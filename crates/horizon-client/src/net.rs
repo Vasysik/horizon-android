@@ -478,18 +478,28 @@ fn run(
                     .map_err(|err| format!("Protocol error: {err}"))?;
                 let secret = generate_secret().map_err(e)?;
                 if hello.should_authenticate {
-                    let account = auth.ok_or_else(|| NOT_SIGNED_IN.to_owned())?;
-                    let hash = server_hash(&hello.server_id, &secret, &hello.public_key);
-                    if let Err(err) = crate::auth::join_server(account, &hash) {
-                        let reason = match err.reason() {
-                            Ok(key) => tr(lang, key),
-                            Err(message) => message.to_owned(),
-                        };
-                        return Err(plain(
-                            &translatable("disconnect.loginFailedInfo", &[&reason]),
-                            lang,
-                        ));
+                    // Online-mode servers ask for a signed-in account through
+                    // the session service. When the player has no account (no
+                    // Microsoft session file), skip join_server so the client
+                    // can join with its offline UUID that was already included
+                    // in the Hello packet. This allows connecting to servers
+                    // that do not enforce Microsoft authentication (e.g.
+                    // offline‑mode servers, private deployments).
+                    if let Some(account) = auth {
+                        let hash = server_hash(&hello.server_id, &secret, &hello.public_key);
+                        if let Err(err) = crate::auth::join_server(account, &hash) {
+                            let reason = match err.reason() {
+                                Ok(key) => tr(lang, key),
+                                Err(message) => message.to_owned(),
+                            };
+                            return Err(plain(
+                                &translatable("disconnect.loginFailedInfo", &[&reason]),
+                                lang,
+                            ));
+                        }
                     }
+                    // No signed-in account: proceed with the offline UUID
+                    // already sent in the Hello packet above.
                 }
                 status(send, &tr(lang, "connect.encrypting"));
                 c.send(
