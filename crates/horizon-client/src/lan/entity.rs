@@ -128,6 +128,9 @@ impl States {
     pub fn as_slice(&self) -> &[EntityState] {
         &self.list[..self.len]
     }
+    pub fn as_mut_slice(&mut self) -> &mut [EntityState] {
+        &mut self.list[..self.len]
+    }
 }
 
 impl Extend<EntityState> for States {
@@ -611,8 +614,9 @@ pub struct Viewer<'a> {
 }
 
 /// One entity as this tick's range checks read it: where it is
-/// horizontally, its id, its type's tracking range in chunks and the chunk
-/// it is in (an index into the tick's chunks).
+/// horizontally, its id, its tracking range in blocks (scaled by
+/// `entity-broadcast-range-percentage`) and the chunk it is in (an index
+/// into the tick's chunks).
 #[derive(Clone, Copy)]
 struct Probe {
     x: f64,
@@ -627,7 +631,7 @@ struct Probe {
 /// each of the tick's chunks whether the client has it (0: not looked up
 /// yet, 1: no, 2: yes), so each chunk is looked up once per client.
 fn sees(v: &Viewer, p: &Probe, chunks: &[(i32, i32)], held: &mut [u8]) -> bool {
-    let range = f64::from(p.range.min(v.view_distance) * 16);
+    let range = f64::from(p.range.min(v.view_distance * 16));
     let (dx, dz) = (v.position[0] - p.x, v.position[2] - p.z);
     dx * dx + dz * dz <= range * range && {
         let held = &mut held[p.chunk as usize];
@@ -641,6 +645,9 @@ fn sees(v: &Viewer, p: &Probe, chunks: &[(i32, i32)], held: &mut [u8]) -> bool {
 /// One level's tracked entities (ChunkMap.entityMap).
 #[derive(Default)]
 pub struct Entities {
+    /// `entity-broadcast-range-percentage` (None: 100), which scales every
+    /// type's tracking range (MinecraftServer.getScaledTrackingDistance).
+    pub range_percent: Option<i32>,
     states: crate::fast_hash::FxHashMap<i32, ServerEntity>,
     /// The level tick, stamped on every entity still in the level.
     tick: u32,
@@ -732,9 +739,29 @@ impl Entities {
                 x: e.position[0],
                 z: e.position[2],
                 id: e.id,
-                range: s.range,
+                range: self
+                    .range_percent
+                    .map_or(s.range * 16, |p| p * (s.range * 16) / 100),
                 chunk,
             });
+        }
+        // TrackedEntity.getEffectiveRange: a vehicle is tracked as far as its
+        // widest indirect passenger, so a rider never leaves before its mount.
+        for (&vehicle, passengers) in &riding.passengers {
+            let Some(own) = self.states.get(&vehicle).filter(|s| s.seen == now) else {
+                continue;
+            };
+            let (index, mut range) = (own.index, own.range);
+            let mut pending = passengers.clone();
+            while let Some(id) = pending.pop() {
+                if let Some(s) = self.states.get(&id).filter(|s| s.seen == now) {
+                    range = range.max(s.range);
+                }
+                pending.extend_from_slice(riding.passengers(id));
+            }
+            self.probes[index].range = self
+                .range_percent
+                .map_or(range * 16, |p| p * (range * 16) / 100);
         }
         self.flags.resize_with(viewers.len(), Vec::new);
         self.pairs.clear();
@@ -930,6 +957,27 @@ mod tests {
         let mut out = Vec::new();
         s.send_changes(e, &Riding::default(), &mut out);
         out
+    }
+
+    #[test]
+    fn furnace_cart_sends_unpowered_metadata_when_fuel_runs_out() {
+        let mut powered = state(0.0);
+        powered.kind = "minecraft:furnace_minecart".into();
+        powered
+            .defaults
+            .push((13, serializer::BOOLEAN, Value::Bool(false)));
+        powered
+            .meta
+            .push((13, serializer::BOOLEAN, Value::Bool(true)));
+        let mut tracker = added(&powered);
+        let mut empty = powered.clone();
+        empty.meta.clear();
+        let mut packets = Vec::new();
+        tracker.send_dirty(&empty, true, &mut packets);
+        assert!(packets.iter().any(|packet| matches!(packet,
+            play::Clientbound::SetEntityData(data)
+                if data.values.contains(&(13, serializer::BOOLEAN, Value::Bool(false)))
+        )));
     }
 
     #[test]

@@ -211,10 +211,10 @@ impl Mob {
         let solid = |p: [i32; 3]| w.solid(p[0], p[1], p[2]);
         if air(p) {
             let mut q = [p[0], p[1] - 1, p[2]];
-            while q[1] >= crate::chunk::MIN_Y && air(q) {
+            while q[1] >= w.world.bottom_y() && air(q) {
                 q[1] -= 1;
             }
-            if q[1] >= crate::chunk::MIN_Y {
+            if q[1] >= w.world.bottom_y() {
                 return [q[0], q[1] + 1, q[2]];
             }
             q[1] = p[1] + 1;
@@ -232,7 +232,7 @@ impl Mob {
         }
         q
     }
-    fn create_path_raw(
+    pub(super) fn create_path_raw(
         &mut self,
         w: &MobWorld,
         targets: &[[i32; 3]],
@@ -240,7 +240,7 @@ impl Mob {
         max_len: f32,
     ) -> Option<Path> {
         if targets.is_empty()
-            || self.position.y < f64::from(crate::chunk::MIN_Y)
+            || self.position.y < f64::from(w.world.bottom_y())
             || !self.can_update_path()
         {
             return None;
@@ -579,6 +579,11 @@ impl Mob {
     pub fn stable_destination(&self, w: &MobWorld, p: [i32; 3]) -> bool {
         if self.species() == super::Species::Bee {
             return super::bee::stable_destination(w, p);
+        }
+        if self.species() == super::Species::Turtle
+            && let Some(stable) = super::turtle::stable_destination(self, w, p)
+        {
+            return stable;
         }
         // StriderPathNavigation: lava too.
         if self.kind.flags.lava_walker && w.block_name(p[0], p[1], p[2]) == "minecraft:lava" {

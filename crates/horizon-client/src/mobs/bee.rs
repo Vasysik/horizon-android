@@ -16,6 +16,7 @@ use super::{
     nav::NavKind,
     path::PathType,
 };
+use crate::beehive::BeehiveExt;
 use horizon_core::random::{LegacyRandom, RandomSource};
 use std::collections::HashMap;
 
@@ -102,6 +103,17 @@ pub fn has_stung(m: &Mob) -> bool {
 }
 pub fn rolling(m: &Mob) -> bool {
     flag(m, FLAG_ROLL)
+}
+/// A client's bee from the server's `DATA_FLAGS_ID` and `DATA_ANGER_END_TIME`
+/// (the texture and the roll read them).
+pub fn set_synced(m: &mut Mob, flags: Option<u8>, anger_end: Option<i64>) {
+    let b = st(m);
+    if let Some(flags) = flags {
+        b.flags = flags;
+    }
+    if let Some(anger_end) = anger_end {
+        b.anger_end = anger_end;
+    }
 }
 /// `Bee.setHasNectar`: nectar resets the time without it.
 pub fn set_has_nectar(m: &mut Mob, value: bool) {
@@ -196,6 +208,12 @@ pub fn stop_being_angry(m: &mut Mob) {
     let b = st(m);
     b.angry_at = None;
     b.anger_end = -1;
+}
+/// `NeutralMob.playerDied`: the anger at the player who died ends.
+pub fn forgive_dead_player(m: &mut Mob) {
+    if get(m).and_then(|b| b.angry_at) == Some(Who::Player) {
+        stop_being_angry(m);
+    }
 }
 /// `Bee.startPersistentAngerTimer`: 20 to 39 seconds.
 fn start_anger_timer(m: &mut Mob, w: &MobWorld) {
@@ -322,13 +340,24 @@ pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
     let amount = (m.attrs.attack_damage as i32) as f32;
     match who {
         Who::Player => {
-            cx.events.push(MobEvent::AttackPlayer(amount, from));
-            let seconds = if cx.w.difficulty.hard { 18 } else { 10 };
-            cx.events.push(MobEvent::EffectPlayer {
-                effect: "minecraft:poison",
-                ticks: seconds * 20,
-                amplifier: 0,
-            });
+            // Bee.doHurtTarget: the poison only when the sting hurt, and
+            // only on normal (10 s) and hard (18 s).
+            let seconds = match cx.w.difficulty.id {
+                2 => 10,
+                3 => 18,
+                _ => 0,
+            };
+            if seconds > 0 {
+                cx.events.push(MobEvent::AttackPlayerWithEffect {
+                    amount,
+                    from,
+                    effect: "minecraft:poison",
+                    ticks: seconds * 20,
+                    amplifier: 0,
+                });
+            } else {
+                cx.events.push(MobEvent::AttackPlayer(amount, from));
+            }
         }
         Who::Mob(id) => cx.events.push(MobEvent::AttackMob {
             target: id,
@@ -421,10 +450,10 @@ pub fn drop_off_nectar(m: &mut Mob) {
     set_has_nectar(m, false);
     st(m).crops_grown = 0;
 }
-/// `Bee.setStayOutOfHiveCountdown`, which in 26.3 only resets the time
-/// without nectar.
+/// `Bee.setStayOutOfHiveCountdown`: the bee will not enter a hive for 400
+/// ticks (the hive passes that when a sedated hive lets its bees out).
 pub fn set_stay_out_of_hive_countdown(m: &mut Mob) {
-    st(m).ticks_without_nectar = 0;
+    st(m).stay_out_of_hive = 400;
 }
 fn drop_hive(m: &mut Mob) {
     let b = st(m);

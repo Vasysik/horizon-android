@@ -258,6 +258,8 @@ impl Game<'_> {
         if dist > 1.0 || p.health.dead_or_dying() {
             return;
         }
+        // ServerPlayer.onExplosionHit: the blast that hit the player is theirs.
+        self.adv.marks.blast = Some((feet, false));
         let w = f64::from(p.dimensions.width) / 2.0;
         let h = f64::from(p.dimensions.height);
         let eye = [
@@ -296,15 +298,23 @@ impl Game<'_> {
             if !creative
                 && !spectator
                 && hurtable
-                && let Ok(o) = p.hurt_blocking(
+                && let Ok(o) = p.hurt_caused_by(
                     &self.motion.health,
                     self.world.health_rules,
                     id,
                     amount,
                     blocking,
+                    // The exploding mob is the causing entity.
+                    exploding.is_some(),
                 )
             {
                 outcome = o;
+                // dealDefaultKnockback's `indicateDamage` points at the blast
+                // (the source position), not the no-direction fallback.
+                if o.knockback && o.blocked <= 0.0 {
+                    p.health
+                        .indicate_damage(center[0] - feet[0], center[2] - feet[2], p.yaw);
+                }
             }
             if !spectator && !(creative && flying) {
                 p.velocity = Vec3::new(
@@ -314,15 +324,18 @@ impl Game<'_> {
                 );
             }
         }
-        if outcome.hurt && !creative {
-            self.hurt_armor(amount);
-        }
         if raised {
             self.after_block(outcome, amount, None, false);
         }
     }
 
-    fn explosion_hurt_entities(&mut self, center: [f64; 3], radius: f32, damage_type: &str) {
+    fn explosion_hurt_entities(
+        &mut self,
+        center: [f64; 3],
+        radius: f32,
+        damage_type: &str,
+        interaction: BlockInteraction,
+    ) {
         if radius < 1.0e-5 {
             return;
         }
@@ -375,9 +388,21 @@ impl Game<'_> {
             }
             self.lan = Some(host);
         }
-        // Mobs.
+        // Mobs. `WitherBoss.hurtServer`: a wither shrugs off an undead cause.
+        let cause = self
+            .combat
+            .explosion_owner
+            .or(exploding)
+            .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+            .map(|m| m.species());
+        // Mobs, but not the one exploding (`getEntities(source, box)`): a
+        // wither's spawn blast neither hurts nor pushes it.
+        let spared = exploding.filter(|_| self.combat.explosion_source_named);
         let mut mobs = std::mem::take(&mut self.mobs);
-        for m in mobs.iter_mut().filter(|m| m.alive()) {
+        for m in mobs
+            .iter_mut()
+            .filter(|m| m.alive() && spared != Some(m.id))
+        {
             let hurtable = teams_allow(self, self.mob_team(m.id));
             let feet = [m.position.x, m.position.y, m.position.z];
             let dist = distance(feet) / diameter;
@@ -391,12 +416,23 @@ impl Game<'_> {
                 [feet[0] - w, feet[1], feet[2] - w],
                 [feet[0] + w, feet[1] + h, feet[2] + w],
             );
+            // The exploding mob is the damage source's entity, so victims
+            // it kills drop its charged-creeper loot (`Creeper.killedEntity`).
             let source = horizon_client::mobs::Damage {
                 kind: horizon_client::mobs::DamageKind::Explosion,
-                attacker: None,
+                // A projectile's owner (`getIndirectSourceEntity`), else
+                // the exploding mob itself.
+                attacker: self
+                    .combat
+                    .explosion_owner
+                    .or(exploding)
+                    .filter(|&o| o != m.id)
+                    .map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
             };
-            if hurtable && !m.damage(damage(dist, exposure), source) {
+            let shielded =
+                cause.is_some_and(|c| horizon_client::mobs::wither::shielded_from(m.species(), c));
+            if hurtable && (shielded || !m.damage(damage(dist, exposure), source)) {
                 continue;
             }
             // `EXPLOSION_KNOCKBACK_RESISTANCE`, not `KNOCKBACK_RESISTANCE`: its
@@ -410,6 +446,7 @@ impl Game<'_> {
             );
         }
         self.mobs = mobs;
+        self.explosion_breaks_frames(center, diameter, interaction);
         // Dropped items: 5 health, destroyed by the explosion damage (nether stars resist).
         let mut items = std::mem::take(&mut self.dropped);
         items.retain_mut(|item| {
@@ -489,6 +526,24 @@ impl Game<'_> {
             );
         }
     }
+    /// `ServerLevel.getDestroyType`: a drop decay rule picks between decaying
+    /// and plain destruction.
+    pub(super) fn destroy_type(&self, rule: &str) -> BlockInteraction {
+        if self.ui.rules.bool(rule) {
+            BlockInteraction::DestroyWithDecay
+        } else {
+            BlockInteraction::Destroy
+        }
+    }
+    /// Runs an explosion whose source empties the hives it destroys
+    /// (`BeehiveBlock.getDrops`: primed TNT, creeper, wither skull, wither,
+    /// TNT minecart).
+    pub(super) fn with_hive_emptying_blast<R>(&mut self, blast: impl FnOnce(&mut Self) -> R) -> R {
+        self.combat.hive_emptying_blast = true;
+        let result = blast(self);
+        self.combat.hive_emptying_blast = false;
+        result
+    }
     /// `Level.explode` on the server: positions, entities, blocks, fire; then
     /// the client's explosion sound.
     pub(super) fn server_explode(
@@ -531,7 +586,7 @@ impl Game<'_> {
         let ctx = horizon_client::sculk::Context::default();
         self.post_game_event("minecraft:explode", center, ctx);
         let mut targets = self.exploded_positions(center, radius, resists);
-        self.explosion_hurt_entities(center, radius, damage_type);
+        self.explosion_hurt_entities(center, radius, damage_type, interaction);
         if interaction != BlockInteraction::Keep {
             // Util.shuffle(list, level.random)
             for i in (2..=targets.len()).rev() {
@@ -571,16 +626,16 @@ impl Game<'_> {
         let pitch = (1.0 + (client_float() - client_float()) * 0.2) * 0.7;
         self.audio
             .play("minecraft:entity.generic.explode", Some(center), 4.0, pitch);
-        let block_count = if interaction == BlockInteraction::Keep {
-            0
-        } else {
-            targets.len()
-        };
+        // ServerLevel.explode sends toBlow.size() whatever the interaction, and
+        // `ServerExplosion.isSmall` also covers an explosion that keeps blocks.
+        let block_count = targets.len();
+        let small = radius < 2.0 || interaction == BlockInteraction::Keep;
         let (world, facts) = (&self.world, self.res.facts());
-        self.particles.explosion(center, radius, block_count, &|b| {
-            facts.is_air(world.block(b[0], b[1], b[2]))
-        });
-        self.lan_explode(center, radius, block_count);
+        self.particles
+            .explosion(center, small, block_count, radius, &|b| {
+                facts.is_air(world.block(b[0], b[1], b[2]))
+            });
+        self.lan_explode(center, small, radius, block_count);
         Ok(())
     }
     /// `BlockBehaviour.onExplosionHit` (TNT: `wasExploded` primes a short fuse).
@@ -597,9 +652,30 @@ impl Game<'_> {
         }
         let name = self.res.facts().get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
+        // CreakingHeartBlock.onExplosionHit: its creaking dies (no
+        // experience, as Horizon does not track a TNT's owner).
+        if &*name == "minecraft:creaking_heart" {
+            self.creaking_heart_broken(pos, false);
+        }
         // Block.onExplosionHit: the drops copy from the block entity, which
         // then spills its contents as the block turns to air.
         let key = (pos[0], pos[1], pos[2]);
+        let is_hive = matches!(&*name, "minecraft:beehive" | "minecraft:bee_nest");
+        // BeehiveBlock.getDrops: the bees of a hive blown up by TNT, a
+        // creeper, a wither skull, a wither or a TNT minecart come out.
+        if is_hive && self.combat.hive_emptying_blast {
+            let facing = self
+                .pack
+                .assets
+                .registry
+                .state(state)
+                .and_then(|s| s.properties.get("facing").cloned());
+            self.empty_hive(
+                pos,
+                horizon_client::beehive::facing_step(facing.as_deref()),
+                horizon_client::beehive::Release::Emergency,
+            );
+        }
         if let Some(entity) = self.world.block_entities.get(&key).cloned() {
             let custom = self.world.block_names.get(&key).cloned();
             self.pending.record(pos, &entity, &name, custom);
@@ -612,7 +688,7 @@ impl Game<'_> {
             // tables' survives_explosion and explosion_decay draw from their
             // random sequence.
             let decay = (interaction == BlockInteraction::DestroyWithDecay).then_some(radius);
-            let drops = self.res.items().block_drops_exploded(
+            let drops = world_items!(self).block_drops_exploded(
                 self.pack.assets.registry,
                 state,
                 None,
@@ -620,17 +696,25 @@ impl Game<'_> {
                 &mut self.world.random,
                 Some((&mut self.rand_sequences, self.level.seed)),
                 decay,
+                false,
             );
             for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {
                     continue;
                 }
                 self.pending.attach(pos, &mut stack);
-                add_or_append_stack(stacks, stack, pos);
+                let items = self.res.items();
+                add_or_append_stack(stacks, stack, pos, &|s| {
+                    items.get(&s.item).map_or(64, |i| i.max_stack)
+                });
             }
         }
         self.pending.clear(pos);
         self.level_set(pos, self.world.air)?;
+        // BeehiveBlock.onExplosionHit: the bees about turn on the player.
+        if is_hive {
+            self.anger_nearby_bees(pos);
+        }
         // TntBlock.wasExploded: new PrimedTnt (its push drawn first), then
         // getRandomShortFuse(80); no game event.
         if is_tnt && self.ui.rules.bool("tnt_explodes") {
@@ -643,15 +727,23 @@ impl Game<'_> {
     }
 }
 
-/// `ServerExplosion.addOrAppendStack` with `ItemEntity.merge(.., 16)`.
+/// `ServerExplosion.addOrAppendStack`: `ItemEntity.areMergable` (same item and
+/// components, combined count within the item's max stack size), then
+/// `ItemEntity.merge(.., 16)`.
 fn add_or_append_stack(
     stacks: &mut Vec<([i32; 3], ItemStack)>,
     mut stack: ItemStack,
     pos: [i32; 3],
+    max_stack: &dyn Fn(&ItemStack) -> u32,
 ) {
+    let max = i64::from(max_stack(&stack));
     for (_, existing) in stacks.iter_mut() {
-        if existing.item == stack.item && existing.damage == stack.damage && existing.count < 16 {
-            let moved = (16 - existing.count).min(stack.count);
+        if existing.same_item_same_components(&stack)
+            && i64::from(existing.count) + i64::from(stack.count) <= max
+        {
+            let moved = (max.min(16) - i64::from(existing.count))
+                .min(i64::from(stack.count))
+                .max(0) as u32;
             existing.count += moved;
             stack.count -= moved;
             if stack.count == 0 {
@@ -689,12 +781,50 @@ mod tests {
             damage: 0,
             extra: None,
         };
+        let max = |s: &ItemStack| {
+            if &*s.item == "minecraft:diamond_sword" {
+                1
+            } else {
+                64
+            }
+        };
         let mut stacks = Vec::new();
         for _ in 0..20 {
-            add_or_append_stack(&mut stacks, stack("minecraft:dirt"), [0, 0, 0]);
+            add_or_append_stack(&mut stacks, stack("minecraft:dirt"), [0, 0, 0], &max);
         }
-        add_or_append_stack(&mut stacks, stack("minecraft:stone"), [1, 0, 0]);
+        add_or_append_stack(&mut stacks, stack("minecraft:stone"), [1, 0, 0], &max);
         let counts: Vec<u32> = stacks.iter().map(|(_, s)| s.count).collect();
         assert_eq!(counts, vec![16, 4, 1]);
+    }
+
+    #[test]
+    fn unstackable_drops_stay_separate() {
+        let sword = ItemStack {
+            item: "minecraft:diamond_sword".into(),
+            count: 1,
+            damage: 0,
+            extra: None,
+        };
+        let max = |_: &ItemStack| 1;
+        let mut stacks = Vec::new();
+        add_or_append_stack(&mut stacks, sword.clone(), [0, 0, 0], &max);
+        add_or_append_stack(&mut stacks, sword, [0, 0, 0], &max);
+        let counts: Vec<u32> = stacks.iter().map(|(_, s)| s.count).collect();
+        assert_eq!(counts, vec![1, 1]);
+    }
+
+    #[test]
+    fn drops_with_different_damage_stay_separate() {
+        let pick = |damage| ItemStack {
+            item: "minecraft:iron_pickaxe".into(),
+            count: 1,
+            damage,
+            extra: None,
+        };
+        let max = |_: &ItemStack| 64;
+        let mut stacks = Vec::new();
+        add_or_append_stack(&mut stacks, pick(0), [0, 0, 0], &max);
+        add_or_append_stack(&mut stacks, pick(5), [0, 0, 0], &max);
+        assert_eq!(stacks.len(), 2);
     }
 }

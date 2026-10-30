@@ -21,7 +21,7 @@ use crate::{
 use horizon_core::geometry::{Aabb, ShapeOp, Vec3, VoxelShape};
 use horizon_protocol::ids::play::clientbound as ids;
 use horizon_protocol::{
-    entity_data::{Value, serializer},
+    entity_data::{Particle, ParticleData, Value, serializer},
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::{literal, translatable},
 };
@@ -43,6 +43,7 @@ pub mod game_event {
     pub const RAIN_LEVEL: u8 = 7;
     pub const THUNDER_LEVEL: u8 = 8;
     pub const GUARDIAN_ELDER_EFFECT: u8 = 10;
+    pub const IMMEDIATE_RESPAWN: u8 = 11;
     pub const LEVEL_CHUNKS_LOAD_START: u8 = 13;
 }
 
@@ -87,6 +88,29 @@ pub struct HostState {
     pub living_flags: i8,
     /// The bed the host sleeps in (`LivingEntity.SLEEPING_POS`).
     pub bed: Option<[i32; 3]>,
+    pub body: BodyFlags,
+}
+
+/// What the other players see of a player's body besides sneaking and
+/// sprinting: the pose and the rest of `Entity.DATA_SHARED_FLAGS_ID`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BodyFlags {
+    /// `Entity.isFallFlying`: gliding with elytra.
+    pub gliding: bool,
+    /// `Entity.isSwimming` (the swimming flag).
+    pub swimming: bool,
+    /// The swimming pose of a player crawling under a block.
+    pub crawling: bool,
+    /// The crouching pose, held without sneaking under a low ceiling.
+    pub crouching: bool,
+    /// `LivingEntity.isAutoSpinAttack`: Riptide's spin.
+    pub spin_attack: bool,
+    /// `Entity.isOnFire`.
+    pub on_fire: bool,
+    /// `Entity.isInvisible`: the invisibility effect.
+    pub invisible: bool,
+    /// The glowing effect.
+    pub glowing: bool,
 }
 
 /// Everything the hub needs from the game for one tick.
@@ -128,6 +152,11 @@ pub enum HostEvent {
         line: String,
         secure: bool,
     },
+    /// A chat message a player sent (after it was broadcast), for server mods.
+    PlayerChat {
+        sender: u128,
+        text: String,
+    },
     /// A server log warning (ServerGamePacketListenerImpl's LOGGER.warn).
     Warn(String),
     /// A server log error (LOGGER.error).
@@ -144,11 +173,19 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// The `immediate_respawn` game rule, as the players were last told.
+    immediate_respawn: bool,
     /// An integrated server's owner (`MinecraftServer.isSingleplayerOwner`),
     /// whose moves are never checked.
     pub singleplayer_owner: Option<u128>,
+    /// The world is superflat (`ServerLevel.isFlat`, a world-wide flag, sent as
+    /// `CommonPlayerSpawnInfo.isFlat` in every dimension).
+    pub flat_world: bool,
     /// Who rides what, set by the game before each tick.
     pub riding: super::entity::Riding,
+    /// The scoreboard's teams, set by the game each tick, for players'
+    /// display names.
+    pub teams: Vec<crate::scoreboard::Team>,
     last_clock: i64,
     last_rate: f32,
     ticking: (f32, bool),
@@ -160,6 +197,16 @@ pub struct Hub {
     level_sync: std::collections::HashMap<String, LevelSync>,
     /// Operators and their permission levels (dedicated servers).
     pub ops: std::collections::HashMap<u128, u8>,
+    /// `entity-broadcast-range-percentage` (dedicated servers).
+    pub entity_range_percent: i32,
+    /// `spawn-protection` (dedicated servers): the radius around the world
+    /// spawn that only operators may change.
+    pub spawn_protection: i32,
+    /// `chat-spam-threshold-seconds` as a TickThrottler threshold (20 a second):
+    /// over it, a guest who is not an operator is kicked. 0 never kicks.
+    pub chat_spam_threshold: i32,
+    /// `command-spam-threshold-seconds`, as `chat_spam_threshold`.
+    pub command_spam_threshold: i32,
     chat_type: i32,
     dimension_type: i32,
     clock_ids: Vec<i32>,
@@ -169,6 +216,9 @@ pub struct Hub {
     entities: std::collections::HashMap<String, Entities>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
     entity_out: Vec<Vec<Vec<u8>>>,
+    /// Server mods' commands, a root in the commands report's format, sent
+    /// after vanilla's; the key the game last set them for.
+    mod_commands: (serde_json::Value, Option<u64>),
 }
 
 fn string(s: &str) -> Tag {
@@ -204,6 +254,24 @@ pub fn display_name(uuid: u128, name: &str) -> Tag {
         ),
         ("insertion", string(name)),
     ])
+}
+
+impl Hub {
+    /// Player.getDisplayName: the name formatted for the player's team
+    /// (PlayerTeam.formatNameForTeam), suggesting `/tell NAME `, showing the
+    /// player on hover and inserting the name.
+    pub fn player_display_name(&self, uuid: u128, name: &str) -> Tag {
+        let Some(team) = self.teams.iter().find(|t| t.players.contains(name)) else {
+            return display_name(uuid, name);
+        };
+        let mut c = team.formatted_name_comp(&crate::scoreboard::literal(name));
+        c["click_event"] =
+            serde_json::json!({"action": "suggest_command", "command": format!("/tell {name} ")});
+        c["hover_event"] = serde_json::json!({"action": "show_entity", "id": "minecraft:player",
+            "uuid": horizon_protocol::crypto::uuid_string(uuid), "name": name});
+        c["insertion"] = name.into();
+        crate::scoreboard::component_tag(&c)
+    }
 }
 
 /// A yellow translation of player names (`multiplayer.player.joined`).
@@ -290,7 +358,7 @@ impl Hub {
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
         let mut encoder = encoder;
         let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
-        encoder.set_dimension(d.min_y, d.height, d.has_skylight);
+        encoder.set_dimension(level_shape(&d));
         Self {
             lan,
             config,
@@ -298,14 +366,20 @@ impl Hub {
             guests: Vec::new(),
             sync,
             ticks: 0,
+            immediate_respawn: false,
             movement_checks: (true, true),
             singleplayer_owner: None,
+            flat_world: false,
             riding: Default::default(),
             last_clock: i64::MIN,
             last_rate: 0.0,
             ticking: (20.0, false),
             stepping: 0,
             ops: Default::default(),
+            entity_range_percent: 100,
+            spawn_protection: 0,
+            chat_spam_threshold: 0,
+            command_spam_threshold: 0,
             weather: (false, 0.0, 0.0),
             level_sync: Default::default(),
             chat_type,
@@ -315,6 +389,8 @@ impl Hub {
             entity_types: Default::default(),
             entities: Default::default(),
             entity_out: Vec::new(),
+            mod_commands: (serde_json::Value::Null, None),
+            teams: Vec::new(),
         }
     }
 
@@ -349,15 +425,38 @@ impl Hub {
         id
     }
     pub fn stack(&mut self, s: &Option<ItemStack>) -> Option<horizon_protocol::item::Stack> {
-        let id = s.as_ref().map(|s| self.item_id(&s.item))?;
+        let item = s.as_ref()?.item.clone();
+        let id = self.item_id(&item);
         let sync = self.sync.clone();
-        stack_to_network(|_| id, |registry, name| sync.id(registry, name), s)
+        // The stacks inside it (a bundle's contents, a crossbow's projectiles)
+        // have ids of their own.
+        let item_id = |name: &str| {
+            if name == &*item {
+                return id;
+            }
+            sync.builtin
+                .get("minecraft:item")
+                .and_then(|i| i.id(name))
+                .unwrap_or(0)
+        };
+        stack_to_network(item_id, |registry, name| sync.id(registry, name), s)
     }
 
     pub fn broadcast(&self, packet: &C) {
         let body = packet.encode();
         for g in self.guests.iter().filter(|g| g.placed) {
             g.sender.send(body.clone());
+        }
+    }
+    /// MinecraftServer.onGameRuleChanged: every player is told when
+    /// `immediate_respawn` changes; a joining player's Login carries it.
+    pub fn set_immediate_respawn(&mut self, on: bool) {
+        if self.immediate_respawn != on {
+            self.immediate_respawn = on;
+            self.broadcast(&C::GameEvent(play::GameEvent {
+                event: game_event::IMMEDIATE_RESPAWN,
+                param: if on { 1.0 } else { 0.0 },
+            }));
         }
     }
     /// PlayerList.setViewDistance: every player is told the new radius,
@@ -399,6 +498,25 @@ impl Hub {
         self.broadcast(&C::SystemChat(play::SystemChat {
             content,
             overlay: false,
+        }));
+    }
+    /// A system message for the guests `hears` picks by name
+    /// (`PlayerList.broadcastSystemToTeam` and its kin).
+    pub fn system_message_to(&self, content: Tag, hears: impl Fn(&str) -> bool) {
+        let body = C::SystemChat(play::SystemChat {
+            content,
+            overlay: false,
+        })
+        .encode();
+        for g in self.guests.iter().filter(|g| g.placed && hears(&g.name)) {
+            g.sender.send(body.clone());
+        }
+    }
+    /// `ServerPlayer.sendOverlayMessage` to every guest (the action bar).
+    pub fn overlay_message(&self, content: Tag) {
+        self.broadcast(&C::SystemChat(play::SystemChat {
+            content,
+            overlay: true,
         }));
     }
     /// A chat message from the host (a disguised chat: the host has no
@@ -510,7 +628,7 @@ impl Hub {
             latency: Some(latency),
             display_name: Some(None),
             list_order: Some(0),
-            show_hat: Some(true),
+            show_hat: Some(guest.is_none_or(|g| g.info.model_customisation & 0x40 != 0)),
         }
     }
     /// ClientboundPlayerInfoUpdatePacket.createPlayerInitializing: every action.
@@ -518,17 +636,26 @@ impl Hub {
 
     // ---- joining -------------------------------------------------------
 
-    fn spawn_info(&self, game_mode: i32) -> play::SpawnInfo {
+    /// `CommonPlayerSpawnInfo`, with the player's `portalCooldown`.
+    fn spawn_info(&self, i: usize, portal_cooldown: i32) -> play::SpawnInfo {
+        let g = &self.guests[i];
         play::SpawnInfo {
             dimension_type: self.dimension_type,
             dimension: self.config.dimension.clone(),
             seed: horizon_core::biome::obfuscate_seed(self.config.seed),
-            game_type: game_mode,
+            game_type: g.game_mode,
             previous_game_type: None,
             debug: false,
-            flat: false,
-            last_death: None,
-            portal_cooldown: 0,
+            flat: self.flat_world,
+            // Player.getLastDeathLocation.
+            last_death: g
+                .last_death
+                .as_ref()
+                .map(|(dimension, pos)| play::GlobalPos {
+                    dimension: dimension.clone(),
+                    pos: *pos,
+                }),
+            portal_cooldown,
             sea_level: 63,
         }
     }
@@ -594,9 +721,9 @@ impl Hub {
             chunk_radius: self.config.view_distance,
             simulation_distance: self.config.simulation_distance,
             reduced_debug_info: false,
-            show_death_screen: true,
+            show_death_screen: !self.immediate_respawn,
             limited_crafting: false,
-            spawn: self.spawn_info(mode),
+            spawn: self.spawn_info(i, 0),
             // MinecraftServer.usesAuthentication, enforceSecureProfile.
             online_mode: self.lan.shared.config.online.is_some(),
             enforces_secure_chat: self.enforces_secure_chat(),
@@ -669,7 +796,7 @@ impl Hub {
             entries: vec![self.player_info(uuid, &name, mode, 0)],
         };
         self.broadcast(&C::PlayerInfoUpdate(newcomer));
-        self.send_level_info(i, ctx);
+        self.send_level_info(i, ctx, true);
         // ServerLevel.addNewPlayer: the chunk tracking starts at the player.
         let g = &mut self.guests[i];
         let (cx, cz) = g.chunk();
@@ -810,13 +937,36 @@ impl Hub {
         }
     }
 
+    /// The key [`Hub::set_mod_commands`] last had: the game compares it
+    /// with its server mods' each tick.
+    pub fn mod_commands_key(&self) -> Option<u64> {
+        self.mod_commands.1
+    }
+    /// Server mods' commands changed: every player gets their tree again.
+    pub fn set_mod_commands(&mut self, key: u64, commands: serde_json::Value) {
+        let resend = self.mod_commands.0 != commands;
+        self.mod_commands = (commands, Some(key));
+        if resend {
+            for i in 0..self.guests.len() {
+                if self.guests[i].placed {
+                    self.send_commands(i);
+                }
+            }
+        }
+    }
+
     /// Commands.sendCommands: the command tree for this player.
     fn send_commands(&self, i: usize) {
         let g = &self.guests[i];
         let packet = match &self.sync.commands {
             Some(tree) => {
                 let dedicated = self.config.dedicated && !self.config.integrated;
-                tree.packet(g.permission, dedicated, &self.sync.builtin)
+                tree.packet_with(
+                    g.permission,
+                    dedicated,
+                    &self.sync.builtin,
+                    &self.mod_commands.0,
+                )
             }
             None => play::Commands {
                 nodes: vec![play::CommandNode {
@@ -889,8 +1039,10 @@ impl Hub {
         })
     }
 
-    /// PlayerList.sendLevelInfo.
-    fn send_level_info(&mut self, i: usize, ctx: &TickCtx) {
+    /// PlayerList.sendLevelInfo; `load_start` false holds back
+    /// LEVEL_CHUNKS_LOAD_START for a player who has no position yet
+    /// ([`Self::land`] sends it).
+    fn send_level_info(&mut self, i: usize, ctx: &TickCtx, load_start: bool) {
         let spawn = ctx.spawn;
         let g = &self.guests[i];
         g.send(&C::InitializeBorder(super::border::initialize(ctx.border)));
@@ -911,10 +1063,12 @@ impl Hub {
                 param: w.thunder_level.1,
             }));
         }
-        g.send(&C::GameEvent(play::GameEvent {
-            event: game_event::LEVEL_CHUNKS_LOAD_START,
-            param: 0.0,
-        }));
+        if load_start {
+            g.send(&C::GameEvent(play::GameEvent {
+                event: game_event::LEVEL_CHUNKS_LOAD_START,
+                param: 0.0,
+            }));
+        }
         // TickRateManager.updateJoiningPlayer.
         g.send(&ticking_state(ctx.tick_rate, ctx.tick_frozen));
         g.send(&C::TickingStep(play::TickingStep {
@@ -1017,9 +1171,28 @@ impl Hub {
                         events.push(HostEvent::Left(Box::new(g)));
                     }
                 }
-                NetEvent::Packet(conn, packet) => {
-                    if let Some(g) = self.guest_mut(conn) {
-                        g.inbox.push_back(*packet);
+                NetEvent::Packet(conn, packet, bytes) => {
+                    let Some(g) = self.guest_mut(conn) else {
+                        continue;
+                    };
+                    // A kicked player's packets wait for nothing.
+                    if !g.left_reason.is_empty() {
+                        continue;
+                    }
+                    g.inbox.push_back((*packet, bytes));
+                    g.inbox_bytes += bytes;
+                    // A client sending faster than its budget is handled
+                    // would grow the inbox until the server runs out of memory.
+                    if g.inbox.len() > INBOX_LIMIT || g.inbox_bytes > INBOX_BYTES {
+                        events.push(HostEvent::Warn(format!(
+                            "{} sent more packets than the server handles ({} waiting, {} kB)",
+                            g.name,
+                            g.inbox.len(),
+                            g.inbox_bytes >> 10
+                        )));
+                        g.inbox = Default::default();
+                        g.inbox_bytes = 0;
+                        self.kick(conn, translatable("disconnect.exceeded_packet_rate", &[]));
                     }
                 }
                 NetEvent::Duplicate(uuid) => {
@@ -1036,6 +1209,26 @@ impl Hub {
                         );
                     }
                 }
+            }
+        }
+        // keepConnectionAlive's timeout, checked once a second here, not on
+        // the writer thread: a client that stops reading blocks that thread
+        // and would hold its slot forever. Kicked, it gets the reason; still
+        // here a second later, its connection is closed under the writer.
+        if self.ticks.is_multiple_of(20) {
+            for g in &self.guests {
+                if !g.left_reason.is_empty() && g.sender.timed_out() {
+                    g.sender.close();
+                }
+            }
+            let silent: Vec<u32> = self
+                .guests
+                .iter()
+                .filter(|g| g.left_reason.is_empty() && g.sender.timed_out())
+                .map(|g| g.conn)
+                .collect();
+            for conn in silent {
+                self.kick(conn, translatable("disconnect.timeout", &[]));
             }
         }
         events
@@ -1356,8 +1549,9 @@ impl Hub {
         if log.is_empty() {
             return;
         }
-        let mut changes: Vec<((i32, i32), u32)> = log.drain().collect();
-        changes.sort_unstable();
+        let mut changes: Vec<_> = log.drain().collect();
+        // One entry per column, so the order is the columns'.
+        changes.sort_unstable_by_key(|&(column, _)| column);
         for ((x, z), sections) in changes {
             let tracked = |g: &Guest, x: i32, z: i32| g.sent_chunks.contains(&(x, z));
             let viewers: Vec<usize> = (0..self.guests.len())
@@ -1436,10 +1630,15 @@ impl Hub {
             }
             // Block entities with data the client shows.
             for &(x, y, z) in &positions {
-                let Some(entity) = world.block_entities.get(&(x, y, z)) else {
-                    continue;
+                // A decorated pot is no block entity: its tag is the chunk's saved one.
+                let tag = match world.block_entities.get(&(x, y, z)) {
+                    Some(entity) => super::chunks::entity_tag(entity),
+                    None => world
+                        .chunks
+                        .get(&(x >> 4, z >> 4))
+                        .and_then(|c| super::chunks::pot_tag(c, (x, y, z))),
                 };
-                let Some(tag) = super::chunks::entity_tag(entity) else {
+                let Some(tag) = tag else {
                     continue;
                 };
                 let state = world.block(x, y, z).0;
@@ -1461,6 +1660,49 @@ impl Hub {
 
     // ---- entities ------------------------------------------------------
 
+    /// `LivingEntity.updateSynchronizedMobEffectParticles`: DATA_EFFECT_PARTICLES
+    /// (10) and DATA_EFFECT_AMBIENCE_ID (11) for the visible `effects`, as
+    /// (effect, ambient). The entries are left out when there is nothing to
+    /// show, which is their default.
+    pub fn effect_meta<'a>(
+        &self,
+        effects: impl IntoIterator<Item = (&'a str, bool)>,
+    ) -> Vec<(u8, i32, Value)> {
+        let mut particles = Vec::new();
+        let mut all_ambient = true;
+        for (effect, ambient) in effects {
+            let effect = effect.trim_start_matches("minecraft:");
+            // MobEffect.particleFactory: the omens have their own particles,
+            // the others an entity effect in their colour (faint if ambient).
+            let (name, data) = match effect {
+                "trial_omen" | "raid_omen" => (effect, None),
+                _ => {
+                    let Some(def) = crate::brewing::effect(effect) else {
+                        continue;
+                    };
+                    let alpha = if ambient { 38 } else { 255 };
+                    let argb = (alpha << 24) | def.color as i32;
+                    ("entity_effect", Some(ParticleData::Color(argb)))
+                }
+            };
+            let Some(id) =
+                self.registry_id("minecraft:particle_type", &format!("minecraft:{name}"))
+            else {
+                continue;
+            };
+            particles.push(Particle { id, data });
+            all_ambient &= ambient;
+        }
+        if particles.is_empty() {
+            return Vec::new();
+        }
+        let mut meta = vec![(10, serializer::PARTICLES, Value::Particles(particles))];
+        if all_ambient {
+            meta.push((11, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        meta
+    }
+
     fn player_state(
         &self,
         id: i32,
@@ -1468,21 +1710,29 @@ impl Hub {
         position: [f64; 3],
         rot: (f32, f32, f32),
         on_ground: bool,
-        flags: (bool, bool, bool, bool),
+        flags: (bool, bool, bool),
+        body: BodyFlags,
         living_flags: i8,
         bed: Option<[i32; 3]>,
         skin: u8,
         health: f32,
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
         attributes: Vec<play::AttributeSnapshot>,
+        effects: &[EffectInstance],
     ) -> EntityState {
-        let (sneaking, sprinting, gliding, sleeping) = flags;
-        let shared = shared_flags(sneaking, sprinting, gliding);
+        let (sneaking, sprinting, sleeping) = flags;
+        let shared = shared_flags(sneaking, sprinting, &body);
+        // Player.getDesiredPose (and updatePlayerPose's crawl): sleeping,
+        // swimming, gliding, Riptide's spin, crouching.
         let pose = if sleeping {
             2
-        } else if gliding {
+        } else if body.swimming || body.crawling {
+            3
+        } else if body.gliding {
             1
-        } else if sneaking {
+        } else if body.spin_attack {
+            4
+        } else if sneaking || body.crouching {
             5
         } else {
             0
@@ -1508,6 +1758,14 @@ impl Hub {
         if skin != 0 {
             meta.push((16, serializer::BYTE, Value::Byte(skin as i8)));
         }
+        meta.extend(
+            self.effect_meta(
+                effects
+                    .iter()
+                    .filter(|e| e.visible)
+                    .map(|e| (e.id, e.ambient)),
+            ),
+        );
         EntityState {
             id,
             uuid,
@@ -1520,7 +1778,11 @@ impl Hub {
             velocity: [0.0; 3],
             data: 0,
             meta,
-            defaults: Vec::new(),
+            // The effect swirls go back to none.
+            defaults: vec![
+                (10, serializer::PARTICLES, Value::Particles(Vec::new())),
+                (11, serializer::BOOLEAN, Value::Bool(false)),
+            ],
             equipment,
             attributes,
             precise: false,
@@ -1568,13 +1830,15 @@ impl Hub {
                 h.position,
                 (h.yaw, h.pitch, h.head_yaw),
                 h.on_ground,
-                (h.sneaking, h.sprinting, false, h.bed.is_some()),
+                (h.sneaking, h.sprinting, h.bed.is_some()),
+                h.body,
                 h.living_flags,
                 h.bed,
                 0x7F,
                 h.health,
                 equipment,
                 h.attributes.clone(),
+                &[],
             ));
         }
         let placed: Vec<usize> = (0..self.guests.len())
@@ -1600,7 +1864,8 @@ impl Hub {
                     g.position,
                     (g.yaw, g.pitch, g.head_yaw),
                     g.on_ground,
-                    (g.sneaking, g.sprinting, g.fall_flying, g.sleeping),
+                    (g.sneaking, g.sprinting, g.sleeping),
+                    guest_body(g),
                     g.living_flags,
                     g.bed,
                     g.info.model_customisation,
@@ -1610,6 +1875,7 @@ impl Hub {
                         .as_ref()
                         .map(|m| super::attributes::syncable(&m.attributes))
                         .unwrap_or_default(),
+                    &g.effects.list,
                 )
             })
             .collect();
@@ -1639,6 +1905,7 @@ impl Hub {
                 out,
             })
             .collect();
+        level.range_percent = Some(self.entity_range_percent);
         let (types, sync) = (&mut self.entity_types, &self.sync);
         level.tick(&entities, &self.riding, &mut viewers, |kind| {
             entity_type(types, sync, kind)
@@ -1759,7 +2026,7 @@ impl Hub {
         // too, so the sprint a hit stops (Player.causeExtraKnockback) stops
         // on its client.
         let g = &mut self.guests[i];
-        let shared = shared_flags(g.sneaking, g.sprinting, g.fall_flying);
+        let shared = shared_flags(g.sneaking, g.sprinting, &guest_body(g));
         if shared != g.sent_shared {
             g.sent_shared = shared;
             g.send(&C::SetEntityData(play::SetEntityData {
@@ -1884,17 +2151,27 @@ impl Hub {
         d > f64::from(1.0E-5_f32)
     }
 
+    /// A move still queued for guest `i`, which a packet the game handles
+    /// after this pass must not overtake.
+    fn move_queued(&self, i: usize) -> bool {
+        self.guests[i]
+            .inbox
+            .iter()
+            .any(|(p, _)| matches!(p, S::MovePlayerPos(_) | S::MovePlayerPosRot(_)))
+    }
+
     fn process_inbox(&mut self, i: usize, ctx: &mut TickCtx, events: &mut Vec<HostEvent>) {
         // ServerGamePacketListenerImpl.tickPlayer ran between the last
         // tick's packets and these: resetPosition, and the moves it counted.
         let g = &mut self.guests[i];
         g.first_good = g.position;
         g.known_moves = g.received_moves;
-        let mut budget = 400;
+        let mut budget = PACKETS_PER_TICK;
         while budget > 0 {
-            let Some(packet) = self.guests[i].inbox.pop_front() else {
+            let Some((packet, bytes)) = self.guests[i].inbox.pop_front() else {
                 break;
             };
+            self.guests[i].inbox_bytes -= bytes;
             budget -= 1;
             let conn = self.guests[i].conn;
             // ServerPlayer.resetLastActionTime: every handler of a player's
@@ -1908,6 +2185,7 @@ impl Hub {
                 | S::PlayerLoaded(_)
                 | S::ChunkBatchReceived(_)
                 | S::ClientInformation(_)
+                | S::RecipeBookChangeSettings(_)
                 | S::ClientTickEnd(_)
                 | S::KeepAlive(_) => false,
                 S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
@@ -1973,18 +2251,51 @@ impl Hub {
                     }
                     g.max_unacknowledged = 10;
                 }
-                S::ClientTickEnd(_) => self.guests[i].position_this_tick = false,
+                S::ClientTickEnd(_) => {
+                    // handleClientTickEnd: no move this tick, no known movement.
+                    let g = &mut self.guests[i];
+                    if !g.position_this_tick {
+                        g.known_movement = [0.0; 3];
+                    }
+                    g.position_this_tick = false;
+                }
+                // ServerGamePacketListenerImpl.handleRecipeBookChangeSettingsPacket.
+                S::RecipeBookChangeSettings(p) => {
+                    if let Some(book) = crate::recipe_book::BookType::ALL.get(p.book_type as usize)
+                    {
+                        let settings = &mut self.guests[i].recipe_book;
+                        settings.open[book.index()] = p.open;
+                        settings.filtering[book.index()] = p.filtering;
+                    }
+                }
                 S::ClientInformation(info) => {
                     let g = &mut self.guests[i];
+                    // PlayerModelPart.HAT (bit 6): the tab list shows the hat layer.
+                    let was_hat = g.info.model_customisation & 0x40 != 0;
                     g.view_distance =
                         i32::from(info.view_distance).clamp(2, self.config.view_distance);
                     g.info = info;
                     g.center = None;
+                    let hat = g.info.model_customisation & 0x40 != 0;
+                    let uuid = g.uuid;
+                    // ServerGamePacketListenerImpl.handleClientInformation: UPDATE_HAT to everyone.
+                    if hat != was_hat {
+                        self.broadcast(&C::PlayerInfoUpdate(play::PlayerInfoUpdate {
+                            actions: 128,
+                            entries: vec![play::PlayerInfo {
+                                uuid,
+                                show_hat: Some(hat),
+                                ..Default::default()
+                            }],
+                        }));
+                    }
                 }
                 S::PlayerInput(p) => {
                     self.guests[i].input = p.flags;
                     self.guests[i].sneaking = p.flags & 32 != 0;
-                    self.guests[i].sprinting = p.flags & 64 != 0 && p.flags & 1 != 0;
+                    // handlePlayerInput only records keys and updates crouching.
+                    // Sprinting persists after the sprint key is released (or
+                    // starts with a double tap); PlayerCommand changes it.
                 }
                 // OPEN_INVENTORY (the ridden mount's inventory) and
                 // START_FALL_FLYING (checked against the guest's chest slot
@@ -2002,6 +2313,31 @@ impl Hub {
                 S::Chat(c) => self.handle_chat(i, c, events),
                 S::ChatAck(p) => self.chat_ack(i, p.offset, events),
                 S::ChatSessionUpdate(p) => self.chat_session_update(i, p, events),
+                // handlePlayerAction (a dig starting, stopping or finishing) is the
+                // game's, run after this pass. A move queued behind it is checked
+                // against the block the player just broke and falls through, so it
+                // would be sent back; it waits for the next tick, when the block is
+                // gone, as vanilla handles the packets in order. So does everything
+                // queued before that move: the arm swing (Punch) comes between the dig
+                // and the move.
+                S::PlayerAction(p) if p.action <= 3 => {
+                    events.push(HostEvent::Packet(conn, Box::new(S::PlayerAction(p))));
+                    if self.move_queued(i) {
+                        break;
+                    }
+                }
+                // handleUseItemOn is the game's too, and BlockItem.canPlace checks
+                // the player's box where they clicked from (Level.isUnobstructed), as
+                // their client's prediction did. After the move behind it, a player
+                // jumping up a pillar was already clear of the cell their client had
+                // refused: the block went down without the place sound that only the
+                // placer's client plays (BlockItem.place's playSound(player, ...)).
+                S::UseItemOn(p) => {
+                    events.push(HostEvent::Packet(conn, Box::new(S::UseItemOn(p))));
+                    if self.move_queued(i) {
+                        break;
+                    }
+                }
                 other => events.push(HostEvent::Packet(conn, Box::new(other))),
             }
         }
@@ -2035,7 +2371,7 @@ impl Hub {
             }
             g.position_this_tick = true;
         }
-        if !g.loaded && g.ticks == 0 && pos.is_none() {
+        if g.landing || !g.loaded && g.ticks == 0 && pos.is_none() {
             return;
         }
         // updateAwaitingTeleport: moves wait for the client to accept the
@@ -2093,11 +2429,16 @@ impl Hub {
                 packets = 1;
             }
             // shouldCheckPlayerMovement (never the single-player owner).
-            // The server holds no velocity for a guest (getDeltaMovement),
-            // so nothing is expected.
             if !owner && check && (!g.fall_flying || elytra_check) {
                 let limit = if g.fall_flying { 300.0 } else { 100.0 };
-                if moved > limit * f64::from(packets) {
+                // `movedDist - expectedDist` (getDeltaMovement): the velocity
+                // the server last simulated for the guest is expected
+                // movement, not a violation — a landing glide keeps its speed.
+                let expected = g.motion.as_ref().map_or(0.0, |m| {
+                    let v = m.velocity;
+                    v.x * v.x + v.y * v.y + v.z * v.z
+                });
+                if moved - expected > limit * f64::from(packets) {
                     events.push(HostEvent::Warn(format!(
                         "{} moved too quickly! {},{},{}",
                         g.name,
@@ -2132,6 +2473,7 @@ impl Hub {
             g.moves_from_ground = g.on_ground;
         }
         g.moves.push((moved, flags & 1 != 0));
+        g.known_movement = moved;
         g.yaw = yaw;
         g.pitch = pitch.clamp(-90.0, 90.0);
         g.head_yaw = g.yaw;
@@ -2151,17 +2493,14 @@ impl Hub {
         if g.spectator() || g.sleeping {
             return (false, false);
         }
-        let height = if g.fall_flying {
-            0.6
-        } else if g.sneaking {
-            1.5
-        } else {
-            1.8
-        };
+        // getBoundingBox: the box of the body's pose (swimming and crawling
+        // are 0.6 tall), so a swimmer under a ceiling isn't sent back.
+        let d = g.dimensions();
+        let (half, height) = (f64::from(d.width) / 2.0, f64::from(d.height));
         let at = |p: [f64; 3]| {
             Aabb::new(
-                Vec3::new(p[0] - 0.3, p[1], p[2] - 0.3),
-                Vec3::new(p[0] + 0.3, p[1] + height, p[2] + 0.3),
+                Vec3::new(p[0] - half, p[1], p[2] - half),
+                Vec3::new(p[0] + half, p[1] + height, p[2] + half),
             )
         };
         let (old, new) = (at(g.position), at(to));
@@ -2291,6 +2630,11 @@ impl Hub {
             .name("minecraft:enchantment", id)
             .map(str::to_owned)
     }
+    /// A stack a client sent (`SetCreativeModeSlot`), read with this
+    /// server's registries.
+    pub fn stack_from_network(&self, s: &horizon_protocol::item::Stack) -> crate::items::ItemStack {
+        crate::item_sync::from_network(s, &self.sync.builtin, &self.sync.dynamic)
+    }
 
     /// ServerLevel.removePlayerImmediately, then addRespawnedPlayer: the other players
     /// lose the dead player's entity (ServerEntity.removePairing) and are sent the
@@ -2308,18 +2652,15 @@ impl Hub {
     /// level loading screen from the Respawn packet until the level info's "level chunks load
     /// start" event and the chunk under the player, so the packets follow vanilla's order.
     pub fn respawn(&mut self, i: usize, at: [f64; 3], ctx: &TickCtx) {
-        let mode = self.guests[i].game_mode;
-        let mut info = self.spawn_info(mode);
-        // Player.getLastDeathLocation, set where the player died.
-        // The level they died in: theirs until now.
-        info.last_death = self.guests[i].last_death.map(|pos| play::GlobalPos {
-            dimension: self.guests[i].dimension.clone(),
-            pos,
-        });
+        let info = self.spawn_info(i, 0);
         self.close_container_for(i);
         let g = &mut self.guests[i];
         // PlayerList.respawn: into the level in place (the respawn level).
         g.dimension = self.config.dimension.clone();
+        // ServerLevel.removePlayerImmediately: the dead player's
+        // Entity.setRemoved (KILLED) stops its riding; the new player rides
+        // nothing.
+        g.stop_riding();
         // ServerLevel.removePlayerImmediately: every entity paired with the dead player is
         // removed (ServerEntity.removePairing, one packet each). Its chunks are dropped
         // without ForgetLevelChunk (PlayerChunkSender.dropChunk skips dead players): the
@@ -2373,7 +2714,7 @@ impl Hub {
         g.sent_xp = Some(xp);
         // ServerPlayer.sendPostEffects.
         g.send(&raw(ids::POST_EFFECTS, vec![0]));
-        self.send_level_info(i, ctx);
+        self.send_level_info(i, ctx, true);
         self.send_permission_level(i);
         // ServerLevel.addRespawnedPlayer: the chunk tracking starts again at the player.
         let g = &mut self.guests[i];
@@ -2411,25 +2752,30 @@ impl Hub {
             .id("minecraft:dimension_type", dimension)
             .unwrap_or(0);
         let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
-        self.encoder
-            .set_dimension(d.min_y, d.height, d.has_skylight);
+        self.encoder.set_dimension(level_shape(&d));
     }
 
     /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
     /// names (`set_dimension`): ClientboundRespawnPacket keeping all data,
     /// then vanilla's packet order. Nothing tracked in the old level is
     /// removed one by one: the client drops its whole level.
+    ///
+    /// Through a `portal`, vanilla finds the exit (an End platform, a Nether
+    /// portal, a spawn column) before the teleport; here it is found once
+    /// the destination has loaded around `at`. Until [`Self::land`] the
+    /// client gets no position, so it stays on its level loading screen
+    /// instead of showing the player in the air at `at`.
     pub fn change_level(
         &mut self,
         i: usize,
         at: [f64; 3],
         yaw: f32,
         pitch: Option<f32>,
-        portal_sound: bool,
+        portal: bool,
+        portal_cooldown: i32,
         ctx: &TickCtx,
     ) {
-        let mode = self.guests[i].game_mode;
-        let info = self.spawn_info(mode);
+        let info = self.spawn_info(i, portal_cooldown);
         self.close_container_for(i);
         let g = &mut self.guests[i];
         g.dimension = self.config.dimension.clone();
@@ -2453,14 +2799,22 @@ impl Hub {
             locked: ctx.difficulty_locked,
         }));
         self.send_permission_level(i);
-        self.teleport(i, None);
+        if portal {
+            // A teleport still pending from the old level is void: its late
+            // acceptance must not move the player back there.
+            let g = &mut self.guests[i];
+            g.landing = true;
+            g.awaiting_teleport = None;
+        } else {
+            self.teleport(i, None);
+        }
         let g = &mut self.guests[i];
         g.send(&C::PlayerAbilities(play::PlayerAbilities {
             flags: g.ability_flags(),
             flying_speed: 0.05,
             walking_speed: 0.1,
         }));
-        self.send_level_info(i, ctx);
+        self.send_level_info(i, ctx, !portal);
         // PlayerList.sendAllPlayerInfo: the inventory and the held slot.
         self.send_inventory(i);
         let g = &mut self.guests[i];
@@ -2471,15 +2825,6 @@ impl Hub {
         let g = &mut self.guests[i];
         // ServerPlayer.sendPostEffects.
         g.send(&raw(ids::POST_EFFECTS, vec![0]));
-        // TeleportTransition.PLAY_PORTAL_SOUND.
-        if portal_sound {
-            g.send(&C::LevelEvent(play::LevelEvent {
-                kind: 1032,
-                pos: [0, 0, 0],
-                data: 0,
-                global: false,
-            }));
-        }
         // lastSentExp, lastSentHealth and lastSentFood; the client's new
         // player starts with the default air and no absorption.
         g.sent_health = None;
@@ -2492,6 +2837,25 @@ impl Hub {
             z: cz,
         }));
         g.center_sent = Some((cx, cz));
+    }
+
+    /// The rest of a portal's [`Self::change_level`] once its exit is found:
+    /// the position, LEVEL_CHUNKS_LOAD_START (the client's loading screen
+    /// closes once its chunk is in) and TeleportTransition.PLAY_PORTAL_SOUND.
+    pub fn land(&mut self, i: usize, at: [f64; 3]) {
+        self.guests[i].landing = false;
+        self.teleport(i, Some(at));
+        let g = &self.guests[i];
+        g.send(&C::GameEvent(play::GameEvent {
+            event: game_event::LEVEL_CHUNKS_LOAD_START,
+            param: 0.0,
+        }));
+        g.send(&C::LevelEvent(play::LevelEvent {
+            kind: 1032,
+            pos: [0, 0, 0],
+            data: 0,
+            global: false,
+        }));
     }
 }
 
@@ -2509,6 +2873,15 @@ fn wrap_degrees(degrees: f32) -> f32 {
     wrapped
 }
 
+/// The packets of one player handled in a tick; the rest wait for the next.
+const PACKETS_PER_TICK: usize = 400;
+/// The packets a player may have waiting (a second of its budget) before it is
+/// disconnected, as vanilla's rate-limit does: no real client gets near it.
+const INBOX_LIMIT: usize = 20 * PACKETS_PER_TICK;
+/// The same in bytes on the wire: 8000 full books would hold gigabytes. A
+/// real client's largest packets (a 100-page book) are a few hundred kB.
+const INBOX_BYTES: usize = 16 << 20;
+
 fn invalid_movement() -> Tag {
     translatable("multiplayer.disconnect.invalid_player_movement", &[])
 }
@@ -2525,19 +2898,58 @@ fn ticking_state(rate: f32, frozen: bool) -> C {
     raw(ids::TICKING_STATE, w.data)
 }
 
-/// Entity.DATA_SHARED_FLAGS_ID of a player: crouching, sprinting, gliding.
-fn shared_flags(sneaking: bool, sprinting: bool, gliding: bool) -> i8 {
+/// What the others see of a guest's body, from its server-side state.
+pub fn guest_body(g: &Guest) -> BodyFlags {
+    let m = g.motion.as_deref();
+    BodyFlags {
+        gliding: g.fall_flying,
+        swimming: m.is_some_and(|m| m.swimming),
+        crawling: m.is_some_and(|m| m.pose == crate::pose::Pose::Swimming && !m.swimming),
+        crouching: m.is_some_and(|m| m.pose == crate::pose::Pose::Crouching),
+        spin_attack: m.is_some_and(|m| m.auto_spin_attack_ticks > 0),
+        on_fire: m.is_some_and(|m| m.fire_ticks > 0),
+        // ServerPlayer.updateInvisibilityStatus: a spectator is always invisible.
+        invisible: g.effects.get("invisibility").is_some() || g.spectator(),
+        glowing: g.effects.get("glowing").is_some(),
+    }
+}
+
+/// Entity.DATA_SHARED_FLAGS_ID of a player: on fire 0x01, crouching 0x02,
+/// sprinting 0x08, swimming 0x10, invisible 0x20, glowing 0x40, gliding 0x80.
+fn shared_flags(sneaking: bool, sprinting: bool, body: &BodyFlags) -> i8 {
     let mut shared = 0i8;
+    if body.on_fire {
+        shared |= 0x01;
+    }
     if sneaking {
         shared |= 0x02;
     }
     if sprinting {
         shared |= 0x08;
     }
-    if gliding {
+    if body.swimming {
+        shared |= 0x10;
+    }
+    if body.invisible {
+        shared |= 0x20;
+    }
+    if body.glowing {
+        shared |= 0x40;
+    }
+    if body.gliding {
         shared |= -128;
     }
     shared
+}
+
+/// The shape a level of the dimension type `d` has.
+fn level_shape(d: &horizon_protocol::registry::DimensionType) -> crate::chunk::LevelShape {
+    crate::chunk::LevelShape {
+        sky_light: d.has_skylight,
+        min_y: d.min_y,
+        height: d.height,
+        logical_height: d.height,
+    }
 }
 
 #[cfg(test)]

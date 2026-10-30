@@ -198,6 +198,15 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.extra.leash_spin = 0.0;
         return;
     };
+    // Leashable.tickLeash: a dying entity cannot interact with the level.
+    if !m.alive() {
+        events.push(MobEvent::LeashBreak {
+            mob: m.id,
+            drop: true,
+            sound: false,
+        });
+        return;
+    }
     let Some(state) = holder_state(w, holder) else {
         // The holder is gone: the lead drops.
         if !matches!(holder, Holder::Player) {
@@ -327,6 +336,16 @@ pub fn leash_offset(m: &Mob) -> [f64; 3] {
     if super::llama::is_llama(m.species()) {
         // Llama.getLeashOffset.
         [0.0, 0.75 * m.eye_height(), f64::from(m.width()) * 0.5]
+    } else if m.species() == super::Species::Wolf {
+        // Wolf.getLeashOffset: 0.6 of the eye height.
+        [
+            0.0,
+            f64::from(0.6_f32 * m.eye_height() as f32),
+            f64::from(m.width() * 0.4),
+        ]
+    } else if m.species() == super::Species::Bee {
+        // Bee.getLeashOffset: half the eye height, a fifth of the width ahead.
+        [0.0, 0.5 * m.eye_height(), f64::from(m.width() * 0.2)]
     } else {
         [0.0, m.eye_height(), f64::from(m.width() * 0.4)]
     }

@@ -5,7 +5,7 @@
 //! menu are returned for the game to drop.
 use super::guest::Guest;
 use crate::{
-    bundle::{Contents, can_be_in_bundle},
+    bundle::{Contents, can_be_in_bundle, toggle_selected},
     items::{ItemStack, Items},
     world::World,
 };
@@ -37,6 +37,10 @@ pub struct Menu {
     pub sent_data: Vec<i16>,
 }
 
+/// The y of the key a chest minecart's or chest boat's items are kept under
+/// while a menu shows them.
+pub const VEHICLE_KEY_Y: i32 = -100_000;
+
 /// Where the slots of a container menu live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slots {
@@ -63,6 +67,21 @@ impl Slots {
         self.halves()
             .iter()
             .all(|k| world.block_entities.contains_key(k))
+    }
+    /// `Container.stillValid` for the guest: the block entities are there
+    /// and the guest is within reach of each (`stillValidBlockEntity`). The
+    /// ender chest's block is `at` (`PlayerEnderChestContainer.activeChest`).
+    pub fn still_valid(self, world: &World, guest: &Guest, at: Option<(i32, i32, i32)>) -> bool {
+        let blocks = match self {
+            Slots::Ender => at.into_iter().collect(),
+            _ => self.halves(),
+        };
+        // A vehicle's container is kept under a key, not a block: the game
+        // checks its reach to the vehicle (`isChestVehicleStillValid`).
+        self.valid(world)
+            && blocks
+                .iter()
+                .all(|k| k.1 == VEHICLE_KEY_Y || guest.within_block_range([k.0, k.1, k.2], 4.0))
     }
     /// Container slot `n`.
     pub fn get(self, world: &World, guest: &Guest, mut n: usize) -> Option<ItemStack> {
@@ -111,6 +130,8 @@ pub struct View<'a> {
     pub guest: &'a mut Guest,
     /// The container's slots, or None for the inventory menu.
     pub container: Option<&'a mut [Option<ItemStack>]>,
+    /// The container is a shulker box (`ShulkerBoxSlot`).
+    pub shulker: bool,
 }
 
 impl View<'_> {
@@ -152,6 +173,12 @@ impl View<'_> {
     fn may_place(&self, i: usize, stack: &ItemStack, rules: &dyn Rules) -> bool {
         if self.container.is_none() && (5..=8).contains(&i) {
             return rules.armor_index(&stack.item) == Some(i - 5);
+        }
+        if self.shulker
+            && self.container.as_ref().is_some_and(|c| i < c.len())
+            && !crate::menu::fits_inside_container_items(stack)
+        {
+            return false;
         }
         self.enabled(i)
     }
@@ -487,7 +514,10 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
             }
         }
         (carried, _) => {
+            // toggleSelectedItem(-1), then the click goes on.
             view.guest.carried = carried;
+            toggle_selected(&mut bundle, -1);
+            view.set(i, Some(bundle));
             return false;
         }
     }
@@ -630,6 +660,7 @@ mod tests {
     use super::*;
     use crate::lan::{Joined, PlayerSender};
     use horizon_protocol::packets::configuration::ClientInformation;
+    use horizon_world::loot::PackOverlay;
     use std::sync::{Arc, atomic::AtomicI32, mpsc};
 
     struct ItemRules(Items);
@@ -665,6 +696,26 @@ mod tests {
         )
     }
 
+    /// The prepared resources' items, or None (the test is skipped) without them.
+    fn rules() -> Option<ItemRules> {
+        let root = std::env::var_os("HORIZON_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("items.json").exists() {
+            eprintln!("skipping resource-backed menu check: {}", root.display());
+            return None;
+        }
+        let registry = horizon_world::level::data::load_registry(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, &registry).unwrap();
+        Some(ItemRules(
+            Items::load(&root, &registry, &facts, &PackOverlay::NONE).unwrap(),
+        ))
+    }
+
     fn contents(stack: &Option<ItemStack>) -> Vec<(String, u32)> {
         let inside = stack.as_ref().and_then(|s| s.data());
         inside.map_or(Vec::new(), |d| {
@@ -680,20 +731,9 @@ mod tests {
     /// slot; a stack clicked onto a bundle goes in, as far as it fits.
     #[test]
     fn guest_chest_clicks_fill_and_empty_bundles() {
-        let root = std::env::var_os("HORIZON_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../.local/horizon-client")
-                    .join(horizon_core::VANILLA_VERSION)
-            });
-        if !root.join("items.json").exists() {
-            eprintln!("skipping resource-backed bundle check: {}", root.display());
+        let Some(rules) = rules() else {
             return;
-        }
-        let registry = horizon_world::level::data::load_registry(&root).unwrap();
-        let facts = crate::blocks::BlockFacts::load(&root, &registry).unwrap();
-        let rules = ItemRules(Items::load(&root, &registry, &facts).unwrap());
+        };
         let mut g = guest();
         let mut chest = vec![
             Some(ItemStack::new("minecraft:stone", 48)),
@@ -704,6 +744,7 @@ mod tests {
         let mut view = View {
             guest: &mut g,
             container: Some(&mut chest),
+            shulker: false,
         };
         view.guest.carried = Some(ItemStack::new("minecraft:bundle", 1));
         // Left click with the bundle: the stone goes in.
@@ -735,5 +776,38 @@ mod tests {
             Some(("minecraft:ender_pearl", 16))
         );
         assert_eq!(contents(&view.get(2)), []);
+    }
+
+    #[test]
+    fn guest_shulker_box_menu_refuses_shulker_boxes() {
+        let Some(rules) = rules() else {
+            return;
+        };
+        for shulker in [true, false] {
+            let mut g = guest();
+            let mut container = vec![None; 27];
+            let mut drag = None;
+            let mut view = View {
+                guest: &mut g,
+                container: Some(&mut container),
+                shulker,
+            };
+            // Carried onto an empty slot, shift-clicked from the hotbar
+            // (menu slot 27 + 27) and swapped in with the number key 1.
+            view.guest.carried = Some(ItemStack::new("minecraft:red_shulker_box", 1));
+            click(&mut view, &mut drag, 0, 0, input::PICKUP, &rules);
+            assert_eq!(view.get(0).is_none(), shulker);
+            view.guest.carried = None;
+            view.guest.inventory[0] = Some(ItemStack::new("minecraft:shulker_box", 1));
+            click(&mut view, &mut drag, 54, 0, input::QUICK_MOVE, &rules);
+            assert_eq!(view.guest.inventory[0].is_some(), shulker);
+            view.guest.inventory[0] = Some(ItemStack::new("minecraft:blue_shulker_box", 1));
+            click(&mut view, &mut drag, 5, 0, input::SWAP, &rules);
+            assert_eq!(view.get(5).is_none(), shulker);
+            // Anything else goes in.
+            view.guest.carried = Some(ItemStack::new("minecraft:diamond", 1));
+            click(&mut view, &mut drag, 9, 0, input::PICKUP, &rules);
+            assert!(view.get(9).is_some());
+        }
     }
 }

@@ -247,6 +247,12 @@ pub fn beacon_required_levels(effect: Option<&str>) -> i32 {
         .map_or(i32::MAX, |i| i as i32 + 1)
 }
 
+/// `Item.canFitInsideContainerItems` (`ShulkerBoxSlot.mayPlace`): shulker
+/// boxes cannot nest.
+pub fn fits_inside_container_items(stack: &ItemStack) -> bool {
+    !stack.item.ends_with("shulker_box")
+}
+
 /// The containers a menu spans.
 const PLAYER: usize = 0;
 const MAIN: usize = 1;
@@ -280,8 +286,12 @@ pub struct Menu {
     /// Sounds the player makes (a bundle's insert and remove), for the
     /// caller to play at the player as `Entity.playSound`.
     pub player_sounds: Vec<&'static str>,
-    /// Recipes whose result was taken (`awardUsedRecipes`), for the caller.
-    pub crafted: Vec<String>,
+    /// Recipes whose result was taken (`awardUsedRecipes`) and the stacks that
+    /// went into each, for the caller.
+    pub crafted: Vec<(String, Vec<Option<ItemStack>>)>,
+    /// Potions taken from a brewing stand's bottle slots
+    /// (`PotionSlot.onTake`), for the caller.
+    pub brewed: Vec<ItemStack>,
     /// `LivingEntity.onEquipItem` calls that change the item: the
     /// `EquipmentSlot` name and the new stack, in order, for the caller.
     pub equipped: Vec<(&'static str, Option<ItemStack>)>,
@@ -677,6 +687,7 @@ impl Menu {
             sounds: Vec::new(),
             player_sounds: Vec::new(),
             crafted: Vec::new(),
+            brewed: Vec::new(),
             equipped: Vec::new(),
             merchant: None,
             stone: Stonecutter::default(),
@@ -995,7 +1006,7 @@ impl Menu {
     fn anvil_result(&mut self, env: &Env) {
         let hover = self.containers[MAIN][0]
             .as_ref()
-            .map(|i| crate::stations::hover_name(&|id| env.names.item(id), i))
+            .map(|i| crate::stations::hover_name(&|id| env.names.display_item(id), i))
             .unwrap_or_default();
         let out = crate::stations::anvil_result(
             env.enchantments,
@@ -1062,7 +1073,8 @@ impl Menu {
             return false;
         }
         if let Some(result) = self.containers[RESULT][0].as_mut() {
-            result.data_mut().custom_name = (!name.trim().is_empty()).then(|| name.clone());
+            result.data_mut().custom_name = (!name.trim().is_empty())
+                .then(|| horizon_world::nbt::Tag::String(name.as_str().into()));
             result.tidy();
         }
         self.anvil.name = Some(name);
@@ -1210,11 +1222,6 @@ impl Menu {
         env.items.get(&stack.item).is_some_and(|i| i.fuel.is_some())
     }
 
-    /// `Item.canFitInsideContainerItems`: shulker boxes cannot nest.
-    fn fits_inside(stack: &ItemStack) -> bool {
-        !(stack.item.ends_with("shulker_box"))
-    }
-
     // ---- Slot ----
 
     fn may_place(&self, env: &Env, s: usize, stack: &ItemStack) -> bool {
@@ -1247,7 +1254,7 @@ impl Menu {
                         .as_deref()
                         .is_some_and(|m| i.equip_allowed.as_ref().is_none_or(|a| a.contains(m)))
             }),
-            Role::Shulker => Self::fits_inside(stack),
+            Role::Shulker => fits_inside_container_items(stack),
             Role::Fuel => Self::is_fuel(env, stack) || Self::is_bucket(stack),
             Role::Output | Role::CraftResult | Role::Inert => false,
             Role::CrafterIn => self.data.get(self.slots[s].index) != Some(&1),
@@ -1503,7 +1510,17 @@ impl Menu {
     }
 
     /// `ResultSlot.onTake` and the other `Slot.onTake` overrides.
-    fn on_take(&mut self, env: &Env, s: usize) {
+    fn on_take(&mut self, env: &Env, s: usize, taken: &ItemStack) {
+        if self.slots[s].role == Role::Potion {
+            // BrewingStandMenu.PotionSlot.onTake: a stack with potion contents.
+            if matches!(
+                &*taken.item,
+                "minecraft:potion" | "minecraft:splash_potion" | "minecraft:lingering_potion"
+            ) {
+                self.brewed.push(taken.clone());
+            }
+            return;
+        }
         if self.slots[s].role == Role::MerchantResult {
             self.merchant_take(env);
             return;
@@ -1512,8 +1529,10 @@ impl Menu {
             // StonecutterMenu's result onTake: awardUsedRecipes, one input
             // used up, the result again for the selected recipe.
             if let Some(r) = self.stone.used {
-                self.crafted
-                    .push(env.station_recipes.stonecutting[r].id.clone());
+                self.crafted.push((
+                    env.station_recipes.stonecutting[r].id.clone(),
+                    vec![self.containers[MAIN][0].clone()],
+                ));
             }
             if self.remove(env, 0, 1).is_some() {
                 self.stone_setup_result(env, self.data[0]);
@@ -1539,6 +1558,17 @@ impl Menu {
         }
         if self.slots[s].role == Role::CombineResult {
             // SmithingMenu.onTake: awardUsedRecipes, then one of each input.
+            if self.kind == Kind::Smithing {
+                let inputs = [0, 1, 2].map(|i| self.containers[MAIN][i].clone());
+                if let Some((id, _)) = env.station_recipes.smithing_recipe(
+                    env.enchantments,
+                    inputs[0].as_ref(),
+                    inputs[1].as_ref(),
+                    inputs[2].as_ref(),
+                ) {
+                    self.crafted.push((id.to_owned(), inputs.to_vec()));
+                }
+            }
             for i in 0..3 {
                 if let Some(mut stack) = self.containers[MAIN][i].clone() {
                     stack.count -= 1;
@@ -1580,7 +1610,7 @@ impl Menu {
         let n = self.grid_size;
         let grid = self.containers[GRID].clone();
         if let Some((id, _)) = env.recipes.find(&grid, n) {
-            self.crafted.push(format!("minecraft:{id}"));
+            self.crafted.push((format!("minecraft:{id}"), grid.clone()));
         }
         let remaining = env
             .recipes
@@ -1670,7 +1700,7 @@ impl Menu {
         max_amount: u32,
     ) -> Option<ItemStack> {
         let mut result = self.try_remove(env, s, amount, max_amount)?;
-        self.on_take(env, s);
+        self.on_take(env, s, &result);
         if self.slots[s].role == Role::CartoResult {
             Self::map_crafted(env, &mut result);
         }
@@ -2345,7 +2375,7 @@ impl Menu {
             return None;
         }
         if after_take || matches!(self.kind, Kind::Inventory | Kind::Crafting) {
-            self.on_take(env, index);
+            self.on_take(env, index, &clicked);
         }
         // What the result slot's move left over is dropped.
         if (index == 0 && matches!(self.kind, Kind::Inventory | Kind::Crafting))
@@ -2593,7 +2623,7 @@ impl Menu {
                     };
                     if let Some(mut taken) = self.try_remove(env, s, amount, u32::MAX) {
                         self.carried = Some(taken.clone());
-                        self.on_take(env, s);
+                        self.on_take(env, s, &taken);
                         if self.slots[s].role == Role::CartoResult {
                             // onTake's onCraftedBy edits the carried stack.
                             Self::map_crafted(env, &mut taken);
@@ -2627,7 +2657,7 @@ impl Menu {
                             if let Some(c) = self.carried.as_mut() {
                                 c.count += taken.count;
                             }
-                            self.on_take(env, s);
+                            self.on_take(env, s, &taken);
                             if self.slots[s].role == Role::CartoResult {
                                 // onCraftedBy edits the taken stack, not the carried one.
                                 Self::map_crafted(env, &mut taken);
@@ -2655,7 +2685,7 @@ impl Menu {
                 if self.may_pickup(env, target) {
                     self.containers[PLAYER][inv_slot] = Some(taken.clone());
                     self.set_by_player(env, target, None);
-                    self.on_take(env, target);
+                    self.on_take(env, target, &taken);
                     if self.slots[target].role == Role::CartoResult
                         && let Some(stack) = self.containers[PLAYER][inv_slot].as_mut()
                     {
@@ -2683,14 +2713,14 @@ impl Menu {
                         let part = split(&mut source, max);
                         self.containers[PLAYER][inv_slot] = Some(source);
                         self.set_by_player(env, target, Some(part));
-                        self.on_take(env, target);
+                        self.on_take(env, target, &taken);
                         if !self.inventory_add(env, &mut taken) {
                             self.drop_stack(&taken);
                         }
                     } else {
-                        self.containers[PLAYER][inv_slot] = Some(taken);
+                        self.containers[PLAYER][inv_slot] = Some(taken.clone());
                         self.set_by_player(env, target, Some(source));
-                        self.on_take(env, target);
+                        self.on_take(env, target, &taken);
                     }
                 }
             }
@@ -2993,6 +3023,7 @@ impl Menu {
 pub(crate) mod tests {
     use super::*;
     use crate::{banner::Banners, brewing::Brewing, crafting::Recipes};
+    use horizon_world::loot::PackOverlay;
 
     fn stack(item: &str, count: u32) -> Option<ItemStack> {
         Some(ItemStack {
@@ -3022,11 +3053,12 @@ pub(crate) mod tests {
         if !root.join("items.json").exists() {
             return;
         }
-        let items = Items::catalog(&root).unwrap();
-        let recipes = Recipes::load(&root, &items).unwrap();
-        let brewing = Brewing::load(&root, &items);
+        let items = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+        let brewing = Brewing::load(&root, &items, &PackOverlay::NONE);
         let banners = Banners::load(&root);
-        let station_recipes = crate::stations::StationRecipes::load(&root, &items);
+        let station_recipes =
+            crate::stations::StationRecipes::load(&root, &items, &PackOverlay::NONE);
         let enchantments = crate::enchant::Enchantments::default();
         let names = crate::creative::Names::default();
         let env = Env {
@@ -3208,6 +3240,66 @@ pub(crate) mod tests {
             assert_eq!(menu.carried, stack("dirt", 10));
             assert_eq!(menu.player_item(0), None);
             assert_eq!(menu.slot(0), stack("dirt", 1).as_ref());
+        });
+    }
+
+    /// #1737: a Shift+Right-Click quick move in a chest (a double chest's
+    /// 54 slots) moves the stack and leaves the menu's state clean, so the
+    /// next quick move still moves its stack and the inventory still
+    /// answers.
+    #[test]
+    fn a_chest_quick_move_keeps_the_next_one_working() {
+        with_menu(Kind::Chest(6), |env, menu| {
+            menu.creative = false;
+            // The hotbar holds two stacks; the chest is empty.
+            menu.set_slot(env, 81, stack("cobblestone", 64));
+            menu.set_slot(env, 82, stack("dirt", 32));
+            // Shift+Right-Click on the hotbar: the stack goes into the chest.
+            menu.click(env, 81, 1, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(81), None);
+            assert_eq!(menu.slot(0).map(|s| s.count), Some(64));
+            // Nothing is left on the cursor and no quick craft is running.
+            assert_eq!(menu.carried, None);
+            assert_eq!(menu.quick_status, 0);
+            // The next quick move still works.
+            menu.click(env, 82, 1, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(82), None);
+            assert_eq!(menu.slot(1).map(|s| s.count), Some(32));
+            assert_eq!(menu.carried, None);
+            assert_eq!(menu.quick_status, 0);
+        });
+    }
+
+    /// #1832: a potion taken from the creative inventory and put in the
+    /// hotbar keeps its `PotionContents` (the brew), as vanilla's
+    /// `PotionContents.createItemStack` builds it: the item tab's stack is
+    /// the real one, and the hotbar slot holds it as it is.
+    #[test]
+    fn a_creative_potion_keeps_its_contents_in_the_hotbar() {
+        let snbt = r#"{components:{"minecraft:potion_contents":{potion:"minecraft:swiftness"}},count:1,id:"minecraft:potion"}"#;
+        let potion = crate::item_data::parse_stack(snbt).unwrap().unwrap();
+        assert_eq!(potion.potion(), Some("minecraft:swiftness"));
+        // The creative screen hands the stack over...
+        let mut carried = None;
+        crate::creative::click_display(
+            &mut carried,
+            Some(&potion),
+            |_: &ItemStack| 1,
+            0,
+            Input::Pickup,
+        );
+        assert_eq!(
+            carried.as_ref().and_then(|s| s.potion()),
+            Some("minecraft:swiftness")
+        );
+        // ... and the hotbar slot keeps it: it is not the uncraftable
+        // potion, which is a `minecraft:potion` with no contents at all.
+        with_menu(Kind::ItemPicker, |env, menu| {
+            menu.carried = carried;
+            menu.click(env, 45, 0, Input::Pickup).unwrap();
+            let in_hand = menu.slot(45).expect("the hotbar slot");
+            assert_eq!(in_hand.potion(), Some("minecraft:swiftness"));
+            assert_eq!(&*in_hand.item, "minecraft:potion");
         });
     }
 }

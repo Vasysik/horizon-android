@@ -70,8 +70,7 @@ impl Game<'_> {
     /// One ordinary click on a game slot. False when nothing took it.
     pub(super) fn tweak_click(&mut self, slot: usize, button: i32, input: Input) -> bool {
         if self.remote.is_some() {
-            let ordinal = super::remote::input_ordinal(input);
-            return self.remote_slot_click(slot, button as i8, ordinal);
+            return self.remote_menu_ops(&[(Some(slot), button, input)]);
         }
         if !self.menu_click(Some(slot), button, input) {
             return false;
@@ -399,7 +398,7 @@ impl Game<'_> {
         }
         let views: Vec<Option<ItemStack>> = slots.iter().map(|&s| self.slot_view(s)).collect();
         let clicks = {
-            let names = |id: &str| self.pack.names.item(id);
+            let names = |id: &str| self.pack.names.display_item(id);
             let rank = |s: &ItemStack| {
                 let order = self.creative_screen.order_of(s).unwrap_or(usize::MAX);
                 (order, hover_name(&names, s))

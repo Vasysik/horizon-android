@@ -218,8 +218,9 @@ impl Game<'_> {
         );
     }
     /// `CreakingHeartBlock.playerWillDestroy`: the heart's creaking twitches to
-    /// death and a natural heart drops experience.
-    pub(super) fn creaking_heart_broken(&mut self, pos: [i32; 3]) {
+    /// death and a natural heart drops experience. `onExplosionHit` does the
+    /// same for the creaking (`by_player` false), without the experience.
+    pub(super) fn creaking_heart_broken(&mut self, pos: [i32; 3], by_player: bool) {
         let key = (pos[0], pos[1], pos[2]);
         if !matches!(
             self.world.block_entities.get(&key),
@@ -242,7 +243,7 @@ impl Game<'_> {
             .state(state)
             .and_then(|s| s.properties.get("natural").cloned())
             .is_some_and(|v| v == "true");
-        if natural && !self.creative && !self.spectator() {
+        if by_player && natural && !self.creative && !self.spectator() {
             let xp = 20 + self.world.random.next_int_bound(5).unwrap_or(0) as u32;
             self.spawn_orbs(
                 [
@@ -341,7 +342,7 @@ impl Game<'_> {
                     let (lx, lz, ly) = ((i & 15) as i32, ((i >> 4) & 15) as i32, (i >> 8) as i32);
                     let pos = (
                         key.0 * 16 + lx,
-                        horizon_client::chunk::MIN_Y + si as i32 * 16 + ly,
+                        self.world.bottom_y() + si as i32 * 16 + ly,
                         key.1 * 16 + lz,
                     );
                     self.world

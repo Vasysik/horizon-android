@@ -9,8 +9,8 @@
 //! server (`LocalPlayer.tick`: `ServerboundMoveVehiclePacket`,
 //! `AbstractBoat.tick`: `ServerboundPaddleBoatPacket`). A minecart moves on
 //! the server with the rider's input, and the rider sits in it.
-use super::{Game, Keys, view_vector};
-use horizon_core::geometry::Vec3;
+use super::{Game, Keys, ray_box};
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::packets::play::{self, Serverbound as S};
 
 /// An object under the crosshair: its entity id, how far along the view it
@@ -24,10 +24,9 @@ pub(super) struct ObjectHit {
 
 impl Game<'_> {
     /// The nearest boat, minecart, item frame, armor stand or painting the
-    /// view hits within reach.
-    pub(super) fn remote_object_hit(&self) -> Option<ObjectHit> {
-        let eye = self.eye_position()?;
-        let dir = view_vector(self.yaw, self.pitch);
+    /// view hits within reach; also End crystals when attacking.
+    pub(super) fn remote_object_hit(&self, attacking: bool) -> Option<ObjectHit> {
+        let (eye, dir) = self.aim()?;
         let at = |d: f64| {
             [
                 eye[0] + dir[0] * d,
@@ -56,6 +55,11 @@ impl Game<'_> {
             let p = a.position;
             hits.push((a.id as i32, d, [p.x, p.y, p.z]));
         }
+        if let Some((i, d, _)) = self.cushion_hit() {
+            let c = &self.cushions[i];
+            let p = c.position;
+            hits.push((c.id as i32, d, [p.x, p.y, p.z]));
+        }
         if let Some((i, d)) = self.boat_hit() {
             let p = self.boats[i].position;
             hits.push((self.boats[i].id as i32, d, [p.x, p.y, p.z]));
@@ -63,6 +67,24 @@ impl Game<'_> {
         if let Some((i, d)) = self.cart_hit() {
             let p = self.carts[i].position;
             hits.push((self.carts[i].id as i32, d, [p.x, p.y, p.z]));
+        }
+        if attacking {
+            // EndCrystal.isPickable: its 2 x 2 box, with the server's entity
+            // id, not special_targets' local projectile target id.
+            // Entity.interact passes on a crystal, so right clicks use the item.
+            let reach = if self.creative { 5.0 } else { 3.0 };
+            for c in self.crystals.iter().filter(|c| c.id != 0) {
+                let p = c.position;
+                let bounds = Aabb::new(
+                    Vec3::new(p.x - 1.0, p.y, p.z - 1.0),
+                    Vec3::new(p.x + 1.0, p.y + 2.0, p.z + 1.0),
+                );
+                if let Some(d) = ray_box(eye, dir, reach, bounds) {
+                    hits.push((c.id as i32, d, [p.x, p.y, p.z]));
+                }
+            }
+            // EnderDragonPart.isPickable: the server's dragon hurts by part.
+            hits.extend(self.remote_dragon_part_hit(eye, dir, reach));
         }
         let (id, distance, origin) = hits.into_iter().min_by(|a, b| a.1.total_cmp(&b.1))?;
         let point = at(distance);
@@ -94,6 +116,13 @@ impl Game<'_> {
                 m.extra.passenger = true;
             }
         }
+        for (id, display) in &mut self.text_displays {
+            if passengers.contains(id) {
+                display.vehicle = Some(vehicle_id);
+            } else if display.vehicle == Some(vehicle_id) {
+                display.vehicle = None;
+            }
+        }
         if passengers.contains(&me) {
             if self.riding != Some(vehicle_id) {
                 self.riding = Some(vehicle_id);
@@ -105,6 +134,17 @@ impl Game<'_> {
         } else if self.riding == Some(vehicle_id) {
             // The server takes the player out, then teleports it.
             self.riding = None;
+            // HappyGhast.removePassenger: a still timeout of 10 (the server's
+            // STAYS_STILL confirms it), and the rider lands on top of the ghast
+            // (`place_ghast_under`).
+            if let Some(m) = self.mobs.iter_mut().find(|m| {
+                m.id == vehicle_id && m.species() == horizon_client::mobs::Species::HappyGhast
+            }) {
+                m.extra.counter = 10;
+                if let Some(r) = self.remote.as_mut() {
+                    r.ghast_dismount = Some(vehicle_id);
+                }
+            }
         }
     }
 
@@ -122,11 +162,16 @@ impl Game<'_> {
             self.position_rider();
             return true;
         }
-        let seat = if let Some(i) = self.boats.iter().position(|b| b.id == id) {
+        let seat = if let Some(c) = self.cushions.iter().find(|c| c.id == id) {
+            // The seat does not move; the rider sits on the cushion.
+            Some(c.seat())
+        } else if let Some(i) = self.boats.iter().position(|b| b.id == id) {
             // AbstractBoat.tick on the controlling client: steer and move.
-            let mut b = self.boats[i].clone();
+            // It steers with the input `LocalPlayer.rideTick` latched on the
+            // previous tick, so the paddle packet describes the motion the
+            // server is sent; this tick's keys are latched after it ticked.
+            let mut b = self.tick_boat(self.boats[i].clone(), true);
             b.input = [keys.left, keys.right, keys.forward, keys.backward];
-            let b = self.tick_boat(b, true);
             // positionRider: the seat turns with the boat; clampRotation.
             self.yaw += b.delta_rotation;
             let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;

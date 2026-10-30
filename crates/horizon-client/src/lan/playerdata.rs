@@ -27,6 +27,11 @@ pub fn uuid_ints(uuid: u128) -> [i32; 4] {
         uuid as i32,
     ]
 }
+/// `UUIDUtil.uuidFromIntArray`.
+pub fn ints_uuid(ints: [i32; 4]) -> u128 {
+    ints.iter()
+        .fold(0, |acc, &i| acc << 32 | u128::from(i as u32))
+}
 
 /// Whether a saved file exists for this player.
 pub fn exists(world: &Path, uuid: u128) -> bool {
@@ -80,6 +85,8 @@ pub fn apply(guest: &mut Guest, level: &Level) {
         .map(|s| [s[0] + 0.5, s[1], s[2] + 0.5]);
     guest.respawn_elsewhere = level.respawn_elsewhere.clone();
     guest.saved = level.player_extra.clone();
+    guest.seen_credits = level.seen_credits;
+    guest.last_death = level.last_death.clone();
     let extra = level.player_extra.as_ref();
     let short = |key: &str, default: i64| {
         extra
@@ -161,6 +168,8 @@ pub fn store(guest: &Guest, level: &mut Level) {
     level.spawn = guest.spawn.map(|s| [s[0] - 0.5, s[1], s[2] - 0.5]);
     level.respawn_elsewhere = guest.respawn_elsewhere.clone();
     level.on_ground = guest.on_ground;
+    level.seen_credits = guest.seen_credits;
+    level.last_death = guest.last_death.clone();
     level.player_extra = guest.saved.clone();
     // The live body's fire, air and fall distance (Entity.saveWithoutId),
     // or what the file had while the player has no body yet.
