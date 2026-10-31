@@ -6,6 +6,8 @@
 mod game;
 #[path = "android/launcher.rs"]
 mod launcher;
+#[path = "android/mc_ui.rs"]
+mod mc_ui;
 // Share the desktop launcher's actual search, compatibility checks, downloads,
 // dependency resolution and Java content porting; GPUI itself is desktop-only.
 // These files are formatted in the launcher's separate Rust 2021 workspace.
