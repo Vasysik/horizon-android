@@ -16365,7 +16365,11 @@ fn run_loading(
     let menu = startup_menu::StartupMenu::new(&options, pack_error.as_deref())?;
     let sound_registry = options.dedicated.is_none().then(|| {
         let root = vanilla_root.clone();
-        std::thread::spawn(move || horizon_client::sound_events::SoundRegistry::load(&root))
+        std::thread::spawn(move || {
+            // Starling: a phone's setup before 0.1.6 left the sounds out.
+            horizon_client::preparer::complete_sounds(&root);
+            horizon_client::sound_events::SoundRegistry::load(&root)
+        })
     });
     let loading = Loading {
         window: None,
@@ -16520,6 +16524,8 @@ pub fn run() -> Result<()> {
     )?;
     let gui = loaded.gui.ok_or("missing menu bundle")?;
     options.resources = loaded.root.clone();
+    // Starling: a phone's setup before 0.1.6 left the sounds out.
+    horizon_client::preparer::complete_sounds(&vanilla_root);
     let audio = if !options.execution_role.is_client() {
         Audio::silent(&options.resources)
     } else {

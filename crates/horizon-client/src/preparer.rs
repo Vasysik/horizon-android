@@ -152,6 +152,11 @@ fn run(resources: &Path) -> Result<(), String> {
             *shared() = Stage::Preparing(line.to_owned());
         },
     )?;
+    // The sounds: `prepare` leaves them out (the desktop launcher copies them after it,
+    // backend.rs). Without them the game plays, silent.
+    if let Err(e) = copy_sounds(&kit) {
+        log::warn!("Horizon: no sounds (the game will be silent): {e}");
+    }
     // The prepared folder becomes the resources; the ones there did not load.
     if resources.exists() {
         std::fs::remove_dir_all(resources).map_err(|e| format!("{}: {e}", resources.display()))?;
@@ -167,6 +172,62 @@ fn run(resources: &Path) -> Result<(), String> {
         let _ = std::fs::remove_dir_all(done);
     }
     Ok(())
+}
+
+/// The fetched files' sounds into `kit`'s prepared folder (horizon-prepare's `sounds`).
+fn copy_sounds(kit: &Path) -> Result<(), String> {
+    horizon_prepare::sounds(kit, Some(&crate::accounts::files_root()), &|line| {
+        log::info!("Horizon: preparing: {line}");
+        *shared() = Stage::Preparing(line.to_owned());
+    })
+    .map(drop)
+}
+
+/// Starling before 0.1.6 prepared the game without its sounds: once the fetched files are
+/// there, they are added to the prepared `resources`, before the game reads its sounds.
+pub fn complete_sounds(resources: &Path) {
+    if !crate::platform::registered()
+        || !resources.is_dir()
+        || resources.join("assets/minecraft/sounds.json").is_file()
+        || crate::accounts::files() != crate::accounts::Files::Ready
+    {
+        return;
+    }
+    match add_sounds(resources) {
+        Ok(()) => log::info!(
+            "Horizon: the game's sounds were added to {}",
+            resources.display()
+        ),
+        Err(e) => log::warn!("Horizon: the game's sounds were not added: {e}"),
+    }
+}
+
+/// horizon-prepare copies into the kit's prepared folder: a link to `resources` stands in for
+/// it while it does.
+#[cfg(unix)]
+fn add_sounds(resources: &Path) -> Result<(), String> {
+    let kit = home().join("kit");
+    unpack_kit(&kit)?;
+    let version = horizon_prepare::artifacts::Lock::read(&kit)?.version;
+    let target = kit.join(".local/horizon-client").join(&version);
+    // A link left by a stop midway, or the work of a preparation cut short.
+    let _ = std::fs::remove_file(&target);
+    let _ = std::fs::remove_dir_all(&target);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    std::os::unix::fs::symlink(resources, &target)
+        .map_err(|e| format!("{}: {e}", target.display()))?;
+    let copied = horizon_prepare::sounds(&kit, Some(&crate::accounts::files_root()), &|line| {
+        log::info!("Horizon: adding the sounds: {line}")
+    });
+    let _ = std::fs::remove_file(&target);
+    copied.map(drop)
+}
+
+#[cfg(not(unix))]
+fn add_sounds(_: &Path) -> Result<(), String> {
+    Err("only a phone's setup prepares on the device".into())
 }
 
 /// The low-budget skin the setup draws the game's menus with while their own resources are not
