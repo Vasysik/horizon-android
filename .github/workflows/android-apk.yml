@@ -1,10 +1,10 @@
-# On-demand public release APKs for the ARM ABIs players actually use. Push an
-# apk-* tag (or dispatch manually) and both APKs are built from that one fixed
-# commit, audited by tools/check_android_release.py and attached to a GitHub
-# release. Mojang inputs download at build time and never enter Git. The dev
-# signing key is generated once per run (or restored from the
-# ANDROID_DEV_KEYSTORE_B64 secret) and shared by both ABIs, so the two APKs
-# keep one signing identity.
+# On-demand public release APKs. Push an apk-* tag (or dispatch manually) and
+# the armeabi-v7a APK is built from that one fixed commit, audited by
+# tools/check_android_release.py and attached to a GitHub release. (Add more
+# matrix entries, e.g. arm64-v8a, to publish additional ABIs.) Mojang inputs
+# download at build time and never enter Git. The dev signing key is generated
+# once per run (or restored from the ANDROID_DEV_KEYSTORE_B64 secret) and kept
+# in an artifact so later runs can preserve the signing identity.
 name: Android release APKs
 on:
   push:
@@ -48,8 +48,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - abi: arm64-v8a
-            target: aarch64-linux-android
           - abi: armeabi-v7a
             target: armv7-linux-androideabi
     steps:
@@ -58,6 +56,8 @@ jobs:
         run: |
           # Newer runner images ship no sdkmanager; fall back to Google's
           # command-line tools and a writable SDK root when that happens.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libasound2-dev pkg-config
           image_sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           if command -v sdkmanager >/dev/null 2>&1; then
             sdk="$image_sdk"; manager=$(command -v sdkmanager)
@@ -111,13 +111,26 @@ jobs:
       - name: Surface log tails as annotations
         if: failure()
         run: |
-          emit() {
-            [ -f "$1" ] || return 0
-            body=$(tail -c 12000 "$1" | sed -e 's/%/%25/g' -e 's/\r//g' | awk 'BEGIN { ORS = "%0A" } { print }' | sed 's/%0A$//')
-            echo "::error title=$2::$body"
-          }
-          emit "$RUNNER_TEMP/prepare.log" "prepare log tail"
-          emit "$RUNNER_TEMP/build.log" "build log tail"
+          # Annotation messages truncate at 4096 chars, so the last 12 KB of
+          # the build log goes out in three ordered chunks; the final chunk
+          # always contains the actual error.
+          encode() { sed -e 's/%/%25/g' -e 's/\r//g' | awk 'BEGIN { ORS = "%0A" } { print }' | sed 's/%0A$//'; }
+          log="$RUNNER_TEMP/build.log"
+          if [ -f "$log" ]; then
+            tail -c 12000 "$log" > "$RUNNER_TEMP/tail.log"
+            total=$(wc -c < "$RUNNER_TEMP/tail.log")
+            part=1
+            start=0
+            while [ "$start" -lt "$total" ]; do
+              body=$(dd if="$RUNNER_TEMP/tail.log" bs=1 skip="$start" count=3600 2>/dev/null | encode)
+              echo "::error title=build log tail ${part} of 3 (${start}-${total})::${body}"
+              part=$((part + 1))
+              start=$((start + 3600))
+            done
+          fi
+          if [ -f "$RUNNER_TEMP/prepare.log" ]; then
+            echo "::error title=prepare log tail::$(tail -c 3600 "$RUNNER_TEMP/prepare.log" | encode)"
+          fi
           echo "::error title=disk::$(df -h / | awk 'NR == 2 { print "total " $2 ", available " $4 }')"
       - name: Upload full logs
         if: always()
@@ -151,7 +164,7 @@ jobs:
           pattern: apk-*
           merge-multiple: true
           path: out
-      - name: Publish the release with both APKs
+      - name: Publish the release with the APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -160,19 +173,19 @@ jobs:
           cat > notes.md <<EOF
           > 🤖 Published by kushaladhikari982648-lgtm's AI agent (Arena.ai Agent Mode), not by kushaladhikari982648-lgtm personally.
 
-          Public release APKs built from commit \`${commit}\`.
+          Public release APK built from commit \`${commit}\`.
 
-          - **Horizon-Android-${version}-arm64-v8a.apk** - ARMv8 64-bit phones and tablets (virtually every device from the last decade)
-          - **Horizon-Android-${version}-armeabi-v7a.apk** - older 32-bit ARMv7 devices
+          - **Horizon-Android-${version}-armeabi-v7a.apk** - 32-bit ARMv7 devices
+            (installs on ARMv8/64-bit phones too, in 32-bit mode)
 
           Includes the Minecraft-styled dark stone launcher UI (PR #1). Release-optimized
           (opt-level 3, ThinLTO), non-debuggable, payload-audited; original game resources
           download from Mojang on first run.
 
-          Signed with a generated development key (one key shared by both ABIs, kept in
-          this run's \`signing-key\` artifact for 90 days). Future updates install over an
-          existing install only when rebuilt with the same key: keep that keystore, or set
-          the \`ANDROID_DEV_KEYSTORE_B64\` repository secret (base64 of a \`debug.keystore\`
+          Signed with a generated development key (kept in this run's \`signing-key\`
+          artifact for 90 days). Future updates install over an existing install only when
+          rebuilt with the same key: keep that keystore, or set the
+          \`ANDROID_DEV_KEYSTORE_B64\` repository secret (base64 of a \`debug.keystore\`
           with alias \`androiddebugkey\`, store/key password \`android\`) before the next run.
           EOF
           gh release create "$GITHUB_REF_NAME" out/Horizon-Android-*.apk \
