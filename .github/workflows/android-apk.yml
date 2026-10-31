@@ -117,13 +117,19 @@ jobs:
           encode() { sed -e 's/%/%25/g' -e 's/\r//g' | awk 'BEGIN { ORS = "%0A" } { print }' | sed 's/%0A$//'; }
           log="$RUNNER_TEMP/build.log"
           if [ -f "$log" ]; then
-            tail -c 12000 "$log" > "$RUNNER_TEMP/tail.log"
+            # Every rustc error header and source location first: one compact
+            # annotation that survives any log size.
+            errs=$(grep -E "^error(\[|:)|^ +--> |aborting due to|could not compile|error: failed" "$log" | head -c 3400 | encode)
+            if [ -n "$errs" ]; then
+              echo "::error title=build errors (grep)::${errs}"
+            fi
+            tail -c 24000 "$log" > "$RUNNER_TEMP/tail.log"
             total=$(wc -c < "$RUNNER_TEMP/tail.log")
             part=1
             start=0
             while [ "$start" -lt "$total" ]; do
               body=$(dd if="$RUNNER_TEMP/tail.log" bs=1 skip="$start" count=3600 2>/dev/null | encode)
-              echo "::error title=build log tail ${part} of 3 (${start}-${total})::${body}"
+              echo "::error title=build log tail part ${part} (${start}-${total})::${body}"
               part=$((part + 1))
               start=$((start + 3600))
             done

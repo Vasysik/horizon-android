@@ -282,7 +282,7 @@ pub fn progress(ui: &mut Ui, rect: [f32; 4], fraction: f32) {
     let width = (w - 4.0) * fraction.clamp(0.0, 1.0);
     if width >= 1.0 {
         fill(ui, x + 2.0, y + 2.0, width, h - 4.0, color::GREEN_FACE);
-        fill(ui, x + 2.0, y + 2.0, width, (2.0).min(h - 4.0), color::GREEN_HI);
+        fill(ui, x + 2.0, y + 2.0, width, 2.0f32.min(h - 4.0), color::GREEN_HI);
     }
 }
 
