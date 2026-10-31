@@ -128,3 +128,17 @@ geometry. Disabling sky, fog and cave culling, or explicitly rebasing section
 instance bindings, did not resolve it. The unhelpful binding experiment was
 reverted. These tests establish the shader-link crash fix, not correct world
 rendering or improved FPS. The main player application and its data were not used.
+
+## Legacy GPU release limitation
+
+Older OpenGL ES GPUs may display transparent or fragmented terrain. This is
+confirmed on the Fujitsu F-03L (Adreno 304, driver V@269), including the 0.7.5
+baseline. The shader-link crash fix allows startup but does not fix terrain
+rendering. ARMv7 availability does not imply that every legacy GPU is supported.
+The normalized-vertex and simplified-fragment experiments were not retained.
+
+On Android, Video Settings > Graphics API is now read-only and displays the
+backend selected in launcher Setup. Desktop backend selection is unchanged.
+
+For this candidate the upstream base stays at c0b65f1d2. The later 646 commits
+through f2b9a33b4 are pending Android validation rather than included in the release.

@@ -9,9 +9,9 @@
   "branch": "android",
   "merged_upstream_commit": "c0b65f1d2",
   "merged_upstream_commits": 7041,
-  "last_reviewed_date": "2026-10-31",
+  "last_reviewed_date": "2026-11-01",
   "last_update_commits": 571,
-  "latest_fetched_commit": "c0b65f1d2",
-  "review": "Merged stable main through c0b65f1d2. Reviewed gameplay, SRV handshake, player persistence, archive hardening, audio discovery, rendering and server-side resource optimizations. Preserved Android system DNS, sandboxed .hmod execution, native queue reset, input/IME, renderer selection, smaller GPU heaps and startup recovery. Resolved new boot-renderer API and ZIP 9 integration; retained background device discovery with upstream fingerprint caching. Combined anticheat attack handling with queued-move ordering and restored required Win32 boot-paint features. Upstream deployment workflows remain inactive. Device validation of new upstream gameplay/rendering remains required; native .hnmod compilation is still unsupported.",
-  "pending_review_commits": 0
+  "latest_fetched_commit": "f2b9a33b4",
+  "review": "Merged stable main through c0b65f1d2. Reviewed gameplay, SRV handshake, player persistence, archive hardening, audio discovery, rendering and server-side resource optimizations. Preserved Android system DNS, sandboxed .hmod execution, native queue reset, input/IME, renderer selection, smaller GPU heaps and startup recovery. Resolved new boot-renderer API and ZIP 9 integration; retained background device discovery with upstream fingerprint caching. Combined anticheat attack handling with queued-move ordering and restored required Win32 boot-paint features. Upstream deployment workflows remain inactive. Device validation of new upstream gameplay/rendering remains required; native .hnmod compilation is still unsupported. Follow-up: inspected main through f2b9a33b4 (646 additional commits). Kept the current c0b65f1d2 base while investigating legacy GLES rendering. The pending batch changes terrain sampling, OpenGL submission, shader-pack rendering, native hooks and frame interpolation; it is not yet an Android-validated release baseline.",
+  "pending_review_commits": 646
 }
