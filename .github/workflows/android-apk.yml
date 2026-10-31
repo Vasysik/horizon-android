@@ -90,15 +90,45 @@ jobs:
           name: signing-key
           path: .local/android
       - name: Prepare engine tables from Mojang's pinned inputs
-        run: python3 tools/android_prepare.py --java-home "$JAVA_HOME_17_X64"
+        run: |
+          set -euo pipefail
+          python3 tools/android_prepare.py --java-home "$JAVA_HOME_17_X64" 2>&1 | tee "$RUNNER_TEMP/prepare.log"
+          version=$(python3 -c "import json; print(json.load(open('research-lock.json'))['minecraft']['version'])")
+          tables=".local/horizon-client/$version"
+          test -f "$tables/horizon-resources.json"
+          test -f "$tables/worldgen/blocks/structure-blocks.json"
+          echo "Prepared tables: $(find "$tables" -type f | wc -l) files, $(du -sh "$tables" | cut -f1)"
       - name: Reclaim runner disk before the release build
         run: |
           rm -rf target/debug .local/android/minecraft .local/android/serve
           df -h / "$RUNNER_TEMP"
       - name: Build the public release APK (${{ matrix.abi }})
-        run: >-
-          python3 tools/android_build.py --abi "${{ matrix.abi }}" --public
-          --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" --gradle "$GRADLE_BIN"
+        run: |
+          set -euo pipefail
+          python3 tools/android_build.py --abi "${{ matrix.abi }}" --public \
+            --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" --gradle "$GRADLE_BIN" \
+            2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Surface log tails as annotations
+        if: failure()
+        run: |
+          emit() {
+            [ -f "$1" ] || return 0
+            body=$(tail -c 12000 "$1" | sed -e 's/%/%25/g' -e 's/\r//g' | awk 'BEGIN { ORS = "%0A" } { print }' | sed 's/%0A$//')
+            echo "::error title=$2::$body"
+          }
+          emit "$RUNNER_TEMP/prepare.log" "prepare log tail"
+          emit "$RUNNER_TEMP/build.log" "build log tail"
+          echo "::error title=disk::$(df -h / | awk 'NR == 2 { print "total " $2 ", available " $4 }')"
+      - name: Upload full logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: logs-${{ matrix.abi }}
+          path: |
+            ${{ runner.temp }}/prepare.log
+            ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Stage the APK under its release name
         run: |
           version=$(sed -n "s/.*versionName '\([^']*\)'.*/\1/p" packaging/android/build.gradle | head -1)
