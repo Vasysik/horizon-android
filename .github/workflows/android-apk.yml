@@ -55,7 +55,29 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install Android toolchain
-        run: sdkmanager "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-35"
+        run: |
+          # Newer runner images ship no sdkmanager; fall back to Google's
+          # command-line tools and a writable SDK root when that happens.
+          image_sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          if command -v sdkmanager >/dev/null 2>&1; then
+            sdk="$image_sdk"; manager=$(command -v sdkmanager)
+          elif [ -x "$image_sdk/cmdline-tools/latest/bin/sdkmanager" ]; then
+            sdk="$image_sdk"; manager="$image_sdk/cmdline-tools/latest/bin/sdkmanager"
+          else
+            sdk="$RUNNER_TEMP/android-sdk"
+            mkdir -p "$sdk/cmdline-tools"
+            curl -fsSL -o "$RUNNER_TEMP/cmdline-tools.zip" \
+              https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip \
+              || curl -fsSL -o "$RUNNER_TEMP/cmdline-tools.zip" \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$sdk/cmdline-tools"
+            mv "$sdk/cmdline-tools/cmdline-tools" "$sdk/cmdline-tools/latest"
+            manager="$sdk/cmdline-tools/latest/bin/sdkmanager"
+            yes | "$manager" --sdk_root="$sdk" --licenses > /dev/null
+          fi
+          "$manager" --sdk_root="$sdk" "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          df -h /
       - name: Install the Rust Android target
         run: rustup target add "${{ matrix.target }}"
       - name: Pin Gradle 8.14
