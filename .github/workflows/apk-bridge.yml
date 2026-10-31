@@ -1,0 +1,35 @@
+# One-off transport, not part of the release flow: moves an already-built
+# release APK from Actions artifact storage onto a short-lived scratch branch
+# so it can be retrieved over the git protocol directly, then deleted. The
+# scratch branch is never merged and never scanned by the public-tree checks;
+# this workflow file itself is removed once the transfer is done.
+name: APK bridge
+on:
+  push:
+    tags: ['apk-bridge-*']
+permissions:
+  contents: write
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: apk-armeabi-v7a
+          path: incoming
+          run-id: 41231877664
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push the APK to the scratch branch
+        run: |
+          set -euo pipefail
+          cp incoming/Horizon-Android-*.apk Horizon-Android-0.7.6-armeabi-v7a.apk
+          sha256sum Horizon-Android-0.7.6-armeabi-v7a.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan apk-drop
+          git rm -rf --cached . > /dev/null
+          git add Horizon-Android-0.7.6-armeabi-v7a.apk
+          git commit -m "Scratch APK transfer (deleted right after retrieval; never merged)"
+          git push -f origin apk-drop
