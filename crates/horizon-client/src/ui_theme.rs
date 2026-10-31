@@ -79,9 +79,12 @@ pub(crate) const RADIUS_PLATE: f32 = horizon_theme::RADIUS_PLATE;
 pub enum Face {
     Regular,
     Medium,
+    /// Pixelify Sans, the theme's pixel display face: the Minecraft-flavoured
+    /// headings, tabs and button labels of the native launcher.
+    Pixel,
 }
 struct Fonts {
-    faces: [FontRef<'static>; 2],
+    faces: [FontRef<'static>; 3],
 }
 impl Fonts {
     fn load() -> Self {
@@ -90,6 +93,7 @@ impl Fonts {
             faces: [
                 f(horizon_theme::fonts::GEIST_REGULAR),
                 f(horizon_theme::fonts::GEIST_MEDIUM),
+                f(horizon_theme::fonts::PIXEL_MEDIUM),
             ],
         }
     }

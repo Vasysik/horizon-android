@@ -1,9 +1,10 @@
 //! SAF selection, bounded background imports and explicit collision choices.
+use crate::mc_ui::{self, color};
 use horizon_client::{
     Result,
     content_files::{self, Kind},
-    hud::{HudAtlas, HudBatch, rgba},
-    ui_theme::{Face, Ui, color},
+    hud::{HudAtlas, HudBatch},
+    ui_theme::{Face, Ui},
 };
 use jni::{
     JNIEnv,
@@ -431,12 +432,13 @@ pub fn draw_ui(ui: &mut Ui<'_>) {
     };
     let x = (ui.w - w) / 2.0;
     let y = ((ui.h - height) / 2.0).max(0.0);
-    ui.rounded(0.0, 0.0, ui.w, ui.h, 0.0, rgba(0, 0, 0, 180));
-    ui.rounded(x, y, w, height, 2.0, color::BG);
-    ui.text(
-        Face::Medium,
-        20.0,
-        x + 12.0,
+    mc_ui::dim(ui);
+    mc_ui::panel(ui, [x, y, w, height]);
+    mc_ui::shadow_text(
+        ui,
+        Face::Pixel,
+        19.0,
+        x + 14.0,
         y + 12.0,
         color::TEXT,
         if s.conflict.is_some() {
@@ -445,24 +447,24 @@ pub fn draw_ui(ui: &mut Ui<'_>) {
             "Importing file"
         },
     );
-    let name = ui.fit_text(Face::Regular, 16.0, &name, w - 24.0);
-    ui.text(Face::Regular, 16.0, x + 12.0, y + 46.0, color::MUTED, &name);
+    let name = ui.fit_text(Face::Regular, 15.0, &name, w - 28.0);
+    ui.text(Face::Regular, 15.0, x + 14.0, y + 46.0, color::MUTED, &name);
     let width = (w - 24.0) / choices.len() as f32;
+    let mut primary = true;
     for (i, (label, choice)) in choices.into_iter().enumerate() {
         let rect = if vertical {
             [x + 12.0, y + 86.0 + i as f32 * 44.0, w - 24.0, 38.0]
         } else {
             [x + 12.0 + i as f32 * width, y + 92.0, width - 4.0, 38.0]
         };
-        ui.rounded(rect[0], rect[1], rect[2], rect[3], 2.0, color::RAISED);
-        ui.text(
-            Face::Medium,
-            16.0,
-            rect[0] + 8.0,
-            rect[1] + 7.0,
-            color::TEXT,
-            label,
-        );
+        // The resolving choice is the green primary action; Cancel stays stone.
+        let kind = if !matches!(choice, Choice::Cancel) && primary {
+            primary = false;
+            mc_ui::Kind::Green
+        } else {
+            mc_ui::Kind::Stone
+        };
+        mc_ui::button(ui, rect, label, kind, false, 15.0);
         s.hits.push((
             [
                 rect[0] * ui.density,

@@ -1,7 +1,10 @@
 //! Native account panel; authentication is shared with the desktop launcher.
 use super::pages::{Action, button};
-use crate::account::{self, Account, Accounts, Secrets, SignIn, SignInState};
-use horizon_client::ui_theme::{Face, Ui, color};
+use crate::{
+    account::{self, Account, Accounts, Secrets, SignIn, SignInState},
+    mc_ui::{self, color},
+};
+use horizon_client::ui_theme::{Face, Ui};
 
 pub(super) struct Login {
     pub visible: bool,
@@ -169,19 +172,22 @@ impl Login {
         targets: &mut Vec<([f32; 4], Action)>,
         offline_name: &str,
         editing_name: bool,
+        press: Option<[f32; 4]>,
     ) {
         targets.clear();
+        mc_ui::dim(ui);
         let w = (ui.w - 32.0).min(720.0);
         let h = (ui.h - 24.0).min(550.0);
         let x = (ui.w - w) / 2.0;
         let y = (ui.h - h) / 2.0;
-        ui.rounded(x, y, w, h, 8.0, color::BG);
+        mc_ui::panel(ui, [x, y, w, h]);
         if editing_name {
-            ui.text(
-                Face::Medium,
-                24.0,
+            mc_ui::shadow_text(
+                ui,
+                Face::Pixel,
+                22.0,
                 x + 20.0,
-                y + 20.0,
+                y + 18.0,
                 color::TEXT,
                 "Offline player name",
             );
@@ -200,6 +206,7 @@ impl Login {
                 offline_name,
                 Action::Field("name"),
                 false,
+                press,
             );
             button(
                 ui,
@@ -208,25 +215,27 @@ impl Login {
                 "Done",
                 Action::FinishNameEdit,
                 true,
+                press,
             );
             return;
         }
 
-        ui.text(
-            Face::Medium,
-            24.0,
+        mc_ui::shadow_text(
+            ui,
+            Face::Pixel,
+            22.0,
             x + 20.0,
             y + 18.0,
             color::TEXT,
             "Accounts",
         );
         ui.text(
-            Face::Medium,
-            18.0,
+            Face::Pixel,
+            17.0,
             x + 20.0,
-            y + 58.0,
+            y + 60.0,
             if self.signed_in {
-                color::ACCENT
+                color::GREEN_TEXT
             } else {
                 color::MUTED
             },
@@ -240,6 +249,7 @@ impl Login {
                 &format!("{}    /    Copy code", code.user_code),
                 Action::CopyLoginCode,
                 false,
+                press,
             );
         } else {
             ui.text(
@@ -313,6 +323,7 @@ impl Login {
                 },
                 Action::Field("name"),
                 false,
+                press,
             );
         }
         let half = (w - 52.0) / 2.0;
@@ -324,6 +335,7 @@ impl Login {
                 "Request Minecraft API approval",
                 Action::ReviewApp,
                 false,
+                press,
             );
         }
         let (label, action) = if matches!(self.state, Some(SignInState::Code(_))) {
@@ -347,6 +359,7 @@ impl Login {
             label,
             action,
             true,
+            press,
         );
         button(
             ui,
@@ -355,6 +368,7 @@ impl Login {
             "Use a device code instead",
             Action::DeviceSignIn,
             false,
+            press,
         );
         button(
             ui,
@@ -379,6 +393,7 @@ impl Login {
                 }
             },
             false,
+            press,
         );
         button(
             ui,
@@ -391,6 +406,7 @@ impl Login {
             },
             Action::CloseLogin,
             false,
+            press,
         );
     }
 }

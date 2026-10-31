@@ -3,8 +3,11 @@ use super::{
     Launcher,
     pages::{Action, button},
 };
-use crate::catalog::RendererMode;
-use horizon_client::ui_theme::{Face, Ui, color};
+use crate::{
+    catalog::RendererMode,
+    mc_ui::{self, color},
+};
+use horizon_client::ui_theme::{Face, Ui};
 
 pub(super) enum Kind {
     Aspect,
@@ -260,14 +263,19 @@ impl Chooser {
             (self.choices.len() as f32 * 84.0 - (height - 237.0)).max(0.0),
         ]
     }
-    pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>) {
+    pub fn draw(
+        &mut self,
+        ui: &mut Ui,
+        targets: &mut Vec<([f32; 4], Action)>,
+        press: Option<[f32; 4]>,
+    ) {
         let (w, h) = (ui.w, ui.h);
         targets.clear();
-        ui.rounded(0.0, 0.0, w, h, 0.0, color::BG);
-        ui.text(Face::Medium, 28.0, 32.0, 35.0, color::TEXT, self.title);
+        mc_ui::fill(ui, 0.0, 0.0, w, h, color::PAGE);
+        mc_ui::shadow_text(ui, Face::Pixel, 24.0, 32.0, 33.0, color::TEXT, self.title);
         ui.text(Face::Regular, 15.0, 32.0, 85.0, color::MUTED, self.help);
         if let Some(device) = &self.device {
-            ui.text(Face::Regular, 13.0, 32.0, 111.0, color::MUTED, device);
+            ui.text(Face::Regular, 13.0, 32.0, 111.0, color::FAINT, device);
         }
         let top = 137.0;
         let bottom = h - 100.0;
@@ -280,14 +288,34 @@ impl Chooser {
             if y < top || y + 76.0 > bottom {
                 continue;
             }
-            ui.rounded(34.0, y + 10.0, 22.0, 22.0, 11.0, color::TEXT);
-            ui.rounded(36.0, y + 12.0, 18.0, 18.0, 9.0, color::BG);
-            if *selected {
-                ui.rounded(40.0, y + 16.0, 10.0, 10.0, 5.0, color::TEXT);
+            // A destructive confirmation reads red; the safe default stays green.
+            let danger = *action == Action::ConfirmDeleteLocal;
+            mc_ui::slot(ui, [32.0, y, w - 64.0, 76.0], *selected);
+            mc_ui::check(
+                ui,
+                [46.0, y + 26.0, 24.0, 24.0],
+                *selected,
+                if danger {
+                    color::RED_FACE
+                } else {
+                    color::GREEN_FACE
+                },
+            );
+            ui.text(
+                Face::Pixel,
+                18.0,
+                88.0,
+                y + 12.0,
+                if danger {
+                    color::RED_TEXT
+                } else {
+                    color::TEXT
+                },
+                label,
+            );
+            if !detail.is_empty() {
+                ui.text(Face::Regular, 14.0, 88.0, y + 44.0, color::MUTED, detail);
             }
-            ui.text(Face::Medium, 19.0, 80.0, y + 8.0, color::TEXT, label);
-            ui.text(Face::Regular, 14.0, 80.0, y + 40.0, color::MUTED, detail);
-            ui.rounded(32.0, y + 75.0, w - 64.0, 1.0, 0.0, color::BORDER);
             targets.push(([32.0, y, w - 64.0, 76.0], *action));
         }
         button(
@@ -297,6 +325,7 @@ impl Chooser {
             "Cancel",
             Action::Dismiss,
             false,
+            press,
         );
     }
 }
