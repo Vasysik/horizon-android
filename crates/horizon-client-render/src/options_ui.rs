@@ -125,6 +125,9 @@ pub(crate) const MOUSE_OPTIONS: &[Opt] = &[
 impl Opt {
     /// Keep controls visible while their underlying systems are still missing.
     pub(crate) fn available(self) -> bool {
+        if cfg!(target_os = "android") && self == Opt::GraphicsBackend {
+            return false;
+        }
         !matches!(
             self,
             Opt::Narrator
@@ -771,11 +774,17 @@ impl Opt {
                 "options.textureFiltering.rgss",
                 "options.textureFiltering.anisotropic",
             ][s.file.int("textureFiltering").clamp(0, 2) as usize]),
-            Opt::GraphicsBackend => tr(match s.horizon.api {
-                crate::graphics::GraphicsApi::OpenGl => "options.graphicsApi.opengl",
-                crate::graphics::GraphicsApi::Vulkan => "options.graphicsApi.vulkan",
-                _ => "options.graphicsApi.default",
-            }),
+            Opt::GraphicsBackend => tr(
+                match if cfg!(target_os = "android") {
+                    crate::android_runtime::graphics_api()
+                } else {
+                    s.horizon.api
+                } {
+                    crate::graphics::GraphicsApi::OpenGl => "options.graphicsApi.opengl",
+                    crate::graphics::GraphicsApi::Vulkan => "options.graphicsApi.vulkan",
+                    _ => "options.graphicsApi.default",
+                },
+            ),
             Opt::SmoothLighting => on_off(s.smooth_lighting),
             Opt::Clouds => tr(match s.clouds.as_str() {
                 "false" => "options.off",
@@ -1329,6 +1338,9 @@ fn set_filtering(s: &mut Settings, anisotropy_bit: i32, filtering: i32) {
 /// `Options.preferredGraphicsBackend`'s tooltip: the restart note once the choice differs from
 /// the startup one, the description, and Vulkan's warning.
 fn graphics_api_tooltip(s: &Settings) -> Text {
+    if cfg!(target_os = "android") {
+        return Text::literal("Selected in Horizon Android launcher > Setup.");
+    }
     let line = |key: &str| lang::get_or(key, key);
     let mut lines = Vec::new();
     if s.horizon.api != s.startup_api {
