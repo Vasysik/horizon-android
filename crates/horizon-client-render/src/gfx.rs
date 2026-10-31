@@ -1295,6 +1295,14 @@ async fn open_backend(
         limits.max_texture_array_layers,
     ));
     let desc = wgpu::DeviceDescriptor {
+        // Mobile drivers can spend hundreds of milliseconds reserving a new
+        // 128-256 MiB pool block. This changes allocation granularity, not
+        // resource limits, shader features, texture quality or geometry.
+        memory_hints: if cfg!(target_os = "android") {
+            wgpu::MemoryHints::MemoryUsage
+        } else {
+            wgpu::MemoryHints::Performance
+        },
         label: Some("Horizon device"),
         required_features: features,
         required_limits: limits,
@@ -6462,7 +6470,9 @@ impl Renderer {
         }
         let submission = crate::spans::time("submit", || self.queue.submit([commands]));
         #[cfg(target_os = "android")]
-        if first_frame && let Some(startup) = self.startup.take() {
+        // Reused devices start with FirstFrame::Drawn too; their new renderer
+        // still has a startup marker that must complete after its first submit.
+        if let Some(startup) = self.startup.take() {
             self.queue
                 .on_submitted_work_done(move || startup.complete());
         }

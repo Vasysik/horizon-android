@@ -10,7 +10,7 @@ This update targets touch controls, initial menu navigation and diagnostic recor
 - Touch, gyro and controller camera movement count toward the look-around tutorial. Completed tutorial stages remain saved across worlds; an unfinished stage may appear again.
 - Hardware D-pad navigation works in the initial title menu before the full game loads. Focus acquisition retries after widgets become available.
 - GPU profiling and performance recording share one report session. Both launcher controls use the same button style. Reports include the requested profiling mode and whether encoder timestamps are supported; unsupported hardware cannot provide these stage timings.
-- Installation cleanup waits for active resource preparation to finish; the final asset index is saved from verified memory rather than reopened from Android’s evictable cache. This prevents a concurrent startup cleanup from deleting files needed by a reinstall (#30). The original device report does not include a log, so a clean installation on that affected device still needs verification.
+- Installation cleanup waits for active resource preparation to finish; the final asset index is saved from verified memory rather than reopened from Androidâ€™s evictable cache. This prevents a concurrent startup cleanup from deleting files needed by a reinstall (#30). The original device report does not include a log, so a clean installation on that affected device still needs verification.
 - Stable upstream history merged through `c3905131b` (717 incoming commits, including merge history): rendering, chunk work, resource packs, gameplay, network and mod API changes. Android input, presentation bounds, upload budgets and sandbox `.hmod` support are retained.
 
 Native `.hnmod` compilation on Android remains unsupported. Java Fabric, Forge and NeoForge mods are not supported.
@@ -63,11 +63,37 @@ See [the test checklist](android-0.7.6-testing.md).
 
 ## Post-RC1 allocator candidate
 
-Phone reports from RC1 show frame-thread `arena_buffer_create` spikes of 799.5 ms,
-571.0 ms and 364.4 ms. These are nested inside geometry upload, not evidence of
-CPU time spent in diagnostic serialization. Android arena pages now stop normal
-growth at 8 MiB rather than repeatedly growing/copying buffers toward 256 MiB.
-Large single meshes retain the original hardware limit. Desktop allocation policy
-is unchanged. Twenty GPU tests pass, including range/data preservation across
-bounded pages and a larger single mesh. Phone FPS and allocator-stall improvement
-remain unverified; this is not a benchmark claim.
+RC1 phone reports contain frame-thread `arena_buffer_create` spikes of 799.5 ms,
+571.0 ms and 364.4 ms, nested inside geometry upload. Android now uses wgpu's
+`MemoryUsage` allocation policy and an 8 MiB soft ceiling for normal terrain-page
+growth. Large single meshes retain the hardware limit. Shader features, texture
+quality and geometry are unchanged; desktop allocation policy is unchanged.
+
+On an Adreno 710 tablet in Vulkan Compatibility at 2560×1600, Fancy and 12 chunks,
+sequential runs of an isolated test world gave these results:
+
+| Build | Maximum terrain-buffer creation | Reserved GPU memory after loading |
+| --- | --- | --- |
+| 0.7.5 | 578 ms | 1,024 MiB |
+| 0.7.6 RC1 | 608 ms; 318 ms in a later return run | 1,024 MiB |
+| Allocator candidate | 44 ms; 153 ms in a later run | approximately 548 MiB |
+
+The scene was capped at 60 FPS; run medians were approximately 58.5–60 FPS.
+These are individual sequential runs with audio disabled, not a phone benchmark
+or proof of higher uncapped FPS. Mobs and time were not frozen in these loading
+runs. Phone verification and older-driver compatibility remain required.
+
+Short separate uncapped sky-view runs with recording off, recording on, and CPU/GPU
+recording together did not reproduce the long allocation stalls. The combined
+report contained all three GPU stages. This does not establish zero diagnostic
+overhead; recording and GPU profiling remain opt-in.
+
+Also fixed a stale Vulkan startup marker when a renderer reuses a device. Its
+completion is now scheduled after that renderer's first submission even when
+first-device startup logging has already finished. Two consecutive tablet launches
+retained Vulkan Compatibility and cleared the marker.
+
+Validation: the existing 20 arena/render GPU tests, a GPU timestamp test with
+`MemoryUsage`, the startup-marker ordering test, an optimized ARM64 build and
+ARM64 Clippy passed. The Fujitsu device was offline during this follow-up; its
+legacy GLES startup crash remains unresolved.

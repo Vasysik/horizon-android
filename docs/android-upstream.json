@@ -11,7 +11,7 @@
   "merged_upstream_commits": 6470,
   "last_reviewed_date": "2026-10-31",
   "last_update_commits": 717,
-  "latest_fetched_commit": "c3905131b",
+  "latest_fetched_commit": "68ac6f647",
   "review": "Merged stable main through c3905131b. Preserved Android mod ticking and native queue reset from the prior merge; reviewed teleport/jump replay fixes and jittered vanilla-client tests. Reviewed and merged PR #39 with original author history. Fixed synchronous CPAL discovery, nonblocking diagnostics, integrated-server owner persistence and GLES shader composition. Added opaque Android presentation and interrupted-Vulkan startup recovery. Upstream deployment workflows remain inactive. Native .hnmod on-device compilation remains unsupported. Targeted source/GPU tests pass; owner-device FPS, audio hotplug, Mali composition and Unisoc recovery verification remain release-candidate checks.",
-  "pending_review_commits": 0
+  "pending_review_commits": 60
 }
