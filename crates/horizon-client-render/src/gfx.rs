@@ -41,10 +41,15 @@ fn terrain_shader(gl: bool) -> std::borrow::Cow<'static, str> {
         .find("fn sprite_level(")
         .expect("terrain level function");
     let end = level + source[level..].find("\n}\n").expect("terrain level end") + 3;
+    let rgss = source
+        .find("fn sample_rgss(")
+        .expect("terrain RGSS function");
+    let rgss_end = rgss + source[rgss..].find("\n}\n").expect("terrain RGSS end") + 3;
     let mut output = String::with_capacity(source.len() + 200);
     output.push_str(&source[..start]);
     output.push_str(include_str!("gfx/terrain_gles.wgsl.inc"));
-    output.push_str(&source[end..]);
+    output.push_str(&source[end..rgss]);
+    output.push_str(&source[rgss_end..]);
     std::borrow::Cow::Owned(output)
 }
 
@@ -6908,6 +6913,7 @@ mod tests {
         assert_eq!(super::terrain_shader(false), include_str!("terrain.wgsl"));
         let source = super::terrain_shader(true);
         assert!(!source.contains("switch layer / SPRITE_SPLIT"));
+        assert!(!source.contains("uv + offsets[i] * pixel"));
         for index in 0..7 {
             assert!(source.contains(&format!("array_index == {index}u")));
         }

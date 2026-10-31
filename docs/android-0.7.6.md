@@ -107,5 +107,24 @@ retained Vulkan Compatibility and cleared the marker.
 
 Validation: the existing 20 arena/render GPU tests, a GPU timestamp test with
 `MemoryUsage`, the startup-marker ordering test, an optimized ARM64 build and
-ARM64 Clippy passed. The Fujitsu device was offline during this follow-up; its
-legacy GLES startup crash remains unresolved.
+ARM64 Clippy passed. The Fujitsu device was offline during the allocator follow-up; its legacy
+GLES investigation is recorded below.
+
+## Legacy Adreno GLES follow-up
+
+Adreno 304 with driver V@269 crashes during terrain-program linking when RGSS
+indexes a local four-element offset array. The GLES variant now spells out the
+same four samples in the same accumulation order. Filtering modes, sample
+positions and mip blending are preserved; Vulkan WGSL is unchanged.
+
+An isolated native EGL probe reproduced SIGSEGV with the original shader and
+linked the rewritten version successfully with one and eight sprite arrays.
+The GLES source/entrypoint validation test also passes. An optimized ARMv7
+private build on the F-03L now enters the title screen and an isolated world;
+physical D-pad input activates a menu item and moves the player.
+
+F-03L compatibility is still incomplete: terrain appears as thin or fragmented
+geometry. Disabling sky, fog and cave culling, or explicitly rebasing section
+instance bindings, did not resolve it. The unhelpful binding experiment was
+reverted. These tests establish the shader-link crash fix, not correct world
+rendering or improved FPS. The main player application and its data were not used.
