@@ -174,41 +174,14 @@ impl TouchControls {
             if opacity <= 0.0 {
                 continue;
             }
-            let tint = if pressed {
-                rgba(170, 210, 150, (opacity * 255.0) as u8)
-            } else {
-                rgba(255, 255, 255, (opacity * 255.0) as u8)
-            };
-            if !theme_button(
+            text_button(
                 b,
                 a,
-                "button",
                 rect,
+                &button.label(),
                 pressed,
                 rgba(255, 255, 255, (opacity * 255.0) as u8),
                 true,
-            ) {
-                nine(b, a, "ui/button_borderless_light", 2.0, rect, tint);
-            }
-            let label = button.label();
-            let width = HudBatch::text_width(a, &label);
-            let start = b.vertices.len();
-            b.text(
-                a,
-                &label,
-                rect[0] + (size - width) / 2.0,
-                rect[1] + (size - 8.0) / 2.0,
-                rgba(25, 25, 25, (opacity * 255.0) as u8),
-                false,
-            );
-            let scale = ((size - 6.0).max(1.0) / width.max(1.0))
-                .min(((size - 6.0).max(1.0) / 8.0).min(1.0));
-            b.scale_since(
-                start,
-                p.center[0] * b.width,
-                p.center[1] * b.height,
-                scale,
-                scale,
             );
         }
     }

@@ -252,6 +252,9 @@ impl TouchControls {
     }
     fn placement(&self, c: Control) -> layout::Placement {
         let mut p = self.settings.placement(c);
+        let factory_swap = c == Control::Offhand
+            && self.settings.layouts[self.settings.mode.index()][c as usize].center == [0.80, 0.96]
+            && p.size == 0.075;
         // Keep factory top buttons separate on tall surfaces. Custom positions
         // and every landscape layout remain exactly as the player saved them.
         if self.aspect() < 1.0 && p.center[1] == 0.055 && p.size == 0.075 {
@@ -279,7 +282,18 @@ impl TouchControls {
                 }
             }
         }
-        self.fit_placement(p)
+        let mut p = self.fit_placement(p);
+        if factory_swap {
+            // Keep the factory Swap beside Inventory in physical button units,
+            // including portrait displays and the left-handed layout.
+            let inventory = self.placement(Control::Inventory);
+            let direction = if self.settings.left_handed { -1.0 } else { 1.0 };
+            p.center[0] = inventory.center[0]
+                + direction * ((inventory.size + p.size) * 0.5 + 0.015) / self.aspect();
+            let half = p.size / self.aspect() * 0.5;
+            p.center[0] = p.center[0].clamp(half, 1.0 - half);
+        }
+        p
     }
     fn button(c: Control) -> Option<Button> {
         Some(match c {
@@ -436,24 +450,12 @@ impl TouchControls {
                         region(b, a, "gui", [236.0, 46.0, 18.0, 18.0], bounds, color)
                     }
                     Control::Offhand | Control::Shield => {
-                        menu_frame(b, a, bounds, color);
                         let label = if control == Control::Offhand {
                             "Swap"
                         } else {
                             "Shield"
                         };
-                        let start = b.vertices.len();
-                        let width = HudBatch::text_width(a, label);
-                        b.text(
-                            a,
-                            label,
-                            x + (size - width) / 2.0,
-                            y + (size - 8.0) / 2.0,
-                            color,
-                            false,
-                        );
-                        let scale = ((size - 5.0) / width.max(1.0)).clamp(0.1, 1.0);
-                        b.scale_since(start, x + size / 2.0, y + size / 2.0, scale, scale);
+                        text_button(b, a, bounds, label, pressed, color, false);
                     }
                     Control::Inventory => {
                         sprite(b, a, "ui/joystick_knob", bounds, color);
@@ -856,6 +858,47 @@ pub fn theme_button(
     true
 }
 
+/// Shared text controls: keep the raised frame at rest, visibly depress it while held.
+fn text_button(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    bounds: [f32; 4],
+    label: &str,
+    pressed: bool,
+    color: u32,
+    themed: bool,
+) {
+    let custom_art = themed && theme_button(b, a, "button", bounds, pressed, color, true);
+    if !custom_art {
+        let [r, g, blue, alpha] = color.to_le_bytes();
+        let tint = if pressed {
+            rgba(r / 2, g / 2, blue / 2, alpha)
+        } else {
+            color
+        };
+        menu_frame(b, a, bounds, tint);
+    }
+    let [x, y, w, h] = bounds;
+    let offset = if pressed { (h / 18.0).min(2.0) } else { 0.0 };
+    let width = HudBatch::text_width(a, label);
+    let start = b.vertices.len();
+    let label_color = if custom_art {
+        rgba(25, 25, 25, color.to_le_bytes()[3])
+    } else {
+        color
+    };
+    b.text(
+        a,
+        label,
+        x + (w - width) / 2.0,
+        y + (h - 8.0) / 2.0 + offset,
+        label_color,
+        false,
+    );
+    let scale = ((w - 6.0).max(1.0) / width.max(1.0)).min(((h - 6.0).max(1.0) / 8.0).min(1.0));
+    b.scale_since(start, x + w / 2.0, y + h / 2.0 + offset, scale, scale);
+}
+
 /// Reuse Chat's complete 18x18 border, including its bottommost pixel row.
 fn menu_frame(b: &mut HudBatch, a: &HudAtlas, [x, y, w, h]: [f32; 4], color: u32) {
     let border = (w / 18.0 * 2.0).min(h / 2.0);
@@ -1049,6 +1092,38 @@ fn line(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn factory_swap_stays_beside_inventory_without_covering_action_buttons() {
+        for (w, h) in [(2560, 1600), (2400, 1080), (1080, 2400), (240, 320)] {
+            for left_handed in [false, true] {
+                for mode in Mode::ALL {
+                    let mut touch = TouchControls::default();
+                    touch.viewport(w, h);
+                    touch.settings.left_handed = left_handed;
+                    touch.settings.mode = mode;
+                    let swap = touch.placement(Control::Offhand).rect(touch.aspect());
+                    for control in [
+                        Control::Inventory,
+                        Control::Sprint,
+                        Control::Sneak,
+                        Control::Jump,
+                    ] {
+                        let other = touch.placement(control).rect(touch.aspect());
+                        let overlaps = swap[0] < other[0] + other[2]
+                            && other[0] < swap[0] + swap[2]
+                            && swap[1] < other[1] + other[3]
+                            && other[1] < swap[1] + swap[3];
+                        assert!(!overlaps, "{w}x{h}, {left_handed}, {mode:?}: {control:?}");
+                    }
+                    touch.settings.layouts[mode.index()][Control::Offhand as usize].center =
+                        [0.55, 0.43];
+                    let custom = touch.placement(Control::Offhand).center;
+                    assert!((custom[0] - if left_handed { 0.45 } else { 0.55 }).abs() < 0.0001);
+                    assert_eq!(custom[1], 0.43);
+                }
+            }
+        }
+    }
     #[test]
     fn camera_calibration_uses_physical_distance_on_both_axes() {
         let mut settings = Settings::default();

@@ -202,7 +202,7 @@ impl Default for Settings {
             Placement::new(0.73, 0.95, 0.075),
             Placement::new(0.42, 0.055, 0.075),
             Placement::new(0.58, 0.055, 0.075),
-            Placement::new(0.66, 0.38, 0.09),
+            Placement::new(0.80, 0.96, 0.075),
             Placement::new(0.92, 0.36, 0.12),
         ];
         let mut layouts = [base; 3];
@@ -263,11 +263,14 @@ impl Settings {
                 }
             }
         }
-        // Move only the initial swap-hands placement that overlapped Sprint.
+        // Migrate factory Swap placements only; keep the player's own layout.
         for row in &mut s.layouts {
             let swap = &mut row[Control::Offhand as usize];
-            if swap.center == [0.68, 0.80] && (swap.size - 0.09).abs() < 0.0001 {
-                swap.center = [0.66, 0.38];
+            if matches!(swap.center, [0.68, 0.80] | [0.66, 0.38])
+                && (swap.size - 0.09).abs() < 0.0001
+            {
+                swap.center = [0.80, 0.96];
+                swap.size = 0.075;
             }
         }
         // Move the old factory sprint position only; keep customized placements.
@@ -485,17 +488,22 @@ mod tests {
         let file =
             std::env::temp_dir().join(format!("horizon-swap-layout-{}.json", std::process::id()));
         let mut settings = Settings::default();
-        settings.layouts[0][Control::Offhand as usize].center = [0.68, 0.80];
+        settings.layouts[0][Control::Offhand as usize] = super::Placement::new(0.68, 0.80, 0.09);
         settings.layouts[1][Control::Offhand as usize].center = [0.55, 0.43];
+        settings.layouts[2][Control::Offhand as usize] = super::Placement::new(0.66, 0.38, 0.09);
         settings.save_to(&file).unwrap();
         let read = Settings::load_from(&file);
         assert_eq!(
             read.layouts[0][Control::Offhand as usize].center,
-            [0.66, 0.38]
+            [0.80, 0.96]
         );
         assert_eq!(
             read.layouts[1][Control::Offhand as usize].center,
             [0.55, 0.43]
+        );
+        assert_eq!(
+            read.layouts[2][Control::Offhand as usize].center,
+            [0.80, 0.96]
         );
         std::fs::remove_file(file).unwrap();
     }
