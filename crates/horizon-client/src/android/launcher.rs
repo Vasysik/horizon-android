@@ -11,6 +11,8 @@ pub(crate) fn session_argument() -> Option<PathBuf> {
 mod chooser;
 #[path = "launcher_gesture.rs"]
 mod gesture;
+#[path = "launcher_icons.rs"]
+mod icons;
 #[path = "launcher_pages.rs"]
 mod pages;
 use horizon_client::{

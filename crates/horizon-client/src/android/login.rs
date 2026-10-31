@@ -1,7 +1,7 @@
 //! Native account panel; authentication is shared with the desktop launcher.
-use super::pages::{Action, button};
+use super::pages::{Action, button, m3};
 use crate::account::{self, Account, Accounts, Secrets, SignIn, SignInState};
-use horizon_client::ui_theme::{Face, Ui, color};
+use horizon_client::ui_theme::{Face, Ui};
 
 pub(super) struct Login {
     pub visible: bool,
@@ -171,32 +171,33 @@ impl Login {
         editing_name: bool,
     ) {
         targets.clear();
-        let w = (ui.w - 32.0).min(720.0);
+        let w = (ui.w - 32.0).min(640.0);
         let h = (ui.h - 24.0).min(550.0);
         let x = (ui.w - w) / 2.0;
         let y = (ui.h - h) / 2.0;
-        ui.rounded(x, y, w, h, 8.0, color::BG);
+        ui.rounded(0.0, 0.0, ui.w, ui.h, 0.0, m3::SCRIM);
+        ui.rounded(x, y, w, h, 28.0, m3::CONTAINER_HIGH);
         if editing_name {
             ui.text(
                 Face::Medium,
                 24.0,
-                x + 20.0,
+                x + 24.0,
                 y + 20.0,
-                color::TEXT,
+                m3::ON_SURFACE,
                 "Offline player name",
             );
             ui.text(
                 Face::Regular,
                 16.0,
-                x + 20.0,
+                x + 24.0,
                 y + 66.0,
-                color::MUTED,
+                m3::ON_SURFACE_VARIANT,
                 "Used when signed out of Microsoft.",
             );
             button(
                 ui,
                 targets,
-                [x + 20.0, y + 100.0, w - 40.0, 44.0],
+                [x + 24.0, y + 100.0, w - 48.0, 44.0],
                 offline_name,
                 Action::Field("name"),
                 false,
@@ -204,7 +205,7 @@ impl Login {
             button(
                 ui,
                 targets,
-                [x + 20.0, y + h - 56.0, w - 40.0, 36.0],
+                [x + 24.0, y + h - 56.0, w - 48.0, 36.0],
                 "Done",
                 Action::FinishNameEdit,
                 true,
@@ -215,20 +216,20 @@ impl Login {
         ui.text(
             Face::Medium,
             24.0,
-            x + 20.0,
+            x + 24.0,
             y + 18.0,
-            color::TEXT,
+            m3::ON_SURFACE,
             "Accounts",
         );
         ui.text(
             Face::Medium,
             18.0,
-            x + 20.0,
+            x + 24.0,
             y + 58.0,
             if self.signed_in {
-                color::ACCENT
+                m3::PRIMARY
             } else {
-                color::MUTED
+                m3::ON_SURFACE_VARIANT
             },
             &self.status(offline_name),
         );
@@ -236,7 +237,7 @@ impl Login {
             button(
                 ui,
                 targets,
-                [x + 20.0, y + 96.0, w - 40.0, 48.0],
+                [x + 24.0, y + 96.0, w - 48.0, 48.0],
                 &format!("{}    /    Copy code", code.user_code),
                 Action::CopyLoginCode,
                 false,
@@ -245,9 +246,9 @@ impl Login {
             ui.text(
                 Face::Regular,
                 16.0,
-                x + 20.0,
+                x + 24.0,
                 y + 104.0,
-                color::TEXT,
+                m3::ON_SURFACE,
                 if self.signed_in {
                     "Account saved securely. Sessions renew automatically."
                 } else {
@@ -259,7 +260,7 @@ impl Login {
             Some(SignInState::Starting) => "Requesting a sign-in code...",
             _ => &self.message,
         };
-        let limit = ((w - 40.0) / 7.5).max(20.0) as usize;
+        let limit = ((w - 48.0) / 7.5).max(20.0) as usize;
         let mut line = String::new();
         let mut row = 0;
         for word in text.split_whitespace() {
@@ -267,9 +268,9 @@ impl Login {
                 ui.text(
                     Face::Regular,
                     14.0,
-                    x + 20.0,
+                    x + 24.0,
                     y + 166.0 + row as f32 * 20.0,
-                    color::TEXT,
+                    m3::ON_SURFACE,
                     &line,
                 );
                 row += 1;
@@ -287,9 +288,9 @@ impl Login {
             ui.text(
                 Face::Regular,
                 14.0,
-                x + 20.0,
+                x + 24.0,
                 y + 166.0 + row as f32 * 20.0,
-                color::TEXT,
+                m3::ON_SURFACE,
                 &line,
             );
         }
@@ -297,15 +298,15 @@ impl Login {
             ui.text(
                 Face::Regular,
                 14.0,
-                x + 20.0,
+                x + 24.0,
                 y + h - 247.0,
-                color::MUTED,
+                m3::ON_SURFACE_VARIANT,
                 "Offline player name",
             );
             button(
                 ui,
                 targets,
-                [x + 20.0, y + h - 226.0, w - 40.0, 38.0],
+                [x + 24.0, y + h - 226.0, w - 48.0, 38.0],
                 if offline_name.is_empty() {
                     "Enter an offline name"
                 } else {
@@ -315,12 +316,12 @@ impl Login {
                 false,
             );
         }
-        let half = (w - 52.0) / 2.0;
+        let half = (w - 60.0) / 2.0;
         if self.message.contains("not approved by Mojang") {
             button(
                 ui,
                 targets,
-                [x + 20.0, y + h - 183.0, w - 40.0, 30.0],
+                [x + 24.0, y + h - 183.0, w - 48.0, 30.0],
                 "Request Minecraft API approval",
                 Action::ReviewApp,
                 false,
@@ -343,7 +344,7 @@ impl Login {
         button(
             ui,
             targets,
-            [x + 20.0, y + h - 148.0, w - 40.0, 42.0],
+            [x + 24.0, y + h - 148.0, w - 48.0, 42.0],
             label,
             action,
             true,
@@ -351,7 +352,7 @@ impl Login {
         button(
             ui,
             targets,
-            [x + 20.0, y + h - 98.0, half, 38.0],
+            [x + 24.0, y + h - 98.0, half, 38.0],
             "Use a device code instead",
             Action::DeviceSignIn,
             false,
@@ -359,7 +360,7 @@ impl Login {
         button(
             ui,
             targets,
-            [x + 32.0 + half, y + h - 98.0, half, 38.0],
+            [x + 36.0 + half, y + h - 98.0, half, 38.0],
             if self.pending() {
                 "Cancel sign-in"
             } else {
@@ -383,7 +384,7 @@ impl Login {
         button(
             ui,
             targets,
-            [x + 20.0, y + h - 52.0, w - 40.0, 36.0],
+            [x + 24.0, y + h - 52.0, w - 48.0, 36.0],
             if self.pending() {
                 "Back (sign-in continues)"
             } else {
