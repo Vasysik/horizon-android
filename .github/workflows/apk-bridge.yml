@@ -22,8 +22,13 @@ jobs:
           run-id: 41231877664
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Push the APK to the scratch branch
+        env:
+          PUSH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          exec > >(tee "$RUNNER_TEMP/bridge.log") 2>&1
+          set -x
+          ls -la incoming/
           cp incoming/Horizon-Android-*.apk Horizon-Android-0.7.6-armeabi-v7a.apk
           sha256sum Horizon-Android-0.7.6-armeabi-v7a.apk
           git config user.name "github-actions[bot]"
@@ -32,4 +37,17 @@ jobs:
           git rm -rf --cached . > /dev/null
           git add Horizon-Android-0.7.6-armeabi-v7a.apk
           git commit -m "Scratch APK transfer (deleted right after retrieval; never merged)"
-          git push -f origin apk-drop
+          set +x
+          git push -f "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" apk-drop:apk-drop
+          set -x
+          echo BRIDGE_PUSH_DONE
+      - name: Report failure
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/bridge.log"
+          if [ -f "$log" ]; then
+            body=$(tail -c 3600 "$log" | sed -e 's/%/%25/g' -e 's/\r//g' | awk 'BEGIN { ORS = "%0A" } { print }' | sed 's/%0A$//')
+            echo "::error title=bridge log tail::${body}"
+          else
+            echo "::error title=bridge::no log file produced"
+          fi
