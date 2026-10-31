@@ -1,0 +1,128 @@
+# On-demand public release APKs for the ARM ABIs players actually use. Push an
+# apk-* tag (or dispatch manually) and both APKs are built from that one fixed
+# commit, audited by tools/check_android_release.py and attached to a GitHub
+# release. Mojang inputs download at build time and never enter Git. The dev
+# signing key is generated once per run (or restored from the
+# ANDROID_DEV_KEYSTORE_B64 secret) and shared by both ABIs, so the two APKs
+# keep one signing identity.
+name: Android release APKs
+on:
+  push:
+    tags: ['apk-*']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  HORIZON_TELEMETRY_URL: "off"
+jobs:
+  signing-key:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Generate or restore the dev signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEV_KEYSTORE_B64 }}
+        run: |
+          mkdir -p out
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > out/debug.keystore
+          else
+            "$JAVA_HOME_17_X64/bin/keytool" -genkeypair -keystore out/debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -validity 3650 -dname 'CN=Horizon Android Development'
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signing-key
+          path: out/debug.keystore
+          retention-days: 90
+  apk:
+    needs: signing-key
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+          - abi: armeabi-v7a
+            target: armv7-linux-androideabi
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install Android toolchain
+        run: sdkmanager "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-35"
+      - name: Install the Rust Android target
+        run: rustup target add "${{ matrix.target }}"
+      - name: Pin Gradle 8.14
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.14-bin.zip
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "GRADLE_BIN=$RUNNER_TEMP/gradle-8.14/bin/gradle" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signing-key
+          path: .local/android
+      - name: Prepare engine tables from Mojang's pinned inputs
+        run: python3 tools/android_prepare.py --java-home "$JAVA_HOME_17_X64"
+      - name: Reclaim runner disk before the release build
+        run: |
+          rm -rf target/debug .local/android/minecraft .local/android/serve
+          df -h / "$RUNNER_TEMP"
+      - name: Build the public release APK (${{ matrix.abi }})
+        run: >-
+          python3 tools/android_build.py --abi "${{ matrix.abi }}" --public
+          --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" --gradle "$GRADLE_BIN"
+      - name: Stage the APK under its release name
+        run: |
+          version=$(sed -n "s/.*versionName '\([^']*\)'.*/\1/p" packaging/android/build.gradle | head -1)
+          cp ".local/android/apk/${{ matrix.abi }}/horizon-android-public.apk" \
+            "Horizon-Android-${version}-${{ matrix.abi }}.apk"
+          ls -la Horizon-Android-*.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: apk-${{ matrix.abi }}
+          path: Horizon-Android-*.apk
+          retention-days: 90
+  release:
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: apk-*
+          merge-multiple: true
+          path: out
+      - name: Publish the release with both APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n "s/.*versionName '\([^']*\)'.*/\1/p" packaging/android/build.gradle | head -1)
+          commit=$(git rev-parse --short=12 HEAD)
+          cat > notes.md <<EOF
+          > 🤖 Published by kushaladhikari982648-lgtm's AI agent (Arena.ai Agent Mode), not by kushaladhikari982648-lgtm personally.
+
+          Public release APKs built from commit \`${commit}\`.
+
+          - **Horizon-Android-${version}-arm64-v8a.apk** - ARMv8 64-bit phones and tablets (virtually every device from the last decade)
+          - **Horizon-Android-${version}-armeabi-v7a.apk** - older 32-bit ARMv7 devices
+
+          Includes the Minecraft-styled dark stone launcher UI (PR #1). Release-optimized
+          (opt-level 3, ThinLTO), non-debuggable, payload-audited; original game resources
+          download from Mojang on first run.
+
+          Signed with a generated development key (one key shared by both ABIs, kept in
+          this run's \`signing-key\` artifact for 90 days). Future updates install over an
+          existing install only when rebuilt with the same key: keep that keystore, or set
+          the \`ANDROID_DEV_KEYSTORE_B64\` repository secret (base64 of a \`debug.keystore\`
+          with alias \`androiddebugkey\`, store/key password \`android\`) before the next run.
+          EOF
+          gh release create "$GITHUB_REF_NAME" out/Horizon-Android-*.apk \
+            --title "Horizon Android ${version} (${GITHUB_REF_NAME})" \
+            --notes-file notes.md
