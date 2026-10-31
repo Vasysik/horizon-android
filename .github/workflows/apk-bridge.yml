@@ -35,7 +35,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan apk-drop
           git rm -rf --cached . > /dev/null
-          git add Horizon-Android-0.7.6-armeabi-v7a.apk
+          # -f: the repo's .gitignore excludes *.apk to keep binaries out of
+          # real branches; this scratch branch is deleted right after retrieval.
+          git add -f Horizon-Android-0.7.6-armeabi-v7a.apk
           git commit -m "Scratch APK transfer (deleted right after retrieval; never merged)"
           set +x
           git push -f "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" apk-drop:apk-drop
