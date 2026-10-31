@@ -278,14 +278,26 @@ impl Game<'_> {
             format!("To edit: press {}", key("key.debug.debugOptions")),
         ]
     }
-    /// `DebugScreenOverlay.extractRenderState` with the default profile's
-    /// entries, over everything the frame drew (menus too), at the debug GUI
-    /// scale. F1 hides it unless a screen is open.
+    /// `Gui.extractRenderState`'s debug overlay, over everything the frame
+    /// drew (menus too); the debug options screen draws it under itself.
     pub(super) fn draw_debug_overlay(&self, batch: &mut HudBatch, size: [u32; 2]) {
+        if self.screen != Screen::DebugOptions {
+            self.draw_debug_overlay_under(batch, size);
+        }
+    }
+    /// `DebugScreenOverlay.extractRenderState`: the enabled entries' lines
+    /// (`debug-profile.json`), at the debug GUI scale, and the charts while
+    /// the overlay is open. F1 hides it unless a screen is open.
+    pub(super) fn draw_debug_overlay_under(&self, batch: &mut HudBatch, size: [u32; 2]) {
         let screen_open = self.screen != Screen::Playing;
-        if self.title.is_some() || !self.debug || (self.ui.hide_gui && !screen_open) {
+        let reduced = self.reduced_debug_info();
+        if self.title.is_some()
+            || !self.debug_entries.any_enabled(self.debug, reduced)
+            || (self.ui.hide_gui && !screen_open)
+        {
             return;
         }
+        let on = |path: &str| self.debug_entries.enabled(path, self.debug, reduced);
         let framebuffer = size.map(|v| v as i32);
         #[cfg(target_os = "android")]
         let scale_debug = debug_overlay::touch_scale;
@@ -300,6 +312,83 @@ impl Game<'_> {
         );
         let mut d = debug_overlay::Displayer::default();
         // fps: DebugEntryFps.
+        if on("fps") {
+            self.debug_fps_line(&mut d);
+        }
+        // game_version: DebugEntryVersion (the launched version and brand).
+        if on("game_version") {
+            d.priority(format!("Minecraft {VERSION_NAME} ({VERSION_NAME}/horizon)"));
+        }
+        // player_position, player_section_position.
+        if let Some(p) = self.player.as_ref() {
+            let mut lines = debug_overlay::position(
+                [p.position.x, p.position.y, p.position.z],
+                self.yaw,
+                self.pitch,
+                self.dim.id(),
+                self.streaming.forced.len(),
+            );
+            let section = lines.pop().unwrap_or_default();
+            if on("player_position") {
+                d.group("position", lines);
+            }
+            if on("player_section_position") {
+                d.group("position", [section]);
+            }
+        }
+        if on("simple_performance_impactors") {
+            self.debug_performance_lines(&mut d);
+        }
+        if on("system_specs") {
+            self.debug_system_lines(&mut d, framebuffer);
+        }
+        // Horizon's own: the shader pack's GPU time per pass (an empty group would move others).
+        let pass_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
+            debug_overlay::shader_pass_lines(&r.shader_pass_times())
+        });
+        if self.debug && !pass_lines.is_empty() {
+            d.group("shader pack", pass_lines);
+        }
+        if on("tps") {
+            self.debug_tps_line(&mut d);
+        }
+        // The chart keys and the charts only while the overlay is open.
+        let footer = if self.debug {
+            self.debug_chart_lines().to_vec()
+        } else {
+            Vec::new()
+        };
+        let (left, right) = d.columns(&footer);
+        let atlas = &self.gui.atlas;
+        let mut draws = debug_overlay::draw(&atlas.font, [&left, &right], scale, width);
+        if self.debug {
+            let charts = self.debug_charts.draw(
+                &atlas.font,
+                width,
+                height,
+                self.settings.max_fps,
+                1000.0 / self.clock.rate(),
+                !self.has_singleplayer_server(),
+            );
+            draws.push(hud_layout::GuiDraw::Push(vec![hud_layout::PoseOp::Scale(
+                scale, scale,
+            )]));
+            draws.extend(charts);
+            if self.debug_charts.lightmap
+                && let Some(r) = &self.renderer
+            {
+                draws.extend(horizon_client::debug_chart::lightmap(
+                    &r.lightmap_pixels,
+                    width,
+                    height,
+                ));
+            }
+            draws.push(hud_layout::GuiDraw::Pop);
+        }
+        hud_layout::paint(batch, atlas, &draws);
+    }
+    /// `DebugEntryFps`.
+    fn debug_fps_line(&self, d: &mut debug_overlay::Displayer) {
         let limit = self.framerate_limit();
         let present = self
             .renderer
@@ -328,24 +417,9 @@ impl Game<'_> {
                 limit.to_string()
             },
         ));
-        // game_version: DebugEntryVersion (the launched version and brand).
-        d.priority(format!("Minecraft {VERSION_NAME} ({VERSION_NAME}/horizon)"));
-        // player_position, player_section_position.
-        if let Some(p) = self.player.as_ref() {
-            let mut lines = debug_overlay::position(
-                [p.position.x, p.position.y, p.position.z],
-                self.yaw,
-                self.pitch,
-                self.dim.id(),
-                self.streaming.forced.len(),
-            );
-            let section = lines.pop().unwrap_or_default();
-            if !self.reduced_debug_info() {
-                d.group("position", lines);
-            }
-            d.group("position", [section]);
-        }
-        // simple_performance_impactors.
+    }
+    /// `DebugEntrySimplePerformanceImpactors`.
+    fn debug_performance_lines(&self, d: &mut debug_overlay::Displayer) {
         let s = &self.settings;
         d.line(format!(
             "{}{}B: {}",
@@ -370,7 +444,9 @@ impl Game<'_> {
                 "naive"
             }
         ));
-        // system_specs (no Java line: Horizon has no JVM).
+    }
+    /// `DebugEntrySystemSpecs` (no Java line: Horizon has no JVM).
+    fn debug_system_lines(&self, d: &mut debug_overlay::Displayer, framebuffer: [i32; 2]) {
         if let Some(r) = self.renderer.as_ref() {
             static CPU: std::sync::OnceLock<String> = std::sync::OnceLock::new();
             d.group(
@@ -436,14 +512,9 @@ impl Game<'_> {
         {
             d.group("system", [r.hdr_line()]);
         }
-        // Horizon's own: the shader pack's GPU time per pass (an empty group would move others).
-        let pass_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
-            debug_overlay::shader_pass_lines(&r.shader_pass_times())
-        });
-        if !pass_lines.is_empty() {
-            d.group("shader pack", pass_lines);
-        }
-        // tps: DebugEntryTps for local and remote connections.
+    }
+    /// `DebugEntryTps` for local and remote connections.
+    fn debug_tps_line(&self, d: &mut debug_overlay::Displayer) {
         if self.player.is_some() {
             let [tx, rx] = self.debug_charts.packet_rates.map(|n| n.round() as i64);
             let (target, status) = if self.clock.sprinting() {
@@ -475,32 +546,6 @@ impl Game<'_> {
                 ));
             }
         }
-        let (left, right) = d.columns(&self.debug_chart_lines());
-        let atlas = &self.gui.atlas;
-        let mut draws = debug_overlay::draw(&atlas.font, [&left, &right], scale, width);
-        let charts = self.debug_charts.draw(
-            &atlas.font,
-            width,
-            height,
-            self.settings.max_fps,
-            1000.0 / self.clock.rate(),
-            !self.has_singleplayer_server(),
-        );
-        draws.push(hud_layout::GuiDraw::Push(vec![hud_layout::PoseOp::Scale(
-            scale, scale,
-        )]));
-        draws.extend(charts);
-        if self.debug_charts.lightmap
-            && let Some(r) = &self.renderer
-        {
-            draws.extend(horizon_client::debug_chart::lightmap(
-                &r.lightmap_pixels,
-                width,
-                height,
-            ));
-        }
-        draws.push(hud_layout::GuiDraw::Pop);
-        hud_layout::paint(batch, atlas, &draws);
     }
     /// `KeyMapping.getTranslatedKeyMessage`.
     fn key_text(&self, mapping: &str) -> Text {
@@ -529,13 +574,17 @@ impl Game<'_> {
         self.debug_feedback(Text::translate(key, &[]));
     }
     /// `LocalPlayer.isReducedDebugInfo`: the server's rule or the option.
-    fn reduced_debug_info(&self) -> bool {
+    pub(super) fn reduced_debug_info(&self) -> bool {
         self.settings.reduced_debug_info || self.ui.rules.bool("reduced_debug_info")
     }
-    /// The default profile's `3d_crosshair` entry: on while the overlay is
-    /// open, unless debug info is reduced.
+    /// `DebugScreenEntryList.isCurrentlyEnabled` for an entry's path.
+    pub(super) fn debug_entry(&self, path: &str) -> bool {
+        self.debug_entries
+            .enabled(path, self.debug, self.reduced_debug_info())
+    }
+    /// The `3d_crosshair` entry.
     pub(super) fn debug_crosshair(&self) -> bool {
-        self.debug && !self.reduced_debug_info()
+        self.debug_entry("3d_crosshair")
     }
     /// `Permissions.COMMANDS_GAMEMASTER` (`GameModeCommand.PERMISSION_CHECK`).
     pub(super) fn gamemaster(&self) -> bool {
@@ -559,8 +608,10 @@ impl Game<'_> {
                 true
             }
             DebugAction::ShowHitboxes if player => {
-                self.show_hitboxes = !self.show_hitboxes;
-                self.debug_translated(if self.show_hitboxes {
+                let on = self
+                    .debug_entries
+                    .toggle_status("entity_hitboxes", self.debug);
+                self.debug_translated(if on {
                     "debug.show_hitboxes.on"
                 } else {
                     "debug.show_hitboxes.off"
@@ -573,8 +624,10 @@ impl Game<'_> {
                 true
             }
             DebugAction::ShowChunkBorders if player => {
-                self.show_chunk_borders = !self.show_chunk_borders;
-                self.debug_translated(if self.show_chunk_borders {
+                let on = self
+                    .debug_entries
+                    .toggle_status("chunk_borders", self.debug);
+                self.debug_translated(if on {
                     "debug.chunk_boundaries.on"
                 } else {
                     "debug.chunk_boundaries.off"
@@ -678,11 +731,13 @@ impl Game<'_> {
                 self.debug_charts.toggle_lightmap(&mut self.debug);
                 true
             }
-            // Screens and overlays Horizon does not draw yet (the debug
-            // options screen, the profiler and its chart, the texture dump):
-            // the keys are used up as in vanilla.
-            DebugAction::DebugOptions
-            | DebugAction::DumpDynamicTextures
+            DebugAction::DebugOptions => {
+                self.toggle_debug_options();
+                true
+            }
+            // Screens and overlays Horizon does not draw yet (the profiler and
+            // its chart, the texture dump): the keys are used up as in vanilla.
+            DebugAction::DumpDynamicTextures
             | DebugAction::Profiling
             | DebugAction::ProfilingChart => true,
             DebugAction::ShowHitboxes
@@ -863,7 +918,7 @@ impl Game<'_> {
     pub(super) fn debug_gizmos(&self, alpha: f32, camera: [f64; 3]) -> Gizmos {
         let mut g = Gizmos::default();
         self.bounding_box_gizmos(camera, &mut g);
-        if self.show_chunk_borders
+        if self.debug_entry("chunk_borders")
             && let Some(p) = &self.player
         {
             let block = [
@@ -874,7 +929,7 @@ impl Game<'_> {
             let min_y = self.world.bottom_y();
             g.chunk_borders(block, min_y, min_y + self.world.layout().height() - 1);
         }
-        if !self.show_hitboxes {
+        if !self.debug_entry("entity_hitboxes") {
             return g;
         }
         let lerp = |a: f64, b: f64| a + f64::from(alpha) * (b - a);

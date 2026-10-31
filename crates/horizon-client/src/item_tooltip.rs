@@ -1,5 +1,6 @@
 //! Item tooltip formatting: equipment modifiers with a player's base values,
 //! and lines without player context for the recipe book's search tree.
+use crate::text::{GRAY, Text};
 use crate::{
     hud::rgba,
     items::{ItemInfo, ItemStack},
@@ -298,6 +299,130 @@ pub fn instrument_line(
     };
     let key = format!("instrument.{}", id.replacen(':', ".", 1));
     Some(translate(&key).unwrap_or(key))
+}
+
+/// `TropicalFish.COMMON_VARIANTS`: pattern, base colour and pattern colour of
+/// the 22 named fish (`entity.minecraft.tropical_fish.predefined.<index>`).
+const COMMON_TROPICAL_FISH: [(&str, &str, &str); 22] = [
+    ("stripey", "orange", "gray"),
+    ("flopper", "gray", "gray"),
+    ("flopper", "gray", "blue"),
+    ("clayfish", "white", "gray"),
+    ("sunstreak", "blue", "gray"),
+    ("kob", "orange", "white"),
+    ("spotty", "pink", "light_blue"),
+    ("blockfish", "purple", "yellow"),
+    ("clayfish", "white", "red"),
+    ("spotty", "white", "yellow"),
+    ("glitter", "white", "gray"),
+    ("clayfish", "white", "orange"),
+    ("dasher", "cyan", "pink"),
+    ("brinely", "lime", "light_blue"),
+    ("betty", "red", "white"),
+    ("snooper", "gray", "red"),
+    ("blockfish", "red", "white"),
+    ("flopper", "white", "yellow"),
+    ("kob", "red", "white"),
+    ("sunstreak", "gray", "white"),
+    ("dasher", "cyan", "yellow"),
+    ("flopper", "yellow", "yellow"),
+];
+
+/// `TropicalFish.Pattern.addToTooltip`: a bucket of tropical fish names a
+/// common variant, or else shows the pattern and then the base colour (with
+/// the pattern colour when it differs), all in italic gray. Only a stack that
+/// has the pattern component shows it.
+pub fn tropical_fish_lines(stack: &ItemStack, display: &TooltipDisplay) -> Vec<Text> {
+    if !display.shows("minecraft:tropical_fish/pattern") {
+        return Vec::new();
+    }
+    let Some(data) = stack.data() else {
+        return Vec::new();
+    };
+    let name = |key: &str, default: &'static str| match data.other(key) {
+        Some(Tag::String(s)) => s
+            .to_string_lossy()
+            .trim_start_matches("minecraft:")
+            .to_owned(),
+        _ => default.to_owned(),
+    };
+    let Some(Tag::String(pattern)) = data.other("minecraft:tropical_fish/pattern") else {
+        return Vec::new();
+    };
+    let pattern = pattern
+        .to_string_lossy()
+        .trim_start_matches("minecraft:")
+        .to_owned();
+    let base = name("minecraft:tropical_fish/base_color", "white");
+    let color = name("minecraft:tropical_fish/pattern_color", "white");
+    let styled = |t: Text| t.italic().with_color(GRAY);
+    let common = COMMON_TROPICAL_FISH
+        .iter()
+        .position(|(p, b, c)| *p == pattern && *b == base && *c == color);
+    if let Some(index) = common {
+        let key = format!("entity.minecraft.tropical_fish.predefined.{index}");
+        return vec![styled(Text::translate(&key, &[]))];
+    }
+    let mut colors = Text::translate(&format!("color.minecraft.{base}"), &[]);
+    if base != color {
+        colors = colors
+            .append(", ")
+            .append(Text::translate(&format!("color.minecraft.{color}"), &[]));
+    }
+    vec![
+        styled(Text::translate(
+            &format!("entity.minecraft.tropical_fish.type.{pattern}"),
+            &[],
+        )),
+        styled(colors),
+    ]
+}
+
+/// `MapId.addToTooltip`: a map whose data is not known (`map` is `None`, else
+/// its `locked` flag and `scale`) reads "Unknown Map"; a known one gives its
+/// id (unless it has a custom name or is to be locked or scaled), "Locked"
+/// when it is or is being locked, and with advanced tooltips its scale (a
+/// copy being scaled one up, at most 4) and level.
+pub fn map_id_lines(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    advanced: bool,
+    map: Option<(bool, u8)>,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let Some(id) = stack.data().and_then(|d| d.map_id) else {
+        return Vec::new();
+    };
+    if !display.shows("minecraft:map_id") {
+        return Vec::new();
+    }
+    let text = |key: &str, fallback: &str| translate(key).unwrap_or_else(|| fallback.to_owned());
+    let Some((locked, scale)) = map else {
+        return vec![text("filled_map.unknown", "Unknown Map")];
+    };
+    // MapPostProcessing: 0 lock, 1 scale.
+    let post = stack.data().and_then(|d| d.map_post_processing);
+    let mut lines = Vec::new();
+    if stack.custom_name().is_none() && post.is_none() {
+        lines.push(text("filled_map.id", "ID #%s").replacen("%s", &id.to_string(), 1));
+    }
+    if locked || post == Some(0) {
+        lines.push(text("filled_map.locked", "Locked"));
+    }
+    if advanced {
+        let scale = (scale + u8::from(post == Some(1))).min(4);
+        lines.push(text("filled_map.scale", "Scaling at 1:%s").replacen(
+            "%s",
+            &(1u32 << scale).to_string(),
+            1,
+        ));
+        lines.push(
+            text("filled_map.level", "(Level %s/%s)")
+                .replacen("%s", &scale.to_string(), 1)
+                .replacen("%s", "4", 1),
+        );
+    }
+    lines
 }
 
 /// `Bees.addToTooltip`: how many bees a hive item holds (a hive item without

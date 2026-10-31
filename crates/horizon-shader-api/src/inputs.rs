@@ -143,6 +143,14 @@ uniform! {
         frame_index: u32,
         /// 1 while F1 hides the HUD, else 0.
         hide_gui: u32,
+        /// What falls in the biome at the camera while it rains: 0 nothing, 1 rain, 2 snow.
+        precipitation: u32,
+        /// The biome at the camera's temperature (vanilla's, -0.7..2.0; it snows below 0.15).
+        temperature: f32,
+        /// The biome at the camera's downfall, 0..1.
+        downfall: f32,
+        /// `rain`, smoothed: rises over about 30 seconds and dries over about 10, 0..1.
+        wetness: f32,
     }
 }
 
@@ -176,6 +184,7 @@ pub const MATERIAL_INPUT: Struct = Struct {
         position: "vec3<f32>" = "The point, camera-relative, in blocks.",
         uv: "vec2<f32>" = "The texture coordinate inside the block atlas.",
         translucent: "bool" = "Drawn in the translucent pass (water, stained glass, ice).",
+        tags: "u32" = "The pack's sprite tags this surface's sprite has: bit i for the manifest's i-th `[[tags]]`.",
     },
 };
 
@@ -207,9 +216,9 @@ mod tests {
     #[test]
     fn frame_fields_carry_their_docs() {
         let wgsl = Frame::WGSL;
-        assert_eq!(wgsl.fields.len(), 28);
+        assert_eq!(wgsl.fields.len(), 32);
         assert!(wgsl.fields.iter().all(|f| !f.doc.trim().is_empty()));
-        assert_eq!(std::mem::size_of::<Frame>(), 4 * 64 + 9 * 16);
+        assert_eq!(std::mem::size_of::<Frame>(), 4 * 64 + 10 * 16);
         assert!(
             wgsl.wgsl()
                 .contains("    camera_position: vec3<f32>,\n    time: f32,\n")

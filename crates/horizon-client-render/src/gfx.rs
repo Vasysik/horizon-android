@@ -101,6 +101,7 @@ mod frame_timing;
 
 mod frame_gen;
 mod hdr;
+pub use hdr::Calibration as HdrCalibration;
 pub mod lightning;
 mod lod;
 mod native_material;
@@ -1372,6 +1373,19 @@ impl Renderer {
             .map(|tile| u64::from(tile.mesh.solid + tile.mesh.translucent))
             .sum()
     }
+    /// Tiles and quads of the far terrain tiles with GPU buffers, by level.
+    pub fn lod_levels(&self) -> Vec<[u64; 2]> {
+        let mut levels = Vec::new();
+        for (key, tile) in &self.lods {
+            let level = usize::from(key.level);
+            if levels.len() <= level {
+                levels.resize(level + 1, [0, 0]);
+            }
+            levels[level][0] += 1;
+            levels[level][1] += u64::from(tile.mesh.solid + tile.mesh.translucent);
+        }
+        levels
+    }
     /// Bytes of the section vertex arena's buffers, and of the vertices
     /// resident sections hold in them.
     pub fn section_vertex_bytes(&self) -> [u64; 2] {
@@ -2400,8 +2414,9 @@ impl Renderer {
             CRUMBLING_BLEND,
             false,
         );
-        // RenderPipelines.ENTITY_SHADOW: translucent, depth test without
-        // writes. The quads lie exactly on the block tops like vanilla's, but
+        // RenderPipelines.ENTITY_SHADOW: translucent, back-face culled, depth
+        // test without writes. The quads lie exactly on the block tops like
+        // vanilla's, facing +Y so looking up from below culls them, but
         // terrain and shadows are separate draw paths, so their fp32 depth
         // interpolations disagree by a few dozen ulps of the fragment depth
         // and the shadow's rim z-fights with the block top (speckle that
@@ -2411,7 +2426,7 @@ impl Renderer {
         // the feet.
         let shadow_blob_pipeline = entity_pipeline_with(
             "Entity shadows",
-            None,
+            Some(wgpu::Face::Back),
             false,
             wgpu::CompareFunction::GreaterEqual,
             wgpu::DepthBiasState {
@@ -3853,7 +3868,13 @@ impl Renderer {
     ) {
         surface.configure(device, config);
         if let Some(hdr) = hdr {
-            horizon_hdr::set_metadata(device, surface, hdr.paper_white, hdr.peak, hdr.black);
+            horizon_hdr::set_metadata(
+                device,
+                surface,
+                hdr.paper_white,
+                hdr.declared_peak(),
+                hdr.black,
+            );
         }
     }
     fn configure_surface(&self) {
@@ -3866,9 +3887,29 @@ impl Renderer {
             );
         }
     }
+    /// HDR calibration's test picture (`crate::hdr_calibration`) while it runs, else None.
+    pub fn set_hdr_calibration(&mut self, calibration: Option<HdrCalibration>) {
+        let Some(hdr) = &mut self.hdr else {
+            return;
+        };
+        if hdr.calibration == calibration {
+            return;
+        }
+        let declared = hdr.declared_peak();
+        hdr.calibration = calibration;
+        if hdr.declared_peak() != declared {
+            self.send_hdr_metadata();
+        }
+    }
     fn send_hdr_metadata(&self) {
         if let (Some(surface), Some(hdr)) = (&self.surface, &self.hdr) {
-            horizon_hdr::set_metadata(&self.device, surface, hdr.paper_white, hdr.peak, hdr.black);
+            horizon_hdr::set_metadata(
+                &self.device,
+                surface,
+                hdr.paper_white,
+                hdr.declared_peak(),
+                hdr.black,
+            );
         }
     }
     /// The swapchain's configuration: `config` (what every pipeline draws in), or
@@ -3935,7 +3976,8 @@ impl Renderer {
                 DisplayWatch::default()
             };
             let format = self.config.format.remove_srgb_suffix();
-            self.hdr = output.map(|output| hdr::Hdr::new(&self.device, format, output));
+            self.hdr =
+                output.map(|output| hdr::Hdr::new(&self.device, &self.queue, format, output));
             self.configure_surface();
             match output {
                 Some(output) => log::info!(
@@ -4060,9 +4102,13 @@ impl Renderer {
     /// stages' labels; on an error the pack that ran keeps running.
     pub fn set_native_shader_pack(
         &mut self,
-        pack: Option<(horizon_shader_api::Report, Vec<(String, f64)>)>,
+        pack: Option<(
+            horizon_shader_api::Report,
+            Vec<(String, f64)>,
+            Vec<(u32, u32)>,
+        )>,
     ) -> std::result::Result<Vec<String>, String> {
-        let Some((report, constants)) = pack else {
+        let Some((report, constants, sprite_tags)) = pack else {
             self.native = None;
             return Ok(Vec::new());
         };
@@ -4071,6 +4117,7 @@ impl Renderer {
             flat: self.flat.as_ref().map(|f| &f.draw_layout),
             sprites: self.terrain_sprites,
             format: self.config.format.remove_srgb_suffix(),
+            sprite_tags: &sprite_tags,
         };
         let (pack, labels) =
             native_pack::NativePack::new(&self.device, &terrain, report, &constants)?;

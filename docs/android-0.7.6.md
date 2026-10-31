@@ -2,7 +2,7 @@
 
 This update targets touch controls, initial menu navigation and diagnostic recording.
 
-- Optional **Swap hands button**, off by default. It uses the normal swap-hands action and supports the layout editor.
+- Optional **Swap hands button**, off by default. Its factory position is beside Inventory in landscape and portrait, mirrored for left-handed controls. Customized placements are preserved. Swap, Shield and custom text buttons share the same default frame and visible held feedback; custom artwork remains supported.
 - **Raise shield with: Sneak / Button**. The separate button appears when a blocking item is available. Shield input selects the blocking hand without consuming the main-hand item or interacting with a targeted block.
 - Tap-control schemes show a crosshair for bows, crossbows, tridents and throwable items. Their use gestures aim through the center; other items retain touch targeting.
 - **Horizontal sensitivity** and **Vertical sensitivity** calibrate camera input independently. Equal physical drag distances now produce equal default turns on both axes, including portrait screens.
@@ -10,8 +10,8 @@ This update targets touch controls, initial menu navigation and diagnostic recor
 - Touch, gyro and controller camera movement count toward the look-around tutorial. Completed tutorial stages remain saved across worlds; an unfinished stage may appear again.
 - Hardware D-pad navigation works in the initial title menu before the full game loads. Focus acquisition retries after widgets become available.
 - GPU profiling and performance recording share one report session. Both launcher controls use the same button style. Reports include the requested profiling mode and whether encoder timestamps are supported; unsupported hardware cannot provide these stage timings.
-- Installation cleanup waits for active resource preparation to finish; the final asset index is saved from verified memory rather than reopened from Androidâ€™s evictable cache. This prevents a concurrent startup cleanup from deleting files needed by a reinstall (#30). The original device report does not include a log, so a clean installation on that affected device still needs verification.
-- Stable upstream history merged through `c3905131b` (717 incoming commits, including merge history): rendering, chunk work, resource packs, gameplay, network and mod API changes. Android input, presentation bounds, upload budgets and sandbox `.hmod` support are retained.
+- Installation cleanup waits for active resource preparation to finish; the final asset index is saved from verified memory rather than reopened from Android’s evictable cache. This prevents a concurrent startup cleanup from deleting files needed by a reinstall (#30). The original device report does not include a log, so a clean installation on that affected device still needs verification.
+- Stable upstream history merged through `c0b65f1d2` (571 additional incoming commits after RC1, including merge history): rendering, chunk work, resource packs, gameplay, network and mod API changes. Android input, presentation bounds, upload budgets and sandbox `.hmod` support are retained.
 
 Native `.hnmod` compilation on Android remains unsupported. Java Fabric, Forge and NeoForge mods are not supported.
 
@@ -32,6 +32,18 @@ verification on the originally affected phone is still required.
 - OpenGL ES selection also applies to the launcher. An interrupted first Vulkan frame triggers OpenGL ES recovery on the next launch, with an explanatory status (#38). This does not identify or repair every vendor-driver crash.
 - GLES sprite selection preserves the newly added texture-filtering functions; assembled shader validation and DirectX translation pass. The storage probe follows the relocated file-lock module.
 - Fireworks no longer enable the automatic projectile crosshair. Swap hands moves away from Sprint; only the original factory placement is migrated.
+
+## Follow-up upstream integration
+
+The additional 571 incoming commits include SRV handshake corrections, player saving,
+movement/attack ordering, safer archive reading, item/model fixes and server-side
+resource-allocation improvements. Android keeps sandboxed code `.hmod` support and
+now validates upstream content-only `.hmod` packages with the shared package parser.
+Native source `.hnmod` compilation remains unsupported.
+
+The new boot-renderer interface and ZIP 9 API were adapted explicitly for Android.
+Audio-device discovery remains off-thread; upstream device fingerprints reduce
+unnecessary queries. Upstream deployment workflows remain disabled.
 
 ## Crash diagnostics
 
@@ -55,7 +67,7 @@ See [diagnostic collection and limitations](android-diagnostics.md).
 
 ## Validation
 
-Local checks passed: 2 execution-role/player save tests, 44 touch tests (including layout migration and per-axis calibration), 8 installer tests, 5 crash-diagnostic tests, 9 performance/timing tests, 27 content tests (one fixture-dependent test skipped), 10 audio tests, 19 GPU tests, 26 renderer/shader tests and a standalone storage-probe build, 13 Android tooling tests, ARM64 Clippy and ARMv7 cargo check. Public-tree and whitespace checks passed.
+Local checks passed: 2 execution-role/player save tests, 45 touch tests (including layout migration and per-axis calibration), 8 installer tests, 5 crash-diagnostic tests, 9 performance/timing tests, 27 content tests (one fixture-dependent test skipped), 18 audio tests, 19 GPU tests, 26 renderer/shader tests and a standalone storage-probe build, 13 Android tooling tests, ARM64 Clippy and ARMv7 cargo check. Public-tree and whitespace checks passed.
 
 The change is a release candidate until the device checklist below passes. Local source tests do not establish performance or compatibility on every phone.
 

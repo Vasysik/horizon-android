@@ -1424,6 +1424,38 @@ impl Game<'_> {
             adv::conditions(&c["location"], &ctx, w)
         });
     }
+    /// `DefaultBlockInteractionTrigger` (default_block_use): the player, and
+    /// the block's `BLOCK_USE` context at its centre, with no tool.
+    pub(super) fn trigger_default_block_use(&mut self, pos: [i32; 3]) {
+        self.trigger_block_use("minecraft:default_block_use", pos, None);
+    }
+    /// `AnyBlockInteractionTrigger` (any_block_use): the player, and the
+    /// block's `ADVANCEMENT_LOCATION` context at its centre with the stack in
+    /// hand as the use left it.
+    pub(super) fn trigger_any_block_use(&mut self, pos: [i32; 3], stack: &ItemStack) {
+        self.trigger_block_use("minecraft:any_block_use", pos, Some(stack));
+    }
+    fn trigger_block_use(&mut self, name: &str, pos: [i32; 3], stack: Option<&ItemStack>) {
+        let me = self.player_entity();
+        let it = stack.map(item_view);
+        let centre = pos.map(|c| f64::from(c) + 0.5);
+        self.trigger(name, move |c, w| {
+            let player = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let location = adv::Entities {
+                origin: centre,
+                tool: it.as_ref(),
+                block_pos: Some(pos),
+                ..player
+            };
+            adv::conditions(&c["player"], &player, w)
+                && adv::conditions(&c["location"], &location, w)
+        });
+    }
     /// `LightningStrikeTrigger`: the bolt, and the mobs around it that it did
     /// not hit (`bystander`), each tested from this player's position.
     pub(super) fn trigger_lightning_strike(&mut self, bolt: &EntityView, viewers: &[EntityView]) {

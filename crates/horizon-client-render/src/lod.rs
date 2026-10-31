@@ -40,8 +40,17 @@ fn sampling_threads(cores: usize) -> usize {
 /// terrain starts one sample job at most this often and no detail: it would
 /// otherwise take the cores the near chunks and the frame need.
 const HELD_SAMPLE_STEP: std::time::Duration = std::time::Duration::from_millis(500);
-/// The coarsest tile level: `Plan` roots cover at most 1024 chunks around.
-pub(crate) const MAX_LEVEL: u8 = 10;
+/// The coarsest tile level: `Plan` roots cover at most `MAX_CHUNKS` chunks
+/// around (a level-22 tile is 67 million blocks wide: the whole world).
+pub(crate) const MAX_LEVEL: u8 = 22;
+/// Tiles this far from the camera (1024 chunks, as far as far terrain went
+/// before it covered the world) are planned with `WORLD_SPLIT`.
+const WORLD_START: i32 = 1024 * 16;
+/// How many tile widths away from the camera a tile of the world-wide terrain
+/// splits (`Plan::visit`: cells then span about 1/48 of the distance).
+const WORLD_SPLIT: i32 = 3;
+/// The farthest `Plan` reaches, in chunks.
+pub const MAX_CHUNKS: u32 = 1 << 22;
 /// The coarsest tile level whose chunks are generated in full (trees,
 /// structures) rather than sampled: cells of up to 4 blocks, out to about
 /// 1024 blocks at Full far detail.
@@ -417,7 +426,7 @@ impl Plan {
         elevation: i32,
         reduced: bool,
     ) -> Self {
-        let range = distance.min(1024) as i32 * 16;
+        let range = distance.min(MAX_CHUNKS) as i32 * 16;
         let mut level = 0;
         while (16 << level) < range {
             level += 1;
@@ -454,7 +463,16 @@ impl Plan {
         // Keep distant cells small on screen; finest tiles retain individual
         // blocks. Reduced keeps them twice as large (a quarter of the cells).
         let split = if previous.split.contains(&key) { 10 } else { 8 };
-        let threshold = key.size() * if reduced { split / 2 } else { split };
+        // Beyond the old 1024-chunk limit the cells are as large as `reduced`'s:
+        // the whole world is 22 levels, not all of them worth full cells.
+        let threshold = key.size()
+            * if key.distance(camera) >= WORLD_START {
+                WORLD_SPLIT
+            } else if reduced {
+                split / 2
+            } else {
+                split
+            };
         if key.level > 0
             && (key.distance(camera) < detail * 16 + 16
                 || key.distance(camera).max(self.elevation) < threshold)
@@ -1742,6 +1760,42 @@ mod tests {
             .origin(),
             [-32, 0, -64]
         );
+    }
+    #[test]
+    fn world_wide_plans_stay_small_and_cover_every_level() {
+        // About 10 000 nodes at a corner of the world, 9 000 at its centre.
+        const WORLD_PLAN_NODES: usize = 16_384;
+        for (camera, elevation) in [
+            ([0, 0], 0),
+            ([115, 135], 49_000_000),
+            ([-30_000_000, 29_999_000], 90),
+        ] {
+            let plan =
+                Plan::with_previous(camera, 12, MAX_CHUNKS, &Plan::default(), elevation, false);
+            let reduced =
+                Plan::with_previous(camera, 12, MAX_CHUNKS, &Plan::default(), elevation, true);
+            let top = plan.nodes.iter().map(|k| k.level).max().unwrap();
+            assert_eq!(top, MAX_LEVEL, "{camera:?} y={elevation}: roots stop short");
+            assert!(
+                plan.nodes.len() < WORLD_PLAN_NODES,
+                "{camera:?} y={elevation}: {} nodes",
+                plan.nodes.len()
+            );
+            assert!(
+                reduced.nodes.len() <= plan.nodes.len(),
+                "{camera:?} y={elevation}: reduced has {} nodes, full {}",
+                reduced.nodes.len(),
+                plan.nodes.len()
+            );
+            // Every level from the finest planned one up to the roots has tiles.
+            let finest = plan.nodes.iter().map(|k| k.level).min().unwrap();
+            for level in finest..=MAX_LEVEL {
+                assert!(
+                    plan.nodes.iter().any(|k| k.level == level),
+                    "{camera:?} y={elevation}: no level-{level} tile"
+                );
+            }
+        }
     }
     #[test]
     fn aerial_distance_avoids_unseen_full_detail_outside_the_near_area() {

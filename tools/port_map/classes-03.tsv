@@ -187,7 +187,7 @@ FlowerBedBlock.canBeReplaced	port	crates/horizon-world/src/level/place.rs::Sim::
 FlowerBedBlock.createBlockStateDefinition	skip:data		block state definition is data (blocks table in horizon-items)
 FlowerBedBlock.performBonemeal	port	crates/horizon-world/src/level/bonemeal.rs::Sim::perform_bonemeal	
 FlowerBedBlock.rotate	port	crates/horizon-world/src/worldgen/structure.rs::StateTransforms::rotate	
-FlowerBlock.makeEffectList	skip:data		suspicious stew effects are item data (stew_effects component)
+FlowerBlock.makeEffectList	skip:data		the constructor sites' effects are the table in horizon-items/src/flowers.rs (floor(seconds * 20))
 FrogspawnBlock.mayPlaceOn	port	crates/horizon-world/src/level/survive.rs::Sim::frogspawn_may_place_on	
 FrogspawnBlock.spawnTadpoles	port	crates/horizon-client/src/game.rs::Game::process_level_events	handles the hatch block event: 2 to 5 tadpoles
 FrogspawnBlock.tick	port	crates/horizon-world/src/level/tick.rs::Sim::tick_block	

@@ -153,10 +153,38 @@ impl Game<'_> {
         );
         (damage + f64::from(per_block) * fall) as f32
     }
+    /// `source.getEntity()` of a blow as `SulfurCube.knockback` reads it: its eye position
+    /// (`getEyePosition`), view direction (`getLookAngle`, `calculateViewVector(xRot, yRot)`)
+    /// and feet (`position`). The player is the one acting, a mob one in the list.
+    pub(super) fn attacker_aim(
+        &self,
+        who: Option<horizon_client::mobs::Who>,
+    ) -> Option<horizon_client::mobs::Aim> {
+        match who? {
+            horizon_client::mobs::Who::Player => {
+                let p = self.player.as_ref()?;
+                let look = horizon_world::view_direction::view_vector(self.pitch, self.yaw);
+                Some(horizon_client::mobs::Aim {
+                    eye: self.eye_position()?,
+                    look: [look.x, look.y, look.z],
+                    feet: [p.position.x, p.position.y, p.position.z],
+                })
+            }
+            horizon_client::mobs::Who::Mob(id) => {
+                let m = self.mobs.iter().find(|m| m.id == id)?;
+                Some(horizon_client::mobs::Aim {
+                    eye: [m.position.x, m.eye_y(), m.position.z],
+                    look: m.look_angle(),
+                    feet: [m.position.x, m.position.y, m.position.z],
+                })
+            }
+        }
+    }
     /// `LivingEntity.hurtServer` of the mob at `index` by the player's hit:
     /// the weapon's `armor_effectiveness` enchantments (Breach) thin its armor.
     pub(super) fn hurt_by_player(&mut self, index: usize, amount: f32, source: Damage) -> bool {
         let held = self.held().cloned();
+        let aim = self.attacker_aim(source.attacker);
         let kind = self.mobs[index].kind.id.clone();
         let ctx = EffectContext {
             this: Some(&kind),
@@ -184,7 +212,11 @@ impl Game<'_> {
             )
         };
         let old_health = self.mobs[index].health;
+        // The causing entity's aim, for what turns a blow by where it points
+        // (`SulfurCube.knockback`).
+        self.mobs[index].attacker_aim = aim;
         let hurt = self.mobs[index].damage_with(amount, source, Some(&mut breach));
+        self.mobs[index].attacker_aim = None;
         if hurt && self.mobs[index].health != old_health {
             self.mob_damage_event(self.mobs[index].id);
         }
@@ -456,8 +488,7 @@ impl Game<'_> {
         let attribute = if spin > 0.0 {
             spin
         } else {
-            1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage)
-                + self.effect_attack_bonus()
+            self.attack_damage()
         };
         let base = sweep_base_damage(ratio, attribute, scale);
         let (xd, zd) = self.extra_knockback_direction();

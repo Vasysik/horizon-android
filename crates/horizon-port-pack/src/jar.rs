@@ -56,7 +56,11 @@ pub fn read(path: &Path) -> Result<JarInfo, String> {
             .and_then(|m| manifest_value(&m, "Implementation-Version"))
             .unwrap_or_default();
     }
-    let names: Vec<String> = zip.file_names().map(str::to_owned).collect();
+    let names: Vec<String> = zip
+        .file_names()
+        .map(|name| name.map(|name| name.into_owned()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     info.census = census(&names);
     if info.mod_id.is_empty() {
         info.mod_id = path

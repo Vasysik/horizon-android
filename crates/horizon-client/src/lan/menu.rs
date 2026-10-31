@@ -588,13 +588,26 @@ fn swap(view: &mut View, slot: i32, button: i32, rules: &dyn Rules) {
     if i >= view.len() || !view.enabled(i) {
         return;
     }
-    // Hotbar slot `button` (0..9) or the off hand (40).
+    // Hotbar slot `button` (0..9) or the off hand (40). A chest has no
+    // off-hand slot, so F swaps with `Guest.offhand` (Inventory slot 40).
+    if button == 40 && view.container.is_some() {
+        let (clicked, off) = (view.get(i), view.guest.offhand.clone());
+        if off
+            .as_ref()
+            .is_some_and(|off| !view.may_place(i, off, rules))
+        {
+            return;
+        }
+        view.set(i, off);
+        view.guest.offhand = clicked;
+        return;
+    }
     let other = match button {
         0..=8 => match &view.container {
             Some(c) => c.len() + 27 + button as usize,
             None => 36 + button as usize,
         },
-        40 if view.container.is_none() => 45,
+        40 => 45,
         _ => return,
     };
     if other == i {
@@ -919,6 +932,64 @@ mod tests {
         // Nothing leaves a hidden slot either.
         click(&mut view, &mut drag, 2, 0, input::QUICK_MOVE, &rules);
         assert_eq!(view.get(2).map(|s| s.item), Some("minecraft:stone".into()));
+    }
+
+    struct SwapRules;
+    impl Rules for SwapRules {
+        fn items(&self) -> &Items {
+            unreachable!("swap does not read the item catalog");
+        }
+        fn max_stack(&self, _: &str) -> u32 {
+            64
+        }
+        fn armor_index(&self, _: &str) -> Option<usize> {
+            None
+        }
+    }
+
+    /// F (SWAP button 40) over a chest or the inventory below it swaps with
+    /// the off hand, even though the menu has no off-hand slot.
+    #[test]
+    fn guest_chest_f_swaps_with_the_off_hand() {
+        let rules = SwapRules;
+        let mut g = guest();
+        g.offhand = Some(ItemStack::new("minecraft:shield", 1));
+        let mut chest = vec![Some(ItemStack::new("minecraft:diamond", 1)), None];
+        let mut drag = None;
+        let mut view = View {
+            guest: &mut g,
+            container: Some(&mut chest),
+            shulker: false,
+            hidden: &[],
+        };
+        click(&mut view, &mut drag, 0, 40, input::SWAP, &rules);
+        assert_eq!(
+            view.get(0).as_ref().map(|s| &*s.item),
+            Some("minecraft:shield")
+        );
+        assert_eq!(
+            view.guest.offhand.as_ref().map(|s| &*s.item),
+            Some("minecraft:diamond")
+        );
+        // Empty chest slot: the off hand goes in.
+        click(&mut view, &mut drag, 1, 40, input::SWAP, &rules);
+        assert_eq!(
+            view.get(1).as_ref().map(|s| &*s.item),
+            Some("minecraft:diamond")
+        );
+        assert!(view.guest.offhand.is_none());
+        // F over the first hotbar slot (menu slot 2 + 27).
+        view.guest.offhand = Some(ItemStack::new("minecraft:oak_boat", 1));
+        view.guest.inventory[0] = Some(ItemStack::new("minecraft:apple", 1));
+        click(&mut view, &mut drag, 2 + 27, 40, input::SWAP, &rules);
+        assert_eq!(
+            view.guest.inventory[0].as_ref().map(|s| &*s.item),
+            Some("minecraft:oak_boat")
+        );
+        assert_eq!(
+            view.guest.offhand.as_ref().map(|s| &*s.item),
+            Some("minecraft:apple")
+        );
     }
 
     #[test]

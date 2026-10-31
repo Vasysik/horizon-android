@@ -304,6 +304,34 @@ fn mesh_columns_with_neighbors(
     });
     mesh_columns_with_edges(key, columns, covered, covered_bounds, &edges, &[], material)
 }
+/// From this tile level up a cell is 64 blocks wide or more: the strata
+/// inside the ground cannot be told apart, so a column is its surface.
+const HEIGHTMAP_LEVEL: u8 = 6;
+/// `column` as a heightmap: its top solid span reaching down to the bottom of
+/// the world (so the walls toward lower neighbours are one face of the
+/// surface's material, merged along the cliff), and the fluid over it.
+fn heightmap(column: &Column, mut fluid: impl FnMut(&Span) -> bool) -> Column {
+    let Some((top, below)) = column.spans.split_last() else {
+        return column.clone();
+    };
+    let ground = |span: &Span| Span {
+        min: crate::chunk::MIN_Y as i16,
+        ..*span
+    };
+    let mut spans = Vec::with_capacity(2);
+    match below.last() {
+        Some(under) if fluid(top) => {
+            spans.push(ground(under));
+            spans.push(*top);
+        }
+        _ if fluid(top) => spans.push(*top),
+        _ => spans.push(ground(top)),
+    }
+    Column {
+        surface: column.surface,
+        spans,
+    }
+}
 fn mesh_columns_with_edges(
     key: TileKey,
     columns: &[Column],
@@ -314,6 +342,28 @@ fn mesh_columns_with_edges(
     mut material: impl FnMut(&Span, Direction, [i32; 2]) -> Material,
 ) -> SectionMesh {
     assert_eq!(columns.len(), CELLS * CELLS);
+    let heightmap_columns;
+    let heightmap_neighbors;
+    let (columns, neighbors) = if key.level >= HEIGHTMAP_LEVEL {
+        let [ox, _, oz] = key.origin();
+        let mut fluid = |span: &Span| material(span, Direction::Up, [ox, oz]).fluid != 0;
+        heightmap_columns = columns
+            .iter()
+            .map(|column| heightmap(column, &mut fluid))
+            .collect::<Vec<_>>();
+        heightmap_neighbors = neighbors.each_ref().map(|side| {
+            side.iter()
+                .map(|edge| EdgeColumn {
+                    start: edge.start,
+                    end: edge.end,
+                    column: heightmap(&edge.column, &mut fluid),
+                })
+                .collect::<Vec<_>>()
+        });
+        (&heightmap_columns[..], &heightmap_neighbors)
+    } else {
+        (columns, neighbors)
+    };
     let mut count = CELLS * CELLS;
     let edge_offsets = std::array::from_fn::<_, 4, _>(|side| {
         let start = count;
@@ -336,7 +386,10 @@ fn mesh_columns_with_edges(
                 step = step.min(other.size());
             }
         }
-        step
+        // The cells of the coarsest tiles are thousands of blocks wide: a
+        // few steps each keep the work bounded, the cut around finer terrain
+        // coarse for as long as such a tile stands in for its children.
+        step.max(stride / MAX_STEPS)
     };
     let filled = fill_buried_gaps(
         columns,
@@ -944,20 +997,35 @@ fn merge(rects: &mut Vec<Rect>) {
 /// The widest face `emit` writes, in blocks: its UVs, counted from the face's
 /// corner, must stay within `TerrainVertex::tiled`'s range.
 const MAX_FACE: f32 = 1024.0;
+/// A face that would be more than this many `MAX_FACE` pieces is one quad
+/// whose UVs are scaled to fit: a cell of the coarsest tiles is thousands to
+/// millions of blocks wide, and the texture repeats within it are far below a
+/// pixel.
+const MAX_PIECES: f32 = 4.0;
+/// Steps along a cell of a tile cut around finer terrain, at most.
+const MAX_STEPS: i32 = 32;
 fn emit(mesh: &mut SectionMesh, key: FaceKey, rect: Rect) {
+    let pieces = ((rect.u1 - rect.u0) / MAX_FACE).ceil() * ((rect.v1 - rect.v0) / MAX_FACE).ceil();
+    if pieces > MAX_PIECES {
+        let extent = (rect.u1 - rect.u0).max(rect.v1 - rect.v0);
+        emit_quad(mesh, key, rect, (MAX_FACE / extent).min(1.0));
+        return;
+    }
     let mut u0 = rect.u0;
     while u0 < rect.u1 {
         let u1 = rect.u1.min(u0 + MAX_FACE);
         let mut v0 = rect.v0;
         while v0 < rect.v1 {
             let v1 = rect.v1.min(v0 + MAX_FACE);
-            emit_quad(mesh, key, Rect { u0, v0, u1, v1 });
+            emit_quad(mesh, key, Rect { u0, v0, u1, v1 }, 1.0);
             v0 = v1;
         }
         u0 = u1;
     }
 }
-fn emit_quad(mesh: &mut SectionMesh, key: FaceKey, rect: Rect) {
+/// `uv_scale` shrinks the UVs, in blocks from the face's corner, of a face
+/// too wide for them.
+fn emit_quad(mesh: &mut SectionMesh, key: FaceKey, rect: Rect, uv_scale: f32) {
     let Rect { u0, v0, u1, v1 } = rect;
     let p = f32::from_bits(key.plane);
     let mut points = match key.direction {
@@ -994,7 +1062,10 @@ fn emit_quad(mesh: &mut SectionMesh, key: FaceKey, rect: Rect) {
     out.extend(points.into_iter().zip(uvs).map(|(pos, uv)| {
         TerrainVertex::tiled(
             pos,
-            [uv[0] - corner[0], uv[1] - corner[1]],
+            [
+                (uv[0] - corner[0]) * uv_scale,
+                (uv[1] - corner[1]) * uv_scale,
+            ],
             key.layer,
             key.color,
             key.light,
@@ -1092,6 +1163,84 @@ mod tests {
             }
         }
         assert_eq!(area, 2500.0 * 15.5);
+    }
+    #[test]
+    fn far_columns_are_heightmaps_of_their_surface_and_water() {
+        let fluid = |s: &Span| s.state.0 == 2;
+        let strata = Column {
+            surface: None,
+            spans: vec![span(0, 60, 1), span(60, 63, 3), span(63, 64, 4)],
+        };
+        let flat = heightmap(&strata, fluid);
+        assert_eq!(flat.spans, [span(-64, 64, 4)]);
+        let sea = Column {
+            surface: None,
+            spans: vec![span(0, 50, 1), span(50, 62, 2)],
+        };
+        let flat = heightmap(&sea, fluid);
+        assert_eq!(flat.spans, [span(-64, 50, 1), span(50, 62, 2)]);
+        assert!(heightmap(&columns()[0], fluid).spans.is_empty());
+        // A rolling landscape of strata: far tiles need a fraction of the quads.
+        let rolling: Vec<Column> = (0..CELLS * CELLS)
+            .map(|i| {
+                let top = 64 + (i * 7 % 5) as i16;
+                Column {
+                    surface: None,
+                    spans: vec![
+                        span(0, top - 4, 1),
+                        span(top - 4, top - 1, 3),
+                        span(top - 1, top, 4),
+                    ],
+                }
+            })
+            .collect();
+        let quads = |level| {
+            let key = TileKey { x: 0, z: 0, level };
+            let mesh = mesh_columns(key, &rolling, &FxHashSet::default(), None, material);
+            mesh.solid.len() / 4
+        };
+        let (voxel, height) = (quads(HEIGHTMAP_LEVEL - 1), quads(HEIGHTMAP_LEVEL));
+        assert!(height * 3 < voxel * 2, "{height} quads against {voxel}");
+    }
+    #[test]
+    fn world_sized_faces_are_one_quad_with_uvs_that_fit() {
+        let mut mesh = SectionMesh::default();
+        let key = FaceKey {
+            direction: Direction::Up,
+            plane: 64.0f32.to_bits(),
+            overlay: 0,
+            layer: 1,
+            light: 0,
+            color: 0,
+            translucent: false,
+        };
+        let size = 4_194_304.0;
+        emit(
+            &mut mesh,
+            key,
+            Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: size,
+                v1: size / 2.0,
+            },
+        );
+        assert_eq!(mesh.solid.len(), 4);
+        let corners: Vec<[f32; 3]> = mesh.solid.iter().map(|v| v.pos).collect();
+        assert!(
+            corners.iter().any(|p| p[0] == size && p[2] == size / 2.0),
+            "{corners:?}"
+        );
+        let top = mesh
+            .solid
+            .iter()
+            .map(tiled_uv)
+            .fold(0.0f32, |m, uv| m.max(uv[0]).max(uv[1]));
+        assert!(top <= MAX_FACE + 1.0, "UV reaches {top}");
+        assert!(
+            top > MAX_FACE / 4.0,
+            "the texture still repeats across the face"
+        );
     }
     fn normal(q: &[TerrainVertex; 4]) -> glam::Vec3 {
         let p = |i: usize| glam::Vec3::from(q[i].pos);

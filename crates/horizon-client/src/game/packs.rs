@@ -346,6 +346,11 @@ impl Game<'_> {
             self.renderer = Some(renderer);
             self.apply_ui_settings();
         }
+        // Horizon's own shader pack is built again: its sprite tags name the old atlas's
+        // layers, and a new renderer runs no pack.
+        self.native_shaders = super::native_shaders::NativeShaders::picking(&std::mem::take(
+            &mut self.native_shaders.picked,
+        ));
         self.ui.chat.rescale(&self.gui.atlas);
         // The creative screen survives the reload; item names may not.
         self.creative_screen.forget_items();

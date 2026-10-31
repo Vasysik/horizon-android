@@ -63,8 +63,12 @@ impl Game<'_> {
                 .iter()
                 .map(|o| (o.id.clone(), o.kind.default_constant()))
                 .collect();
+            let sprites = self.pack.render.sprite_layers.iter();
+            let tags = pack
+                .manifest
+                .sprite_tags(sprites.map(|(name, layer)| (name.as_str(), *layer)));
             let labels = renderer
-                .set_native_shader_pack(Some((report, constants)))
+                .set_native_shader_pack(Some((report, constants, tags)))
                 .map_err(|e| vec![e])?;
             Ok((pack.manifest, labels))
         });

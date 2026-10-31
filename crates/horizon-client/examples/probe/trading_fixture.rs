@@ -353,8 +353,9 @@ pub fn main() -> horizon_client::Result<()> {
                 if let Tag::Compound(c) = &mut tag {
                     c.insert("id".into(), Tag::String(id.into()));
                 }
-                let mob = entity_nbt::mob_from_nbt(&tag, &types, 1).ok_or("unreadable villager")?;
-                let back = entity_nbt::mob_to_nbt(&mob, [0; 4], None);
+                let mob =
+                    entity_nbt::mob_from_nbt(&tag, &types, 1, None).ok_or("unreadable villager")?;
+                let back = entity_nbt::mob_to_nbt(&mob, [0; 4], None, None);
                 writeln!(out, "{name} snbt {text}")?;
                 let mut kept = horizon_world::nbt::Compound::new();
                 for key in [

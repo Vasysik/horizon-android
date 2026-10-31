@@ -654,6 +654,7 @@ pub(crate) fn crafting_station(kind: &str) -> &'static str {
         "minecraft:smoking" => "minecraft:smoker",
         "minecraft:campfire_cooking" => "minecraft:campfire",
         "minecraft:stonecutting" => "minecraft:stonecutter",
+        "minecraft:brewing" => "minecraft:brewing_stand",
         "minecraft:smithing_transform" | "minecraft:smithing_trim" => "minecraft:smithing_table",
         _ => "minecraft:crafting_table",
     }
@@ -666,7 +667,10 @@ impl RecipeIndex {
         let mut insert = |id: String, v: &serde_json::Value| {
             let kind = v["type"].as_str().unwrap_or_default();
             let special = kind.starts_with("minecraft:crafting_special_")
-                || kind == "minecraft:crafting_decorated_pot";
+                || kind == "minecraft:crafting_decorated_pot"
+                // A brewing recipe has no recipe book display of its own
+                // (`BrewingRecipe`), so it never takes display numbers.
+                || kind == "minecraft:brewing";
             let displays = if special {
                 0
             } else if kind == "minecraft:crafting_transmute" {
@@ -690,25 +694,22 @@ impl RecipeIndex {
                     first_display: 0,
                     station: crafting_station(kind),
                     notify: v["show_notification"].as_bool().unwrap_or(true),
-                    result: v["result"]["id"].as_str().map(str::to_owned),
+                    result: horizon_world::loot::recipe_result_id(&v["result"]).map(str::to_owned),
                 },
             );
         };
         let dir = root.join("data/minecraft/recipe");
-        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "json") {
-                continue;
-            }
-            let (Some(stem), Some(v)) = (
-                path.file_stem().and_then(|s| s.to_str()),
-                std::fs::read(&path)
-                    .ok()
-                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()),
-            ) else {
+        // The whole folder, `brewing/` under it too, in id order
+        // (`SimpleJsonResourceReloadListener` walks it recursively): a
+        // subfolder's recipe keeps it in its id, `minecraft:brewing/<name>`.
+        for (name, path) in crate::crafting::recipe_files(&dir).unwrap_or_default() {
+            let Some(v) = std::fs::read(&path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            else {
                 continue;
             };
-            insert(format!("minecraft:{stem}"), &v);
+            insert(format!("minecraft:{name}"), &v);
         }
         // The world's packs' recipes over the game's own: the top pack's
         // file for each id replaces it (`SimpleJsonResourceReloadListener`).

@@ -1368,6 +1368,8 @@ pub enum Page {
     Graphics,
     GraphicsAdvanced,
     GraphicsHdr,
+    /// HDR calibration, full screen (`calibration`).
+    HdrCalibration,
     /// Horizon's controller settings and button binds.
     Controller,
     Touch,
@@ -1384,6 +1386,8 @@ pub enum Page {
     Skin,
     /// OnlineOptionsScreen: server listing, Realms and friends notifications.
     Online,
+    /// Splitscreen: the profile another player joins as (`split_profiles`).
+    SplitProfiles,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -1556,8 +1560,16 @@ pub struct OptionsUi {
     /// Scroll the selected language into the middle on the next layout.
     center_language: bool,
     pub graphics: crate::graphics_ui::GraphicsUi,
+    pub split_profiles: crate::split_profiles::SplitProfiles,
+    /// HDR calibration while its page is open.
+    pub calibration: Option<crate::hdr_calibration::Calibration>,
+    /// Whether the window was fullscreen before calibration made it so (the game keeps it).
+    pub calibration_fullscreen: Option<bool>,
     /// The AI Agent page's status lines (set by the game while it shows).
     pub agent_status: Vec<String>,
+    /// Splitscreen: another player's options. Language and resource packs are the whole
+    /// process's (every player's text and textures), so they're P1's to change.
+    pub split_guest: bool,
 }
 impl Default for OptionsUi {
     fn default() -> Self {
@@ -1591,7 +1603,11 @@ impl Default for OptionsUi {
             in_world: false,
             center_language: false,
             graphics: Default::default(),
+            split_profiles: Default::default(),
+            calibration: None,
+            calibration_fullscreen: None,
             agent_status: Vec::new(),
+            split_guest: false,
         }
     }
 }
@@ -1658,6 +1674,7 @@ fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
         Page::Controller => "horizon.pages.controller.tooltip",
         Page::Extras => "horizon.pages.extras.tooltip",
         Page::Agent => "horizon.pages.agent.tooltip",
+        Page::SplitProfiles => "horizon.pages.split_profiles.tooltip",
         Page::ShaderPacks => "horizon.pages.shader_packs.tooltip",
         Page::Mods => "horizon.pages.mods.tooltip",
         _ => return None,
@@ -1799,6 +1816,9 @@ impl OptionsUi {
         ) {
             self.graphics.reset();
         }
+        if page == Page::SplitProfiles {
+            self.split_profiles.reset();
+        }
     }
     /// The graphics screen level of `page`, if it is one.
     fn graphics_level(page: Page) -> Option<crate::graphics_ui::Level> {
@@ -1827,7 +1847,9 @@ impl OptionsUi {
             Page::Mods => "horizon.pages.mods",
             Page::NativeMod(_) => "Mod Settings",
             Page::ShaderPacks => "horizon.pages.shader_packs",
-            Page::Graphics | Page::GraphicsAdvanced | Page::GraphicsHdr => "options.videoTitle",
+            Page::Graphics | Page::GraphicsAdvanced | Page::GraphicsHdr | Page::HdrCalibration => {
+                "options.videoTitle"
+            }
             Page::Controller => "horizon.pages.controller",
             Page::PadBinds => "horizon.pages.controller_binds",
             Page::Extras => "horizon.pages.extras",
@@ -1835,6 +1857,7 @@ impl OptionsUi {
             Page::Credits => "credits_and_attribution.screen.title",
             Page::Horizon => "horizon.pages.settings",
             Page::Agent => "horizon.pages.agent",
+            Page::SplitProfiles => "horizon.pages.split_profiles",
         }
     }
     fn scrollbar_x(&self, width: f32) -> f32 {
@@ -2373,9 +2396,15 @@ impl OptionsUi {
                     ("options.sounds", Some(Page::Sound)),
                     ("options.video", Some(Page::Video)),
                     ("options.controls", Some(Page::Controls)),
-                    ("options.language", Some(Page::Language)),
+                    (
+                        "options.language",
+                        (!self.split_guest).then_some(Page::Language),
+                    ),
                     ("options.chat", Some(Page::Chat)),
-                    ("options.resourcepack", Some(Page::Packs)),
+                    (
+                        "options.resourcepack",
+                        (!self.split_guest).then_some(Page::Packs),
+                    ),
                     ("options.accessibility", Some(Page::Accessibility)),
                     // Vanilla's Telemetry Data and Credits slots: Horizon's
                     // settings and its mods, as a mod adds its button here.
@@ -2961,10 +2990,21 @@ impl OptionsUi {
             );
             return;
         }
+        if self.page() == Page::HdrCalibration
+            && let Some(c) = &self.calibration
+        {
+            c.draw(batch, atlas, cursor);
+            return;
+        }
         if let Some(level) = Self::graphics_level(self.page()) {
             self.graphics.binding = self.selected_key;
             self.graphics
                 .draw(level, s, batch, atlas, cursor, self.in_world);
+            return;
+        }
+        if self.page() == Page::SplitProfiles {
+            self.split_profiles
+                .draw(batch, atlas, cursor, self.in_world, self.pad_style);
             return;
         }
         if self.page() == Page::Packs {
@@ -3220,6 +3260,30 @@ impl OptionsUi {
             }
             return Vec::new();
         }
+        if self.page() == Page::SplitProfiles {
+            use crate::split_profiles::Click;
+            if right || drag {
+                return Vec::new();
+            }
+            return match self.split_profiles.click(atlas, (x, y), size) {
+                Click::Nothing => Vec::new(),
+                Click::Pressed => vec![Event::ButtonClick],
+                Click::Done => {
+                    let mut events = vec![Event::ButtonClick];
+                    events.extend(self.back(s));
+                    events
+                }
+            };
+        }
+        if self.page() == Page::HdrCalibration
+            && let Some(c) = &mut self.calibration
+        {
+            if right {
+                return Vec::new();
+            }
+            let outcome = c.click((x, y), size, drag);
+            return self.calibration_outcome(s, outcome);
+        }
         if let Some(level) = Self::graphics_level(self.page()) {
             use crate::graphics_ui::Action;
             // Waiting on a key: a mouse button binds, as on Key Binds.
@@ -3243,6 +3307,10 @@ impl OptionsUi {
                     Action::OpenAdvanced => self.push(Page::GraphicsAdvanced),
                     Action::OpenHdr => self.push(Page::GraphicsHdr),
                     Action::BindKey(name) => self.selected_key = Some(name),
+                    Action::Calibrate => {
+                        self.calibration = Some(crate::hdr_calibration::Calibration::new(s));
+                        self.push(Page::HdrCalibration);
+                    }
                     Action::OpenSimple => {
                         if self.stack.len() >= 2
                             && self.stack[self.stack.len() - 2] == Page::Graphics
@@ -3489,7 +3557,8 @@ impl OptionsUi {
         // release, even if the pointer has left the widget or its value stayed.
         let slider = self.dragging.take().is_some();
         let graphics_slider = self.graphics.release();
-        if slider || graphics_slider {
+        let calibration_slider = self.calibration.as_mut().is_some_and(|c| c.release());
+        if slider || graphics_slider || calibration_slider {
             vec![Event::ButtonClick, Event::Changed]
         } else {
             Vec::new()
@@ -3647,6 +3716,37 @@ impl OptionsUi {
         self.pack_screen.as_mut().expect("made above")
     }
     /// Escape or Done: leave the current page, applying page results.
+    /// After an input on HDR calibration: Save keeps what it landed on, Cancel what was
+    /// set before; both go back to Graphics: HDR.
+    fn calibration_outcome(
+        &mut self,
+        s: &mut Settings,
+        outcome: crate::hdr_calibration::Outcome,
+    ) -> Vec<Event> {
+        use crate::hdr_calibration::Outcome;
+        match outcome {
+            Outcome::Nothing | Outcome::Changed => Vec::new(),
+            Outcome::Click => vec![Event::ButtonClick],
+            Outcome::Save | Outcome::Cancel => {
+                if let Some(c) = self.calibration.take()
+                    && outcome == Outcome::Save
+                {
+                    c.save(s);
+                }
+                let mut events = vec![Event::ButtonClick];
+                events.extend(self.back(s));
+                events
+            }
+        }
+    }
+    /// HDR calibration's test picture, while its page is open: the step, its nits and
+    /// where the controls start (a share of the height `h`).
+    pub fn calibration_picture(&self, h: f32) -> Option<(crate::hdr_calibration::Step, f32, f32)> {
+        self.calibration
+            .as_ref()
+            .filter(|_| self.page() == Page::HdrCalibration)
+            .map(|c| c.picture(h))
+    }
     pub fn back(&mut self, s: &mut Settings) -> Vec<Event> {
         let mut events = Vec::new();
         let page = self.stack.pop().unwrap_or(Page::Main);
@@ -3703,6 +3803,8 @@ impl OptionsUi {
         if self.page() == Page::Language {
             self.language_search.insert_text(text);
             self.scroll = 0.0;
+        } else if self.page() == Page::SplitProfiles {
+            self.split_profiles.type_text(text);
         } else if self.settings_search_active() {
             self.settings_search.insert_text(text);
             self.scroll = 0.0;
@@ -3730,6 +3832,9 @@ impl OptionsUi {
                 self.scroll = 0.0;
             }
             return true;
+        }
+        if self.page() == Page::SplitProfiles {
+            return self.split_profiles.shortcut(shortcut, clipboard);
         }
         if self.settings_search_active() {
             if self.settings_search.shortcut(shortcut, clipboard) {
@@ -3781,6 +3886,12 @@ impl OptionsUi {
         text: Option<&str>,
     ) -> Vec<Event> {
         use winit::keyboard::KeyCode as K;
+        if self.page() == Page::HdrCalibration
+            && let Some(c) = &mut self.calibration
+        {
+            let outcome = c.key(key);
+            return self.calibration_outcome(s, outcome);
+        }
         if self.resource_error.is_some() {
             if matches!(key, K::Escape | K::Enter | K::NumpadEnter) {
                 self.resource_error = None;
@@ -3821,6 +3932,9 @@ impl OptionsUi {
                     .to_owned()
             };
             return self.bind_key(s, value);
+        }
+        if self.page() == Page::SplitProfiles && self.split_profiles.key(key, text) {
+            return Vec::new();
         }
         if key == K::Escape {
             return self.back(s);

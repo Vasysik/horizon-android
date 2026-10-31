@@ -103,6 +103,20 @@ Post passes also read `scene_color`, `scene_depth`, `previous` (the last pass's 
 Rules the check enforces: your files declare no bindings (`@group`/`@binding`), no entry points and no names starting
 with `horizon_`. Code shared by several stages goes in files listed in `shared`, put before every stage.
 
+## Sprite tags
+
+The material stage can tell block sprites apart through tags the manifest declares. Each `[[tags]]` is a bit of
+`input.tags`, in the order they appear (32 at most); its `sprites` are sprite names, the namespace `minecraft` by
+default, each with at most one `*`:
+
+```toml
+[[tags]]
+id = "glass"                                      # bit 0: (input.tags & 1u) != 0u
+sprites = ["block/glass", "block/*_stained_glass"]
+```
+
+Terrain carries its sprite, not its block, so a sprite drawn by several blocks gets the tag for all of them.
+
 ## Options
 
 Each `[[options]]` entry is a WGSL `override` of the same name, set when the game builds the pipeline: no text

@@ -71,7 +71,7 @@ StonecutterBlock.useWithoutItem	port	crates/horizon-world/src/level/interact.rs:
 SugarCaneBlock.randomTick	port	crates/horizon-world/src/level/tick.rs::Sim::random_tick_block	growth arm of the random tick
 SugarCaneBlock.tick	port	crates/horizon-world/src/level/tick.rs::Sim::tick_block	
 SugarCaneBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::update_shape_class	
-SuspiciousEffectHolder.tryGet	skip:data		the effect comes from the item's stew effects data (item_data.rs)
+SuspiciousEffectHolder.tryGet	port	crates/horizon-items/src/flowers.rs::stew_effect	the item's block is looked up in the flower table
 TallSeagrassBlock.canSurvive	port	crates/horizon-world/src/level/survive.rs::Sim::can_survive_class	
 TallSeagrassBlock.getStateForPlacement	port	crates/horizon-world/src/level/place.rs::Sim::placement_class	
 TallSeagrassBlock.mayPlaceOn	port	crates/horizon-world/src/level/survive.rs::Sim::may_place_on	

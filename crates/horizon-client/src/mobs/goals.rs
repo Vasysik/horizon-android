@@ -680,6 +680,18 @@ impl Mob {
                     .as_ref()
                     .is_some_and(|p| super::tame::owned_by(self.extra.owner, p.uuid)))
     }
+    /// `canAttack` of any target: the player rules above, and
+    /// `IronGolem.canAttack`'s refusal of creepers. The callers check that
+    /// the target is alive and can be seen as an enemy.
+    pub fn spares_target(&self, w: &MobWorld, who: Who) -> bool {
+        match who {
+            Who::Player => self.spares_players(w),
+            Who::Mob(id) => {
+                self.species() == Species::IronGolem
+                    && w.seen(id).is_some_and(|s| s.species == Species::Creeper)
+            }
+        }
+    }
     /// TargetingConditions.forCombat().test for the player: alive, not
     /// creative, within range scaled by visibility, optionally visible.
     pub fn can_target_player(&mut self, w: &MobWorld, range: f64, check_sight: bool) -> bool {
@@ -1593,7 +1605,10 @@ pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &m
     let Some(t) = cx.w.target_info(who) else {
         return false;
     };
-    if !t.alive || !t.can_be_seen_as_enemy || t.is_player && (t.creative || m.spares_players(cx.w))
+    if !t.alive
+        || !t.can_be_seen_as_enemy
+        || (t.is_player && t.creative)
+        || m.spares_target(cx.w, who)
     {
         return false;
     }
@@ -1787,7 +1802,9 @@ impl Goal for HurtByTarget {
         };
         t.alive
             && t.can_be_seen_as_enemy
-            && !(t.is_player && (t.creative || m.spares_players(cx.w)))
+            && !(t.is_player && t.creative)
+            // HurtByTargetGoal.canUse ends with canAttack(lastHurtByMob).
+            && !m.spares_target(cx.w, by)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if self.bee && !super::bee::angry(m, cx.w) {

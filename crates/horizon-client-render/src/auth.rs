@@ -296,6 +296,25 @@ pub fn join_server(session: &AuthSession, server_hash: &str) -> Result<(), JoinE
     }
 }
 
+const MINECRAFT_PROFILE: &str = "https://api.minecraftservices.com/minecraft/profile";
+
+/// The signed-in account's active skin and cape from `GET /minecraft/profile`.
+/// Single-player and integrated servers often send no `textures` property, or
+/// one without the equipped cape; the client asks the profile endpoint once.
+pub fn own_textures(session: &AuthSession) -> Option<crate::skins::Textures> {
+    let response = agent()
+        .get(MINECRAFT_PROFILE)
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .call()
+        .ok()?;
+    if response.status() != 200 {
+        return None;
+    }
+    let body = response.into_string().ok()?;
+    let profile: serde_json::Value = serde_json::from_str(&body).ok()?;
+    Some(crate::skins::services_profile_textures(&profile))
+}
+
 /// What the session service says about a player joining this server
 /// (MinecraftServicesSessionService.hasJoinedServer).
 #[derive(Clone, Debug, PartialEq)]

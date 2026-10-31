@@ -7,11 +7,11 @@
   "compared_source_files": 3147,
   "modified_existing_files": 41,
   "branch": "android",
-  "merged_upstream_commit": "c3905131b",
-  "merged_upstream_commits": 6470,
+  "merged_upstream_commit": "c0b65f1d2",
+  "merged_upstream_commits": 7041,
   "last_reviewed_date": "2026-10-31",
-  "last_update_commits": 717,
-  "latest_fetched_commit": "68ac6f647",
-  "review": "Merged stable main through c3905131b. Preserved Android mod ticking and native queue reset from the prior merge; reviewed teleport/jump replay fixes and jittered vanilla-client tests. Reviewed and merged PR #39 with original author history. Fixed synchronous CPAL discovery, nonblocking diagnostics, integrated-server owner persistence and GLES shader composition. Added opaque Android presentation and interrupted-Vulkan startup recovery. Upstream deployment workflows remain inactive. Native .hnmod on-device compilation remains unsupported. Targeted source/GPU tests pass; owner-device FPS, audio hotplug, Mali composition and Unisoc recovery verification remain release-candidate checks.",
-  "pending_review_commits": 60
+  "last_update_commits": 571,
+  "latest_fetched_commit": "c0b65f1d2",
+  "review": "Merged stable main through c0b65f1d2. Reviewed gameplay, SRV handshake, player persistence, archive hardening, audio discovery, rendering and server-side resource optimizations. Preserved Android system DNS, sandboxed .hmod execution, native queue reset, input/IME, renderer selection, smaller GPU heaps and startup recovery. Resolved new boot-renderer API and ZIP 9 integration; retained background device discovery with upstream fingerprint caching. Combined anticheat attack handling with queued-move ordering and restored required Win32 boot-paint features. Upstream deployment workflows remain inactive. Device validation of new upstream gameplay/rendering remains required; native .hnmod compilation is still unsupported.",
+  "pending_review_commits": 0
 }

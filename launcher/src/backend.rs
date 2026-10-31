@@ -46,31 +46,78 @@ pub struct Release {
     pub nightly: Option<String>,
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub const ASSET: Option<&str> = Some("horizon-linux-x86_64.tar.gz");
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub const ASSET: Option<&str> = Some("horizon-macos-arm64.zip");
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-pub const ASSET: Option<&str> = Some("horizon-windows-x64.zip");
-#[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-pub const ASSET: Option<&str> = None;
+/// The release assets of each system Horizon ships for: (`std::env::consts::OS`, `ARCH`, the game,
+/// the launcher). game-build.yml builds the game's, nightly-build.yml signs and publishes them, and
+/// launcher.yml builds the launcher's (`platform_assets_are_published`).
+pub const PLATFORMS: [(&str, &str, &str, &str); 4] = [
+    (
+        "linux",
+        "x86_64",
+        "horizon-linux-x86_64.tar.gz",
+        "horizon-launcher-linux-x86_64.tar.gz",
+    ),
+    (
+        "macos",
+        "aarch64",
+        "horizon-macos-arm64.zip",
+        "horizon-launcher-macos-arm64.zip",
+    ),
+    // Intel Macs (#1161).
+    (
+        "macos",
+        "x86_64",
+        "horizon-macos-x64.zip",
+        "horizon-launcher-macos-x64.zip",
+    ),
+    (
+        "windows",
+        "x86_64",
+        "horizon-windows-x64.zip",
+        "horizon-launcher-windows-x64.zip",
+    ),
+];
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-linux-x86_64.tar.gz");
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-macos-arm64.zip");
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-pub const LAUNCHER_ASSET: Option<&str> = Some("horizon-launcher-windows-x64.zip");
-#[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-pub const LAUNCHER_ASSET: Option<&str> = None;
+/// `a == b`, in a const context.
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// This system's entry of `PLATFORMS`: the game's asset and the launcher's.
+const fn platform_assets(os: &str, arch: &str) -> Option<(&'static str, &'static str)> {
+    let mut i = 0;
+    while i < PLATFORMS.len() {
+        let (o, a, game, launcher) = PLATFORMS[i];
+        if same(o, os) && same(a, arch) {
+            return Some((game, launcher));
+        }
+        i += 1;
+    }
+    None
+}
+
+const OWN_ASSETS: Option<(&str, &str)> =
+    platform_assets(std::env::consts::OS, std::env::consts::ARCH);
+/// The game build this launcher installs, None where Horizon has none.
+pub const ASSET: Option<&str> = match OWN_ASSETS {
+    Some((game, _)) => Some(game),
+    None => None,
+};
+/// The launcher build this launcher updates itself from.
+pub const LAUNCHER_ASSET: Option<&str> = match OWN_ASSETS {
+    Some((_, launcher)) => Some(launcher),
+    None => None,
+};
 
 const LAUNCHER_BINARY: &str = if cfg!(windows) {
     "horizon-launcher.exe"
@@ -415,7 +462,7 @@ impl Default for Links {
     /// What the launcher uses until (or unless) it can read links.json.
     fn default() -> Self {
         Self {
-            discord: "https://discord.gg/HcTeMZxe5E".into(),
+            discord: "https://discord.gg/playhorizon".into(),
             sponsor: "https://github.com/sponsors/ludovic111".into(),
             website: "https://playhorizon.dev".into(),
         }
@@ -459,6 +506,76 @@ pub fn data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("horizon-launcher")
+}
+
+/// A canonical path without Windows' verbatim prefix: `canonicalize` gives `\\?\C:\...` there,
+/// and some tools stat `\\?\C:` — the volume itself — and fail. A drive path loses its `\\?\`;
+/// any other path is left as it is.
+pub(crate) fn plain(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|p| p.strip_prefix(r"\\?\")) {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
+/// `path` spelled only in ASCII: what Windows' MinGW-w64 tools can open (they read paths
+/// through ANSI APIs, so a Cyrillic user name in %APPDATA% breaks them, #5189).
+fn ascii(path: &Path) -> bool {
+    path.as_os_str().to_str().is_some_and(str::is_ascii)
+}
+
+/// Where builds happen — the Rust toolchain, its Cargo home and `native_mods::root` — as a
+/// path every build tool can read: `data_dir()` resolved, so the tools are never handed a
+/// link (horizon-mixins refuses one, and macOS's /tmp is one). On Windows, when the resolved
+/// path isn't [`ascii`], [`windows_build_dir`] names the same folder a way MinGW-w64 can open.
+pub fn build_dir() -> PathBuf {
+    let data = data_dir();
+    let _ = fs::create_dir_all(&data);
+    let real = data.canonicalize().map(plain).unwrap_or(data);
+    if ascii(&real) {
+        return real;
+    }
+    #[cfg(windows)]
+    return windows_build_dir(&real);
+    #[cfg(not(windows))]
+    real
+}
+
+/// [`build_dir`] when `real` isn't [`ascii`]: the folder's own short (8.3) name where the
+/// volume keeps one — the same files, spelled in ASCII — else a folder of ProgramData's,
+/// named for the path so each user's is its own and can be created there.
+#[cfg(windows)]
+fn windows_build_dir(real: &Path) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    if let Some(short) = short_path(real).filter(|p| ascii(p)) {
+        return short;
+    }
+    let public = std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute() && ascii(p))
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+    let key = Sha256::digest(real.as_os_str().as_encoded_bytes());
+    let key: String = key[..4].iter().map(|b| format!("{b:02x}")).collect();
+    public.join(format!("horizon-launcher-{key}"))
+}
+
+/// `GetShortPathNameW`: `path`'s short (8.3) name, or None on error. A folder with no short
+/// name (the volume may keep none) answers with its long name again, which [`ascii`] refuses.
+#[cfg(windows)]
+fn short_path(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetShortPathNameW(long: *const u16, short: *mut u16, len: u32) -> u32;
+    }
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let need = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) } as usize;
+    if need == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; need];
+    let got = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), need as u32) } as usize;
+    (got != 0 && got < need).then(|| PathBuf::from(std::ffi::OsString::from_wide(&buf[..got])))
 }
 
 fn versions_dir() -> PathBuf {
@@ -1089,10 +1206,11 @@ fn complete_reports(versions: &Path, tag: &str) -> bool {
 
 /// What a prepared version may lack that the launcher adds without preparing again, each copied
 /// from the player's own Minecraft asset store as `horizon-prepare <kind>` does: what the
-/// player misses without it, whether the resources lack it, and the copy.
+/// player misses without it, its kind (`horizon_prepare::missing_extras`, the same check as
+/// `horizon-prepare --check`), and the copy.
 type Completion = (
     &'static str,
-    fn(&Path) -> bool,
+    &'static str,
     fn(&Path, Option<&Path>, horizon_prepare::Log) -> Result<PathBuf, String>,
 );
 
@@ -1100,53 +1218,17 @@ const COMPLETIONS: [Completion; 5] = [
     // Preparers before #1538 left the built-in packs out.
     (
         "Programmer Art and High Contrast",
-        lacks_packs,
+        "packs",
         horizon_prepare::packs,
     ),
     // A preparation that could not read the asset store keeps the client jar's 1x1 grey
     // placeholders, its English alone, and no sounds (#1867: Prism Launcher installs prepared
     // since 0.2.48).
-    (
-        "The title panorama",
-        lacks_panorama,
-        horizon_prepare::panorama,
-    ),
-    ("The Unifont glyphs", lacks_unifont, horizon_prepare::fonts),
-    ("The languages", lacks_languages, horizon_prepare::languages),
-    (
-        "The sounds",
-        |resources| !sounds_in(resources),
-        horizon_prepare::sounds,
-    ),
+    ("The title panorama", "panorama", horizon_prepare::panorama),
+    ("The Unifont glyphs", "fonts", horizon_prepare::fonts),
+    ("The languages", "languages", horizon_prepare::languages),
+    ("The sounds", "sounds", horizon_prepare::sounds),
 ];
-
-fn lacks_unifont(resources: &Path) -> bool {
-    !resources
-        .join("assets/minecraft/font/unifont.zip")
-        .is_file()
-}
-
-/// Whether the language list is missing: `pack.mcmeta` only the asset index holds, while the
-/// client jar's `lang` folder holds `en_us.json` and `deprecated.json`, so counting its files
-/// never tells.
-fn lacks_languages(resources: &Path) -> bool {
-    !resources.join("assets/pack.mcmeta").is_file()
-}
-
-fn lacks_packs(resources: &Path) -> bool {
-    horizon_prepare::BUILT_IN_PACKS
-        .iter()
-        .any(|pack| !resources.join("assets").join(pack).is_file())
-}
-
-/// Whether the first panorama face is missing or the client jar's 1x1 placeholder (a PNG's
-/// width is the big-endian word at byte 16, in the IHDR chunk).
-fn lacks_panorama(resources: &Path) -> bool {
-    let face = resources.join("assets/minecraft/textures/gui/title/background/panorama_0.png");
-    fs::read(face).map_or(true, |png| {
-        png.get(16..20).is_none_or(|width| width == [0, 0, 0, 1])
-    })
-}
 
 /// Adds what a prepared version lacks of `COMPLETIONS`: a new version reuses the resources of the
 /// one before (`reuse_prepared`), which may come from a preparer that left them out. Without them
@@ -1167,7 +1249,9 @@ fn refill_own_store(tag: &str) {
     let own = data_dir().join("minecraft");
     let resources = resources_at(&versions_dir().join(tag));
     if !own.join("assets/indexes").is_dir()
-        || !(lacks_languages(&resources) || !sounds_in(&resources))
+        || !horizon_prepare::missing_extras(&resources)
+            .iter()
+            .any(|(kind, _)| matches!(*kind, "languages" | "sounds"))
         || ASKED.swap(true, std::sync::atomic::Ordering::Relaxed)
     {
         return;
@@ -1206,9 +1290,10 @@ fn complete_assets_in(
         if !resources.join(RESOURCES_MANIFEST).exists() {
             return Vec::new();
         }
+        let missing = horizon_prepare::missing_extras(&resources);
         COMPLETIONS
             .iter()
-            .filter(|(_, lacks, _)| lacks(&resources))
+            .filter(|(_, kind, _)| missing.iter().any(|(m, _)| m == kind))
             .collect()
     };
     if lacking().is_empty() {
@@ -1759,6 +1844,8 @@ pub fn preparer(
                 minecraft_dir: Some(minecraft.clone()),
                 server_jar: (!reused).then_some(jar),
                 java_home: Some(java_home.clone()),
+                inputs: Default::default(),
+                output: None,
             };
             return Ok((Preparer::InProcess(options), minecraft));
         }
@@ -2534,8 +2621,7 @@ fn installed_launcher_version(path: &Path) -> Option<String> {
 /// Puts `new` at `exe`, the path this launcher started from. The running process keeps its
 /// file (unlinked) and works on. Unix only: `self_replace` asks the system where the running
 /// binary is, and Linux answers "<path> (deleted)" once the file has been replaced, so a second
-/// update in the same run failed with "No such file or directory". Windows keeps a running
-/// binary locked, so there `self_replace` moves it aside first.
+/// update in the same run failed with "No such file or directory".
 #[cfg(unix)]
 fn replace_binary(new: &Path, exe: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -2554,9 +2640,80 @@ fn replace_binary(new: &Path, exe: &Path) -> std::io::Result<()> {
     result
 }
 
+/// Windows keeps a running binary from being written or deleted but lets it be renamed: the
+/// running one steps aside to `<name>.old-<pid>-<n>` in its folder, the new one takes its path,
+/// and a later start removes the old file (`remove_replaced_binaries`). The `self_replace` crate
+/// did this by copying the launcher under a random hidden name and starting that copy to delete
+/// the original through a hidden `cmd.exe`, which Microsoft Defender quarantines as
+/// Trojan:Script/Wacatac (#3175).
 #[cfg(not(unix))]
-fn replace_binary(new: &Path, _exe: &Path) -> std::io::Result<()> {
-    self_replace::self_replace(new)
+fn replace_binary(new: &Path, exe: &Path) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    // A second update in the same run moves the first one's binary aside too.
+    static MOVED: AtomicU32 = AtomicU32::new(0);
+    let dir = exe.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "the launcher has no folder")
+    })?;
+    let name = exe.file_name().unwrap_or_default().to_string_lossy();
+    let pid = std::process::id();
+    let temp = dir.join(format!("{name}.update-{pid}"));
+    let old = dir.join(format!(
+        "{name}.old-{pid}-{}",
+        MOVED.fetch_add(1, Ordering::Relaxed)
+    ));
+    if let Err(e) = fs::copy(new, &temp) {
+        let _ = fs::remove_file(&temp);
+        return Err(e);
+    }
+    match fs::rename(exe, &old) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            let _ = fs::remove_file(&temp);
+            return Err(e);
+        }
+        _ => {}
+    }
+    if let Err(e) = fs::rename(&temp, exe) {
+        let _ = fs::rename(&old, exe);
+        let _ = fs::remove_file(&temp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Deletes the binaries earlier self-updates moved aside (`replace_binary`), and the copies of an
+/// update that stopped before its new binary took its place (`<name>.update-<pid>`). The one the
+/// launcher just restarted from is still exiting, so this keeps trying for a few seconds in the
+/// background; one that stays in use (another launcher window) goes on a later start.
+#[cfg(windows)]
+pub fn remove_replaced_binaries() {
+    let exe = exe_path();
+    let (Some(dir), Some(name)) = (exe.parent(), exe.file_name()) else {
+        return;
+    };
+    let dir = dir.to_path_buf();
+    let name = name.to_string_lossy();
+    let old = format!("{name}.old-");
+    let update = format!("{name}.update-");
+    let own = format!("{update}{}", std::process::id());
+    std::thread::spawn(move || {
+        for _ in 0..10 {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                return;
+            };
+            let mut left = false;
+            for entry in entries.flatten() {
+                let file = entry.file_name();
+                let file = file.to_string_lossy();
+                if file.starts_with(&old) || (file.starts_with(&update) && file != own) {
+                    left |= fs::remove_file(entry.path()).is_err();
+                }
+            }
+            if !left {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    });
 }
 
 /// The app bundle the launcher runs from (`…/Horizon.app` for `…/Horizon.app/Contents/MacOS/
@@ -2849,6 +3006,9 @@ pub enum Msg {
     PackDone(Result<Box<crate::modpacks::Imported>, String>),
     /// How many play Horizon now, or none when the server can't be reached (`telemetry`).
     Playing(Option<u64>),
+    /// How many play on the official server now, or none when it doesn't answer its status ping
+    /// (`telemetry::watch_official`).
+    OfficialPlayers(Option<u64>),
     /// Where the native-mods build is (`native_mods::Step::label`).
     NativeProgress(String),
     /// The native-mods build ended: the version built, or why not.
@@ -3030,11 +3190,11 @@ pub struct Settings {
     /// one now (the owner gate's screen).
     #[serde(default)]
     pub owner_notice_seen: bool,
-    /// Seconds the sidebar's partner banner has been on screen, over every start, up to
-    /// `partner::SEEN_BEFORE_HIDE`: only then can the player hide it.
+    /// Seconds a partner banner (the sidebar's card or the Servers page's banner) has been on
+    /// screen, over every start, up to `partner::SEEN_BEFORE_HIDE`: only then can the player hide it.
     #[serde(default)]
     pub partner_seen_secs: u64,
-    /// The player hid the sidebar's partner banner. The Servers page keeps its own.
+    /// The player hid a partner banner: the sidebar's card and the Servers page's banner are both gone for good.
     #[serde(default)]
     pub partner_hidden: bool,
     /// What the window does while the game runs. Stays by default.
@@ -3050,14 +3210,14 @@ pub struct Settings {
     /// The window's language. Unset follows the system's (`i18n::Language::system`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<crate::i18n::Language>,
-    /// Native mods (experimental) are on (`native_mods`): mixin mods compiled into a game of
-    /// their own. Off until the player installs a native mod (`native_mods::turns_on`), or turns
-    /// them on in Settings.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub native_mods: bool,
-    /// The player has read what installing a native mod starts (`native_mods::needs_notice`).
+    /// The player has read the notice before the first native mod (`native_status::NOTICE`).
+    /// Native mods are always on: an older file's `native_mods` switch is ignored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_mods_noticed: bool,
+    /// Native builds compile with the release profile (`native_mods::Profile`) instead of `fast`:
+    /// slower to build, slightly faster game.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_release: bool,
     /// Developer options (hidden: seven clicks on the sidebar's launcher version reveal them):
     /// offline names play without an account that owns the game, in the window only
     /// (`account::Accounts::play_as_with`, `account::launch_for_game`). Never a download: the game still
@@ -3143,6 +3303,54 @@ mod java_tests;
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    /// A canonical path loses Windows' verbatim prefix on a drive (horizon-mixins' output
+    /// check stats `\\?\C:`, the volume itself, which Windows refuses, os error 1), and keeps
+    /// it where there is no drive form.
+    #[test]
+    fn a_canonical_windows_path_loses_only_a_drives_verbatim_prefix() {
+        let plain = |p: &str| plain(PathBuf::from(p));
+        assert_eq!(
+            plain(r"\\?\C:\Users\me\AppData\Roaming\horizon-launcher\native"),
+            PathBuf::from(r"C:\Users\me\AppData\Roaming\horizon-launcher\native")
+        );
+        // A share has no drive form to fall back to; other paths have no prefix.
+        assert_eq!(
+            plain(r"\\?\UNC\server\share\native"),
+            PathBuf::from(r"\\?\UNC\server\share\native")
+        );
+        assert_eq!(
+            plain("/home/me/.local/share/horizon-launcher/native"),
+            PathBuf::from("/home/me/.local/share/horizon-launcher/native")
+        );
+    }
+
+    /// [#5189](https://github.com/horizon-rust/horizon/issues/5189): MinGW-w64's tools can't
+    /// read a non-ASCII path, so the build root is the data folder's resolved ASCII spelling —
+    /// which a link's target or a short (8.3) name already is.
+    #[test]
+    fn the_build_dir_is_a_path_the_tools_can_read() {
+        assert!(ascii(Path::new(
+            r"C:\Users\me\AppData\Roaming\horizon-launcher"
+        )));
+        assert!(!ascii(Path::new(
+            r"C:\Users\Кириченко Павло\AppData\Roaming\horizon-launcher"
+        )));
+        assert!(!ascii(Path::new("/høme/me/horizon-launcher")));
+        let built = build_dir();
+        assert!(ascii(&built) || cfg!(windows), "{}", built.display());
+        // Resolved: the build never sees a link in the path (where the answer is the data
+        // folder itself, so already resolved — Windows' other spellings aren't its own).
+        if ascii(&built) {
+            assert_eq!(
+                built,
+                built
+                    .canonicalize()
+                    .map(plain)
+                    .unwrap_or_else(|_| built.clone())
+            );
+        }
+    }
 
     /// The game program's mod API level is its mark's; a program from before the mark (0.2.68
     /// and older) or none at all serves level 0.
@@ -3369,6 +3577,57 @@ pub fn {f}("
             resources_summary(false, false, "26.3"),
             resources_summary(false, true, "26.3")
         );
+    }
+
+    #[test]
+    fn each_mac_picks_the_build_for_its_processor() {
+        assert_eq!(
+            platform_assets("macos", "aarch64"),
+            Some((
+                "horizon-macos-arm64.zip",
+                "horizon-launcher-macos-arm64.zip"
+            ))
+        );
+        assert_eq!(
+            platform_assets("macos", "x86_64"),
+            Some(("horizon-macos-x64.zip", "horizon-launcher-macos-x64.zip"))
+        );
+        assert_eq!(
+            platform_assets("windows", "x86_64").map(|(game, _)| game),
+            Some("horizon-windows-x64.zip")
+        );
+        assert_eq!(platform_assets("linux", "aarch64"), None);
+        assert_eq!(platform_assets("macos", "x86"), None);
+        assert_eq!(
+            ASSET,
+            platform_assets(std::env::consts::OS, std::env::consts::ARCH).map(|(game, _)| game)
+        );
+    }
+
+    /// Every asset a launcher looks for is one the release workflows build, sign and publish.
+    #[test]
+    fn platform_assets_are_published() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let read = |path: &str| fs::read_to_string(repo.join(path)).unwrap();
+        let build = read(".github/workflows/game-build.yml");
+        let nightly = read(".github/workflows/nightly-build.yml");
+        let launcher = read(".github/workflows/launcher.yml");
+        for (os, arch, game, launcher_asset) in PLATFORMS {
+            assert!(
+                build.contains(&format!("asset: {game}")),
+                "game-build.yml builds no {game}"
+            );
+            // Signed (SHA256SUMS), then published.
+            assert_eq!(
+                nightly.matches(&format!("dist/{game}")).count(),
+                2,
+                "nightly-build.yml must sign and publish {game} ({os} {arch})"
+            );
+            assert!(
+                launcher.contains(&format!("asset: {launcher_asset}")),
+                "launcher.yml builds no {launcher_asset}"
+            );
+        }
     }
 
     #[test]
@@ -3996,12 +4255,12 @@ pub fn {f}("
     #[test]
     fn links_fall_back_to_the_built_in_ones() {
         let defaults = Links::default();
-        assert_eq!(defaults.discord, "https://discord.gg/HcTeMZxe5E");
+        assert_eq!(defaults.discord, "https://discord.gg/playhorizon");
         assert_eq!(defaults.sponsor, "https://github.com/sponsors/ludovic111");
         assert_eq!(defaults.website, "https://playhorizon.dev");
         // The file on main says the same thing as the defaults.
         let file = Links::parse(
-            r#"{"discord": "https://discord.gg/HcTeMZxe5E", "sponsor": "https://github.com/sponsors/ludovic111", "website": "https://playhorizon.dev"}"#,
+            r#"{"discord": "https://discord.gg/playhorizon", "sponsor": "https://github.com/sponsors/ludovic111", "website": "https://playhorizon.dev"}"#,
         );
         assert_eq!(file, defaults);
         // Unreadable or missing, offline included: the defaults.

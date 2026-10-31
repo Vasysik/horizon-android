@@ -22,6 +22,9 @@ pub(super) struct Env<'a, 'g> {
     game: &'a Game<'g>,
 }
 impl ItemEnv for Env<'_, '_> {
+    fn enchantment_in_tag(&self, enchantment: &str, tag: &str) -> bool {
+        self.game.stations().enchantments.in_tag(tag, enchantment)
+    }
     fn potion_effect_color(&self, contents: &Value) -> Option<i32> {
         // `PotionContents.getColorOr`: the effect mix when any effect is visible.
         let id = contents["potion"].as_str();

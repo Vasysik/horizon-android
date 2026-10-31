@@ -426,9 +426,8 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
         let mut zip = zip::ZipArchive::new(fs::File::open(&files[0].path)?)?;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i)?;
-            if !(entry.name().starts_with("assets/") || entry.name().starts_with("data/"))
-                || entry.is_dir()
-            {
+            let name = entry.name()?;
+            if !(name.starts_with("assets/") || name.starts_with("data/")) || entry.is_dir() {
                 continue;
             }
             let name = entry.enclosed_name().ok_or("Unsafe client resource path")?;

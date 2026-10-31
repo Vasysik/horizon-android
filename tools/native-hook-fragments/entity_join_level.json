@@ -1,0 +1,10 @@
+{
+  "hooks": [
+    {
+      "name": "entity_join_level",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_join_level"
+    }
+  ],
+  "rust_summary": "entities joining a level (`native_entity_join_level`), for\nitem entities and experience orbs so far.",
+  "doc_summary": "`native_entity_join_level(dimension, entity, kind, pos, loaded_from_disk, canceled)`, an entity joining a\nserver level (NeoForge's `EntityJoinLevelEvent`, vanilla's `PersistentEntitySectionManager.addEntity`):\n`loaded_from_disk` is true when it comes back with its chunk, false for a fresh add (a drop, an orb, `/summon`, an\narrival through a portal into another level). The entity is already in the level's lists when the hook runs; `canceled` takes it back\nout, and a `/summon` of it fails with vanilla's \"duplicate UUIDs\" message. It tells item entities and experience\norbs so far; later APIs add other kinds, so check `kind`. Bundles that use it need `\"hooks\": @API:entity_join_level@`."
+}

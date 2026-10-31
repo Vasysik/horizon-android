@@ -348,8 +348,11 @@ impl Game<'_> {
                     self.mod_key(physical, false, false);
                     self.native_key_event(physical, false, false);
                 }
-                // The merchant's focused offer takes Enter and Space, as the window's.
-                if action != "up" && self.screen == Screen::Inventory && self.merchant_key(physical)
+                // The merchant's focused offer and the recipe book's last
+                // recipe take Enter and Space, as the window's.
+                if action != "up"
+                    && self.screen == Screen::Inventory
+                    && (self.merchant_key(physical) || self.recipe_book_key(physical))
                 {
                     return ok();
                 }
@@ -537,8 +540,12 @@ impl Game<'_> {
             }
             "lod-distance" => {
                 let n: u32 = arg(1)?.parse()?;
-                if n > 1024 {
-                    return Err("LOD distance must be 0..1024".into());
+                if n > horizon_client::lod::MAX_CHUNKS {
+                    return Err(format!(
+                        "LOD distance must be 0..{}",
+                        horizon_client::lod::MAX_CHUNKS
+                    )
+                    .into());
                 }
                 self.settings.horizon.lod_distance = n;
                 self.apply_settings();
@@ -642,6 +649,7 @@ impl Game<'_> {
                     Screen::Chat => self.chat_type(text),
                     Screen::CommandBlock => self.command_block_type(text),
                     Screen::BlockEditor => self.block_editor_type(text),
+                    Screen::DebugOptions => self.debug_options_type(text),
                     Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
                     // The port, or the game rules' search and number boxes.
                     Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
@@ -922,6 +930,7 @@ impl Game<'_> {
             Screen::BlockEditor => "block-editor",
             Screen::Win => "win",
             Screen::Mod => "mod",
+            Screen::DebugOptions => "debug-options",
         }
     }
 
@@ -1041,6 +1050,7 @@ impl Game<'_> {
             "cached_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().1),
             "far_detail": self.settings.horizon.far_detail.name(),
             "resident_quads": self.renderer.as_ref().map_or(0, |r| r.lod_quads()),
+            "levels": self.renderer.as_ref().map_or_else(Vec::new, |r| r.lod_levels()),
             "pending_observations": self.lod_observe.len(),
             "refined_samples": self.lod.as_ref().map_or(0, |lod| lod.refined_samples()),
         });
@@ -1054,8 +1064,8 @@ impl Game<'_> {
             "screen": self.screen_name(),
             "debug": {
                 "overlay": self.debug,
-                "hitboxes": self.show_hitboxes,
-                "chunk_borders": self.show_chunk_borders,
+                "hitboxes": self.debug_entry("entity_hitboxes"),
+                "chunk_borders": self.debug_entry("chunk_borders"),
                 "pause_menu": self.pause_menu,
                 "advanced_tooltips": self.settings.file.bool("advancedItemTooltips"),
                 "pause_on_lost_focus": self.settings.file.bool("pauseOnLostFocus"),

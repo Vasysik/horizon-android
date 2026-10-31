@@ -210,6 +210,14 @@ impl Tag {
             text: Text::translate("chat.tag.not_secure", &[]),
         }
     }
+    /// `GuiMessageTag.chatError`: red (`CHAT_ERROR`, 16733525), the tooltip `chat.tag.error`.
+    pub fn chat_error() -> Self {
+        Self {
+            color: 0xFF_5555,
+            icon: false,
+            text: Text::translate("chat.tag.error", &[]),
+        }
+    }
     /// `GuiMessageTag.chatModified`: the tooltip adds the original content in grey.
     pub fn modified(original_content: &str) -> Self {
         Self {

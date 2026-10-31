@@ -34,6 +34,17 @@ pub fn register(m: &mut Mob) {
         },
     );
 }
+/// `Phantom.setPhantomSize` with `updatePhantomSizeInfo`: the size, clamped to
+/// 0 to 64, and an attack damage base of 6 plus the size. The box and the
+/// drawn model grow by `1 + 0.15 * size` (the mob's dimensions, `PhantomRenderer.scale`).
+pub fn set_size(m: &mut Mob, size: i32) {
+    use super::finalize::{Attr, set_base};
+    let size = size.clamp(0, 64);
+    if size != m.extra.size {
+        m.extra.size = size;
+        set_base(m, Attr::AttackDamage, f64::from(6 + size));
+    }
+}
 fn can_attack(w: &MobWorld) -> bool {
     w.player
         .as_ref()

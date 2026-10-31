@@ -19,6 +19,7 @@ pub mod data;
 pub mod discovery;
 pub mod entity;
 pub mod far;
+pub mod forwarding;
 pub mod guest;
 pub mod hub;
 pub mod menu;
@@ -175,6 +176,9 @@ pub struct NetConfig {
     pub gate: Option<LoginGate>,
     /// Online mode: players are authenticated (a LAN world's when its host is signed in).
     pub online: Option<Arc<OnlineMode>>,
+    /// Behind a Velocity proxy: the secret its forwarded player information is signed with. Only an offline
+    /// server (the proxy authenticates) uses it; without it a login is the plain offline one.
+    pub forwarding_secret: Option<Vec<u8>>,
     pub log: Option<NetLog>,
     /// server.properties `resource-pack`: offered to every player during
     /// configuration (a dedicated server's; MinecraftServer.getServerResourcePack).
@@ -222,6 +226,7 @@ impl NetConfig {
             bypasses_limit: None,
             gate: None,
             online: None,
+            forwarding_secret: None,
             log: None,
             resource_pack: None,
             code_of_conducts: Vec::new(),

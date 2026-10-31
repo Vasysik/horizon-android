@@ -431,10 +431,10 @@ impl Game<'_> {
                 // The stack the equipment packet (or the mob's own AI) left:
                 // its components are what the item model reads, a loaded
                 // crossbow's `charged_projectiles` included.
-                mob.extra
-                    .main_hand_stack()
-                    .cloned()
-                    .unwrap_or_else(|| ItemStack::new(item, 1))
+                let Some(stack) = render::held_item_stack(&mob.extra, off_hand) else {
+                    continue;
+                };
+                stack
             };
             if !local_player && horizon_client::mobs::gear::enchanted(mob, slot) {
                 // The gear's enchantments are not tracked, only that it has some.
@@ -463,12 +463,14 @@ impl Game<'_> {
                 owner.crossbow_charge_duration = 25;
             }
             use horizon_assets::item_model::DisplayContext as Context;
-            // PandaHoldsItemLayer and FoxHeldItemLayer show the item as it lies
-            // on the ground.
+            // PandaHoldsItemLayer, FoxHeldItemLayer and DolphinCarryingItemLayer
+            // show the item as it lies on the ground.
             let (context, ordinal) = match (mob.species(), left) {
                 // The spyglass held to the eye is the HEAD display.
                 _ if spyglass_to_eye => (Context::Head, 5),
-                (Species::Panda | Species::Fox | Species::Witch, _) => (Context::Ground, 7),
+                (Species::Panda | Species::Fox | Species::Witch | Species::Dolphin, _) => {
+                    (Context::Ground, 7)
+                }
                 (_, true) => (Context::ThirdPersonLeftHand, 1),
                 (_, false) => (Context::ThirdPersonRightHand, 2),
             };

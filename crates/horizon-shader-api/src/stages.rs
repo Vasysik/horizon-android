@@ -116,9 +116,10 @@ struct HorizonMaterialIn {
     @location(4) world: vec3<f32>,
     @location(5) uv: vec2<f32>,
     @location(6) @interpolate(flat) translucent: u32,
+    @location(7) @interpolate(flat) tags: u32,
 }
 @fragment fn horizon_fs_material(in: HorizonMaterialIn) -> @location(0) vec4<f32> {
-    let input = MaterialInput(in.albedo, in.tint, in.light, in.lightmap, in.world, in.uv, in.translucent != 0u);
+    let input = MaterialInput(in.albedo, in.tint, in.light, in.lightmap, in.world, in.uv, in.translucent != 0u, in.tags);
     return material(input).color;
 }
 ";

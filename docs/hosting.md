@@ -41,7 +41,7 @@ plan are in [docs/server.md](https://github.com/horizon-rust/horizon/blob/main/d
 
 ## 1. Install
 
-Linux (x86-64) and macOS (Apple Silicon):
+Linux (x86-64) and macOS (Apple Silicon; Intel from the next Nightly):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.sh | sh
@@ -181,6 +181,11 @@ keep = 12                    # automatic backups kept; backups made by hand are 
 [panel]
 bind = "127.0.0.1:8130"      # this computer only, or a tailnet address (100.x); "" turns it off
 allow_public = false
+
+[api]
+bind = ""                    # the control API: a free port on 127.0.0.1, or a fixed one like 127.0.0.1:8131
+token = ""                   # 16 characters or more; "" a new random one at every start
+allow_public = false
 ```
 
 The defaults are vanilla 26.3's. Unknown keys and values vanilla would refuse are errors, so a typo stops the
@@ -209,6 +214,22 @@ Already have a vanilla server? Run `horizon-server init` in its folder, or `hori
 server.properties` to write `server.toml` from it. The world, `ops.json`, `whitelist.json` and the ban lists
 keep vanilla's names and formats, so going back to vanilla works too.
 
+### Behind a Velocity proxy
+
+A network can put one Velocity proxy in front of several servers: the proxy signs the players in with their
+Microsoft accounts, and the servers behind it trust what it forwards. To run Horizon as one of them:
+
+1. Set `online_mode = false` in `server.toml` and keep the server's port reachable only from the proxy (bind it
+   to `127.0.0.1` or put it on a private network).
+2. Put the proxy's forwarding secret, the one in Velocity's `forwarding.secret`, into a file `forwarding.secret`
+   in the server folder, and set `player-info-forwarding-mode = "modern"` in `velocity.toml`.
+3. Restart the server. The log says `Velocity player information forwarding is on`.
+
+Players then join with the UUID, name, skin and address the proxy forwards. Anyone who connects without going
+through the proxy is refused, and so is a login signed with another secret. With the file in place but
+`online_mode = true` the file is ignored (with a warning), and an empty file stops the start, because an empty
+secret could be signed by anyone. How the exchange works: [velocity-forwarding.md](velocity-forwarding.md).
+
 ## 5. Commands
 
 ```text
@@ -218,6 +239,8 @@ horizon-server start | stop | restart    in the background (its output goes to l
 horizon-server status [--json]           up or not, TPS, MSPT, players, chunks, RAM, CPU
 horizon-server cmd COMMAND...            one console command, and what it answers
 horizon-server logs [-f] [-n N]          the log; -f follows it
+horizon-server console                   attach: the live log, TPS/players at the top, type commands; Ctrl-D detaches
+horizon-server mcp                       an MCP server on stdio, so an AI agent can run and moderate the server
 horizon-server report [SECONDS]          record a performance report (below)
 horizon-server op|deop NAME
 horizon-server whitelist on|off|list
@@ -304,6 +327,23 @@ only. To reach it from your other devices:
 Any other address, such as `0.0.0.0` or a public IP, is refused unless you set `allow_public = true`, and
 even then the panel warns at every start. It has no passwords to leak: whoever can read the server folder can
 make a login link, and no one else can. Never put it on the open internet.
+
+### A bot or a tool of your own
+
+Everything the panel does goes through the control API ([api/server.md](api/server.md)), which a moderation bot
+(a Discord `!ban`), a monitoring tool or a script can call too. It listens on a free port of `127.0.0.1` and
+writes the address and a fresh token to `.horizon/api.json` at every start. For a program that runs elsewhere
+or keeps its settings, fix both in `server.toml`:
+
+```toml
+[api]
+bind = "127.0.0.1:8131"      # or your tailnet address, 100.x.y.z:8131
+token = "a long random string only the bot knows"
+```
+
+The same rules as the panel's hold: a tailnet or loopback address, unless `allow_public = true` (the token is then
+all that guards the server, and it warns at every start). The API can't change `[engine]`, `[panel]` or `[api]`,
+nor turn on RCON or another remote console.
 
 ## 7. Backups
 

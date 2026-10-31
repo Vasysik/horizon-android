@@ -1,4 +1,5 @@
 import json
+import sys
 import unittest
 
 from tools.perf_bench import HISTOGRAM_EDGES_MS, OPTIONS, frames, rnd, summary
@@ -217,6 +218,21 @@ class PortabilityTests(unittest.TestCase):
             self.assertIsNone(pb.nvidia_memory_mb(1234))
             self.assertEqual(pb.nvidia_memory_mb(4321), 812.0)
             self.assertIsNone(pb.nvidia_memory_mb(99))
+
+    @unittest.skipUnless(sys.platform == "win32", "the console's OEM code page is Windows'")
+    def test_windows_version_reads_the_console_code_page(self):
+        # pr_ready runs the tests with PYTHONUTF8=1, and `cmd /C ver` answers in the OEM code page:
+        # decoding it as UTF-8 left `stdout` None (issue #5201).
+        import os
+        import subprocess
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "from tools.perf_bench import windows_version; print(windows_version())"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
+            env={**os.environ, "PYTHONUTF8": "1"}, cwd=root)
+        self.assertIn("Windows", out.stdout)
 
     def test_control_over_the_tcp_endpoint(self):
         # The game's TCP transport (Windows, or an endpoint path ending in .json): the file names a port and

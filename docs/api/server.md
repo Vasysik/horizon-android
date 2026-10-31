@@ -7,20 +7,33 @@ control API. How to host: [hosting.md](../hosting.md); the design: [server.md](.
 
 `horizon-server` sets up a server folder, runs the game as a dedicated server under a supervisor (restarts on a crash,
 backups on a schedule, updates with a rollback), and lets other programs manage it through a local HTTP API with a
-token. The web panel uses that API.
+token. The web panel uses that API, and so can a moderation bot: players, kick, ban and pardon (by name or
+address), op and deop, the whitelist, and metrics as Prometheus text.
 
 | | Count |
 | --- | --- |
-| Commands | 22 (`init`, `run`, `start`, `stop`, `restart`, `status`, `cmd`, `logs`, `backup`, `backups`, `restore`, `service`, `panel`, `update`, `rollback`, `config`, `config set`, `import`, `op`, `deop`, `whitelist`, `version`) |
-| `server.toml` keys | 22 in 6 sections, plus `[properties]` for any other vanilla key |
-| Control API endpoints | 11 under `/api/v1` |
+| Commands | 30 (`init`, `run`, `start`, `stop`, `restart`, `status`, `cmd`, `logs`, `console`, `backup`, `backups`, `restore`, `service`, `panel`, `update`, `rollback`, `config`, `config set`, `import`, `mcp`, `op`, `deop`, `whitelist`, `players`, `kick`, `ban`, `pardon`, `ban-ip`, `pardon-ip`, `version`) |
+| `server.toml` keys | 25 in 7 sections, plus `[properties]` for any other vanilla key |
+| Control API endpoints | 28 under `/api/v1` |
 
 ## Guide
 
 1. `horizon-server init` in an empty folder, then `horizon-server start` ([hosting.md](../hosting.md)).
-2. From a script: `horizon-server status --json`, `horizon-server cmd say hi`, `horizon-server backup`.
+2. From a script: `horizon-server status --json`, `horizon-server cmd say hi`, `horizon-server backup`. By hand:
+   `horizon-server console` attaches to the running server (live log, status header, command line).
+   From an AI agent: `horizon-server --dir /srv/minecraft mcp` is an MCP server on stdio with a tool per endpoint
+   (`players`, `ban`, `events`, `set_config`...); add it to the agent's MCP servers, run as the server's user.
 3. From a program: read `.horizon/api.json` (address and token), then `GET /api/v1/status` with
-   `Authorization: Bearer <token>`.
+   `Authorization: Bearer <token>`. A program that runs elsewhere or keeps its settings (a Discord bot) uses a
+   fixed address and token: `[api] bind` and `[api] token` in `server.toml` ([hosting.md](../hosting.md#a-bot-or-a-tool-of-your-own)).
+4. Moderate: `horizon-server players`, `horizon-server ban NAME [REASON]`, or `POST /api/v1/players/ban`. An
+   action runs vanilla's console command on the running game, so it kicks, logs and saves `banned-players.json`
+   exactly as an operator's `/ban` does; the reply says whether anything `changed` and has the console's lines.
+5. Monitor: point Prometheus (or any scraper that sends a bearer token) at `GET /api/v1/metrics/prometheus`.
+6. Watch: `GET /api/v1/events` with `Accept: text/event-stream` streams what happens as server-sent events: every
+   log line (`log`), the supervisor's `phase`, and the game's typed `join`, `leave`, `kick`, `chat` and `death`
+   events with the player's name and UUID (`?types=chat,death` picks some). `Last-Event-ID` (or `?since=N`)
+   resumes after a reconnection; without `Accept: text/event-stream` it answers the events after `since` as JSON.
 
 ## Reference
 
@@ -33,6 +46,17 @@ token. The web panel uses that API.
 token=$(jq -r .token .horizon/api.json); address=$(jq -r .address .horizon/api.json)
 curl -s -H "Authorization: Bearer $token" "http://$address/api/v1/status"
 curl -s -H "Authorization: Bearer $token" -d '{"line": "list"}' "http://$address/api/v1/command"
+curl -s -H "Authorization: Bearer $token" "http://$address/api/v1/players"
+curl -s -H "Authorization: Bearer $token" -d '{"name": "Steve", "reason": "griefing"}' "http://$address/api/v1/players/ban"
+# {"changed":true,"output":["Banned Steve: griefing"]}
+curl -s -H "Authorization: Bearer $token" "http://$address/api/v1/metrics/prometheus"
+curl -sN -H "Authorization: Bearer $token" -H "Accept: text/event-stream" "http://$address/api/v1/events?types=join,chat,death"
+# id: 41
+# event: chat
+# data: {"id":41,"type":"chat","name":"Steve","uuid":"...","message":"hi","time":1793451234567}
+curl -s -H "Authorization: Bearer $token" -X PATCH -d '{"changes": {"world.difficulty": "hard"}}' "http://$address/api/v1/config"
+# {"applied":["world.difficulty"],"restart":[],"running":true,"saved":["world.difficulty"]}
+curl -s -H "Authorization: Bearer $token" -o world.zip "http://$address/api/v1/backups/download?name=2026-10-31T12-00-00Z-manual.zip"
 ```
 
 ## Stability
@@ -42,19 +66,19 @@ addition; a change to one starts `/api/v2`, served beside `/api/v1`.
 
 ## Not there yet
 
-- **Players**: list with ping and position, kick, ban and pardon, op and deop, the whitelist, as endpoints (today only
-  through `cmd` and the files).
-- **Console stream**: the log as a stream (server-sent events) rather than `logs?since=N` polling; chat, joins, leaves,
-  deaths and crashes as typed events.
-- **Metrics**: a plain-text metrics endpoint any monitoring tool can scrape (TPS, MSPT percentiles, players, chunks,
-  entities, RAM, CPU), from the samples `status` already takes.
-- **Backups**: delete and download one; restore a single dimension.
+- **Players**: positions in `players`; editing the lists while the game is stopped through the API (the CLI's
+  `op`, `deop` and `whitelist` already do).
+- **Metrics**: entities and per-dimension counts in the Prometheus text.
+- **Backups**: restore a single dimension.
 - **Mods on a dedicated server**: list, turn on and off, and their settings, once native mods can be built for the
   server ([mods.md](../mods.md), [native-mods.md](../native-mods.md#multiplayer)).
-- **An MCP server** for the same endpoints, so a host's agent manages the server as it manages the game.
 - **Compatibility tests**: golden replies per endpoint, and a `server.toml` from each release line.
 
 ## Changelog
 
 - `api::ROUTES` lists the endpoints; the reference is generated from it.
 - `/api/v1`: status, metrics, logs, command, stop, restart, backups, restore, update, panel login.
+- Commands: `players`, `kick`, `ban`, `pardon`, `ban-ip`, `pardon-ip`.
+- `/api/v1` additions: `players`, `players/{kick,ban,pardon,ban-ip,pardon-ip,op,deop}`, `whitelist`,
+  `whitelist/{add,remove}`, `metrics/prometheus`, `GET`/`PATCH config`, `DELETE backups`, `GET backups/download`;
+  `server.toml` gets `[api]` (`bind`, `token`, `allow_public`); `GET events` (server-sent events, or JSON).

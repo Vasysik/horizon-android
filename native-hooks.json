@@ -16,6 +16,22 @@
       "target": "horizon_client::game::native_hooks::Game<'_>::native_world_lifecycle"
     },
     {
+      "name": "server_about_to_start",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_server_about_to_start",
+      "neoforge": "ServerAboutToStartEvent",
+      "side": "server",
+      "cancellable": false
+    },
+    {
+      "name": "server_stopping",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_server_stopping",
+      "neoforge": "ServerStoppingEvent",
+      "side": "server",
+      "cancellable": false
+    },
+    {
       "name": "server_tick",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_server_tick"
@@ -124,6 +140,11 @@
       "name": "block_entity_tick",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_tick"
+    },
+    {
+      "name": "block_entity_update_tag",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_update_tag"
     },
     {
       "name": "block_entity_container",

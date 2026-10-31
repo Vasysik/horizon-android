@@ -20,12 +20,12 @@ pulldown-cmark = { version = "0.12", default-features = false }
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
 toml = "1.1"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 dirs = "5"
 # The system's preferred languages, for the window's language (i18n.rs).
 sys-locale = "0.3"
-self-replace = "1"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 horizon-theme = { path = "../crates/horizon-theme" }
 horizon-core = { path = "../crates/horizon-core" }
 horizon-prepare = { path = "../crates/horizon-prepare" }
@@ -53,6 +53,9 @@ getrandom = "0.3"
 # in the lockfile through gpui).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
+# Native builds at low priority (rust_toolchain::low_priority); already in the lockfile.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 # Microsoft account secrets in the OS keychain: the Secret Service on Linux through oo7 (the same
 # build gpui uses), Keychain and Credential Manager through keyring.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]

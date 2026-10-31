@@ -11,5 +11,8 @@
   "horizon.options.look_deadzone": "Мертва зона огляду",
   "horizon.options.button_glyphs": "Значки кнопок",
   "horizon.options.menu_navigation": "Навігація в меню",
-  "horizon.options.on_screen_keyboard": "Екранна клавіатура"
+  "horizon.options.on_screen_keyboard": "Екранна клавіатура",
+  "horizon.multiplayer.finding_friend": "Шукаємо світ друга…",
+  "horizon.loading.opening_world": "Відкриття світу",
+  "horizon.loading.cancelling_world": "Скасування"
 }

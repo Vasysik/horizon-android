@@ -104,12 +104,15 @@ impl Game<'_> {
             )
         })
     }
-    /// The mobs on the player's lead within 32 blocks of a point.
+    /// The mobs on the acting player's lead within 32 blocks of a point
+    /// (`Leashable.leashableInArea` with `getLeashHolder() == player`).
     pub(super) fn player_leashed(&self, around: glam::DVec3) -> Vec<usize> {
+        let acting = self.acting_uuid();
         (0..self.mobs.len())
             .filter(|&i| {
                 let m = &self.mobs[i];
                 m.extra.leash == Some(Holder::Player)
+                    && m.extra.leash_player.is_none_or(|p| p == acting)
                     && (m.position.x - around.x).abs() <= 16.0
                     && (m.position.y - around.y).abs() <= 16.0
                     && (m.position.z - around.z).abs() <= 16.0
@@ -334,9 +337,11 @@ impl Game<'_> {
         }
         if !attached && !sneaking {
             let player = self.player_center();
+            let holder = self.acting_player_uuid();
             for i in existing {
                 if self.can_attach_lead(i, player) {
                     self.mobs[i].extra.leash = Some(Holder::Player);
+                    self.mobs[i].extra.leash_player = Some(holder);
                     attached = true;
                 }
             }

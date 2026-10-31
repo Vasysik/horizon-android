@@ -144,7 +144,8 @@ impl Game<'_> {
         let Some(remote) = self.remote.as_ref() else {
             return Err("the server carries no mod messages".into());
         };
-        if !remote.joined {
+        // A server that reconfigures the player has them out of the play state.
+        if !remote.joined || remote.reconfiguring.is_some() {
             return Err("the player has not joined yet".into());
         }
         if !remote.mod_net {

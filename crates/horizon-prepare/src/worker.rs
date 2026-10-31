@@ -28,6 +28,8 @@ impl Worker {
                 ),
                 "dev.horizonlab.parity.PrepareWorker",
             ])
+            // Vanilla's code logs relative to it (logs/): in the scratch, as `Run::run`.
+            .current_dir(&run.local)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(log)

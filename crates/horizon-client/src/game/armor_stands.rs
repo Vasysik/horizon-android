@@ -441,7 +441,7 @@ impl Game<'_> {
     /// The armor stand under the crosshair, its distance and the hit point.
     pub(super) fn armor_stand_hit(&self) -> Option<(usize, f64, [f64; 3])> {
         let (eye, dir) = self.aim()?;
-        let reach: f64 = if self.creative { 5.0 } else { 3.0 };
+        let reach: f64 = self.entity_reach;
         let mut best: Option<(usize, f64, [f64; 3])> = None;
         for (i, a) in self.armor_stands.iter().enumerate() {
             if a.marker {
@@ -707,14 +707,14 @@ impl Game<'_> {
             if !ticking(a.position.x.floor() as i32, a.position.z.floor() as i32) {
                 continue;
             }
-            let in_water = a.in_water(&self.world, &self.res.motion().fluids);
+            let in_water = a.update_fluids(&self.world, &self.res.motion().fluids);
             let (world, registry, facts, collision) = (
                 &self.world,
                 self.pack.assets.registry,
                 self.res.facts(),
                 self.collision,
             );
-            a.tick(&mut scene, in_water, &mut |bounds, velocity| {
+            a.tick(&mut scene, facts, in_water, &mut |bounds, velocity| {
                 horizon_client::motion::bubble_column_push(
                     world, registry, facts, collision, bounds, velocity,
                 );
@@ -1092,7 +1092,8 @@ fn swap_with_equipment_slot(
 }
 impl Game<'_> {
     /// `Equippable.swapWithEquipmentSlot`: right-clicking armor swaps it into
-    /// its slot (the worn piece comes back to the hand).
+    /// its slot (the worn piece comes back to the hand). It runs on a client
+    /// too (`Item.use`), as the prediction the server's slot packets confirm.
     pub(super) fn equip_from_hand(&mut self, stack: &ItemStack) -> bool {
         let Some(info) = self.items().get(&stack.item) else {
             return false;
@@ -1125,11 +1126,17 @@ impl Game<'_> {
         if let Some(old) = swap.to_inventory
             && let Some(rest) = self.give(old)
             && !self.creative
+            // Player.drop is the server's on a client: it spawns the item.
+            && self.remote.is_none()
             && let Some(eye) = self.eye_position()
         {
             self.spawn_item(rest, eye, [0.0; 3], 40);
         }
-        self.apply_equipment();
+        // The attribute modifiers of a worn piece come from the server's
+        // ClientboundUpdateAttributesPacket on a client.
+        if self.remote.is_none() {
+            self.apply_equipment();
+        }
         self.swing_arm();
         true
     }

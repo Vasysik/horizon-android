@@ -1385,6 +1385,12 @@ fn not_built(
     out
 }
 
+/// A mod gave `block` block entity `id`, but the block's template has none,
+/// so breaking it would never remove it: the block gets none.
+pub(super) fn warn_no_block_entity(block: &str, id: &str) {
+    log::warn!("{block}: no block entity {id}, its template has none (copy a chest or furnace)");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

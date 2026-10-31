@@ -68,6 +68,10 @@ min = 0.0
 max = 2.0
 step = 0.05
 
+[[tags]]                   # 32 at most: bit i of MaterialInput.tags is the i-th tag
+id = "glass"
+sprites = ["block/glass", "block/*_stained_glass"]   # sprite names, at most one * each
+
 [budget]
 gpu_ms = 1.5               # optional: the GPU time the pack aims to add (0 to 16 ms)
 ```
@@ -96,6 +100,8 @@ stages.
 
 ## Changelog
 
+- 2026-10-30: sprite tags (`[[tags]]`, `MaterialInput.tags`) and the frame's `precipitation`, `temperature`,
+  `downfall` and `wetness`.
 - 2026-10-26: the material stage in the game: terrain's surfaces through the pack's `material`.
 - 2026-10-26: the sky stage in the game: the pack's `sky` gets vanilla's colour along each ray.
 - 2026-10-26: the post stage in the game (`HORIZON_SHADER_PACK`, hot reload with the last good pack kept).

@@ -188,7 +188,12 @@ impl Features {
                 &entity_module,
                 entities,
                 &entity_buffers,
-                kind("entity shadows", "shadow", None, shadow_bias),
+                kind(
+                    "entity shadows",
+                    "shadow",
+                    Some(wgpu::Face::Back),
+                    shadow_bias,
+                ),
             ),
             swirl: set(
                 &entity_module,

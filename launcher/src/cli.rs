@@ -7,6 +7,7 @@ use horizon_launcher::github_mods;
 use horizon_launcher::instances;
 use horizon_launcher::loaders;
 use horizon_launcher::native_mods;
+use horizon_launcher::native_status;
 use horizon_launcher::other_launchers;
 use horizon_launcher::server_list;
 use std::io::{IsTerminal, Write};
@@ -684,6 +685,8 @@ impl SourceArg {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Write a shell completion script to stdout
+    Completions { shell: clap_complete::Shell },
     /// List Horizon releases, or the installed versions
     Versions {
         /// Only the versions installed here (no network)
@@ -744,27 +747,36 @@ enum Cmd {
         #[arg(long)]
         accept_eula: bool,
     },
-    /// Native mods (experimental, docs/native-mods.md): compile mixin bundles on the Horizon
-    /// revision they pin, with the launcher's own Rust, as the version the "Native mods" instance
-    /// plays. Not sandboxed: the mods' code runs with your rights
+    /// Native mods (docs/native-mods.md): compile mixin bundles on the Horizon revision they
+    /// pin, else the one the instance plays, with the launcher's own Rust, as the version the
+    /// instance then plays. Not sandboxed: the mods' code runs with your rights
     NativeBuild {
         /// A mod folder (horizon-mixin.toml, or an unpacked .hnmod), or a folder of them
         /// (default: the native mods installed and turned on in the instance)
         folder: Option<PathBuf>,
         /// The instance whose installed native mods to build, and which then plays the build
-        /// (default: the selected one; the game's own home builds into the Native mods instance)
+        /// (default: the selected one)
         #[arg(long)]
         instance: Option<String>,
         /// The installed version whose game files the build reuses, and whose commit it builds on
-        /// when no mod pins one (default: the selected one)
+        /// when no mod pins one (default: the one the instance plays, so a rebuild stays on its
+        /// Horizon)
         #[arg(long)]
         version: Option<String>,
+        /// Move to the newest installed release or Nightly instead of the Horizon the instance
+        /// plays (a full rebuild)
+        #[arg(long, conflicts_with = "version")]
+        update: bool,
         /// You read the mods' source and trust it with full access to this computer
         #[arg(long)]
         trust_native_code: bool,
         /// Build mods made for different Horizon versions together anyway, on the newest of them
         #[arg(long)]
         allow_version_mismatch: bool,
+        /// The Cargo profile: fast (the default: incremental, quick to rebuild) or release
+        /// (thin LTO: slower to build, slightly faster game). Default: the native-profile setting
+        #[arg(long, value_parser = ["fast", "release"])]
+        profile: Option<String>,
     },
     /// Show a release's patch notes (default: the newest)
     Notes { tag: Option<String> },
@@ -783,7 +795,8 @@ enum Cmd {
     /// ("default" removes it), while-playing stay|minimize|hide (what the window does while the game runs), language
     /// system|en|fr|ru|de|zh|es|uk|pl (the window's language; system follows the computer's), accent
     /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
-    /// shows Horizon's landscape)
+    /// shows Horizon's landscape), native-profile fast|release (the Cargo profile native mods
+    /// build with: fast is incremental, release is slower to build and slightly faster to play)
     Settings {
         #[arg(value_parser = SETTING_KEYS)]
         key: Option<String>,
@@ -931,7 +944,7 @@ pub fn command() -> clap::Command {
 pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
 
 /// The keys `settings` sets.
-const SETTING_KEYS: [&str; 12] = [
+const SETTING_KEYS: [&str; 13] = [
     "selected-version",
     "minecraft-dir",
     "server-dir",
@@ -944,6 +957,7 @@ const SETTING_KEYS: [&str; 12] = [
     "language",
     "accent",
     "background",
+    "native-profile",
 ];
 
 fn on_off(value: &str) -> Result<bool, String> {
@@ -999,8 +1013,15 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
             s.language = match value.trim() {
                 "system" | "default" => None,
                 code => Some(Language::parse(code).ok_or_else(|| {
-                    format!("{value}: say system, en, fr, ru, de, zh, es, uk or pl")
+                    format!("{value}: say system, en, fr, ru, de, zh, es, uk, pl or pt-br")
                 })?),
+            }
+        }
+        "native-profile" => {
+            s.native_release = match value {
+                "fast" | "default" => false,
+                "release" => true,
+                _ => return Err(format!("{value}: say fast or release")),
             }
         }
         "proxy" => {
@@ -1034,6 +1055,7 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "language": s.language.map_or("system", |l| l.code()),
         "accent": s.accent.name(),
         "background": horizon_launcher::themes::background(&backend::data_dir(), s.background.as_deref()),
+        "native_profile": native_mods::Profile::from_setting(s.native_release).name(),
         "no_ai": backend::no_ai(),
     })
 }
@@ -1114,6 +1136,14 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         }
     }
     match command {
+        Cmd::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut self::command(),
+                "horizon-launcher",
+                &mut std::io::stdout(),
+            );
+        }
         Cmd::Versions { installed: true } => {
             let installed = backend::installed();
             let selected = backend::resolve_version(None).ok();
@@ -1175,39 +1205,53 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             folder,
             instance,
             version,
+            update,
             trust_native_code,
             allow_version_mismatch,
+            profile,
         } => {
             if !trust_native_code {
                 return Err("Native mods run with full access to this computer. Read their source, then pass --trust-native-code.".into());
             }
-            let base = backend::resolve_version(version.as_deref())?;
             let started = std::time::Instant::now();
+            let profile = match profile.as_deref().and_then(native_mods::Profile::parse) {
+                Some(profile) => profile,
+                None => {
+                    native_mods::Profile::from_setting(backend::Settings::load().native_release)
+                }
+            };
             let target = match &instance {
                 Some(name) => instances::find(name)?,
                 None => instances::selected(),
             };
-            let (folder, target) = match folder {
-                Some(folder) => (folder, None),
-                None => (
-                    horizon_launcher::native_mods::installed_mods(&target.home)?,
-                    Some(&target),
-                ),
+            let base = match version {
+                Some(v) => backend::resolve_version(Some(&v))?,
+                None => {
+                    let plays = target.resolve_version(None).ok();
+                    native_mods::base_for(plays.as_deref(), &backend::installed(), update)
+                        .ok_or("No version is installed yet.")?
+                }
             };
-            let built = horizon_launcher::native_mods::build(
+            let folder = match folder {
+                Some(folder) => folder,
+                None => native_mods::installed_mods(&target.home)?,
+            };
+            let built = native_mods::build(
                 &base,
                 &folder,
-                target,
+                &target,
                 allow_version_mismatch,
-                |step| eprintln!("{}", step.label()),
+                profile,
+                |step| {
+                    let secs = started.elapsed().as_secs();
+                    eprintln!("[{:>2}:{:02}] {}", secs / 60, secs % 60, step.label())
+                },
             )
-            .map_err(|e| {
-                match e.starts_with(horizon_launcher::native_mods::MISMATCH) {
-                    true => {
-                        format!("{e} They often still build: pass --allow-version-mismatch to try.")
-                    }
-                    false => e,
+            .map_err(|e| match e.starts_with(native_mods::MISMATCH) {
+                true => {
+                    format!("{e} They often still build: pass --allow-version-mismatch to try.")
                 }
+                false => e,
             })?;
             println!(
                 "{built} built and selected for its instance ({:.0} s).",
@@ -2053,13 +2097,10 @@ fn github_native(
             o.sha256
         );
     }
-    // A native mod turns Native mods on, with the window's notice, once.
+    // The window's trust notice, once. Nothing is turned on: native mods are always on.
     let mut settings = backend::Settings::load();
-    if !settings.native_mods {
-        if !settings.native_mods_noticed {
-            eprintln!("{}", native_mods::NOTICE);
-        }
-        settings.native_mods = true;
+    if !settings.native_mods_noticed {
+        eprintln!("{}", native_status::NOTICE);
         settings.native_mods_noticed = true;
         settings.save();
     }
@@ -2355,14 +2396,11 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     println!("  not ported: {s}");
                 }
             }
-            // A native mod turns Native mods on, with the window's notice, once.
+            // The first native mod: the window's trust notice, once.
             let mut settings = backend::Settings::load();
-            let list = installed::Installed::load(&home).entries;
-            if !settings.native_mods && native_mods::turns_on(false, &list) {
-                if !settings.native_mods_noticed {
-                    eprintln!("{}", native_mods::NOTICE);
-                }
-                settings.native_mods = true;
+            let native = done.iter().any(|e| native_status::is_native_file(&e.file));
+            if native && !settings.native_mods_noticed {
+                eprintln!("{}", native_status::NOTICE);
                 settings.native_mods_noticed = true;
                 settings.save();
             }
@@ -3403,6 +3441,30 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    fn completions_cover_each_shell_and_nested_commands() {
+        for shell in [
+            clap_complete::Shell::Bash,
+            clap_complete::Shell::Zsh,
+            clap_complete::Shell::Fish,
+            clap_complete::Shell::Elvish,
+            clap_complete::Shell::PowerShell,
+        ] {
+            let shell_name = shell.to_string();
+            let args = ["horizon-launcher", "completions", shell_name.as_str()].map(str::to_owned);
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(matches!(cli.command, Some(Cmd::Completions { .. })));
+            let mut output = Vec::new();
+            clap_complete::generate(shell, &mut command(), "horizon-launcher", &mut output);
+            let script = String::from_utf8(output).unwrap();
+            assert!(script.contains("horizon-launcher"));
+            assert!(script.contains("versions"));
+            assert!(script.contains("multiplayer"));
+        }
+        assert!(Cli::try_parse_from(["horizon-launcher", "completions"]).is_err());
+        assert!(Cli::try_parse_from(["horizon-launcher", "completions", "unknown"]).is_err());
+    }
+
+    #[test]
     fn settings_accepts_german_and_chinese() {
         use crate::i18n::Language;
         let mut settings = backend::Settings::default();
@@ -3412,7 +3474,7 @@ mod tests {
         }
         assert_eq!(
             set_setting(&mut settings, "language", "xx").unwrap_err(),
-            "xx: say system, en, fr, ru, de, zh, es, uk or pl"
+            "xx: say system, en, fr, ru, de, zh, es, uk, pl or pt-br"
         );
         set_setting(&mut settings, "language", "system").unwrap();
         assert_eq!(settings.language, None);

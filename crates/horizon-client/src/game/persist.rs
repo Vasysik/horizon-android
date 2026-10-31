@@ -15,7 +15,7 @@ use horizon_core::{
     random::RandomSource,
     ticks::ChunkTicks,
 };
-use horizon_world::{chunk::BlockState, level::MovingPiston, nbt::Tag, registry::BlockStateId};
+use horizon_world::{level::MovingPiston, nbt::Tag, registry::BlockStateId};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -39,6 +39,51 @@ pub struct EntityMemory {
     /// player's file: their chunk copies must not spawn a second one. Cleared
     /// with the rest when a world closes.
     restored: HashSet<[i32; 4]>,
+    /// Entities a native mod kept out of the level (`native_entity_join_level`),
+    /// counted so `/summon` can fail as vanilla's refused add does.
+    pub(super) joins_canceled: u32,
+}
+
+/// The key that marks a compound queued with the chunk loads as a fresh add
+/// (`PersistentEntitySectionManager.addNewEntity`: `/summon`, a portal
+/// arrival), not an entity loaded from disk. Taken off before the compound
+/// is kept or saved.
+const FRESH_ADD: &str = "horizon:fresh_add";
+
+/// Queue `tag` with the chunk loads as a fresh add.
+pub(super) fn mark_fresh(tag: &mut Tag) {
+    if let Tag::Compound(c) = tag {
+        c.insert(FRESH_ADD.into(), Tag::Byte(1));
+    }
+}
+
+/// The key that marks a compound queued with the chunk loads as an entity
+/// moving within its level (an End gateway: `Entity.teleport` takes
+/// `teleportSameDimension`, which moves the entity without removing it), so
+/// it doesn't join the level again. Taken off like [`FRESH_ADD`].
+const SAME_LEVEL_MOVE: &str = "horizon:same_level_move";
+
+/// Queue `tag` with the chunk loads as an entity moving within its level.
+pub(super) fn mark_moved(tag: &mut Tag) {
+    if let Tag::Compound(c) = tag {
+        c.insert(SAME_LEVEL_MOVE.into(), Tag::Byte(1));
+    }
+}
+
+/// Whether `tag` was queued as a move within its level; the mark comes off.
+fn take_moved(tag: &mut Tag) -> bool {
+    match tag {
+        Tag::Compound(c) => c.remove(&SAME_LEVEL_MOVE.into()).is_some(),
+        _ => false,
+    }
+}
+
+/// Whether `tag` was queued as a fresh add; the mark comes off.
+fn take_fresh(tag: &mut Tag) -> bool {
+    match tag {
+        Tag::Compound(c) => c.remove(&FRESH_ADD.into()).is_some(),
+        _ => false,
+    }
 }
 
 fn anon_key(kind: &str, p: Vec3) -> (String, [u64; 3]) {
@@ -250,7 +295,11 @@ impl Game<'_> {
         let loaded = std::mem::take(&mut self.world.loaded_entities);
         let player_uuid = self.level.player_uuid;
         for (key, tags) in loaded {
-            for tag in tags {
+            for mut tag in tags {
+                // PersistentEntitySectionManager.addEntity's `loaded`.
+                let from_disk = !take_fresh(&mut tag);
+                // An End gateway's traveller never left the level: nothing joins.
+                let moved = take_moved(&mut tag);
                 let kind = entity_nbt::kind(&tag).unwrap_or_default();
                 let uuid = entity_nbt::uuid(&tag);
                 if uuid.is_some_and(|u| self.restored_vehicle(u).is_some()) {
@@ -280,15 +329,34 @@ impl Game<'_> {
                         if let Some(e) =
                             entity_nbt::item_entity_from_nbt(&tag, self.next_entity, bob)
                         {
+                            let (id, p) = (e.id, e.position);
                             self.remember(e.id, uuid, tag);
                             self.dropped.push(e);
+                            if !moved
+                                && !self.native_entity_joins(
+                                    id,
+                                    "minecraft:item",
+                                    [p.x, p.y, p.z],
+                                    from_disk,
+                                )
+                            {
+                                self.dropped.pop();
+                                self.forget_entity(id);
+                            }
                         }
                     }
                     "minecraft:experience_orb" => {
                         for mut orb in entity_nbt::orbs_from_nbt(&tag) {
                             self.next_entity += 1;
                             orb.id = self.next_entity;
+                            let (id, p) = (orb.id, orb.position);
                             self.orbs.push(orb);
+                            let kind = "minecraft:experience_orb";
+                            if !moved
+                                && !self.native_entity_joins(id, kind, [p.x, p.y, p.z], from_disk)
+                            {
+                                self.orbs.pop();
+                            }
                         }
                     }
                     "minecraft:arrow" => {
@@ -494,7 +562,12 @@ impl Game<'_> {
             finalize = c.remove(&"horizon:finalize".into()).is_some();
         }
         let riders = self.take_mob_passengers(&mut tag);
-        let mut m = entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), self.next_entity)?;
+        let mut m = entity_nbt::mob_from_nbt(
+            &tag,
+            self.res.mob_types(),
+            self.next_entity,
+            Some(self.pack.assets.registry),
+        )?;
         if horizon_client::mobs::camel::is_camel(m.species()) {
             horizon_client::mobs::camel::finish_load(&mut m, self.world.game_time);
         }
@@ -534,6 +607,7 @@ impl Game<'_> {
         self.mobs.push(m);
         if finalize {
             self.enchant_spawn_equipment(id);
+            self.halloween_spawn_head(id);
         }
         for rider in riders {
             if let Some(r) = self.load_mob(rider, Some(id))
@@ -761,7 +835,12 @@ impl Game<'_> {
         } else {
             None
         };
-        let mut tag = entity_nbt::mob_to_nbt(&self.mobs[i], uuid, self.persist.raw.get(&id));
+        let mut tag = entity_nbt::mob_to_nbt(
+            &self.mobs[i],
+            uuid,
+            self.persist.raw.get(&id),
+            Some(self.pack.assets.registry),
+        );
         if horizon_client::mobs::camel::is_camel(self.mobs[i].species())
             && let Tag::Compound(c) = &mut tag
         {
@@ -841,36 +920,10 @@ impl Game<'_> {
     }
     /// `BlockState.CODEC`: a block name or `{id, properties}` (or legacy `{Name, Properties}`).
     pub(super) fn state_from_nbt(&self, tag: &Tag) -> Option<BlockStateId> {
-        let registry = self.pack.assets.registry;
-        let state = match tag.get("Name") {
-            Some(Tag::String(name)) => BlockState {
-                name: name.to_string_lossy(),
-                properties: match tag.get("Properties") {
-                    Some(Tag::Compound(p)) => p
-                        .iter()
-                        .filter_map(|(k, v)| match v {
-                            Tag::String(v) => Some((k.to_string_lossy(), v.to_string_lossy())),
-                            _ => None,
-                        })
-                        .collect(),
-                    _ => Default::default(),
-                },
-            },
-            _ => BlockState::from_nbt(tag).ok()?,
-        };
-        registry
-            .id(&state)
-            .or_else(|| registry.default_state(&state.name))
+        entity_nbt::state_from_nbt(self.pack.assets.registry, tag)
     }
     pub(in crate::game) fn state_to_nbt(&self, state: BlockStateId) -> Tag {
-        let registry = self.pack.assets.registry;
-        match registry.state(state) {
-            Some(s) if registry.default_state(&s.name) == Some(state) => {
-                Tag::String(s.name.as_str().into())
-            }
-            Some(s) => s.to_nbt(),
-            None => Tag::String("minecraft:air".into()),
-        }
+        entity_nbt::state_to_nbt(self.pack.assets.registry, state)
     }
     /// The entity NBT of every simulated entity in `keys`, plus the unknown
     /// entities kept for them. With `remove`, the entities leave the world
@@ -1279,5 +1332,23 @@ impl Game<'_> {
 fn strip_finalize(tag: &mut Tag) {
     if let Tag::Compound(c) = tag {
         c.remove(&"horizon:finalize".into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Tag, mark_fresh, take_fresh};
+
+    /// A portal arrival or a `/summon` is told as a fresh add, and the mark
+    /// never reaches the entity's kept or saved compound.
+    #[test]
+    fn a_fresh_add_is_told_apart_from_a_load_and_unmarked() {
+        let mut loaded = Tag::Compound(Default::default());
+        assert!(!take_fresh(&mut loaded));
+        let mut fresh = Tag::Compound(Default::default());
+        mark_fresh(&mut fresh);
+        assert!(take_fresh(&mut fresh));
+        assert!(!take_fresh(&mut fresh));
+        assert_eq!(fresh, Tag::Compound(Default::default()));
     }
 }

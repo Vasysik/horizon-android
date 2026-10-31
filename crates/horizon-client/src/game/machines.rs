@@ -1106,6 +1106,10 @@ enum Screen {
 impl Game<'_> {
     fn machine_screen(&self) -> Option<Screen> {
         let key = self.container?;
+        // A mod's screen over a hopper or dispenser menu lays out its own slots.
+        if self.native_screen_inventory_y().is_some() {
+            return None;
+        }
         // A server's menu shows by its type, whatever block (or minecart) holds it.
         if let Some(menu) = self.remote_menu_type() {
             return match menu {

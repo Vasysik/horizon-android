@@ -3,7 +3,9 @@
 //! draws), entity damage with exposure and knockback, block interaction with
 //! merged drops and TNT chain priming, and optional fire.
 use super::Game;
-use horizon_client::{Result, blocks::Fluid, collisions::SceneCollisions, items::ItemStack};
+use horizon_client::{
+    Result, blocks::Fluid, collisions::SceneCollisions, items::ItemStack, text::Text,
+};
 use horizon_core::{
     geometry::{Vec3, VoxelShape},
     position::BlockPos,
@@ -136,6 +138,30 @@ fn hurt_and_push_mob(
     m.needs_sync = true;
 }
 
+/// A blast's causing entity and its name (`Explosion.getIndirectSourceEntity`):
+/// the mob that owns the exploding projectile while it is in the level
+/// (`Projectile.getOwner` is null once it is removed), else the exploding
+/// mob. `live` names a mob in the level, `exploded` the mobs whose blast
+/// went off this tick and that already left it.
+fn blast_cause(
+    owner: Option<u32>,
+    exploding: Option<u32>,
+    live: impl Fn(u32) -> Option<Text>,
+    exploded: &[(u32, Text)],
+) -> Option<(u32, Text)> {
+    if let Some(owner) = owner {
+        return live(owner).map(|name| (owner, name));
+    }
+    let id = exploding?;
+    let name = live(id).or_else(|| {
+        exploded
+            .iter()
+            .rfind(|(m, _)| *m == id)
+            .map(|(_, n)| n.clone())
+    })?;
+    Some((id, name))
+}
+
 thread_local! {
     /// Client-side randomness (explosion sound pitch), separate from the level random.
     static CLIENT_RANDOM: std::cell::RefCell<LegacyRandom> = std::cell::RefCell::new(LegacyRandom::new(0x5eed));
@@ -145,6 +171,15 @@ pub(super) fn client_float() -> f32 {
 }
 
 impl Game<'_> {
+    /// `blast_cause` for the blast going off now.
+    pub(super) fn blast_attacker(&self) -> Option<(u32, Text)> {
+        blast_cause(
+            self.combat.explosion_owner,
+            self.combat.explosion_source,
+            |id| self.mob_display_name(id),
+            &self.combat.exploded,
+        )
+    }
     /// `ServerExplosion.getSeenPercent` for an entity box.
     pub(super) fn seen_percent(&self, center: [f64; 3], min: [f64; 3], max: [f64; 3]) -> f32 {
         let xs = 1.0 / ((max[0] - min[0]) * 2.0 + 1.0);
@@ -249,16 +284,26 @@ impl Game<'_> {
                         } else {
                             0.0
                         };
+                        // A primed TNT minecart's rails and the blocks they
+                        // stand on: no resistance, and never blown up.
+                        let spared = self.combat.rail_proof_blast
+                            && (self.rail(pos[0], pos[1], pos[2]).is_some()
+                                || self.rail(pos[0], pos[1] + 1, pos[2]).is_some());
                         match resists {
                             Some((at, resistance)) if at == pos => {
                                 power -= (resistance + 0.3) * 0.3;
                             }
                             _ if !self.res.facts().is_air(state) || f.fluid != Fluid::None => {
-                                power -= (f.explosion_resistance.max(fluid) + 0.3) * 0.3;
+                                let resistance = if spared {
+                                    0.0
+                                } else {
+                                    f.explosion_resistance.max(fluid)
+                                };
+                                power -= (resistance + 0.3) * 0.3;
                             }
                             _ => {}
                         }
-                        if power > 0.0 {
+                        if power > 0.0 && !spared {
                             set.put(Key(pos), ());
                         }
                         xp += xd * f64::from(0.3f32);
@@ -288,6 +333,7 @@ impl Game<'_> {
         radius: f32,
         damage_type: &str,
         exploding: Option<u32>,
+        attacker: Option<&(u32, Text)>,
     ) -> Option<[f64; 3]> {
         let diameter = f64::from(radius * 2.0);
         // Blast protection: `EXPLOSION_KNOCKBACK_RESISTANCE` (0.15 per level and
@@ -341,6 +387,11 @@ impl Game<'_> {
         let flying = self.player.as_ref().is_some_and(|p| p.flying);
         let mut outcome = horizon_client::health::BlockOutcome::default();
         let mut pushed = None;
+        // The death message names the blast's causing entity. It goes to this
+        // player's tracker, the host's or a guest's.
+        if let Some((id, name)) = attacker.filter(|_| !creative && !spectator && hurtable) {
+            self.note_named_attacker(damage_type, *id, name.clone());
+        }
         if let Some(p) = self.player.as_mut()
             && let Some(id) = self.motion.health.damage.id(damage_type)
         {
@@ -354,8 +405,7 @@ impl Game<'_> {
                     id,
                     amount,
                     blocking,
-                    // The exploding mob is the causing entity.
-                    exploding.is_some(),
+                    attacker.is_some(),
                 )
             {
                 outcome = o;
@@ -429,7 +479,9 @@ impl Game<'_> {
         // The player, then every other player in the level (LAN guests),
         // each swapped in as the player. In a guest's turn (their hit on an
         // end crystal) the player is that guest.
-        let own = self.explosion_hurt_player(center, radius, damage_type, exploding);
+        let attacker = self.blast_attacker();
+        let own =
+            self.explosion_hurt_player(center, radius, damage_type, exploding, attacker.as_ref());
         let mut pushed: Vec<_> = self.lan_acting.zip(own).into_iter().collect();
         if let Some(mut host) = self.lan.take() {
             let guests: Vec<u32> = host
@@ -441,7 +493,13 @@ impl Game<'_> {
                 .collect();
             for conn in guests {
                 let push = self.as_guest(&mut host, conn, |g| {
-                    g.explosion_hurt_player(center, radius, damage_type, exploding)
+                    g.explosion_hurt_player(
+                        center,
+                        radius,
+                        damage_type,
+                        exploding,
+                        attacker.as_ref(),
+                    )
                 });
                 if let Some(Some(push)) = push {
                     pushed.push((conn, push));
@@ -486,10 +544,9 @@ impl Game<'_> {
                 kind: horizon_client::mobs::DamageKind::Explosion,
                 // A projectile's owner (`getIndirectSourceEntity`), else
                 // the exploding mob itself.
-                attacker: self
-                    .combat
-                    .explosion_owner
-                    .or(exploding)
+                attacker: attacker
+                    .as_ref()
+                    .map(|&(id, _)| id)
                     .filter(|&o| o != m.id)
                     .map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
@@ -592,14 +649,10 @@ impl Game<'_> {
         self.explosion_breaks_decorations(center, diameter, interaction);
         pushed
     }
-    /// `blast_spares_decorations` for the blast going off now: the mob that
-    /// owns its projectile or explodes itself is the source's entity.
+    /// `blast_spares_decorations` for the blast going off now: its causing
+    /// mob (`blast_attacker`) is the source's entity.
     pub(super) fn blast_spares_decorations(&self, interaction: BlockInteraction) -> bool {
-        let by_mob = self
-            .combat
-            .explosion_owner
-            .or(self.combat.explosion_source)
-            .is_some();
+        let by_mob = self.blast_attacker().is_some();
         blast_spares_decorations(self.ui.rules.bool("mob_griefing"), interaction, by_mob)
     }
     /// `ServerExplosion.hurtEntities` for paintings, cushions and armour
@@ -681,14 +734,11 @@ impl Game<'_> {
         interaction: BlockInteraction,
         fire: bool,
     ) -> Result<()> {
-        self.server_explode_as(
-            center,
-            radius,
-            interaction,
-            fire,
-            "minecraft:explosion",
-            None,
-        )
+        let damage_type = super::creatures::damage_type(
+            horizon_client::mobs::DamageKind::Explosion,
+            self.blast_attacker().is_some(),
+        );
+        self.server_explode_as(center, radius, interaction, fire, damage_type, None)
     }
     /// `server_explode` with the damage type the player takes and a block
     /// whose explosion resistance the damage calculator overrides.
@@ -1001,6 +1051,69 @@ mod tests {
         // Off: a blast that keeps blocks, or one a mob causes, does not.
         assert!(blast_spares_decorations(false, Keep, false));
         assert!(blast_spares_decorations(false, Destroy, true));
+    }
+
+    /// The type a blast hurts with and the attacker its death message names
+    /// come from one cause (`DamageSources.explosion`): `player_explosion`
+    /// "blown up by" that mob, or `explosion` with no one when it has none.
+    fn blast_hurt(
+        owner: Option<u32>,
+        exploding: Option<u32>,
+        live: &[(u32, Text)],
+        exploded: &[(u32, Text)],
+    ) -> (&'static str, Option<(u32, Text)>) {
+        let find = |id| live.iter().find(|(m, _)| *m == id).map(|(_, n)| n.clone());
+        let cause = blast_cause(owner, exploding, find, exploded);
+        let kind = horizon_client::mobs::DamageKind::Explosion;
+        (
+            super::super::creatures::damage_type(kind, cause.is_some()),
+            cause,
+        )
+    }
+
+    #[test]
+    fn a_caused_blast_names_its_cause_under_player_explosion() {
+        let creeper = Text::translate("entity.minecraft.creeper", &[]);
+        let ghast = Text::translate("entity.minecraft.ghast", &[]);
+        // A creeper's blast: it left the mob list, its event named it.
+        assert_eq!(
+            blast_hurt(None, Some(7), &[], &[(7, creeper.clone())]),
+            ("minecraft:player_explosion", Some((7, creeper)))
+        );
+        // A ghast's fireball: its owner is still in the level.
+        assert_eq!(
+            blast_hurt(Some(3), None, &[(3, ghast.clone())], &[]),
+            ("minecraft:player_explosion", Some((3, ghast.clone())))
+        );
+        // The ghast was removed before its fireball landed: no owner.
+        assert_eq!(
+            blast_hurt(Some(3), None, &[], &[]),
+            ("minecraft:explosion", None)
+        );
+        // Nothing caused it.
+        assert_eq!(
+            blast_hurt(None, None, &[], &[]),
+            ("minecraft:explosion", None)
+        );
+        // A projectile's owner wins over the exploding mob, and a removed
+        // owner gives no cause even when a mob is exploding.
+        let zombie = Text::translate("entity.minecraft.zombie", &[]);
+        let live = [(3, ghast.clone()), (5, zombie.clone())];
+        assert_eq!(
+            blast_hurt(Some(3), Some(5), &live, &[]),
+            ("minecraft:player_explosion", Some((3, ghast)))
+        );
+        assert_eq!(
+            blast_hurt(Some(4), Some(5), &live, &[]),
+            ("minecraft:explosion", None)
+        );
+        // A mob still in the level is named as it is now, before its name
+        // in the exploded list.
+        let named = Text::literal("Bob".to_owned());
+        assert_eq!(
+            blast_hurt(None, Some(5), &live, &[(5, named)]),
+            ("minecraft:player_explosion", Some((5, zombie)))
+        );
     }
 
     #[test]

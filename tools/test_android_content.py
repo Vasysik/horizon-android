@@ -16,17 +16,18 @@ version = "0.0.0"
 edition = "2024"
 [workspace]
 [dependencies]
+horizon-mods = { path = "../../../crates/horizon-mods", default-features = false }
 serde_json = "1"
 sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 miniz_oxide = "0.8"
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 ''', encoding='utf-8')
     lock=tomllib.loads((ROOT / 'Cargo.lock').read_text(encoding='utf-8'))
-    version=next(p['version'] for p in lock['package'] if p['name']=='zip' and p['version'].startswith('2.'))
+    version=next(p['version'] for p in lock['package'] if p['name']=='zip' and p['version'].startswith('9.'))
     manifest=root / 'Cargo.toml'
-    manifest.write_text(manifest.read_text().replace('zip = { version = "2"', f'zip = {{ version = "={version}"'), encoding='utf-8')
+    manifest.write_text(manifest.read_text().replace('zip = { version = "9"', f'zip = {{ version = "={version}"'), encoding='utf-8')
     (root / 'src/lib.rs').write_text('''#![allow(dead_code)]
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 mod osk { pub enum Output { Text(String), Backspace, Enter, Close } }

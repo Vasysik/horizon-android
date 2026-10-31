@@ -1195,6 +1195,29 @@ def wither_breaks():
     ]
 
 
+def tnt_minecart_rails():
+    """A primed TNT minecart (MinecartTNT.isPrimed) on a powered activator rail inside an obsidian box: its
+    blast neither resists on nor breaks a rail or the block under one (getBlockExplosionResistance and
+    shouldBlockExplode, #4992), but breaks the stone beside them; the obsidian holds."""
+    return [
+        *setup('/fill 3 203 3 7 207 7 minecraft:obsidian', '/fill 4 204 4 6 206 6 minecraft:air',
+               '/setblock 5 204 5 minecraft:redstone_block', '/setblock 5 205 5 minecraft:activator_rail',
+               '/setblock 4 204 5 minecraft:stone', '/setblock 2 205 5 minecraft:stone'),
+        cmd('/summon minecraft:tnt_minecart 5.5 205.0625 5.5'),
+        {'op': 'tick', 'n': 5},
+        cmd('/execute if entity @e[type=minecraft:tnt_minecart]'),
+        {'op': 'tick', 'n': 100},
+        cmd('/execute if entity @e[type=minecraft:tnt_minecart]'),
+        cmd('/execute if block 5 205 5 minecraft:activator_rail'),
+        cmd('/execute if block 5 204 5 minecraft:redstone_block'),
+        cmd('/execute if block 4 204 5 minecraft:stone'),
+        cmd('/execute if block 3 205 5 minecraft:obsidian'),
+        cmd('/execute if block 2 205 5 minecraft:stone'),
+        *setup('/kill @e[type=!player]', '/fill 2 203 3 7 207 7 minecraft:air'),
+        {'op': 'tick', 'n': 5},
+    ]
+
+
 def ender_dragon():
     """`/kill` on the fight's dragon ends the fight (#3319): `EnderDragon.kill` removes it and calls
     `EnderDragonFight.setDragonKilled`, so no new dragon takes its place, the exit portal opens and the
@@ -1295,6 +1318,7 @@ def groups():
         ('social and scoreboard', social()),
         ('test', test_command()),
         ('wither breaks', wither_breaks()),
+        ('tnt minecart rails', tnt_minecart_rails()),
         ('ender dragon', ender_dragon()),
         ('place structure', place_structure()),
         ('tame wolf kills', tame_wolf_kills()),

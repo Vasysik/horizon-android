@@ -372,6 +372,7 @@ pub enum Action {
     },
     Connect {
         address: String,
+        lan: bool,
     },
     /// Create World's Data Packs screen on the new world's pack folder.
     DataPacks {
@@ -1854,6 +1855,18 @@ impl Title {
         cursor: (f32, f32),
         hide_splash: bool,
     ) {
+        self.draw_with_items(atlas, None, batch, cursor, hide_splash);
+    }
+    /// [`Title::draw`] with the item models, which draw the item icons of the
+    /// Superflat screens the way `GuiGraphics.renderItem` does.
+    pub fn draw_with_items(
+        &self,
+        atlas: &HudAtlas,
+        items: Option<&crate::item_render::ItemRenderer>,
+        batch: &mut HudBatch,
+        cursor: (f32, f32),
+        hide_splash: bool,
+    ) {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
         if let Some(rules) = self.rules.borrow_mut().as_mut() {
             return rules.draw(batch, atlas, cursor);
@@ -2069,7 +2082,7 @@ impl Title {
                 options,
                 ..
             } => self.draw_create(atlas, batch, cursor, name, seed, *focus, options),
-            Mode::CreateFlat { flat, .. } => flat::draw(self, atlas, batch, cursor, flat),
+            Mode::CreateFlat { flat, .. } => flat::draw(self, atlas, items, batch, cursor, flat),
             Mode::Edit { name, focused, .. } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
                 centered(
@@ -2732,7 +2745,9 @@ impl Title {
                     self.mode = Mode::Main;
                     Action::None
                 }
-                crate::multiplayer::Outcome::Connect(address) => Action::Connect { address },
+                crate::multiplayer::Outcome::Connect { address, lan } => {
+                    Action::Connect { address, lan }
+                }
                 crate::multiplayer::Outcome::None => Action::None,
             },
             (Mode::Main, Some(5)) => {
@@ -3185,7 +3200,9 @@ impl Title {
         match &self.mode {
             Mode::Create { .. } => self.create_action(),
             Mode::Multiplayer(screen) => match screen.confirm() {
-                crate::multiplayer::Outcome::Connect(address) => Action::Connect { address },
+                crate::multiplayer::Outcome::Connect { address, lan } => {
+                    Action::Connect { address, lan }
+                }
                 _ => Action::None,
             },
             _ => Action::None,

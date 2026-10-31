@@ -2357,6 +2357,24 @@ impl SaveDir {
     fn region_path(&self, folder: &str, rx: i32, rz: i32) -> PathBuf {
         region_path(&self.root, folder, rx, rz)
     }
+    /// The references a saved chunk keeps for its structure start `name`
+    /// (`StructureStart.getReferences`, saved as `references`): 0 for a chunk
+    /// not saved yet, a start it does not have or one without the field.
+    pub fn start_references(&self, x: i32, z: i32, name: &str) -> i32 {
+        let Some(root) = self.read_record("region", x, z) else {
+            return 0;
+        };
+        match root
+            .tag
+            .get("structures")
+            .and_then(|s| s.get("starts"))
+            .and_then(|s| s.get(name))
+            .and_then(|s| s.get("references"))
+        {
+            Some(Tag::Int(n)) => *n,
+            _ => 0,
+        }
+    }
     fn read_record(&self, folder: &str, x: i32, z: i32) -> Option<NamedTag> {
         let pending = self
             .pending
@@ -2886,18 +2904,34 @@ fn write_saved_data(world: &Path, name: &str, data: Tag) -> Result<()> {
 }
 pub use horizon_client_core::uuid::{uuid_from_text, uuid_text};
 /// A random (version 4) UUID as vanilla's four-int form.
+///
+/// Every call gets its own: the generator is seeded once from the clock and
+/// the process, then each call takes the next step of one shared counter. A
+/// seed from the clock alone repeats within its resolution (a microsecond on
+/// macOS): a pack of mobs generated together all had the same UUID, and a
+/// vanilla client keeps only one entity per UUID (the rest never moved).
 pub fn random_uuid() -> [i32; 4] {
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as u64);
-    let mut s = t ^ (std::process::id() as u64).rotate_left(32) ^ 0x9E37_79B9_7F4A_7C15;
-    let mut next = || {
-        s ^= s << 13;
-        s ^= s >> 7;
-        s ^= s << 17;
-        s
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
     };
-    let (a, b) = (next(), next());
+    static NEXT: OnceLock<AtomicU64> = OnceLock::new();
+    let next = NEXT.get_or_init(|| {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64);
+        AtomicU64::new(t ^ (std::process::id() as u64).rotate_left(32))
+    });
+    // SplitMix64: distinct steps give distinct outputs.
+    let split = || {
+        let mut z = next
+            .fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed)
+            .wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let (a, b) = (split(), split());
     let a = (a & !0xF000) | 0x4000;
     let b = (b & !(0xC000_0000_0000_0000)) | 0x8000_0000_0000_0000;
     [(a >> 32) as i32, a as i32, (b >> 32) as i32, b as i32]
@@ -5841,6 +5875,12 @@ mod tests {
         );
         let r = random_uuid();
         assert_eq!((r[1] >> 12) & 0xF, 4, "version 4");
+    }
+    #[test]
+    fn random_uuids_made_at_once_differ() {
+        let made: std::collections::HashSet<[i32; 4]> =
+            (0..10_000).map(|_| random_uuid()).collect();
+        assert_eq!(made.len(), 10_000);
     }
     #[test]
     fn creaking_heart_keeps_its_protector_uuid() {

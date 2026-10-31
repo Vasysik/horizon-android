@@ -155,6 +155,24 @@ pub(super) fn remote_projectile_tick(p: &mut Projectile, w: &impl ProjectileWorl
     }
 }
 
+/// `ClientPacketListener.handleProjectilePowerPacket`: the power a hurting
+/// projectile (`AbstractHurtingProjectile`) accelerates by, found by id;
+/// anything else is ignored.
+pub(super) fn remote_projectile_power(projectiles: &mut [Projectile], id: i32, power: f64) {
+    if let Some(p) = projectiles.iter_mut().find(|p| p.id == id as u32)
+        && matches!(
+            p.kind,
+            ProjectileKind::SmallFireball
+                | ProjectileKind::LargeFireball { .. }
+                | ProjectileKind::WitherSkull { .. }
+                | ProjectileKind::WindCharge
+                | ProjectileKind::BreezeWindCharge
+        )
+    {
+        p.acceleration = power;
+    }
+}
+
 /// `AbstractHurtingProjectile.getTrailParticle`: smoke for every one of them
 /// but the wind charges (no trail) and the dragon's fireball (its own).
 pub(super) fn has_smoke_trail(kind: &ProjectileKind) -> bool {
@@ -776,6 +794,11 @@ mod tests {
         p
     }
 
+    /// The same, under the id a server tracks it by.
+    fn tracked(kind: ProjectileKind, id: u32) -> Projectile {
+        Projectile { id, ..thrown(kind) }
+    }
+
     #[test]
     fn a_thrown_item_flies_on_between_the_server_updates() {
         // A thrown egg, an ender pearl and a wind charge (#1762): the server
@@ -809,5 +832,43 @@ mod tests {
         remote_projectile_tick(&mut p, &Empty);
         assert!((p.velocity.x - 1.5).abs() < 1e-9, "{p:?}");
         assert!((p.velocity.y - 0.0).abs() < 1e-9, "{p:?}");
+    }
+
+    #[test]
+    fn a_power_packet_gives_a_fireball_the_power_its_next_tick_uses() {
+        // ClientPacketListener.handleProjectilePowerPacket: the fireball with
+        // id 12 gets the power the server sends bundled with its motion.
+        let mut list = vec![tracked(ProjectileKind::LargeFireball { power: 1 }, 12)];
+        remote_projectile_power(&mut list, 12, 0.5);
+        assert_eq!(list[0].acceleration, 0.5);
+        // AbstractHurtingProjectile.applyInertia: (v + v/|v| * 0.5) * 0.95,
+        // where the default 0.1 would have made 1.52.
+        remote_projectile_tick(&mut list[0], &Empty);
+        assert!((list[0].velocity.x - 1.9).abs() < 1e-9, "{:?}", list[0]);
+    }
+
+    #[test]
+    fn a_power_packet_ignores_an_arrow_an_unknown_id_and_a_thrown_item() {
+        // Vanilla's instanceof AbstractHurtingProjectile: an arrow and a
+        // thrown egg are none, and no entity is id 99.
+        let mut list = vec![
+            tracked(
+                ProjectileKind::Arrow {
+                    base_damage: 2.0,
+                    critical: false,
+                    effect: None,
+                },
+                3,
+            ),
+            tracked(ProjectileKind::Egg, 4),
+            tracked(ProjectileKind::LargeFireball { power: 1 }, 12),
+        ];
+        remote_projectile_power(&mut list, 3, 0.5);
+        remote_projectile_power(&mut list, 4, 0.5);
+        remote_projectile_power(&mut list, 99, 0.5);
+        assert_eq!(
+            list.iter().map(|p| p.acceleration).collect::<Vec<_>>(),
+            [0.1; 3]
+        );
     }
 }

@@ -291,6 +291,19 @@ pub fn brain_step(m: &mut Mob, cx: &mut Cx) {
     }
     update_activity(m, cx.w, cx.events);
 }
+/// `Zoglin.customServerAiStep` after the brain: `Zoglin.updateActivity` plays
+/// the angry grunt when the fight activity starts.
+pub fn zoglin_step(m: &mut Mob, cx: &mut Cx) {
+    let now = if m.ai.target.is_some() {
+        Activity::Fight
+    } else {
+        Activity::Idle
+    };
+    let before = std::mem::replace(&mut m.extra.piglin.activity, now);
+    if now == Activity::Fight && before != Activity::Fight {
+        m.voice("entity.zoglin.angry", cx.events);
+    }
+}
 /// `HoglinAi.updateActivity`, `PiglinAi.updateActivity` and
 /// `PiglinBruteAi.updateActivity`: take the first valid activity and, when it
 /// is not the one it was in, make the sound that goes with the new one; a
@@ -1621,28 +1634,34 @@ pub fn ai_step(
     if !w.nether && !m.extra.flag2 && m.alive() {
         m.extra.counter2 += 1;
         if m.extra.counter2 > CONVERSION {
-            let (kind, sound) = match m.species() {
-                Species::Hoglin => ("minecraft:zoglin", "entity.hoglin.converted_to_zombified"),
+            // `Hoglin.finishConversion` is `ConversionParams.single(this, true,
+            // false)`, `AbstractPiglin.finishConversion` `(this, true, true)`;
+            // both leave the new mob nauseous (the game adds it).
+            let (kind, sound, params) = match m.species() {
+                Species::Hoglin => (
+                    "minecraft:zoglin",
+                    "entity.hoglin.converted_to_zombified",
+                    super::conversion::Params {
+                        keep_equipment: true,
+                        preserve_can_pick_up_loot: false,
+                    },
+                ),
                 Species::PiglinBrute => (
                     "minecraft:zombified_piglin",
                     "entity.piglin_brute.converted_to_zombified",
+                    super::conversion::Params::KEEP_ALL,
                 ),
                 _ => (
                     "minecraft:zombified_piglin",
                     "entity.piglin.converted_to_zombified",
+                    super::conversion::Params::KEEP_ALL,
                 ),
             };
             events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
-            events.push(MobEvent::SpawnKind {
-                kind: kind.into(),
-                at: [m.position.x, m.position.y, m.position.z],
-                setup: super::SpawnSetup {
-                    baby: m.is_baby(),
-                    yaw: m.yaw,
-                    persistent: m.persistent,
-                    nausea: true,
-                    ..Default::default()
-                },
+            events.push(MobEvent::Convert {
+                from: Box::new(m.clone()),
+                kind,
+                params,
             });
             m.removed = true;
         }

@@ -2131,9 +2131,24 @@ impl Game<'_> {
                 lines.push((random.with_color(horizon_client::text::GRAY), u32::MAX));
             }
         }
+        // TropicalFish.Pattern.addToTooltip.
+        for text in horizon_client::item_tooltip::tropical_fish_lines(stack, &display) {
+            lines.push((text, gray));
+        }
         // InstrumentComponent.addToTooltip.
         if let Some(text) =
             horizon_client::item_tooltip::instrument_line(stack, &display, &translate)
+        {
+            push(&mut lines, text, gray);
+        }
+        // MapId.addToTooltip: the saved data's lock and scale, when it is known.
+        let map = stack
+            .data()
+            .and_then(|d| d.map_id)
+            .and_then(|id| self.maps.data.get(&id))
+            .map(|m| (m.locked, m.scale));
+        for text in
+            horizon_client::item_tooltip::map_id_lines(stack, &display, advanced, map, &translate)
         {
             push(&mut lines, text, gray);
         }

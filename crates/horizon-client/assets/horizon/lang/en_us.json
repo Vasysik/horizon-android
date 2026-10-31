@@ -33,12 +33,14 @@
   "horizon.pages.extras": "Horizon Extras",
   "horizon.pages.settings": "Horizon Settings",
   "horizon.pages.agent": "AI Agent",
+  "horizon.pages.split_profiles": "Who's playing?",
   "horizon.pages.settings.tooltip": "Horizon's own settings: graphics, controllers, extras and mods.",
   "horizon.pages.graphics.tooltip": "Graphics, simply: each setting says what it costs.",
   "horizon.pages.graphics_advanced.tooltip": "Every graphics setting, Horizon's included, with what each costs.",
   "horizon.pages.controller.tooltip": "Controllers: their buttons, sticks, vibration and menu navigation.",
   "horizon.pages.extras.tooltip": "Optional additions, all off by default: the game stays vanilla until you turn one on.",
   "horizon.pages.agent.tooltip": "Let your own AI agent play: horizon-ctl and MCP clients on this computer.",
+  "horizon.pages.split_profiles.tooltip": "Who plays: a profile kept in this game folder.",
   "horizon.pages.shader_packs.tooltip": "Shader packs from the shaderpacks folder: Horizon's own and those in the shaders/ format. One runs at a time.",
   "horizon.pages.mods.tooltip": "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on.",
   "horizon.pages.open.graphics": "Graphics...",
@@ -196,5 +198,8 @@
   "Threads that generate, light and mesh chunks. Next start.": "Threads that generate, light and mesh chunks. Next start.",
   "Vulkan, then DirectX 12 (Windows) or OpenGL (Linux) where it fails. Next start.": "Vulkan, then DirectX 12 (Windows) or OpenGL (Linux) where it fails. Next start.",
   "Mesh data sent to the GPU per frame. Lower is smoother while loading.": "Mesh data sent to the GPU per frame. Lower is smoother while loading.",
-  "Frame rate and frame times over the game, with a graph.": "Frame rate and frame times over the game, with a graph."
+  "Frame rate and frame times over the game, with a graph.": "Frame rate and frame times over the game, with a graph.",
+  "horizon.multiplayer.finding_friend": "Finding your friend's world...",
+  "horizon.loading.opening_world": "Opening world",
+  "horizon.loading.cancelling_world": "Cancelling world"
 }

@@ -137,6 +137,7 @@ impl Game<'_> {
                     self.mobs.push(mob);
                     self.native_mobs_joined(self.mobs.len() - 1, false);
                     self.enchant_spawn_equipment(id);
+                    self.halloween_spawn_head(id);
                     self.spawn_jockeys(id, true);
                     Some((id, equipment))
                 }
@@ -212,7 +213,12 @@ impl Game<'_> {
                 tag.insert("PersistenceRequired".into(), Tag::Byte(1));
             }
             let tag = Tag::Compound(tag);
-            let mob = horizon_client::entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), 0)?;
+            let mob = horizon_client::entity_nbt::mob_from_nbt(
+                &tag,
+                self.res.mob_types(),
+                0,
+                Some(self.pack.assets.registry),
+            )?;
             let bounds = mob.bounds();
             planned.push(Planned::Loaded(tag, r.equipment.cloned()));
             bounds

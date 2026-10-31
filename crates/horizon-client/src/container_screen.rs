@@ -270,6 +270,17 @@ mod tests {
     }
 
     #[test]
+    fn a_creative_page_release_does_not_throw_a_carried_stack() {
+        let mut clicks = Clicks::default();
+        let out = Target::<usize>::Outside;
+        clicks.skip_release();
+        assert_eq!(
+            clicks.release(&out, Button::Left, false, false, false, false),
+            Release::Nothing
+        );
+    }
+
+    #[test]
     fn another_button_cancels_the_drag() {
         let mut clicks = Clicks::default();
         let slot = Target::Slot(3);

@@ -1089,6 +1089,7 @@ fn build_with_gameplay<G: GameplayStateSource>(
         );
     }
 
+    let potted_by_content = potted_by_content(&blocks, &table);
     let liquid_blocks = FluidBlockBindings::new(registry)?;
     let mut dynamic = HashMap::new();
     for (id, fact) in facts.iter().enumerate() {
@@ -1113,11 +1114,29 @@ fn build_with_gameplay<G: GameplayStateSource>(
         fluid_tags,
         blocks,
         items,
+        potted_by_content,
         liquid_blocks,
         dynamic,
         occlusion_cache: Default::default(),
         growth: Default::default(),
     })
+}
+
+pub(super) fn potted_by_content(
+    blocks: &[BlockData],
+    table: &StateTable,
+) -> HashMap<BlockId, BlockId> {
+    let air = table.block_by_name("minecraft:air");
+    let mut map = HashMap::new();
+    for (index, block) in blocks.iter().enumerate() {
+        if block.is(Class::FlowerPot)
+            && let Some(potted) = block.link
+            && Some(potted) != air
+        {
+            map.insert(potted, BlockId(index as u16));
+        }
+    }
+    map
 }
 
 /// `NoteBlockInstrument` serialized names in declaration order.

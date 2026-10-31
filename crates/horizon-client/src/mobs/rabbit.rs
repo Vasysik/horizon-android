@@ -3,8 +3,8 @@ use super::{
     Mob, MobEvent, MobWorld, Species,
     control::Operation,
     goals::{
-        Avoid, AvoidEntity, Breed, ClimbOnTopOfPowderSnow, Cx, Float, Goal, LookAtPlayer, Panic,
-        Stroll, Tempt, goal_clone,
+        Avoid, AvoidEntity, Breed, ClimbOnTopOfPowderSnow, Cx, Float, Goal, HurtByTarget,
+        LookAtPlayer, MeleeAttack, NearestTarget, Panic, Stroll, Tempt, goal_clone,
     },
 };
 use horizon_core::{
@@ -104,6 +104,33 @@ pub fn base_tick(m: &mut Mob) {
     }
 }
 
+/// `Rabbit.facePoint`.
+fn face_point(m: &mut Mob, x: f64, z: f64) {
+    m.yaw = trig::atan2_degrees(z - m.position.z, x - m.position.x) - 90.0;
+}
+
+/// `Rabbit.setVariant(EVIL)`, run the first time a killer bunny ticks (its
+/// variant comes from `/summon`, a save or a spawn): armor 8, the bite and
+/// target goals, attack damage plus 5 and the "Killer Bunny" name.
+fn set_evil(m: &mut Mob) {
+    use super::finalize::{Attr, Op, add_modifier, set_base};
+    if m.ai.goals.has("MeleeAttack") {
+        return;
+    }
+    set_base(m, Attr::Armor, 8.0);
+    m.ai.goals.add(4, MeleeAttack::new(1.4, true));
+    m.ai.targets.add(1, HurtByTarget::new().alert());
+    m.ai.targets.add(2, NearestTarget::player(true));
+    m.ai.targets
+        .add(2, NearestTarget::species(&[Species::Wolf], true));
+    add_modifier(m, Attr::AttackDamage, "minecraft:evil", 5.0, Op::AddValue);
+    if m.custom_name.is_none() && m.custom_name_text.is_none() {
+        let name = crate::text::Text::translate("entity.minecraft.killer_bunny", &[]);
+        m.custom_name = Some(name.plain());
+        m.custom_name_text = Some(name);
+    }
+}
+
 fn start_jumping(m: &mut Mob) {
     m.ai.jumping = true;
     m.extra.ints[JUMP_DURATION] = 15;
@@ -119,8 +146,12 @@ fn start_jumping(m: &mut Mob) {
     }
 }
 
-/// Rabbit.customServerAiStep: start a hop toward the current path waypoint.
-pub fn server_ai_step(m: &mut Mob) {
+/// Rabbit.customServerAiStep: start a hop toward the current path waypoint;
+/// `target` is where the rabbit's target stands, if it has one.
+pub fn server_ai_step(m: &mut Mob, target: Option<Vec3>) {
+    if m.extra.variant == EVIL {
+        set_evil(m);
+    }
     // RabbitMoveControl.setWantedPosition applies the water override before landing checks.
     if m.fluids.in_water && m.ai.mov.speed_modifier > 0.0 {
         m.ai.mov.speed_modifier = 1.5;
@@ -133,13 +164,24 @@ pub fn server_ai_step(m: &mut Mob) {
             m.ai.jumping = false;
             m.extra.ints[MOVE_DELAY] = if m.ai.mov.speed_modifier < 2.2 { 10 } else { 3 };
         }
+        // A killer bunny within 4 blocks of its target faces it and hops at it.
+        if m.extra.variant == EVIL
+            && m.extra.ints[MOVE_DELAY] == 0
+            && let Some(t) = target
+            && m.distance_sqr(t) < 16.0
+        {
+            face_point(m, t.x, t.z);
+            let speed = m.ai.mov.speed_modifier;
+            m.ai.mov.set_wanted(t.x, t.y, t.z, speed);
+            start_jumping(m);
+        }
         if !m.ai.jump && m.ai.mov.has_wanted() && m.extra.ints[MOVE_DELAY] == 0 {
             let mut at = m.ai.mov.wanted;
             if let Some(path) = m.ai.nav.path.as_ref().filter(|p| !p.is_done()) {
                 let p = path.entity_pos_at(path.next, m.width());
                 at = [p.x, p.y, p.z];
             }
-            m.yaw = trig::atan2_degrees(at[2] - m.position.z, at[0] - m.position.x) - 90.0;
+            face_point(m, at[0], at[2]);
             start_jumping(m);
         }
     }
@@ -358,7 +400,7 @@ mod tests {
                 "{{id:\"minecraft:rabbit\",Pos:[0.0d,0.0d,0.0d],Age:{age}}}"
             ))
             .unwrap();
-            let m = crate::entity_nbt::mob_from_nbt(&tag, &types, 2).unwrap();
+            let m = crate::entity_nbt::mob_from_nbt(&tag, &types, 2, None).unwrap();
             assert_eq!(m.extra.age, age);
             assert_eq!(m.is_baby(), baby);
             assert_eq!(
@@ -399,10 +441,10 @@ mod tests {
         // Animal.addAdditionalSaveData / readAdditionalSaveData: "InLove" (#1396).
         let mut m = rabbit();
         m.extra.in_love = 570;
-        let tag = crate::entity_nbt::mob_to_nbt(&m, [0, 0, 0, 1], None);
+        let tag = crate::entity_nbt::mob_to_nbt(&m, [0, 0, 0, 1], None, None);
         assert_eq!(tag.get("InLove"), Some(&horizon_world::nbt::Tag::Int(570)));
         let types = HashMap::from([(m.kind.id.clone(), m.kind.clone())]);
-        let back = crate::entity_nbt::mob_from_nbt(&tag, &types, 2).unwrap();
+        let back = crate::entity_nbt::mob_from_nbt(&tag, &types, 2, None).unwrap();
         assert_eq!(back.extra.in_love, 570);
     }
 
@@ -411,14 +453,14 @@ mod tests {
         let mut m = rabbit();
         m.on_ground = true;
         m.ai.mov.set_wanted(0.0, 0.0, 5.0, 0.6);
-        server_ai_step(&mut m);
+        server_ai_step(&mut m, None);
         assert_eq!(m.extra.ints[MOVE_DELAY], 10);
         assert!(!m.ai.jumping);
         for _ in 0..9 {
-            server_ai_step(&mut m);
+            server_ai_step(&mut m, None);
         }
         assert!(!m.ai.jumping);
-        server_ai_step(&mut m);
+        server_ai_step(&mut m, None);
         assert!(m.ai.jumping);
         assert_eq!(m.extra.ints[JUMP_DURATION], 15);
         assert_eq!(m.anim.states[0].started, None);
@@ -456,7 +498,7 @@ mod tests {
         let mut m = rabbit();
         m.on_ground = true;
         m.ai.mov.set_wanted(0.0, 0.0, 5.0, 2.2);
-        server_ai_step(&mut m);
+        server_ai_step(&mut m, None);
         assert_eq!(m.extra.ints[MOVE_DELAY], 3);
         m.ai.jump = true;
         m.jump_control_tick();
@@ -526,7 +568,7 @@ mod tests {
         assert!(m.ai.nav.can_float);
         m.extra.flag = false;
         m.ai.mov.set_wanted(0.0, 0.0, 5.0, 2.2);
-        server_ai_step(&mut m);
+        server_ai_step(&mut m, None);
         assert_eq!(m.ai.mov.speed_modifier, 1.5);
         assert_eq!(m.extra.ints[MOVE_DELAY], 10);
     }

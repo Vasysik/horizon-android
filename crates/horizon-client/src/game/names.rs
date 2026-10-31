@@ -144,7 +144,7 @@ impl Game<'_> {
             let team = if player {
                 self.score.board.players_team(&name)
             } else {
-                self.mob_team(m.id)
+                self.mob_team_of(m)
             };
             // LivingEntityRenderer.shouldShowName (team rules included), then
             // MobRenderer: a visible name, or the mob under the crosshair.

@@ -482,6 +482,36 @@ mod tests {
         );
     }
 
+    /// `EntityDataSerializers.VECTOR3` and `QUATERNION`
+    /// (`FriendlyByteBuf.writeVector3f`, `writeQuaternion`): three or four
+    /// big-endian floats.
+    #[test]
+    fn vectors_and_quaternions_are_big_endian_floats() {
+        use std::f32::consts::FRAC_1_SQRT_2;
+        let entries = vec![
+            (
+                11u8,
+                serializer::VECTOR3,
+                Value::Floats(vec![1.0, -2.0, 0.25]),
+            ),
+            (
+                13,
+                serializer::QUATERNION,
+                Value::Floats(vec![0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]),
+            ),
+        ];
+        let mut w = Writer::new();
+        EntityData::write(&entries, &mut w);
+        #[rustfmt::skip]
+        let bytes = [
+            11, 39, 0x3F, 0x80, 0, 0, 0xC0, 0, 0, 0, 0x3E, 0x80, 0, 0,
+            13, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0x3F, 0x35, 0x04, 0xF3, 0x3F, 0x35, 0x04, 0xF3,
+            0xFF,
+        ];
+        assert_eq!(w.data, bytes);
+        assert_eq!(EntityData::read(&mut Reader::new(&bytes)).unwrap(), entries);
+    }
+
     /// Every particle data shape (26.3 codecs) round-trips, and a PARTICLES
     /// list is a VarInt count then each particle, so the entry after it
     /// still decodes.

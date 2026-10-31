@@ -832,7 +832,7 @@ impl Game<'_> {
     }
     pub(super) fn boat_hit(&self) -> Option<(usize, f64)> {
         let (eye, dir) = self.aim()?;
-        let reach: f64 = if self.creative { 5.0 } else { 3.0 };
+        let reach: f64 = self.entity_reach;
         let mut best: Option<(usize, f64)> = None;
         for (i, b) in self.boats.iter().enumerate() {
             if Some(b.id) == self.riding {
@@ -877,16 +877,7 @@ impl Game<'_> {
         }
         // ChestBoat.interact: sneaking (or a full seat) opens the chest.
         if self.boats[i].chest && (sneaking || self.riding.is_some() || !self.boat_has_room(i)) {
-            let b = &self.boats[i];
-            let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, b.id as i32);
-            self.world.block_entities.insert(
-                key,
-                horizon_client::containers::BlockEntity::Chest(b.items.clone()),
-            );
-            self.container = Some(key);
-            self.screen = super::Screen::Inventory;
-            self.capture(false);
-            self.right = false;
+            self.open_chest_boat_container(i);
             self.swing_arm();
             return true;
         }
@@ -903,6 +894,51 @@ impl Game<'_> {
         // ServerPlayer.startRiding.
         self.trigger_player("minecraft:started_riding");
         true
+    }
+    /// `ContainerEntity.interactWithContainerVehicle` (`AbstractChestBoat`):
+    /// the chest's 27 slots go under a placeholder key that the menu edits; a
+    /// server hands them to the player as a `ChestMenu` (`as_guest` ->
+    /// `lan_open_container`). `AbstractChestBoat.interact` fires
+    /// `CONTAINER_OPEN` and angers the piglins that see it.
+    pub(super) fn open_chest_boat_container(&mut self, i: usize) {
+        let b = &self.boats[i];
+        let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, b.id as i32);
+        let at = [b.position.x, b.position.y, b.position.z];
+        let items = b.items.clone();
+        self.world
+            .block_entities
+            .insert(key, horizon_client::containers::BlockEntity::Chest(items));
+        self.container = Some(key);
+        self.screen = super::Screen::Inventory;
+        self.capture(false);
+        self.right = false;
+        let ctx = self.player_context(None);
+        self.post_game_event("minecraft:container_open", at, ctx);
+        self.anger_piglins(true);
+    }
+    /// `AbstractChestBoat.openCustomInventoryScreen` (`HasCustomInventoryScreen`),
+    /// the inventory key while riding a chest boat: its chest opens, not the
+    /// player's inventory.
+    pub(super) fn open_ridden_chest_boat(&mut self) -> bool {
+        let Some(id) = self.riding else {
+            return false;
+        };
+        let Some(i) = self.boats.iter().position(|b| b.id == id) else {
+            return false;
+        };
+        if !self.boats[i].chest {
+            return false;
+        }
+        self.open_chest_boat_container(i);
+        true
+    }
+    /// Whether the player rides a chest boat: `HasCustomInventoryScreen`, so
+    /// the inventory key sends `ServerboundPlayerCommandPacket.Action.OPEN_INVENTORY`
+    /// (`ServerGamePacketListenerImpl.handlePlayerCommand` opens its screen).
+    pub(super) fn riding_chest_boat(&self) -> bool {
+        self.riding
+            .and_then(|id| self.boats.iter().find(|b| b.id == id))
+            .is_some_and(|b| b.chest)
     }
     /// `VehicleEntity.hurtServer` from the player's attack.
     pub(super) fn attack_boat(&mut self) -> bool {
@@ -922,8 +958,11 @@ impl Game<'_> {
         true
     }
     /// `VehicleEntity.hurtServer`: wobble, add the damage and break past 40
-    /// (`creative`: a creative player's hit removes it without drops).
-    /// True when the boat was removed.
+    /// (`creative`: a creative player's hit discards it straight away).
+    /// `AbstractChestBoat.remove` drops the chest contents for every removal
+    /// reason that destroys the boat (DISCARDED included), while the boat item
+    /// itself only drops on the death path (`VehicleEntity.destroy`), not when
+    /// a creative hit discards it. True when the boat was removed.
     pub(super) fn hurt_boat(&mut self, i: usize, damage: f32, creative: bool) -> bool {
         let b = &mut self.boats[i];
         b.hurt_dir = -b.hurt_dir;
@@ -936,11 +975,15 @@ impl Game<'_> {
             let at = [b.position.x, b.position.y, b.position.z];
             // AbstractBoat.remove: a destroyed boat drops its lead.
             self.boat_removed(&b);
+            // `AbstractChestBoat.remove` spills the chest through
+            // `Containers.dropContents` for every destroying removal reason;
+            // that has no `entity_drops` gate of its own.
+            for stack in b.items.iter().flatten() {
+                self.spawn_item(stack.clone(), at, super::dispenser::new_item_motion(), 10);
+            }
+            // `VehicleEntity.destroy(level, dropItem)` drops the boat item on
+            // the death path only, and only with `entity_drops` on.
             if !creative && self.ui.rules.bool("entity_drops") {
-                // ChestBoat.destroy: chestVehicleDestroyed spills the contents.
-                for stack in b.items.iter().flatten() {
-                    self.spawn_item(stack.clone(), at, super::dispenser::new_item_motion(), 10);
-                }
                 let item = b.entity_type();
                 self.spawn_item(
                     ItemStack {

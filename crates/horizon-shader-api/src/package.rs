@@ -72,7 +72,7 @@ impl Pack {
                 if entry.is_dir() {
                     continue;
                 }
-                let name = entry.name().to_owned();
+                let name = entry.name().map_err(|e| e.to_string())?.into_owned();
                 let mut bytes = Vec::new();
                 (&mut entry)
                     .take(MAX_OTHER.max(MAX_WGSL) + 1)

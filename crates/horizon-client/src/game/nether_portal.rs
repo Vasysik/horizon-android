@@ -1084,6 +1084,8 @@ impl Game<'_> {
                 // setPortalCooldown before the teleport, copied by restoreFrom.
                 c.insert("PortalCooldown".into(), Tag::Int(ENTITY_DELAY));
             }
+            // ServerLevel.addDuringTeleport: a fresh add, not loaded from disk.
+            super::persist::mark_fresh(&mut tag);
             let key = ((at.x.floor() as i32) >> 4, (at.z.floor() as i32) >> 4);
             match self
                 .world

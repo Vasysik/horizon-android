@@ -206,7 +206,9 @@ impl Server {
             border: &horizon_client::worldborder::WorldBorder::default(),
             streaming: None,
         };
-        let events = self.hub.tick(&mut ctx);
+        // Match the game loop: drain guest actions before the ordinary hub tick.
+        let mut events = self.hub.drain_packets(&mut ctx);
+        events.extend(self.hub.tick(&mut ctx));
         for event in events {
             match event {
                 HostEvent::Joined(conn) => self.hub.place_new_player(conn, &mut ctx),
@@ -663,6 +665,45 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
 }
 
 #[test]
+fn a_move_behind_an_attack_and_its_swing_waits_for_the_next_tick() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Striker", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    s.hub.guests[0].loaded = true;
+    s.hub.guests[0].load_timeout = 0;
+    s.hub.guests[0].awaiting_teleport = None;
+    s.hub.guests[0].on_ground = false;
+    // A falling attack sharing a server tick with the landing move behind it:
+    // the attack, the arm swing, then the landing move.
+    let inbox = &mut s.hub.guests[0].inbox;
+    inbox.push_back((S::Attack(play::Attack { id: 1 }), 0));
+    inbox.push_back((S::Punch(Empty), 0));
+    inbox.push_back((S::MovePlayerStatus(play::MovePlayerStatus { flags: 1 }), 0));
+    s.tick(&[]);
+    // The game runs the attack after the hub's pass: the landing move waits so
+    // critical_attack still sees the player off the ground.
+    let g = &s.hub.guests[0];
+    assert!(!g.on_ground, "the landing move ran before the attack");
+    assert!(
+        matches!(g.inbox.back(), Some((S::MovePlayerStatus(_), _))),
+        "the move left the queue"
+    );
+    s.tick(&[]);
+    let g = &s.hub.guests[0];
+    assert!(g.on_ground, "the landing move did not run on the next tick");
+    assert!(g.inbox.is_empty());
+}
+
+#[test]
 fn status_and_join() {
     let Some(resources) = resources() else {
         return;
@@ -950,7 +991,7 @@ fn a_spectators_container_click_is_taken_back() {
         thread::yield_now();
     }
     let conn = s.hub.guests[0].conn;
-    s.hub.set_game_mode(conn, 3);
+    s.hub.set_game_mode(conn, 3, &s.world, None);
     let at = s.hub.guests[0].position;
     let key = (
         at[0].floor() as i32,
@@ -1226,4 +1267,63 @@ fn the_prediction_records_each_client_tick_and_the_server_ticks_it_had_seen() {
     s.tick(&[]);
     let record = s.hub.guests[0].anticheat.record.as_deref().unwrap();
     assert_eq!(record.seen(), Some(pinged));
+}
+
+/// #4301: the damage-immunity term `ServerPlayer.isInvulnerableTo` takes from
+/// its connection (`!hasClientLoaded`) is cleared by a respawn, kept through a
+/// level change, and comes back with ServerboundPlayerLoadedPacket: a respawned
+/// guest cannot be hurt at the spot it died in before its client is back.
+#[test]
+fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Respawned", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    s.hub.guests[0].load_timeout = 0;
+    assert!(s.hub.guests[0].client_loaded());
+    let border = horizon_client::worldborder::WorldBorder::default();
+    let at = [8.5, f64::from(MIN_Y + 5), 8.5];
+    let ctx = TickCtx {
+        world: &mut s.world,
+        host: None,
+        entities: &[],
+        next_entity: &mut s.next_entity,
+        spawn: at,
+        difficulty: 2,
+        difficulty_locked: false,
+        clock_rate: 1.0,
+        tick_rate: 20.0,
+        tick_frozen: false,
+        tick_steps: (0, 0),
+        collision: None,
+        border: &border,
+        streaming: None,
+    };
+    s.hub.respawn(0, at, &ctx);
+    assert!(
+        !s.hub.guests[0].client_loaded(),
+        "a respawn unloads the client"
+    );
+    // A level change does not clear it: vanilla resets the loaded state on death and respawn
+    // only, and covers a portal with its separate `isChangingDimension` term.
+    s.hub.change_level(0, at, 0.0, None, false, 0, &ctx);
+    assert!(
+        !s.hub.guests[0].client_loaded(),
+        "a level change keeps the cleared state from the respawn"
+    );
+    // The client's ServerboundPlayerLoadedPacket once the new level is in.
+    s.hub.guests[0].inbox.push_back((S::PlayerLoaded(Empty), 0));
+    s.tick(&[]);
+    assert!(
+        s.hub.guests[0].client_loaded(),
+        "the packet marks it loaded"
+    );
 }

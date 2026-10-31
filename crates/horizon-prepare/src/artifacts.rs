@@ -15,7 +15,8 @@ const LAUNCHER_HINT: &str =
 Minecraft Java Edition with so it downloads the game's files, then rerun. Horizon reads the \
 official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher, MultiMC, \
 the Modrinth App or GDLauncher, prepare from the Horizon launcher, which finds their files. If your launcher keeps \
-them in another folder, pass --minecraft-dir or set HORIZON_MINECRAFT_DIR.";
+them in another folder, pass --minecraft-dir or set HORIZON_MINECRAFT_DIR, or name the files with \
+--version-json, --client-jar, --libraries-dir and --assets-dir.";
 const SERVER_HINT: &str = "Horizon does not download the game: download the {version} server jar yourself (minecraft.net/download/server \
 while {version} is the current release, otherwise the downloads.server.url in your launcher's \
 versions/{version}/{version}.json), then pass --server-jar PATH or set HORIZON_SERVER_JAR.";
@@ -137,13 +138,40 @@ pub struct GameFiles {
     pub folder: PathBuf,
     pub manifest: PathBuf,
     pub client: PathBuf,
+    /// Where the client's libraries are (`folder`'s `libraries`, or `--libraries-dir`).
+    pub libraries: PathBuf,
+    /// The asset store: `indexes/` and `objects/` (`folder`'s `assets`, or `--assets-dir`).
+    pub assets: PathBuf,
     /// Mojang's Java runtimes the launcher downloaded (java::minecraft_runtimes).
     pub runtimes: PathBuf,
     /// The folders looked in, each with its launcher, when none held the version.
     searched: Vec<(&'static str, PathBuf)>,
 }
 
+/// Files named one by one (`--version-json`, `--client-jar`, `--libraries-dir`, `--assets-dir`),
+/// for launchers whose layout is not one `game_files` knows: each replaces what it names.
+#[derive(Clone, Debug, Default)]
+pub struct Inputs {
+    pub version_json: Option<PathBuf>,
+    pub client_jar: Option<PathBuf>,
+    pub libraries_dir: Option<PathBuf>,
+    pub assets_dir: Option<PathBuf>,
+}
+
 impl GameFiles {
+    /// These files with what `inputs` names instead.
+    pub fn with(mut self, inputs: &Inputs) -> Self {
+        let pick = |given: &Option<PathBuf>, found: &mut PathBuf| {
+            if let Some(given) = given.as_ref().filter(|p| !p.as_os_str().is_empty()) {
+                *found = expand_user(given);
+            }
+        };
+        pick(&inputs.version_json, &mut self.manifest);
+        pick(&inputs.client_jar, &mut self.client);
+        pick(&inputs.libraries_dir, &mut self.libraries);
+        pick(&inputs.assets_dir, &mut self.assets);
+        self
+    }
     /// What to do when these files are missing, with the folders looked in.
     pub(crate) fn hint(&self, version: &str) -> String {
         let mut text = hint(LAUNCHER_HINT, version);
@@ -165,6 +193,8 @@ fn layouts(folder: &Path, version: &str) -> [GameFiles; 2] {
         folder: folder.to_path_buf(),
         manifest: folder.join(manifest),
         client: folder.join(client),
+        libraries: folder.join("libraries"),
+        assets: folder.join("assets"),
         runtimes: folder.join(runtimes),
         searched: Vec::new(),
     };
@@ -527,7 +557,11 @@ pub(crate) fn safe_relative(path: &str) -> Option<PathBuf> {
 /// `com/mojang/jtracy-natives-windows/1.14.38/jtracy-natives-windows-1.14.38.jar`. The path the
 /// version JSON gives is returned when neither exists, for the error to name.
 pub fn launcher_library(minecraft: &Path, name: &str, relative: &Path) -> PathBuf {
-    let libraries = minecraft.join("libraries");
+    library_in(&minecraft.join("libraries"), name, relative)
+}
+
+/// `launcher_library` in a libraries folder of its own.
+fn library_in(libraries: &Path, name: &str, relative: &Path) -> PathBuf {
     let official = libraries.join(relative);
     if official.is_file() {
         return official;
@@ -640,11 +674,11 @@ pub fn import(
     root: &Path,
     lock: &Lock,
     minecraft: Option<&Path>,
+    inputs: &Inputs,
     server_jar: Option<&Path>,
     log: Log,
 ) -> Result<(), String> {
-    let files = game_files(minecraft, &lock.version);
-    let minecraft = &files.folder;
+    let files = game_files(minecraft, &lock.version).with(inputs);
     let manifest = import_manifest(lock, &files)?;
     let client = import_copy(
         &files.client,
@@ -666,9 +700,10 @@ pub fn import(
         .get("id")
         .and_then(Value::as_str)
         .ok_or("The version JSON has no id")?;
+    // The jar read, which --client-jar may have named outside the Minecraft folder.
     log(&format!(
         "Imported client {id} from {}",
-        minecraft.display()
+        files.client.display()
     ));
     let server = import_server(lock, server_jar)?;
     let (server, server_libraries) = unpack_server(server, &lock.directory, id)?;
@@ -676,12 +711,12 @@ pub fn import(
     for (name, artifact) in client_library_artifacts(&manifest)? {
         let (path, sha1) = artifact_fields(artifact)?;
         let relative = safe_relative(path).ok_or("Unsafe library path")?;
-        let source = launcher_library(minecraft, name, &relative);
+        let source = library_in(&files.libraries, name, &relative);
         let destination = lock.directory.join("libraries/client").join(&relative);
         if runs_without(name) && !source.is_file() && !destination.exists() {
             log(&format!(
                 "No {name} in {}: the game runs without it",
-                minecraft.display()
+                files.libraries.display()
             ));
             continue;
         }
@@ -1339,7 +1374,16 @@ mod tests {
         .unwrap();
         let lock = Lock::read(&fixture.target).unwrap();
         let server = old.join("jars/server.jar");
-        let prepare = || import(&fixture.target, &lock, Some(&prism), Some(&server), &|_| {});
+        let prepare = || {
+            import(
+                &fixture.target,
+                &lock,
+                Some(&prism),
+                &Inputs::default(),
+                Some(&server),
+                &|_| {},
+            )
+        };
         let imported = || {
             let manifest = verify(&lock).unwrap().manifest;
             client_libraries(&lock, &manifest).unwrap().len()
@@ -1405,7 +1449,14 @@ mod tests {
         let server = old.join("jars/server.jar");
         let prepare = |dir: &Path| {
             let _ = fs::remove_dir_all(&lock.directory);
-            import(&fixture.target, &lock, Some(dir), Some(&server), &|_| {})
+            import(
+                &fixture.target,
+                &lock,
+                Some(dir),
+                &Inputs::default(),
+                Some(&server),
+                &|_| {},
+            )
         };
 
         for chosen in [atlauncher.clone(), atlauncher.join("instances/Minecraft99")] {
@@ -1438,6 +1489,68 @@ mod tests {
             .contains("may have rewritten it"));
     }
 
+    /// A launcher with a layout of its own names each file (`--version-json`, `--client-jar`,
+    /// `--libraries-dir`): they prepare with the same pins, from no Minecraft folder at all.
+    #[test]
+    fn named_inputs_prepare_without_a_minecraft_folder() {
+        let fixture = Imports::new();
+        let old = fixture.imported(&fixture.source);
+        let own = fixture.directory.join("OwnLauncher");
+        let put = |path: &str, data: &[u8]| {
+            let path = own.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        let client = fs::read(old.join("jars/client.jar")).unwrap();
+        put("instance/minecraft.jar", &client);
+        put("shared/libs/client.jar", b"client library");
+        let manifest = fs::read_to_string(old.join("manifest.json")).unwrap();
+        let manifest = manifest.replacen('{', r#"{"javaVersion":{"majorVersion":25},"#, 1);
+        put("meta/9.9.json", manifest.as_bytes());
+        let pinned = digest(&own.join("meta/9.9.json"), "sha1").unwrap();
+        let lock_path = fixture.target.join("research-lock.json");
+        let text = fs::read_to_string(&lock_path).unwrap();
+        let old_sha1 = digest(&old.join("manifest.json"), "sha1").unwrap();
+        fs::write(&lock_path, text.replace(&old_sha1, &pinned)).unwrap();
+        let inputs = Inputs {
+            version_json: Some(own.join("meta/9.9.json")),
+            client_jar: Some(own.join("instance/minecraft.jar")),
+            libraries_dir: Some(own.join("shared/libs")),
+            assets_dir: None,
+        };
+        let lock = Lock::read(&fixture.target).unwrap();
+        let server = old.join("jars/server.jar");
+        let empty = fixture.directory.join("no-minecraft");
+        fs::create_dir_all(&empty).unwrap();
+        let prepare = |inputs: &Inputs| {
+            let _ = fs::remove_dir_all(&lock.directory);
+            import(
+                &fixture.target,
+                &lock,
+                Some(&empty),
+                inputs,
+                Some(&server),
+                &|_| {},
+            )
+        };
+
+        prepare(&inputs).unwrap();
+        let artifacts = verify(&lock).unwrap();
+        assert_eq!(fs::read(&artifacts.jars["client"]).unwrap(), client);
+        assert_eq!(
+            client_libraries(&lock, &artifacts.manifest).unwrap().len(),
+            1
+        );
+        // Without them the empty folder has nothing; a wrong jar fails its pin.
+        assert!(prepare(&Inputs::default())
+            .unwrap_err()
+            .starts_with("Missing "));
+        put("instance/minecraft.jar", b"other");
+        assert!(prepare(&inputs)
+            .unwrap_err()
+            .contains("is not the pinned file"));
+    }
+
     /// With no launcher's files in the chosen folder, the error names where Horizon looked and
     /// the launchers it reads.
     #[test]
@@ -1446,7 +1559,15 @@ mod tests {
         let empty = fixture.directory.join("instances/empty");
         fs::create_dir_all(&empty).unwrap();
         let lock = Lock::read(&fixture.target).unwrap();
-        let error = import(&fixture.target, &lock, Some(&empty), None, &|_| {}).unwrap_err();
+        let error = import(
+            &fixture.target,
+            &lock,
+            Some(&empty),
+            &Inputs::default(),
+            None,
+            &|_| {},
+        )
+        .unwrap_err();
         assert!(error.starts_with(&format!(
             "Missing {}",
             empty.join("versions/9.9/9.9.json").display()

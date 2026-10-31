@@ -746,6 +746,7 @@ impl Game<'_> {
         self.mobs.push(mob);
         self.native_mobs_joined(self.mobs.len() - 1, false);
         self.enchant_spawn_equipment(id);
+        self.halloween_spawn_head(id);
         Some(id)
     }
 

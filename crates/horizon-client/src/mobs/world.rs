@@ -454,6 +454,7 @@ pub(crate) fn with_built_test_world(
         block_tags: &items.block_tags,
         biomes: &biomes,
         mob_griefing: true,
+        universal_anger: false,
         mob_drops: true,
         max_entity_cramming: 24,
         difficulty: super::spawning::LocalDifficulty::new(2, 18000, 0, 0.0),

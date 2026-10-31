@@ -56,7 +56,14 @@ enum Victim {
 /// What a lingering potion's `AreaEffectCloud` applies: the potion's effects
 /// (at the lingering item's 0.25 duration scale) and who it has affected.
 pub(super) struct PotionCloud {
-    effects: &'static [(&'static str, i32, i32)],
+    effects: Vec<(&'static str, i32, i32)>,
+    /// The effects above that were added hidden (`MobEffectInstance.isVisible` false: no
+    /// particles); the instances the cloud applies are copies and keep that.
+    hidden: Vec<&'static str>,
+    /// The effects above that were ambient (`MobEffectInstance.isAmbient`).
+    ambient: Vec<&'static str>,
+    /// `AreaEffectCloud.radiusPerTick`: `-radius / duration` when it was made.
+    radius_per_tick: f32,
     /// The potion's colour (`PotionContents.getColor`).
     color: u32,
     /// Each victim and the tick it can be affected again.
@@ -989,8 +996,7 @@ impl Game<'_> {
         if waiting {
             return true;
         }
-        // setRadiusPerTick(-radius / duration).
-        c.radius += -3.0 / 600.0;
+        c.radius += potion.radius_per_tick;
         if c.radius < 0.5 {
             return false;
         }
@@ -1007,7 +1013,7 @@ impl Game<'_> {
         for p in players.iter().filter(|p| p.bounds.intersects(area)) {
             inside.push((Victim::Player(p.who), p.position.x, p.position.z));
         }
-        let effects = potion.effects;
+        let effects = potion.effects.clone();
         let tags = &self.stations().enchantments.entity_tags;
         // Only mobs that at least one of the cloud's effects can affect are
         // taken (`allEffects.stream().anyMatch(entity::canBeAffected)`), so
@@ -1029,7 +1035,13 @@ impl Game<'_> {
                 continue;
             }
             potion.victims.push((victim, c.age + REAPPLICATION_DELAY));
-            self.cloud_affect(victim, effects, c.at, &potion.source);
+            self.cloud_affect(
+                victim,
+                &effects,
+                (&potion.hidden, &potion.ambient),
+                c.at,
+                &potion.source,
+            );
             // setRadiusOnUse(-0.5).
             c.radius -= 0.5;
             if c.radius < 0.5 {
@@ -1038,17 +1050,55 @@ impl Game<'_> {
         }
         true
     }
+    /// `Creeper.spawnLingeringCloud`: an `AreaEffectCloud` of radius 2.5, wait time 10, duration 300,
+    /// shrinking by `-radius / duration` a tick and by 0.5 for each entity it affects, applying
+    /// the creeper's effects at 0.25 of their remaining duration.
+    pub(super) fn spawn_creeper_cloud(
+        &mut self,
+        at: [f64; 3],
+        effects: Vec<(&'static str, i32, i32)>,
+        hidden: Vec<&'static str>,
+        ambient: Vec<&'static str>,
+        color: u32,
+    ) {
+        self.breath_clouds.push(Breath {
+            id: 0,
+            at,
+            radius: 2.5,
+            age: 0,
+            duration: 300,
+            from_dragon: false,
+            potion: Some(PotionCloud {
+                effects,
+                hidden,
+                ambient,
+                radius_per_tick: -2.5 / 300.0,
+                color,
+                victims: Vec::new(),
+                source: Text::translate("entity.minecraft.area_effect_cloud", &[]),
+            }),
+        });
+    }
     /// What a cloud puts on one entity: instant effects at half strength
     /// (`applyInstantaneousEffect` with 0.5), the others for their duration
     /// at the lingering item's 0.25 scale (`PotionContents.forEachEffect`).
     fn cloud_affect(
         &mut self,
         victim: Victim,
-        effects: &'static [(&'static str, i32, i32)],
+        effects: &[(&'static str, i32, i32)],
+        (hidden, ambient): (&[&'static str], &[&'static str]),
         at: [f64; 3],
         source: &Text,
     ) {
-        let scaled = |duration: i32| ((f64::from(duration) * 0.25) as i32).max(1);
+        // MobEffectInstance.withScaledDuration: floor(duration * scale), at least 1; an infinite
+        // effect stays infinite.
+        let scaled = |duration: i32| {
+            if duration == -1 {
+                -1
+            } else {
+                ((f64::from(duration) * 0.25) as i32).max(1)
+            }
+        };
         match victim {
             Victim::Player(who) => self.as_fight_player(who, |g| {
                 for (id, duration, amp) in effects {
@@ -1060,7 +1110,10 @@ impl Game<'_> {
                             g.apply_indirect_effect_action(a, source);
                         }
                     } else {
-                        g.add_player_effect(EffectInstance::new(e.id, scaled(*duration), *amp));
+                        let mut instance = EffectInstance::new(e.id, scaled(*duration), *amp);
+                        instance.visible = !hidden.contains(id);
+                        instance.ambient = ambient.contains(id);
+                        g.add_player_effect(instance);
                     }
                 }
             }),
@@ -1092,7 +1145,13 @@ impl Game<'_> {
                             if mob_can_be_affected(tags, &m.kind.id, id)
                                 && let Some(name) = mob_effect_id(id)
                             {
-                                m.add_effect(name, scaled(*duration), *amp);
+                                m.add_effect_with(
+                                    name,
+                                    scaled(*duration),
+                                    *amp,
+                                    ambient.contains(id),
+                                    !hidden.contains(id),
+                                );
                             }
                         }
                     }
@@ -1335,7 +1394,10 @@ impl Game<'_> {
                     duration: 600,
                     from_dragon: false,
                     potion: Some(PotionCloud {
-                        effects: def.effects,
+                        effects: def.effects.to_vec(),
+                        hidden: Vec::new(),
+                        ambient: Vec::new(),
+                        radius_per_tick: -3.0 / 600.0,
                         color,
                         victims: Vec::new(),
                         source: owner.unwrap_or_else(|| {
@@ -1480,6 +1542,7 @@ fn client_tick_effects(effects: &mut PlayerEffects, darkness: &mut (f32, f32)) {
 mod tests {
     use super::super::sculk::darkness_blend_added;
     use super::*;
+    use horizon_client::screen_effects::nausea_blend_added;
 
     /// A server's client (multiplayer and the default single player) fades
     /// the darkness effect in over its 22 blend ticks, holds it, and fades
@@ -1522,5 +1585,20 @@ mod tests {
         assert_eq!(darkness_blend_added(&ending, false), (0.0, 0.0));
         let infinite = EffectInstance::new("darkness", -1, 0);
         assert_eq!(darkness_blend_added(&infinite, false), (1.0, 1.0));
+    }
+
+    /// `ClientPacketListener.handleUpdateMobEffect`: a new nausea fades in
+    /// when the server blends it; one sent unblended (joining, changing
+    /// dimension) is at full strength at once, unless it is already within
+    /// its blend-out ticks.
+    #[test]
+    fn a_new_nausea_starts_blended_or_at_once() {
+        let e = EffectInstance::new("nausea", 600, 0);
+        assert_eq!(nausea_blend_added(&e, true), (0.0, 0.0));
+        assert_eq!(nausea_blend_added(&e, false), (1.0, 1.0));
+        let ending = EffectInstance::new("nausea", 40, 0);
+        assert_eq!(nausea_blend_added(&ending, false), (0.0, 0.0));
+        let infinite = EffectInstance::new("nausea", -1, 0);
+        assert_eq!(nausea_blend_added(&infinite, false), (1.0, 1.0));
     }
 }

@@ -1026,6 +1026,35 @@ pub fn stored_drop_chance(m: &Mob, slot: usize) -> f32 {
         .map_or(super::drops::DEFAULT_DROP_CHANCE, |c| c[slot])
 }
 
+/// `SpecialDates.isHalloween`: October 31.
+pub fn halloween_date(month: u32, day: u32) -> bool {
+    (month, day) == (10, 31)
+}
+
+/// `SpecialDates.isHalloween` from the local calendar.
+pub fn is_halloween() -> bool {
+    use chrono::Datelike;
+    let today = chrono::Local::now();
+    halloween_date(today.month(), today.day())
+}
+
+/// `Zombie` / `AbstractSkeleton` halloween pumpkin: 25% of empty heads, 10%
+/// of those a jack o'lantern, drop chance 0.
+pub fn halloween_head(m: &mut Mob, random: &mut impl RandomSource, halloween: bool) {
+    if !(zombie(m.species()) || skeleton(m.species())) {
+        return;
+    }
+    if m.extra.head.is_none() && halloween && random.next_float() < 0.25 {
+        let head = if random.next_float() < 0.1 {
+            "minecraft:jack_o_lantern"
+        } else {
+            "minecraft:carved_pumpkin"
+        };
+        set_item(m, HEAD, head);
+        set_drop_chance(m, HEAD, 0.0);
+    }
+}
+
 impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     fn float(&mut self) -> f32 {
         self.random.next_float()
@@ -1236,15 +1265,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
         }
     }
     fn halloween(&mut self, m: &mut Mob) {
-        if m.extra.head.is_none() && self.level.halloween() && self.float() < 0.25 {
-            let head = if self.float() < 0.1 {
-                "minecraft:jack_o_lantern"
-            } else {
-                "minecraft:carved_pumpkin"
-            };
-            set_item(m, HEAD, head);
-            set_drop_chance(m, HEAD, 0.0);
-        }
+        halloween_head(m, self.random, self.level.halloween());
     }
 
     // ---- jockeys ------------------------------------------------------
@@ -2298,5 +2319,12 @@ mod tests {
         assert_eq!(villager_type("minecraft:badlands"), 1);
         assert_eq!(villager_type("minecraft:grove"), 4);
         assert_eq!(villager_type("minecraft:plains"), 0);
+    }
+    #[test]
+    fn october_31_is_halloween() {
+        assert!(halloween_date(10, 31));
+        assert!(!halloween_date(10, 30));
+        assert!(!halloween_date(11, 1));
+        assert!(!halloween_date(1, 1));
     }
 }

@@ -272,10 +272,15 @@ pub fn potion_color(id: Option<&str>) -> u32 {
     let Some(def) = id.and_then(potion) else {
         return BASE_POTION_COLOR;
     };
+    effects_color(def.effects.iter().map(|(id, _, amp)| (*id, *amp)))
+}
+/// `PotionContents.getColorOptional` of some effects, `(id, amplifier)`, all visible: the mix of
+/// their colours weighted by amplifier + 1, else the base potion colour.
+pub fn effects_color<'a>(effects: impl Iterator<Item = (&'a str, i32)>) -> u32 {
     let (mut r, mut g, mut b, mut total) = (0u32, 0u32, 0u32, 0u32);
-    for (e, _, amp) in def.effects {
+    for (e, amp) in effects {
         let Some(e) = effect(e) else { continue };
-        let w = *amp as u32 + 1;
+        let w = amp as u32 + 1;
         r += w * (e.color >> 16 & 255);
         g += w * (e.color >> 8 & 255);
         b += w * (e.color & 255);
@@ -299,6 +304,21 @@ mod tests {
         assert_eq!(description_id("speed"), "effect.minecraft.speed");
         assert_eq!(description_id("minecraft:speed"), "effect.minecraft.speed");
         assert_eq!(description_id("ruby:curse/dark"), "effect.ruby.curse.dark");
+    }
+
+    /// `PotionContents.getColorOptional`: each visible effect's colour weighted by its
+    /// amplifier + 1, the channels averaged by integer division; none gives the base colour.
+    #[test]
+    fn effects_mix_their_colours_by_amplifier() {
+        let c = |id: &str| effect(id).unwrap().color;
+        assert_eq!(effects_color([("poison", 0)].into_iter()), c("poison"));
+        let (p, s) = (c("poison"), c("speed"));
+        let mix = |shift: u32| (((p >> shift & 255) + 3 * (s >> shift & 255)) / 4) << shift;
+        assert_eq!(
+            effects_color([("poison", 0), ("speed", 2)].into_iter()),
+            mix(16) | mix(8) | mix(0)
+        );
+        assert_eq!(effects_color(std::iter::empty()), BASE_POTION_COLOR);
     }
 
     /// The only test that registers: the registry is set once per process.

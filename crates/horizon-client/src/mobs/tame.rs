@@ -151,9 +151,13 @@ fn wolf_prey(s: &super::Seen) -> bool {
 fn baby_turtle_on_land(s: &super::Seen) -> bool {
     s.species == Species::Turtle && s.baby
 }
-/// `NeutralMob.isAngryAt(player)`: the player is the anger's target.
-fn angry_at_player(m: &Mob, _: &MobWorld) -> bool {
+/// `NeutralMob.isAngryAt(player)`: the player the anger names, or, with the
+/// `universal_anger` rule on and no anger target left, any player. Creative and
+/// spectator players are dropped first (`isValidPlayerTarget`), by the goal's
+/// `can_target_player`.
+fn angry_at_player(m: &Mob, w: &MobWorld) -> bool {
     m.extra.angry_at == Some(Who::Player)
+        || (w.universal_anger && m.extra.anger > 0 && m.extra.angry_at.is_none())
 }
 /// `Wolf.isAngry`.
 pub fn angry(m: &Mob) -> bool {
@@ -1854,5 +1858,58 @@ mod tests {
         let mut m = sitting(Species::Cat, "minecraft:cat");
         assert!(m.damage(1.0, Damage::player([0.0, 64.0, 1.0])));
         assert!(m.extra.sitting);
+    }
+}
+
+/// `NeutralMob.isAngryAtAllPlayers`: with the `universal_anger` game rule on, a
+/// wolf still angry with no target left goes for any player; with the rule off
+/// it holds none, and a creative player is never one (`isValidPlayerTarget`).
+#[cfg(test)]
+mod universal_anger_tests {
+    use super::*;
+    use crate::mobs::world::{test_player, with_test_world};
+    use std::sync::Arc;
+
+    #[test]
+    fn universal_anger_targets_a_player_the_wolf_was_never_angered_by() {
+        // (the `universal_anger` rule, the player is creative, whether the wolf
+        // ends up with the player as its target).
+        let cases = [
+            (true, false, true),
+            (false, false, false),
+            (true, true, false),
+        ];
+        with_test_world(&[], |w, types| {
+            for (universal_anger, creative, targets) in cases {
+                let mut w = w.clone();
+                let mut p = test_player(Vec3::new(2.5, 64.0, 0.5));
+                p.creative = creative;
+                w.player = Some(p);
+                w.universal_anger = universal_anger;
+                let kind = Arc::new(types.types["minecraft:wolf"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                // `anger_end_time` still running, `angry_at` gone: angry, with
+                // nobody left that it was angered by.
+                m.extra.anger = 600;
+                m.extra.angry_at = None;
+                let mut goals = std::mem::take(&mut m.ai.targets);
+                let mut events = Vec::new();
+                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut cx = Cx {
+                    w: &w,
+                    lr: &mut lr,
+                    events: &mut events,
+                };
+                for _ in 0..200 {
+                    goals.tick(&mut m, &mut cx);
+                }
+                m.ai.targets = goals;
+                assert_eq!(
+                    m.ai.target == Some(Who::Player),
+                    targets,
+                    "universal_anger {universal_anger}, creative {creative}"
+                );
+            }
+        });
     }
 }

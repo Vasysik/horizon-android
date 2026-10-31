@@ -126,7 +126,7 @@ impl Game<'_> {
         let d2: f64 = (0..3)
             .map(|a| (eye[a] - eye[a].clamp(b.0[a], b.1[a])).powi(2))
             .sum();
-        let range = if self.creative { 5.0 } else { 3.0 } + 3.0;
+        let range = self.entity_reach + 3.0;
         d2 < range * range
     }
 }

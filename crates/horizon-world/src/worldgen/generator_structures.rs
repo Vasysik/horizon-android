@@ -392,13 +392,16 @@ impl StructureState {
     /// ChunkGenerator.findNearestMapStructure: the nearest start of one of
     /// `names` from block `from` (rings: every ring chunk; random spreads:
     /// sectors in growing squares up to `radius`). Returns the structure and
-    /// its locate position (the start chunk's corner at y 0).
+    /// its locate position (the start chunk's corner at y 0). `skip` says a
+    /// start (structure name, its chunk) can't be referenced again
+    /// (`StructureStart.canBeReferenced`): the search goes on past it.
     pub(super) fn locate(
         &self,
         context: &mut impl super::structure::start::StartContext,
         names: &[String],
         from: [i32; 3],
         radius: i32,
+        skip: &dyn Fn(&str, ChunkPos) -> bool,
     ) -> Option<(String, [i32; 3])> {
         let seed = context.seed();
         let rings = self.rings(context).clone();
@@ -411,7 +414,7 @@ impl StructureState {
         let found_at = |this: &Self, context: &mut _, chunk: ChunkPos| -> Option<String> {
             this.starts_at(context, chunk)
                 .iter()
-                .find(|s| wanted(s.structure))
+                .find(|s| wanted(s.structure) && !skip(&s.name, chunk))
                 .map(|s| s.name.clone())
         };
         for &si in &self.possible_sets {
@@ -425,20 +428,19 @@ impl StructureState {
                     let Some(chunks) = rings.get(&set.name) else {
                         continue;
                     };
-                    let mut nearest: Option<(f64, ChunkPos)> = None;
+                    let mut nearest: Option<(f64, ChunkPos, String)> = None;
                     for &c in chunks {
                         let d = dist([c.x * 16 + 8, 32, c.z * 16 + 8]);
-                        if nearest.is_none_or(|(n, _)| d < n)
+                        if nearest.as_ref().is_none_or(|(n, ..)| d < *n)
                             && self
                                 .registry
                                 .is_structure_chunk(set, seed, c.x, c.z, &rings)
+                            && let Some(name) = found_at(self, context, c)
                         {
-                            nearest = Some((d, c));
+                            nearest = Some((d, c, name));
                         }
                     }
-                    if let Some((_, c)) = nearest
-                        && let Some(name) = found_at(self, context, c)
-                    {
+                    if let Some((_, c, name)) = nearest {
                         let p = set.locate_pos(c);
                         let d = dist(p);
                         if best.as_ref().is_none_or(|(b, ..)| d < *b) {

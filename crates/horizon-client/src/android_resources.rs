@@ -270,7 +270,7 @@ mod tests {
         let mut zip = zip::ZipArchive::new(fs::File::open(client).unwrap()).unwrap();
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i).unwrap();
-            if entry.is_dir() || !entry.name().starts_with("data/minecraft/") {
+            if entry.is_dir() || !entry.name().unwrap().starts_with("data/minecraft/") {
                 continue;
             }
             let path = root.join(entry.enclosed_name().unwrap());

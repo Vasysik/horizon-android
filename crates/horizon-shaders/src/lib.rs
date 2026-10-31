@@ -8,6 +8,7 @@
 //! - [`Lang`]: the pack's translated names (8.4).
 //! - [`preprocess`]: a stage file through `#include` and the GLSL preprocessor, lines mapped back (1.4, 1.5).
 //! - [`translate_composite`], [`translate_gbuffers`], [`translate_shadow`]: a program into naga modules and its interface (1.6, 2.2).
+//! - [`translate_core`]: a resource pack's vanilla core shader (`shaders/core/`) into naga modules.
 //! - [`Config`] and [`draw_buffers`]: the buffer settings and output lists stage files carry (1.7, 6.1).
 //! - [`load_post`]: a dimension's `prepare`, `deferred`, `composite` and `final` programs, in order (2.1).
 //! - [`Macros`] and [`eval_condition`]: the macros packs test, and the `#if` arithmetic (1.5).
@@ -16,6 +17,7 @@ mod biomes;
 mod block_ids;
 mod condition;
 mod config;
+mod core_shader;
 mod custom;
 mod discover;
 mod lang;
@@ -31,6 +33,7 @@ pub use biomes::{category as biome_category, precipitation as biome_precipitatio
 pub use block_ids::BlockIds;
 pub use condition::eval_condition;
 pub use config::{BUFFERS, Buffer, Config, Format, Kind, Shadow, buffer_index, draw_buffers};
+pub use core_shader::{BLOCKS, CoreProgram, Glue, SAMPLERS, translate_core};
 pub use custom::{Custom, Val};
 pub use discover::{Found, discover};
 pub use lang::Lang;

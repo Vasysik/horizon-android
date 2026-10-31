@@ -293,7 +293,7 @@ impl Game<'_> {
                 z * 16 + i32::from(info.packed_xz as u8 & 15),
             );
             let state = self.world.block(pos.0, pos.1, pos.2);
-            self.sync_block_entity(pos, state);
+            self.sync_block_entity(pos, None, state);
             // LevelChunk.replaceWithPacketData: the block entity loads its update tag.
             self.remote_block_entity_data([pos.0, pos.1, pos.2], info.kind, &info.tag);
         }

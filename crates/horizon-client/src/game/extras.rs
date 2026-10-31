@@ -76,8 +76,8 @@ impl Game<'_> {
         (cps, self.extras.mouse)
     }
     /// Auto-reconnect: a connection to `address` as `name` starts.
-    pub(super) fn extras_connecting(&mut self, address: &str, name: &str) {
-        self.extras.reconnect.connecting(address, name);
+    pub(super) fn extras_connecting(&mut self, address: &str, name: &str, lan: bool) {
+        self.extras.reconnect.connecting(address, name, lan);
     }
     /// The server this game connected to last.
     pub(super) fn server_address(&self) -> Option<&str> {
@@ -124,7 +124,7 @@ impl Game<'_> {
     /// (the launcher's session file is gone after the first read).
     pub(super) fn extras_retry(&mut self) -> horizon_client::Result<()> {
         if let Some(retry) = self.title.as_mut().and_then(|t| t.due_retry()) {
-            self.connect_server(&retry.address, &retry.name)?;
+            self.connect_server_with_options(&retry.address, &retry.name, None, retry.lan)?;
         }
         Ok(())
     }

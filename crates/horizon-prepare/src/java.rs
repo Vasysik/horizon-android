@@ -303,7 +303,14 @@ fn find_tools(major: i64, more: &[PathBuf], compiler: bool) -> Result<Jdk, Strin
                 }
             });
         match checked {
-            Ok(()) => return Ok(Jdk { javac, java }),
+            // Absolute: the exporters run in another working directory, where a relative
+            // `JAVA_HOME`, `--java-home` or `PATH` entry would name nothing.
+            Ok(()) => {
+                return Ok(Jdk {
+                    javac: std::path::absolute(&javac).unwrap_or(javac),
+                    java: std::path::absolute(&java).unwrap_or(java),
+                });
+            }
             Err(e) => problems.push(format!("{from}: {e}")),
         }
     }

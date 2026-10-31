@@ -529,8 +529,12 @@ impl HiveHost for ProbeHive<'_, '_> {
     }
     fn load(&mut self, tag: &horizon_world::nbt::Tag) -> Option<Mob> {
         let index = self.first + self.added.len();
-        let mut m =
-            horizon_client::entity_nbt::mob_from_nbt(tag, self.types, 100_000 + index as u32)?;
+        let mut m = horizon_client::entity_nbt::mob_from_nbt(
+            tag,
+            self.types,
+            100_000 + index as u32,
+            None,
+        )?;
         if m.species() != Species::Bee {
             return None;
         }
@@ -1180,6 +1184,7 @@ pub fn main() -> horizon_client::Result<()> {
                     block_tags: &items.block_tags,
                     biomes: &biomes,
                     mob_griefing: true,
+                    universal_anger: false,
                     mob_drops: true,
                     max_entity_cramming: 24,
                     difficulty: LocalDifficulty::new(s.difficulty, world.day_time, 0, 0.0),
@@ -1426,7 +1431,7 @@ pub fn main() -> horizon_client::Result<()> {
                     else {
                         continue;
                     };
-                    let tag = horizon_client::entity_nbt::mob_to_nbt(&mobs[i], [0; 4], None);
+                    let tag = horizon_client::entity_nbt::mob_to_nbt(&mobs[i], [0; 4], None, None);
                     let flower = horizon_client::mobs::bee::get(&mobs[i]).and_then(|b| b.flower);
                     let mut honey = Vec::new();
                     let stored = {

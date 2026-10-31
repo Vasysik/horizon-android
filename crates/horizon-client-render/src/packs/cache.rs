@@ -658,15 +658,16 @@ mod tests {
         f.write("pack.zip", &archive(&files(b"bbb"), false));
         f.rebuild_matches(std::slice::from_ref(&pack));
         assert_eq!(fs::read(f.0.join("cached").join(name)).unwrap(), b"bbb");
-        // The ZIP opens and enumerates, then its unsupported method fails after
-        // mirror has created directories. No reusable marker survives.
+        // A central directory whose second name runs past the archive fails
+        // the build (an unreadable entry alone only costs that file). No
+        // reusable marker survives.
         let mut broken = archive(&files(b"ccc"), false);
         let central = broken
             .windows(4)
             .position(|s| s == [0x50, 0x4b, 0x01, 0x02])
             .unwrap();
         let second = central + 46 + "pack.mcmeta".len();
-        broken[second + 10..second + 12].copy_from_slice(&99u16.to_le_bytes());
+        broken[second + 28..second + 30].copy_from_slice(&u16::MAX.to_le_bytes());
         f.write("pack.zip", &broken);
         let out = f.0.join("cached");
         assert!(

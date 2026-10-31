@@ -13,7 +13,7 @@ use horizon_client::{
 };
 use horizon_client::{
     hud_overlays,
-    screen_effects::{ScreenInputs, ScreenQuad, lightmap_brightness},
+    screen_effects::{ScreenInputs, ScreenQuad, lightmap_brightness, nausea_has_effect},
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
 use horizon_world::{heightmap::HeightmapType, worldgen::terrain::TerrainBlockStates};
@@ -327,11 +327,7 @@ impl Game<'_> {
             if self.remote.is_some() && self.portals.player.cooldown > 0 {
                 self.portals.player.cooldown -= 1;
             }
-            let nausea = self
-                .potions
-                .effects
-                .get("nausea")
-                .map(|e| !e.ends_within(60));
+            let nausea = self.potions.effects.get("nausea").map(nausea_has_effect);
             self.screen_fx.tick_spinning(nausea);
             // LocalPlayer water vision and AtmosphericFogEnvironment rain fog.
             let in_water =

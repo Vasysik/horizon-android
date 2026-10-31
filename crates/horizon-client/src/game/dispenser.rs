@@ -1812,7 +1812,7 @@ impl Game<'_> {
                                 f64::from(r.next_float() * 0.05),
                                 f64::from((r.next_float() - r.next_float()) * 0.1),
                             ];
-                            if let Some(item) = self.dropped.last_mut() {
+                            if let Some(item) = self.just_spawned_item() {
                                 item.velocity = Vec3::new(
                                     item.velocity.x + push[0],
                                     item.velocity.y + push[1],

@@ -158,6 +158,42 @@ impl Game<'_> {
         let mut ui = std::mem::take(&mut self.ui.options);
         ui.draw(&self.settings, batch, &self.gui.atlas, self.cursor);
         self.ui.options = ui;
+        self.show_calibration(batch.height);
+    }
+    /// HDR calibration's test picture to the renderer, full screen while it runs: the
+    /// window goes fullscreen for it and back after, if it wasn't already.
+    pub(super) fn show_calibration(&mut self, h: f32) {
+        let picture = (self.screen == Screen::Options)
+            .then(|| self.ui.options.calibration_picture(h))
+            .flatten();
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_hdr_calibration(picture.map(|(step, nits, band)| {
+                horizon_client::gfx::HdrCalibration {
+                    step: step.number(),
+                    nits,
+                    band,
+                }
+            }));
+        }
+        let Some(window) = &self.window else {
+            return;
+        };
+        match (picture.is_some(), self.ui.options.calibration_fullscreen) {
+            (true, None) => {
+                let was = window.fullscreen().is_some();
+                if !was {
+                    window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+                }
+                self.ui.options.calibration_fullscreen = Some(was);
+            }
+            (false, Some(was)) => {
+                if !was {
+                    window.set_fullscreen(None);
+                }
+                self.ui.options.calibration_fullscreen = None;
+            }
+            _ => {}
+        }
     }
     pub(super) fn options_mouse(&mut self, pressed: bool, right: bool) -> Result<()> {
         if !pressed {
@@ -297,6 +333,8 @@ impl Game<'_> {
                         self.capture(true);
                     }
                     self.dragging = false;
+                    // Closed from calibration (horizon-ctl, a lost window): out of it.
+                    self.show_calibration(0.0);
                 }
                 Event::Language(code) => {
                     self.load_language(&code);
@@ -429,6 +467,11 @@ impl Game<'_> {
     /// `Window.updateFullscreenState`: a fullscreen change made by the window
     /// system is adopted by the option (`Minecraft.fullscreenStateChanged`).
     pub(super) fn observe_fullscreen(&mut self) {
+        // HDR calibration's own fullscreen is not the player's option: it
+        // goes back to what it was when the calibration ends.
+        if self.ui.options.calibration_fullscreen.is_some() {
+            return;
+        }
         let Some(w) = &self.window else { return };
         if let Some(now) = self.fullscreen.observe(w.fullscreen().is_some())
             && self.settings.fullscreen != now

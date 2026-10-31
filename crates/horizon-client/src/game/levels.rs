@@ -97,6 +97,8 @@ pub(super) struct Pass {
     pub first: bool,
     pub last: bool,
     pub running: Option<bool>,
+    /// Set once this level's player packets were handled before block ticks.
+    pub packets_drained: bool,
 }
 
 impl Default for Pass {
@@ -105,6 +107,7 @@ impl Default for Pass {
             first: true,
             last: true,
             running: None,
+            packets_drained: false,
         }
     }
 }
@@ -129,6 +132,11 @@ impl Levels {
         self.parked
             .iter_mut()
             .map(|(d, p)| (*d, &mut p.world.chunks))
+    }
+
+    /// The world of the level not in place, in `dim`, to change.
+    pub(super) fn parked_world_mut(&mut self, dim: Dim) -> Option<&mut World> {
+        self.parked.get_mut(&dim).map(|level| &mut level.world)
     }
 
     /// The level not in place, in `dim`.
@@ -405,6 +413,7 @@ impl Game<'_> {
                 first: k == 0,
                 last: k + 1 == n,
                 running,
+                packets_drained: false,
             };
             if observe_level {
                 self.native_level_tick_pre(dim.id());

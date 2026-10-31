@@ -14,6 +14,9 @@ use horizon_world::nbt::Tag;
 pub(in crate::game) enum Slot {
     /// `inventory[0..36]`: hotbar then the main rows.
     Inv(usize),
+    /// The selected hotbar slot as `weapon.mainhand` names it: the equipment's
+    /// `setItemSlot`, where `hotbar.N` is the inventory's `setItem`.
+    MainHand,
     /// `armor[0..4]` (head, chest, legs, feet).
     Armor(usize),
     Offhand,
@@ -114,7 +117,7 @@ impl Game<'_> {
                     }
                 }
                 if matches_name(name, "weapon") || matches_name(name, "weapon.mainhand") {
-                    add(Slot::Inv(self.selected));
+                    add(Slot::MainHand);
                 }
                 if matches_name(name, "weapon.offhand") {
                     add(Slot::Offhand);
@@ -175,6 +178,7 @@ impl Game<'_> {
                 .for_player(Target::Guest(*conn), |g| g.slot_get(slot))
                 .flatten(),
             Slot::Inv(i) => self.inventory.get(*i).cloned().flatten(),
+            Slot::MainHand => self.inventory.get(self.selected).cloned().flatten(),
             Slot::Armor(i) => self.armor.get(*i).cloned().flatten(),
             Slot::Offhand => self.offhand.clone(),
             Slot::Ender(i) => self.ender_items.get(*i).cloned().flatten(),
@@ -227,6 +231,14 @@ impl Game<'_> {
                 None => false,
             },
             // LivingEntity's equipment SlotAccess: setItemSlot, so onEquipItem.
+            Slot::MainHand => match self.inventory.get_mut(self.selected) {
+                Some(slot) => {
+                    let old = std::mem::replace(slot, stack.clone());
+                    self.player_on_equip("mainhand", old.as_ref(), stack.as_ref());
+                    true
+                }
+                None => false,
+            },
             Slot::Armor(i) => match self.armor.get_mut(*i) {
                 Some(slot) => {
                     let old = std::mem::replace(slot, stack.clone());

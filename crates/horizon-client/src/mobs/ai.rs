@@ -593,7 +593,7 @@ pub fn tick(
         // Mob.aiStep still runs without AI (only serverAiStep is skipped),
         // so undead still burn in daylight and the endermite's life keeps
         // counting.
-        burn_undead(m, w);
+        burn_undead(m, w, events);
         if m.species() == Species::Endermite {
             endermite_lifetime(m);
         }
@@ -1303,7 +1303,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             }
         }
     }
-    burn_undead(m, w);
+    burn_undead(m, w, events);
     species_ai_step(m, w, level_random, events);
 }
 impl Mob {
@@ -1424,9 +1424,13 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 /// `Mob.aiStep` -> `Mob.burnUndead`: undead burn in daylight. It runs with
 /// or without AI (`NoAI` only skips `serverAiStep`).
-fn burn_undead(m: &mut Mob, w: &MobWorld) {
-    if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) && m.extra.head.is_none() {
-        m.ignite_for_ticks(160);
+fn burn_undead(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) {
+        if m.extra.head.is_some() {
+            events.push(MobEvent::SunProtectionWear { mob: m.id });
+        } else {
+            m.ignite_for_ticks(160);
+        }
     }
 }
 fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
@@ -1554,7 +1558,10 @@ fn armadillo_server_ai_step(m: &mut Mob, mob_drops: bool, events: &mut Vec<MobEv
 }
 fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     match m.species() {
-        Species::Rabbit => super::rabbit::server_ai_step(m),
+        Species::Rabbit => {
+            let target = m.target_info(cx.w).map(|t| t.position);
+            super::rabbit::server_ai_step(m, target)
+        }
         Species::Cat | Species::Ocelot => super::tame::feline_server_ai_step(m),
         // Armadillo.customServerAiStep: the brain and its activity, then the scute.
         Species::Armadillo => {
@@ -1584,6 +1591,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Frog => super::frog::server_ai_step(m, cx.w),
         // Hoglin and Piglin.customServerAiStep: the brain, then updateActivity.
         Species::Piglin | Species::Hoglin => super::piglin::brain_step(m, cx),
+        Species::Zoglin => super::piglin::zoglin_step(m, cx),
         _ => {}
     }
 }
@@ -2099,7 +2107,6 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
         Species::Wither => super::wither::accepts(m, source.kind, source.attacker, false),
         Species::Warden => super::warden::accepts_damage(m, source),
         Species::Shulker => super::shulker::accepts(m, source),
-        Species::SulfurCube => super::sulfur_cube::accepts_damage(m, source, _amount),
         // Bat.hurtServer: a hit wakes it.
         Species::Bat => {
             super::bat::hurt(m);
@@ -2445,6 +2452,9 @@ fn tick_effects(m: &mut Mob) {
     effects.retain(|e| e.1 > 0 || e.1 == -1);
     m.extra
         .hidden_effects
+        .retain(|h| effects.iter().any(|e| e.0 == *h));
+    m.extra
+        .ambient_effects
         .retain(|h| effects.iter().any(|e| e.0 == *h));
     m.extra.effects = effects;
 }

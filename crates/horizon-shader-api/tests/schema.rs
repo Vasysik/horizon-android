@@ -87,7 +87,36 @@ fn reads_every_key_of_schema_1() {
         .map(|o| o.kind.default_constant())
         .collect();
     assert_eq!(constants, [f64::from(1.1f32), 1.0, 4.0, 1.0]);
+    assert_eq!(m.tags.len(), 1);
+    assert_eq!(m.tags[0].id, "glass");
     assert_eq!(m.budget.gpu_ms, Some(1.5));
+}
+
+#[test]
+fn sprite_tags_name_sprites_with_one_wildcard() {
+    let mut m = Manifest::parse(&sample_text()).unwrap();
+    m.tags.push(horizon_shader_api::SpriteTag {
+        id: "ice".into(),
+        sprites: vec!["minecraft:block/*ice".into()],
+    });
+    let sprites = [
+        ("minecraft:block/stone", 0),
+        ("minecraft:block/glass", 1),
+        ("minecraft:block/red_stained_glass", 2),
+        ("minecraft:block/red_stained_glass_pane_top", 3),
+        ("minecraft:block/packed_ice", 4),
+        ("minecraft:block/ice", 5),
+    ];
+    assert_eq!(
+        m.sprite_tags(sprites.iter().rev().copied()),
+        [(1, 1), (2, 1), (4, 2), (5, 2)]
+    );
+    // Two names on one layer (identical stills share it) give one entry, tags merged.
+    let shared = [
+        ("minecraft:block/glass", 7),
+        ("minecraft:block/packed_ice", 7),
+    ];
+    assert_eq!(m.sprite_tags(shared), [(7, 3)]);
 }
 
 #[test]
@@ -115,6 +144,17 @@ fn refuses_what_this_build_does_not_read() {
         (
             text.replace("license = \"MIT\"", "licence = \"MIT\""),
             "unknown field",
+        ),
+        (
+            text.replace(
+                "[\"minecraft:block/glass\", \"block/*_stained_glass\"]",
+                "[]",
+            ),
+            "needs sprites",
+        ),
+        (
+            text.replace("\"block/*_stained_glass\"", "\"block/*_*\""),
+            "at most one *",
         ),
         (
             text.replace("gpu_ms = 1.5", "gpu_ms = 40.0"),

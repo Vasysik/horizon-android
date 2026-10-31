@@ -11,5 +11,8 @@
   "horizon.options.look_deadzone": "Zona muerta de vista",
   "horizon.options.button_glyphs": "Símbolos de botones",
   "horizon.options.menu_navigation": "Navegación de menús",
-  "horizon.options.on_screen_keyboard": "Teclado en pantalla"
+  "horizon.options.on_screen_keyboard": "Teclado en pantalla",
+  "horizon.multiplayer.finding_friend": "Buscando el mundo de tu amigo…",
+  "horizon.loading.opening_world": "Abriendo el mundo",
+  "horizon.loading.cancelling_world": "Cancelando"
 }

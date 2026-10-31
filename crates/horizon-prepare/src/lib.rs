@@ -11,6 +11,7 @@
 //! run, keyed by the sha256 of their inputs and outputs recorded in the manifest, as before.
 
 pub mod artifacts;
+mod check;
 pub mod exporters;
 mod files;
 mod inventory;
@@ -20,8 +21,9 @@ mod sounds;
 mod survival;
 mod worker;
 
+pub use check::{check, missing_extras, STAMP};
 pub use files::clone_or_copy;
-pub use sounds::{fonts, languages, packs, panorama, sounds, BUILT_IN_PACKS};
+pub use sounds::{add_assets, fonts, languages, packs, panorama, sounds, BUILT_IN_PACKS};
 
 use pyjson::Value;
 use sha2::Digest;
@@ -31,6 +33,12 @@ use std::path::{Path, PathBuf};
 
 /// Where progress lines go: the terminal for the binary, the log pane for the launcher.
 pub type Log<'a> = &'a dyn Fn(&str);
+
+/// Where the fraction done goes (`--progress json`), from 0 to 1.
+pub type Progress<'a> = &'a dyn Fn(f32);
+
+/// The stages of `steps`, each opened by `Run::stage`: what the fraction counts.
+const STAGES: u32 = 18;
 
 /// The manifest's `schema`: the prepared files' layout, which the launcher compares.
 pub const SCHEMA: i64 = 7;
@@ -90,6 +98,20 @@ pub struct Options {
     /// The Java runtime to try after JAVA_HOME and the PATH (the launcher's pick, e.g. Minecraft's
     /// own Java it downloaded from Mojang).
     pub java_home: Option<PathBuf>,
+    /// Files named one by one instead of found in `minecraft_dir` (`--version-json`,
+    /// `--client-jar`, `--libraries-dir`, `--assets-dir`).
+    pub inputs: artifacts::Inputs,
+    /// Where the resources go (`--output`); None for `root`'s `.local/horizon-client/<version>`.
+    /// The exporters' scratch files stay in `root`'s `.local/` either way.
+    pub output: Option<PathBuf>,
+}
+
+/// The prepared resources' folder: `output`, else `root`'s `.local/horizon-client/<version>`.
+pub fn resources_dir(root: &Path, version: &str, output: Option<&Path>) -> PathBuf {
+    match output {
+        Some(output) => output.to_path_buf(),
+        None => root.join(".local/horizon-client").join(version),
+    }
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -130,6 +152,45 @@ fn write(path: &Path, data: &[u8]) -> Result<(), String> {
 
 fn mkdir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The lock file each preparation holds in the folders it writes (`LOCK`).
+pub const LOCK: &str = ".horizon-prepare.lock";
+
+/// One preparation at a time per folder: two launchers or instances preparing into one `--output`,
+/// or sharing `root`'s `.local`, would interleave their writes. A second one waits, saying so;
+/// the lock goes with the returned file, so with the process too.
+pub(crate) fn hold_lock(dir: &Path, log: Log) -> Result<fs::File, String> {
+    mkdir(dir)?;
+    let path = dir.join(LOCK);
+    let error = |e: std::io::Error| format!("{}: {e}", path.display());
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(error)?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => {
+            log(&format!(
+                "Waiting for another horizon-prepare to finish with {}",
+                dir.display()
+            ));
+            file.lock().map_err(error)?;
+        }
+        Err(fs::TryLockError::Error(e)) => return Err(error(e)),
+    }
+    Ok(file)
+}
+
+/// Whether two folders are one, through `..`, links and case; a missing folder is created first.
+fn same_dir(a: &Path, b: &Path) -> Result<bool, String> {
+    let real = |dir: &Path| {
+        mkdir(dir)?;
+        fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))
+    };
+    Ok(real(a)? == real(b)?)
 }
 
 pub(crate) fn read_json(path: &Path) -> Result<Value, String> {
@@ -236,16 +297,18 @@ pub(crate) fn zip_text(
 }
 
 /// The archive's member names in its own order (Python's `namelist`).
-fn zip_names(archive: &zip::ZipArchive<fs::File>) -> Vec<String> {
-    (0..archive.len())
-        .filter_map(|i| archive.name_for_index(i).map(str::to_string))
-        .collect()
+fn zip_names(archive: &zip::ZipArchive<fs::File>) -> Result<Vec<String>, String> {
+    archive
+        .file_names()
+        .map(|name| name.map(|name| name.into_owned()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())
 }
 
 /// `{"minecraft:<path>": text}` for every `<prefix><path>.json`, sorted by member name
 /// (the comprehension the Python preparer used for tags, worldgen and damage resources).
 fn json_resources(archive: &mut zip::ZipArchive<fs::File>, prefix: &str) -> Result<Value, String> {
-    let mut names: Vec<String> = zip_names(archive)
+    let mut names: Vec<String> = zip_names(archive)?
         .into_iter()
         .filter(|n| n.starts_with(prefix) && n.ends_with(".json"))
         .collect();
@@ -311,11 +374,22 @@ struct Run<'a> {
     previous: Value,
     origin: Value,
     log: Log<'a>,
+    progress: Progress<'a>,
+    inputs: artifacts::Inputs,
+    /// The stages of `steps` begun so far.
+    stages: std::cell::Cell<u32>,
 }
 
 const PARITY: &str = "mods/horizon/src/test/java/dev/horizonlab/parity";
 
 impl Run<'_> {
+    /// Opens the next stage of `steps`: the fraction done is the stages before it.
+    fn stage(&self) {
+        let done = self.stages.get();
+        (self.progress)(done.min(STAGES) as f32 / STAGES as f32);
+        self.stages.set(done + 1);
+    }
+
     fn bundle(&self) -> Result<&Path, String> {
         if self.bundles.get().is_none() {
             self.bundles.set(exporters::classes(self)?).unwrap();
@@ -388,7 +462,9 @@ impl Run<'_> {
             format!("dev.horizonlab.parity.{main}"),
         ];
         all.extend_from_slice(args);
-        self.jdk.java(&all, None, log)
+        // Vanilla's code in the exporters logs relative to the working directory (logs/): keep
+        // that in the scratch, not where the preparer was started.
+        self.jdk.java(&all, Some(&self.local), log)
     }
 
     /// Runs each exporter from the verified shared bundle, with output in
@@ -417,17 +493,31 @@ impl Run<'_> {
     }
 }
 
-/// Prepares the resources; returns their folder (`.local/horizon-client/<version>`).
+/// Prepares the resources; returns their folder (`resources_dir`).
 pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
-    prepare_impl(options, log, false)
+    prepare_impl(options, log, &|_| {}, false)
+}
+
+/// `prepare`, telling `progress` the fraction done as each stage begins, and 1 at the end.
+pub fn prepare_with_progress(
+    options: &Options,
+    log: Log,
+    progress: Progress,
+) -> Result<PathBuf, String> {
+    prepare_impl(options, log, progress, false)
 }
 
 /// Release build tool: compile and link-check only Horizon's original exporter classes.
 pub fn compile_exporters(options: &Options, log: Log) -> Result<PathBuf, String> {
-    prepare_impl(options, log, true)
+    prepare_impl(options, log, &|_| {}, true)
 }
 
-fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathBuf, String> {
+fn prepare_impl(
+    options: &Options,
+    log: Log,
+    progress: Progress,
+    compile_only: bool,
+) -> Result<PathBuf, String> {
     let root = &std::path::absolute(&options.root)
         .map_err(|e| format!("{}: {e}", options.root.display()))?;
     let lock = artifacts::Lock::read(root)?;
@@ -437,6 +527,8 @@ fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathB
         &artifacts::game_files(options.minecraft_dir.as_deref(), &lock.version).runtimes,
     ));
     let jdk = java::find_runtime(lock.java_major, &homes)?;
+    // The import and the exporters' scratch files.
+    let _local_lock = hold_lock(&root.join(".local"), log)?;
     let reused = if options.import {
         artifacts::reuse_verified(root, log)?
     } else {
@@ -450,6 +542,7 @@ fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathB
                     root,
                     &lock,
                     options.minecraft_dir.as_deref(),
+                    &options.inputs,
                     options.server_jar.as_deref(),
                     log,
                 )?;
@@ -460,8 +553,19 @@ fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathB
         }
     };
     let local = root.join(".local");
-    let resources = local.join("horizon-client").join(&lock.version);
-    mkdir(&resources)?;
+    let resources = match &options.output {
+        Some(output) => {
+            std::path::absolute(output).map_err(|e| format!("{}: {e}", output.display()))?
+        }
+        None => resources_dir(root, &lock.version, None),
+    };
+    // `--output` may name the `.local` folder itself, whose lock is held already: a second
+    // handle on the same lock file would wait for this process forever.
+    let _resources_lock = if same_dir(&resources, &local)? {
+        None
+    } else {
+        Some(hold_lock(&resources, log)?)
+    };
     let manifest_path = resources.join("horizon-resources.json");
     let oracle = root.join(PARITY).join("VanillaHeightmapOracle.java");
     let origin = Value::Object(vec![
@@ -499,11 +603,18 @@ fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathB
         previous,
         origin,
         log,
+        progress,
+        inputs: options.inputs.clone(),
+        stages: std::cell::Cell::new(0),
     };
     if compile_only {
         return Ok(run.bundle()?.to_path_buf());
     }
+    // Not current until this preparation finishes: --check says so meanwhile, and after a failure.
+    check::remove_stamp(&resources)?;
     steps(&run, &lock, &oracle, options.minecraft_dir.as_deref())?;
+    check::write_stamp(&resources)?;
+    progress(1.0);
     log(&format!(
         "Prepared Horizon native-client resources: {}",
         resources.display()
@@ -534,6 +645,7 @@ fn steps(
         .unwrap()
         .iter()
         .all(|(k, v)| run.previous(k) == Some(v));
+    run.stage();
     if !(origin_same
         && facts.exists()
         && run.previous("facts_sha256") == Some(&run.file_hash("facts.json")?))
@@ -555,6 +667,7 @@ fn steps(
     let helper = run.oracle("VanillaCuboidModelOracle.java");
     let binding_sources = source_hashes(repo, &[&binding, &helper])?;
     let model_states = root.join("model-states.json");
+    run.stage();
     if !(run.previous("model_state_exporters_sha256") == Some(&binding_sources)
         && run.same("client_sha256")
         && model_states.exists()
@@ -572,6 +685,7 @@ fn steps(
         )?;
     }
 
+    run.stage();
     let block_tags = "data/minecraft/tags/block/";
     let tags = json_resources(&mut open_zip(&run.server)?, block_tags)?;
     if tags != json_resources(&mut open_zip(&run.client)?, block_tags)? {
@@ -594,6 +708,7 @@ fn steps(
         "attributes.json",
         "landing-definitions.json",
     ];
+    run.stage();
     if !(run.previous("motion_exporters_sha256") == Some(&motion_sources)
         && run.same("server_sha256")
         && run.previous("block_tags_sha256") == Some(&run.file_hash("block-tags.json")?)
@@ -632,6 +747,7 @@ fn steps(
         "damage-catalog.json",
         "player-float-ids.json",
     ];
+    run.stage();
     if !(run.previous("health_exporters_sha256") == Some(&health_sources)
         && run.same("server_sha256")
         && run.files_unchanged("health_files_sha256", &health_files)?)
@@ -671,6 +787,7 @@ fn steps(
     }
 
     let collision_file = root.join("cached-collision.nbt");
+    run.stage();
     if !(run.previous("collision_exporters_sha256") == Some(&collision_sources)
         && run.same("server_sha256")
         && collision_file.exists()
@@ -693,6 +810,7 @@ fn steps(
 
     let render_sources = source_hashes(repo, &[&visibility, &collision, oracle])?;
     let render_files = ["render-definitions.json", "occlusion.nbt"];
+    run.stage();
     if !(run.previous("render_exporters_sha256") == Some(&render_sources)
         && run.same("server_sha256")
         && run.previous("block_tags_sha256") == Some(&run.file_hash("block-tags.json")?)
@@ -721,8 +839,9 @@ fn steps(
     // The playable client needs every client asset (textures, models, fonts, GUI)
     // and every data-pack resource (worldgen, recipes, loot tables, tags), and
     // the vanilla pack's icon (`pack.png`) for the pack screen.
+    run.stage();
     (run.log)("Copying the client's assets and data");
-    let mut indexed = sounds::Assets::load(repo, minecraft, run.log);
+    let mut indexed = sounds::Assets::load(repo, Some(root), minecraft, &run.inputs, run.log);
     let (version, count) = extract_client_resources(&run.client, root, indexed.as_mut().ok())?;
     sounds::optional_imports(indexed.as_mut().map_err(|e| e.as_str()), run.log);
 
@@ -762,6 +881,7 @@ fn steps(
         }
         Ok(hashes)
     };
+    run.stage();
     let gameplay_sources = single(
         "gameplay facts",
         "gameplay-facts.json",
@@ -774,6 +894,7 @@ fn steps(
         "gameplay-export.log",
     )?;
     // Entity dimensions, categories and default attributes for the client's mobs.
+    run.stage();
     let entity_types_sources = single(
         "entity types",
         "entity-types.json",
@@ -787,6 +908,7 @@ fn steps(
     )?;
     // Block classes, instance configuration and per-state support/signal/fluid
     // facts for horizon-world's level behaviour (level::Behaviours::load).
+    run.stage();
     let behaviour_sources = single(
         "block behaviours",
         "block-behaviours.json",
@@ -799,6 +921,7 @@ fn steps(
         "behaviour-export.log",
     )?;
 
+    run.stage();
     if datagen_reports_missing(root) || !run.same("server_sha256") {
         // Vanilla's own data generator reports every item's default components.
         (run.log)("Running vanilla's data generator reports");
@@ -836,8 +959,10 @@ fn steps(
     }
 
     // Biome parameter tables come from the data generator reports above.
+    run.stage();
     prepare_worldgen(run)?;
 
+    run.stage();
     let entity_sources = single(
         "entity models",
         "entity-models.json",
@@ -851,6 +976,7 @@ fn steps(
     )?;
     // Mob AI and animation facts: per-state path types, spawn placements and the
     // client's keyframe animation definitions (needs the client jar).
+    run.stage();
     let mob_sources = single(
         "mob data",
         "mob-data.json",
@@ -868,6 +994,7 @@ fn steps(
     let command_registries = root.join("command-registries.json");
     let command_oracle = run.oracle("VanillaCommandParseOracle.java");
     let command_sources = source_hashes(repo, &[&command_oracle])?;
+    run.stage();
     if !(run.previous("command_registries_exporters_sha256") == Some(&command_sources)
         && command_registries.exists()
         && run.same("server_sha256"))
@@ -889,6 +1016,7 @@ fn steps(
     // The creative inventory (creative-inventory.json): every tab built by vanilla's
     // CreativeModeTabs over the vanilla data pack's registries, with the search
     // tab's tooltip lines and tags.
+    run.stage();
     let creative_sources = single(
         "the creative inventory",
         "creative-inventory.json",
@@ -909,6 +1037,7 @@ fn steps(
                 .collect::<Result<_, String>>()?,
         ))
     };
+    run.stage();
     let mut manifest = vec![("schema".to_string(), Value::Int(SCHEMA.to_string()))];
     manifest.extend(run.origin.as_object().unwrap().iter().cloned());
     manifest.extend([
@@ -968,7 +1097,7 @@ fn extract_client_resources(
     let mut client = open_zip(jar)?;
     let version = pyjson::loads(&zip_text(&mut client, "version.json")?)?;
     let mut count = 0;
-    for name in zip_names(&client) {
+    for name in zip_names(&client)? {
         if !(name.starts_with("assets/") || name.starts_with("data/") || name == "pack.png")
             || name.ends_with('/')
         {
@@ -1093,7 +1222,7 @@ fn prepare_worldgen(run: &Run) -> Result<(), String> {
     // Structure templates: gzip NBT files under structure/<namespace>/<path>.nbt.
     let mut server = open_zip(&run.server)?;
     let prefix = "data/minecraft/structure/";
-    for name in zip_names(&server) {
+    for name in zip_names(&server)? {
         if name.starts_with(prefix) && name.ends_with(".nbt") {
             let relative = member_path(&name[prefix.len()..], "Invalid structure path")?;
             let data = zip_bytes(&mut server, &name)?;
@@ -1227,6 +1356,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_output_in_the_scratch_folder_is_one_folder_however_it_is_named() {
+        let dir = std::env::temp_dir().join(format!("horizon-prepare-same-{}", std::process::id()));
+        let local = dir.join(".local");
+        assert!(same_dir(&local, &dir.join("x").join("..").join(".local")).unwrap());
+        assert!(!same_dir(&local, &local.join("horizon-client")).unwrap());
+        // The lock it would have taken twice: once, then the output skips it.
+        let _held = hold_lock(&local, &|_| {}).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn datagen_reports_are_installed_beside_resources_and_missing_reports_need_repair() {
         let dir =
             std::env::temp_dir().join(format!("horizon-prepare-reports-{}", std::process::id()));
@@ -1272,6 +1412,16 @@ mod tests {
             install_datagen_reports(&root, &reports).unwrap();
         }
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `--progress json` reaches 1 only at the end: `STAGES` counts the stages `steps` opens.
+    #[test]
+    fn steps_open_every_stage() {
+        // A Windows checkout may have CRLF line ends.
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let body = &source[source.find("\nfn steps(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert_eq!(body.matches("run.stage();").count() as u32, STAGES);
     }
 
     #[test]

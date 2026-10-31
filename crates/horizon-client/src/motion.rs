@@ -4,7 +4,7 @@
 //! block-inside effects and audiovisual event consumers remain separate work.
 use crate::{Result, assets::Assets, collisions::SceneCollisions, world::World};
 use horizon_core::{
-    geometry::{Aabb, Axis, Direction, Vec3, VoxelShape, traverse_blocks},
+    geometry::{Aabb, Axis, Direction, Vec3, VoxelShape, traverse_blocks, trig},
     position::BlockPos,
     random::RandomSource,
 };
@@ -46,8 +46,8 @@ use std::{
 pub(crate) mod environment;
 mod fluids;
 pub use fluids::{
-    BubbleColumn, FluidResources, FluidTags, LAVA, PlayerFluids, WATER, bubble_column_at,
-    bubble_column_push,
+    BubbleColumn, FluidResources, FluidTags, LAVA, PlayerFluids, RiddenBoat, WATER,
+    bubble_column_at, bubble_column_push,
 };
 
 pub struct MotionResources {
@@ -266,6 +266,10 @@ pub enum MotionEvent {
 #[derive(Clone)]
 pub struct PlayerMotion {
     pub swimming: bool,
+    /// `Entity.isPassenger()`: this body rides a vehicle. `Entity.updateSwimming`
+    /// needs it false, so the server's copy of a guest who boards a boat while
+    /// swimming is not left in the swimming box in the seat (#4427).
+    pub is_passenger: bool,
     pub fire_ticks: i32,
     pub air: i32,
     pub respiration: i32,
@@ -287,6 +291,9 @@ pub struct PlayerMotion {
     pub jump_trigger_time: i32,
     /// Abilities.mayfly / flying (creative flight).
     pub may_fly: bool,
+    /// `Player.isMobilityRestricted`: blindness, which keeps a sprint from
+    /// starting and stops one (`LocalPlayer.isSprintingPossible`).
+    pub mobility_restricted: bool,
     /// Abilities.invulnerable (creative): only damage bypassing invulnerability hurts.
     pub invulnerable: bool,
     /// Spectator mode: no physics, always flying (`Player.tick`).
@@ -394,6 +401,10 @@ pub struct PlayerMotion {
     /// server hurts it (`Entity.hurt` does nothing on a client) and ticks its
     /// food (`ServerPlayer.tick`). Its hurt animation comes from the server.
     pub client_side: bool,
+    /// The player's client has loaded the world since its last respawn or
+    /// level change (`ServerGamePacketListenerImpl.hasClientLoaded`); a guest's
+    /// turn takes it from its connection.
+    pub client_loaded: bool,
     /// `Entity.applyEffectsFromBlocks` runs after travel (always in the game;
     /// differential fixtures turn it off where their reference does).
     pub block_effects: bool,
@@ -514,6 +525,7 @@ impl PlayerMotion {
             no_jump_delay: 0,
             jump_trigger_time: 0,
             may_fly: false,
+            mobility_restricted: false,
             invulnerable: false,
             spectator: false,
             flying: false,
@@ -543,6 +555,7 @@ impl PlayerMotion {
             pose: crate::pose::Pose::Standing,
             dimensions: crate::pose::Pose::Standing.dimensions(1.0),
             swimming: false,
+            is_passenger: false,
             fire_ticks: -20,
             air: 300,
             respiration: 0,
@@ -573,6 +586,7 @@ impl PlayerMotion {
             server_copy: false,
             wall_hit_events: None,
             client_side: false,
+            client_loaded: true,
             block_effects: true,
             powder_snow_entered: Vec::new(),
             hurt_log: Vec::new(),
@@ -809,8 +823,8 @@ impl PlayerMotion {
         Ok(())
     }
     /// Local input sprint phase (`LocalPlayer.aiStep`'s sprint decisions).
-    /// Vehicle, item-use and effect bindings remain separate; hunger, flight,
-    /// water and collision conditions use this actor's actual state.
+    /// Vehicle bindings remain separate; hunger, flight, water, collision, the
+    /// item in use and blindness use this actor's actual state.
     pub fn sprint_input_tick(&mut self, keys: crate::sprint::Keys) -> Result<()> {
         self.sprint_input_tick_with_window(keys, 7)
     }
@@ -822,6 +836,7 @@ impl PlayerMotion {
     ) -> Result<()> {
         let conditions = crate::sprint::Conditions {
             sprinting: self.sprinting,
+            mobility_restricted: self.mobility_restricted,
             enough_food: self.health.food.has_enough_food(),
             may_fly: self.may_fly,
             flying: self.flying,
@@ -1856,17 +1871,14 @@ impl MotionWorld<'_, '_, '_> {
     /// LivingEntity.travelFallFlying with updateFallFlyingMovement.
     fn travel_fall_flying(&mut self) -> Result<()> {
         let v = self.player.velocity;
-        let (yaw, pitch) = (self.player.yaw.to_radians(), self.player.pitch.to_radians());
-        let look = Vec3::new(
-            f64::from(-yaw.sin() * pitch.cos()),
-            f64::from(-pitch.sin()),
-            f64::from(yaw.cos() * pitch.cos()),
-        );
-        let lean = pitch;
+        // getLookAngle and the lean use Mth's sine table and float degrees,
+        // the lift Math.cos of the widened lean.
+        let look = horizon_world::view_direction::view_vector(self.player.pitch, self.player.yaw);
+        let lean = self.player.pitch * trig::DEG_TO_RAD;
         let look_h = (look.x * look.x + look.z * look.z).sqrt();
         let move_h = (v.x * v.x + v.z * v.z).sqrt();
         let gravity = living_motion::effective_gravity(self)?;
-        let lift = f64::from(lean.cos()).powi(2);
+        let lift = horizon_core::jmath::cos(f64::from(lean)).powi(2);
         let mut m = Vec3::new(v.x, v.y + gravity * (-1.0 + lift * 0.75), v.z);
         if m.y < 0.0 && look_h > 0.0 {
             let convert = m.y * -0.1 * lift;
@@ -1877,7 +1889,7 @@ impl MotionWorld<'_, '_, '_> {
             );
         }
         if lean < 0.0 && look_h > 0.0 {
-            let convert = move_h * f64::from(-lean.sin()) * 0.04;
+            let convert = move_h * f64::from(-trig::sin(f64::from(lean))) * 0.04;
             m = Vec3::new(
                 m.x - look.x * convert / look_h,
                 m.y + convert * 3.2,
@@ -1891,7 +1903,12 @@ impl MotionWorld<'_, '_, '_> {
                 m.z + (look.z / look_h * move_h - m.z) * 0.1,
             );
         }
-        self.player.velocity = Vec3::new(m.x * 0.99, m.y * 0.98, m.z * 0.99);
+        // multiply(0.99F, 0.98F, 0.99F): the float factors widened.
+        self.player.velocity = Vec3::new(
+            m.x * f64::from(0.99_f32),
+            m.y * f64::from(0.98_f32),
+            m.z * f64::from(0.99_f32),
+        );
         let movement = self.player.velocity;
         self.move_self(movement)?;
         // LivingEntity.handleFallFlyingCollisions: only the server hurts.
@@ -3621,6 +3638,66 @@ mod tests {
     }
 
     #[test]
+    fn a_glide_tick_matches_vanilla_to_the_bit() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        // LivingEntity.updateFallFlyingMovement run on the 26.3 JVM from
+        // (0.4, -0.3, 1.1): a climb (Mth.sin in the pull-up) and a dive.
+        let cases = [
+            (
+                -25.3,
+                37.7,
+                [
+                    0x3fd2_0750_bb9c_308e,
+                    0xbfce_177a_a476_8fa8,
+                    0x3ff1_3a5d_8654_8dc8,
+                ],
+            ),
+            (
+                12.9,
+                -118.62,
+                [
+                    0x3fde_db16_996e_3d53,
+                    0xbfd2_5548_1a43_d31f,
+                    0x3fed_2aff_c5b0_6151,
+                ],
+            ),
+        ];
+        for (pitch, yaw, want) in cases {
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 40.0, 20.5)).unwrap();
+            player.glider = true;
+            player.fall_flying = true;
+            player.pitch = pitch;
+            player.yaw = yaw;
+            player.velocity = Vec3::new(0.4, -0.3, 1.1);
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            w.travel_fall_flying().unwrap();
+            let v = w.player.velocity;
+            assert_eq!(
+                [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()],
+                want,
+                "{pitch} {yaw}: {v:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_glide_that_is_not_diving_keeps_the_fall_distance_at_one() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
@@ -3997,6 +4074,62 @@ mod tests {
         player.set_sprinting(true).unwrap();
         copy.set_sprinting(false).unwrap();
         assert_eq!(copy.attribute("minecraft:movement_speed").unwrap(), walking);
+    }
+    /// #4427: `!isPassenger()` where the swim flag is made, not only where the
+    /// pose is chosen. The server's copy of a guest who boards a boat while
+    /// swimming kept `SWIMMING` through `Entity.baseTick`, so it sat in the seat
+    /// in the 0.6 box with its eye 0.4 above it, at the waterline, where the
+    /// boat drowned and suffocated a player whose own screen showed them
+    /// sitting up. Getting out starts the swim again, so it cannot stick off.
+    #[test]
+    fn a_riding_guest_keeps_no_swim_in_the_fluid_phase() {
+        // The boxes the flag picks, before the prepared resources below: the
+        // swim's eye is the one at the waterline. Nothing here needs assets.
+        assert_eq!(crate::pose::Pose::Swimming.dimensions(1.0).eye_height, 0.4);
+        assert_eq!(crate::pose::Pose::Standing.dimensions(1.0).eye_height, 1.62);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        for y in 4..=6 {
+            scene.set(20, y, 20, water).unwrap();
+        }
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        // `fluid_base_tick` samples `was_eye_in_water` before it updates the
+        // fluids (`motion/fluids.rs:222`), so a fresh body needs one tick
+        // before `is_under_water` can answer: the first call records the eye,
+        // the second acts on it. Without that warm-up this test panicked as
+        // soon as `.local/` existed, so it never ran for the author or CI.
+        w.player.sprinting = true;
+        w.fluid_base_tick().unwrap();
+        w.fluid_base_tick().unwrap();
+        assert!(w.player.is_under_water());
+        assert!(w.player.swimming);
+        // In the boat: `Entity.updateSwimming` keeps no swim for a passenger.
+        // This is the assertion that fails on main, where the term is missing.
+        w.player.is_passenger = true;
+        w.fluid_base_tick().unwrap();
+        assert!(!w.player.swimming);
+        // Out of the boat the swim starts again.
+        w.player.is_passenger = false;
+        w.fluid_base_tick().unwrap();
+        assert!(w.player.swimming);
     }
     #[test]
     fn a_riptide_spin_lies_flat_and_ends_on_the_first_entity_it_touches() {
@@ -4824,6 +4957,53 @@ mod tests {
         w.player.item_use_slows_sprint = false;
         w.controlled_simulation_tick(sprint_key).unwrap();
         assert!(w.player.sprinting, "an item that can_sprint lets it start");
+    }
+
+    /// Vanilla `LocalPlayer.isSprintingPossible`: blindness
+    /// (`Player.isMobilityRestricted`) keeps the sprint key from starting a
+    /// sprint and stops a running one (`shouldStopRunSprinting`).
+    #[test]
+    fn blindness_stops_a_sprint_and_keeps_one_from_starting() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        let sprint_key = crate::sprint::Keys {
+            forward: true,
+            sprint: true,
+            ..Default::default()
+        };
+        w.controlled_simulation_tick(sprint_key).unwrap();
+        assert!(w.player.sprinting);
+        w.player.mobility_restricted = true;
+        w.controlled_simulation_tick(sprint_key).unwrap();
+        assert!(!w.player.sprinting, "blindness stops a running sprint");
+        for _ in 0..10 {
+            w.controlled_simulation_tick(sprint_key).unwrap();
+        }
+        assert!(
+            !w.player.sprinting,
+            "blindness keeps the sprint key from starting one"
+        );
+        w.player.mobility_restricted = false;
+        w.controlled_simulation_tick(sprint_key).unwrap();
+        assert!(w.player.sprinting);
     }
 
     /// Vanilla `Player.getFlyingSpeed`: a flying player moves at the ability

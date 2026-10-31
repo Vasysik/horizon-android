@@ -175,7 +175,7 @@ impl Game<'_> {
     /// The frame under the crosshair within reach and its distance.
     pub(super) fn frame_hit(&self) -> Option<(usize, f64)> {
         let (eye, dir) = self.aim()?;
-        let reach: f64 = if self.creative { 5.0 } else { 3.0 };
+        let reach: f64 = self.entity_reach;
         let mut best: Option<(usize, f64)> = None;
         for (i, f) in self.item_frames.iter().enumerate() {
             let (lo, hi) = f.bounds();
@@ -201,7 +201,7 @@ impl Game<'_> {
     }
     /// Nearer than the targeted block?
     pub(super) fn before_block(&self, distance: f64) -> bool {
-        self.pick().is_none_or(|h| {
+        self.pick_unfiltered().is_none_or(|h| {
             let eye = self.aim().map(|(eye, _)| eye).unwrap_or_default();
             (0..3)
                 .map(|a| (h.point[a] - eye[a]).powi(2))
@@ -283,6 +283,12 @@ impl Game<'_> {
     }
     /// `ItemFrame.dropItem`: the frame (when breaking) and the held item.
     fn drop_frame_items(&mut self, f: &ItemFrame, with_frame: bool, by_player: bool) {
+        // The framed map forgets the frame, except when the drops are off and
+        // something caused the break (`removeFramedMap` runs only for a null
+        // `causedBy` then).
+        if self.ui.rules.bool("entity_drops") || !by_player {
+            self.remove_framed_map(f);
+        }
         if !self.ui.rules.bool("entity_drops") || (by_player && self.creative) {
             return;
         }

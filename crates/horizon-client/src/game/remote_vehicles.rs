@@ -73,7 +73,7 @@ impl Game<'_> {
         }
         // Interaction.isPickable: an invisible box the server clicks through
         // to its scripts, for both uses and attacks.
-        let reach = if self.creative { 5.0 } else { 3.0 };
+        let reach = self.entity_reach;
         for (&id, i) in &self.interactions {
             if let Some(d) = ray_box(eye, dir, reach, i.bounds()) {
                 let p = i.position;
@@ -84,7 +84,7 @@ impl Game<'_> {
             // EndCrystal.isPickable: its 2 x 2 box, with the server's entity
             // id, not special_targets' local projectile target id.
             // Entity.interact passes on a crystal, so right clicks use the item.
-            let reach = if self.creative { 5.0 } else { 3.0 };
+            let reach = self.entity_reach;
             for c in self.crystals.iter().filter(|c| c.id != 0) {
                 let p = c.position;
                 let bounds = Aabb::new(

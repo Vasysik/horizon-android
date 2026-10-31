@@ -84,6 +84,9 @@ pub(super) struct RecipeUi {
     client: ClientBook,
     client_known: Option<BTreeSet<String>>,
     client_version: u64,
+    /// The display a click last placed (`lastRecipe`), which Enter and Space
+    /// place again; slot clicks keep it.
+    last_clicked: Option<i32>,
 }
 
 impl RecipeUi {
@@ -99,6 +102,7 @@ impl RecipeUi {
             search.set_value("");
         }
         self.view_key = 0;
+        self.last_clicked = None;
     }
 }
 
@@ -656,6 +660,7 @@ impl Game<'_> {
                 if !right && inside(cursor, x, y, 24.0, 24.0) {
                     let shift = self.shift_down();
                     if self.try_place(*entry, shift) {
+                        self.remember_click(*entry);
                         self.close_narrow_book(book_type, &batch);
                     }
                     return true;
@@ -699,6 +704,7 @@ impl Game<'_> {
                 let (entry, _) = button.entries[step % button.entries.len()];
                 let shift = self.shift_down();
                 if self.try_place(entry, shift) {
+                    self.remember_click(entry);
                     self.close_narrow_book(book_type, &batch);
                 }
             }
@@ -745,6 +751,48 @@ impl Game<'_> {
             }
         }
         narrow
+    }
+    /// `RecipeBookComponent.mouseClicked` after a placed recipe: it becomes
+    /// `lastRecipe`.
+    fn remember_click(&mut self, entry: usize) {
+        self.recipe_ui.last_clicked = self
+            .recipe_ui
+            .book
+            .as_ref()
+            .and_then(|b| b.entries.get(entry))
+            .map(|e| e.display_id);
+    }
+    /// `RecipeBookComponent.keyPressed`: Enter or Space (`isSelection`) places
+    /// the recipe clicked last again, key repeats included, as many as fit
+    /// with Shift. The focused search box takes the key first.
+    pub(super) fn recipe_book_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
+        use winit::keyboard::KeyCode;
+        if !matches!(key, KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space) {
+            return false;
+        }
+        let Some(book_type) = self.active_book() else {
+            return false;
+        };
+        if !self.book_open(book_type) || self.spectator() || self.recipe_search_focused() {
+            return false;
+        }
+        let Some(display) = self.recipe_ui.last_clicked else {
+            return false;
+        };
+        // The craft just taken changed what is craftable.
+        self.refresh_book_view(book_type);
+        let Some(entry) = self
+            .recipe_ui
+            .book
+            .as_ref()
+            .and_then(|b| b.entry_of_display(display))
+        else {
+            return false;
+        };
+        self.audio
+            .play("minecraft:ui.button.click", None, 0.25, 1.0);
+        let shift = self.shift_down();
+        self.try_place(entry, shift)
     }
     /// `RecipeBookComponent.mouseDragged`: while the search box is focused a
     /// drag moves its selection end to the pointer (`EditBox.onDrag`).

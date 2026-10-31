@@ -122,14 +122,6 @@ impl Game<'_> {
             base,
         )
     }
-    /// Strength / weakness on the attack damage attribute.
-    pub(super) fn effect_attack_bonus(&self) -> f32 {
-        let fx = &self.potions.effects;
-        fx.amplifier("strength")
-            .map_or(0.0, |a| 3.0 * (a + 1) as f32)
-            - fx.amplifier("weakness")
-                .map_or(0.0, |a| 4.0 * (a + 1) as f32)
-    }
     /// `Player.attack`'s extra knockback: `getKnockback` (the weapon's knockback
     /// enchantment, halved) plus 0.5 for a sprinting full-strength hit, and
     /// whether the hit is that knockback attack.

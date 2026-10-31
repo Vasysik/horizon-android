@@ -79,14 +79,13 @@ pub fn validate(
     let mut shader = false;
     let mut native_shader = false;
     let mut manifest = false;
-    let mut wasm = false;
     let mut buffer = [0u8; 65536];
     for i in 0..zip.len() {
         if cancelled() {
             return Err("Import cancelled".into());
         }
         let mut entry = zip.by_index(i)?;
-        let raw = entry.name().to_owned();
+        let raw = entry.name()?.into_owned();
         if raw.is_empty()
             || raw.len() > 1024
             || raw.chars().any(char::is_control)
@@ -113,7 +112,6 @@ pub fn validate(
                     .iter()
                     .any(|ext| raw.ends_with(&format!(".{ext}")));
         manifest |= raw == "horizon-mod.toml";
-        wasm |= raw == "mod.wasm";
         let expected = entry.size();
         if raw == "pack.mcmeta" && expected > 1 << 20 {
             return Err("Pack metadata is too large".into());
@@ -150,13 +148,18 @@ pub fn validate(
     if !match kind {
         Kind::Packs => pack,
         Kind::Shaders => shader,
-        Kind::Mods => manifest && wasm,
+        Kind::Mods => manifest,
     } {
         return Err(format!(
             "Archive is not a {} package (required files must be at the ZIP root)",
             kind.label()
         )
         .into());
+    }
+    if kind == Kind::Mods {
+        // Accept both sandboxed code and upstream content-only packages. The
+        // shared parser requires mod.wasm unless the manifest grants registries.
+        horizon_mods::Package::read(path).map_err(|e| format!("Invalid Horizon mod: {e}"))?;
     }
     Ok(kind == Kind::Shaders && native_shader)
 }
@@ -241,6 +244,18 @@ mod tests {
         assert!(validate(&path, Kind::Shaders, "Test.zip", || false).unwrap());
         std::fs::write(&path, archive(&[("horizon-mod.toml", b"manifest")])).unwrap();
         assert!(validate(&path, Kind::Mods, "Test.hmod", || false).is_err());
+        let content = b"id='test_content'\nname='Content'\nversion='1'\napi='0.2'\ncapabilities=['registries']\n";
+        std::fs::write(&path, archive(&[("horizon-mod.toml", content)])).unwrap();
+        assert!(validate(&path, Kind::Mods, "Content.hmod", || false).is_ok());
+        let code = b"id='test_code'\nname='Code'\nversion='1'\napi='0.1'\ncapabilities=['hud']\n";
+        std::fs::write(&path, archive(&[("horizon-mod.toml", code)])).unwrap();
+        assert!(validate(&path, Kind::Mods, "Code.hmod", || false).is_err());
+        std::fs::write(
+            &path,
+            archive(&[("horizon-mod.toml", code), ("mod.wasm", b"wasm")]),
+        )
+        .unwrap();
+        assert!(validate(&path, Kind::Mods, "Code.hmod", || false).is_ok());
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         writer
             .add_symlink(

@@ -12,7 +12,7 @@ def main():
     (harness / 'src').mkdir(parents=True, exist_ok=True)
     lock = tomllib.loads((ROOT / 'Cargo.lock').read_text(encoding='utf-8'))
     version = next(p['version'] for p in lock['package']
-                   if p['name'] == 'zip' and p['version'].startswith('2.'))
+                   if p['name'] == 'zip' and p['version'].startswith('9.'))
     (harness / 'Cargo.toml').write_text(f'''[package]
 name = "android-diagnostics-tests"
 version = "0.0.0"

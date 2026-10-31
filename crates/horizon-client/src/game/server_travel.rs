@@ -11,7 +11,7 @@ use super::end::GatewayJob;
 use super::nether_portal::{PLAYER_DELAY, Plan};
 use super::respawn_anchor::RespawnConfig;
 use super::{Dim, Game, Mob, boats, lan::LanHost, minecarts};
-use horizon_client::{lan::hub::TickCtx, text::Text, world_spawn::PlayerSpawnFinder};
+use horizon_client::{lan::hub::TickCtx, world_spawn::PlayerSpawnFinder};
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_protocol::packets::play::{self, Clientbound as C};
 
@@ -422,8 +422,8 @@ impl Game<'_> {
 
     /// `findRespawnAndUseSpawnBlock` for the player in place, at its point
     /// in the level in place: where it stands up, facing the anchor (with
-    /// the deplete sound) or the bed; else the point is forgotten
-    /// (`block.minecraft.spawn.not_valid`).
+    /// the deplete sound) or the bed; else the point is forgotten, and the
+    /// caller tells the player (`Hub::missing_respawn_block`).
     pub(super) fn resolve_server_respawn(&mut self, config: RespawnConfig) -> Option<(Vec3, f32)> {
         let [x, y, z] = config.pos;
         let anchor = self.is_anchor(self.world.block(x, y, z));
@@ -442,7 +442,6 @@ impl Game<'_> {
             }
             Ok(None) | Err(_) => {
                 self.respawn_config = None;
-                self.system_message(Text::translate("block.minecraft.spawn.not_valid", &[]));
                 None
             }
         }
@@ -554,6 +553,7 @@ impl Game<'_> {
                 match self.as_guest(host, trip.conn, |g| g.resolve_server_respawn(config)) {
                     Some(Some(found)) => found,
                     _ => {
+                        host.hub.missing_respawn_block(trip.conn);
                         self.respawn_at_world_spawn(host, trip.conn);
                         continue;
                     }

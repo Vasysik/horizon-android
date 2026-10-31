@@ -97,6 +97,50 @@ pub fn profile_skin_url(profile: &serde_json::Value) -> Option<String> {
     let (value, signature) = parse_profile(profile).textures?;
     unpack(&value, signature, &TEXTURE_URIS).skin
 }
+
+/// The textures of a Minecraft services `/minecraft/profile` answer: the
+/// `ACTIVE` skin and cape (`MinecraftProfileResponse`). Unsigned, like the
+/// local player's own textures, and only URLs under the allowed domains count.
+pub fn services_profile_textures(profile: &serde_json::Value) -> Textures {
+    let active = |key: &str| {
+        profile
+            .get(key)?
+            .as_array()?
+            .iter()
+            .find(|t| t.get("state").and_then(|s| s.as_str()) == Some("ACTIVE"))
+    };
+    let skin_entry = active("skins");
+    let skin = skin_entry
+        .and_then(|t| t.get("url"))
+        .and_then(|u| u.as_str())
+        .filter(|url| {
+            TEXTURE_URIS
+                .iter()
+                .any(|u| url.starts_with(&u.replace("{textureId}", "")))
+        })
+        .map(str::to_owned);
+    let slim = skin_entry
+        .and_then(|t| t.get("variant"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| v.eq_ignore_ascii_case("slim"));
+    let cape = active("capes")
+        .and_then(|t| t.get("url"))
+        .and_then(|u| u.as_str())
+        .filter(|url| {
+            TEXTURE_URIS
+                .iter()
+                .any(|u| url.starts_with(&u.replace("{textureId}", "")))
+        })
+        .map(str::to_owned);
+    Textures {
+        skin,
+        slim,
+        cape,
+        elytra: None,
+        signed: false,
+    }
+}
+
 /// `profile_skin_url` on a block entity's `profile` NBT (`SkullBlockEntity`):
 /// the same `properties` list, held as a compound. A name-only profile (a
 /// string tag) has no properties and no skin URL.
@@ -1031,6 +1075,36 @@ mod tests {
         // Empty properties leave it dynamic.
         let p = parse_profile(&serde_json::json!({"name": "Notch", "properties": []}));
         assert_eq!(p.dynamic, Some(NameOrId::Name("Notch".into())));
+    }
+
+    #[test]
+    fn services_profile_answers_give_the_active_skin_and_cape() {
+        let profile = serde_json::json!({
+            "skins": [
+                {"state": "INACTIVE", "url": "https://textures.minecraft.net/texture/old"},
+                {"state": "ACTIVE", "url": "https://textures.minecraft.net/texture/skin1", "variant": "CLASSIC"}
+            ],
+            "capes": [{"state": "ACTIVE", "url": "http://textures.minecraft.net/texture/cape1"}]
+        });
+        let t = super::services_profile_textures(&profile);
+        assert_eq!(
+            t.skin.as_deref(),
+            Some("https://textures.minecraft.net/texture/skin1")
+        );
+        assert_eq!(
+            t.cape.as_deref(),
+            Some("http://textures.minecraft.net/texture/cape1")
+        );
+        assert!(!t.signed);
+        let elsewhere = serde_json::json!({"skins": [{"state": "ACTIVE", "url": "https://evil.example/texture/x"}]});
+        assert_eq!(
+            super::services_profile_textures(&elsewhere),
+            super::Textures::default()
+        );
+        assert_eq!(
+            super::services_profile_textures(&serde_json::json!({})),
+            super::Textures::default()
+        );
     }
 
     /// `getByName` and `getProfileById` answer from the services the

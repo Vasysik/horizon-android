@@ -70,6 +70,8 @@ impl Game<'_> {
                 return false;
             }
             self.eject_record(pos);
+            // ServerPlayerGameMode.useItemOn: useWithoutItem consumed the click.
+            self.trigger_default_block_use(pos);
             return true;
         }
         let Some(stack) = held else { return false };

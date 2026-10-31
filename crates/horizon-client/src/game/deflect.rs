@@ -72,7 +72,7 @@ impl Game<'_> {
     /// reach, and how far along the view it is.
     pub(super) fn redirectable_hit(&self) -> Option<(usize, f64)> {
         let (eye, dir) = self.aim()?;
-        let reach: f64 = if self.creative { 5.0 } else { 3.0 };
+        let reach: f64 = self.entity_reach;
         self.creatures
             .projectiles
             .iter()
@@ -94,7 +94,7 @@ impl Game<'_> {
         if self.mob_hit().is_some_and(|(_, d)| d < t) {
             return false;
         }
-        if let (Some(hit), Some(eye)) = (self.pick(), self.eye_position()) {
+        if let (Some(hit), Some(eye)) = (self.pick_unfiltered(), self.eye_position()) {
             let d = (0..3)
                 .map(|a| (hit.point[a] - eye[a]).powi(2))
                 .sum::<f64>()
@@ -122,7 +122,7 @@ impl Game<'_> {
         let d2: f64 = (0..3)
             .map(|a| (eye[a] - eye[a].clamp(lo[a], hi[a])).powi(2))
             .sum();
-        let range = if self.creative { 5.0 } else { 3.0 } + 3.0;
+        let range = self.entity_reach + 3.0;
         d2 < range * range
     }
 

@@ -345,6 +345,7 @@ impl PlayerMotion {
         let h = &mut self.health;
         let mut environment = Environment {
             invulnerable,
+            client_loaded: self.client_loaded,
             rules,
             source,
             living_cause,
@@ -428,6 +429,9 @@ impl PlayerMotion {
 pub(crate) struct Environment<'a> {
     /// Abilities.invulnerable.
     pub(crate) invulnerable: bool,
+    /// The player's client has loaded the world since its last respawn or
+    /// level change (`ServerGamePacketListenerImpl.hasClientLoaded`).
+    pub(crate) client_loaded: bool,
     pub(crate) rules: HealthRules,
     pub(crate) source: DamageSource<'a, ()>,
     /// The causing entity is a living non-player (a mob, or its projectile's owner).
@@ -666,7 +670,7 @@ impl ImmunityWorld for Environment<'_> {
         Ok(self.source.is_type("minecraft:ender_pearl"))
     }
     fn client_loaded(&mut self) -> io::Result<bool> {
-        Ok(true)
+        Ok(self.client_loaded)
     }
 }
 impl HurtWorld for Environment<'_> {
@@ -906,6 +910,38 @@ mod tests {
         assert!(hurt, "the arrow must hurt");
         assert_eq!(player.health.health(), 0.0, "the health must be spent");
         assert!(player.health.dead_or_dying(), "the player must be dead");
+    }
+
+    /// #4301: `ServerPlayer.isInvulnerableTo`'s `!connection.hasClientLoaded`
+    /// term spares a respawned player the void until the client has loaded the
+    /// world; once it has, the void hurts again.
+    #[test]
+    fn the_void_spares_a_player_whose_client_has_not_loaded() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let resources = crate::motion::MotionResources::load(&root, &assets).unwrap();
+        let mut player =
+            crate::motion::PlayerMotion::new(&resources, horizon_core::geometry::Vec3::ZERO)
+                .unwrap();
+        let (health, rules) = (&resources.health, super::HealthRules::default());
+        let id = health.damage.id("minecraft:out_of_world").unwrap();
+        player.client_loaded = false;
+        assert!(
+            !player.hurt(health, rules, id, 4.0).unwrap(),
+            "an unloaded client must not take void damage"
+        );
+        assert_eq!(player.health.health(), 20.0);
+        player.client_loaded = true;
+        assert!(
+            player.hurt(health, rules, id, 4.0).unwrap(),
+            "a loaded client takes the void's 4.0"
+        );
+        assert_eq!(player.health.health(), 16.0);
     }
 
     #[test]

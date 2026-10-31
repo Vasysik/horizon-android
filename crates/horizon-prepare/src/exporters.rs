@@ -152,7 +152,7 @@ pub(crate) fn classes(run: &Run) -> Result<PathBuf, String> {
             arg(&classes),
         ];
         // No exporter executes here: resolve every class and its signatures against pinned jars.
-        run.jdk.java(&validate, None, &log)?;
+        run.jdk.java(&validate, Some(&run.local), &log)?;
     }
     let manifest = Value::Object(vec![
         ("key".into(), Value::Str(key.clone())),

@@ -55,5 +55,9 @@ type = "choice"
 values = ["None", "Soft", "Filmic"]
 default = "Soft"
 
+[[tags]]
+id = "glass"
+sprites = ["minecraft:block/glass", "block/*_stained_glass"]
+
 [budget]
 gpu_ms = 1.5

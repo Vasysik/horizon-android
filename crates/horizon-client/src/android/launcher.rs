@@ -198,7 +198,8 @@ impl Launcher {
         self.renderer = Some(game::loading_renderer(
             window.clone(),
             false,
-            Some(&gui),
+            Some(&gui.atlas),
+            Some(gui.panorama.as_ref()),
             None,
             if self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl {
                 horizon_client::graphics::GraphicsApi::OpenGl

@@ -25,7 +25,7 @@ horizon-release-sign = { path = "../horizon-release-sign" }
 sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 # Backups: one zip anyone can open, Windows included.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 # SIGINT/SIGTERM/SIGHUP: stop the game cleanly when the terminal or the service manager asks.

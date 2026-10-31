@@ -12,6 +12,6 @@ pub mod stages;
 
 pub use check::{Problem, Report, check};
 pub use inputs::Frame;
-pub use manifest::{API, MANIFEST, Manifest, OptionKind, PackOption, SCHEMA, Stage};
+pub use manifest::{API, MANIFEST, Manifest, OptionKind, PackOption, SCHEMA, SpriteTag, Stage};
 pub use package::{EXTENSION, Pack};
 pub use stages::{Composed, StageKind, compose};

@@ -20,8 +20,8 @@ use horizon_core::{geometry::Vec3, random::RandomSource};
 fn golem_prey(s: &super::Seen) -> bool {
     s.hostile && s.species != Species::Creeper
 }
-/// `IronGolem.registerGoals`, without `ResetUniversalAngerTargetGoal`
-/// (nothing reads the `universal_anger` rule yet).
+/// `IronGolem.registerGoals`, without `ResetUniversalAngerTargetGoal` (that
+/// goal is not ported).
 pub fn register_iron(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(1, MeleeAttack::new(1.0, true));
@@ -534,4 +534,73 @@ pub fn snow_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
     }
     let _ = z;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::world::{test_player, with_test_world};
+    use std::sync::Arc;
+
+    fn mob(id: u32, species: Species, at: Vec3) -> Mob {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = species;
+        Mob::new(id, Arc::new(kind), at, 0.0)
+    }
+
+    /// `IronGolem.canAttack` refuses creepers, and `HurtByTargetGoal.canUse`
+    /// asks it: the creeper that hurt the golem is never fought back, while
+    /// a zombie that hurts it is.
+    #[test]
+    fn a_creeper_that_hurts_an_iron_golem_is_never_fought_back() {
+        let creeper = mob(2, Species::Creeper, Vec3::new(1.5, 64.0, 0.5));
+        let zombie = mob(3, Species::Zombie, Vec3::new(1.5, 64.0, 0.5));
+        with_test_world(&[creeper.seen(None), zombie.seen(None)], |w, _| {
+            let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
+            let mut goal = HurtByTarget::new();
+            let mut events = Vec::new();
+            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut cx = Cx {
+                w,
+                lr: &mut lr,
+                events: &mut events,
+            };
+
+            golem.ai.last_hurt_by = Some(Who::Mob(2));
+            golem.ai.last_hurt_by_time = 1;
+            assert!(!goal.can_use(&mut golem, &mut cx));
+            assert_eq!(golem.ai.target, None, "a creeper is refused");
+
+            golem.ai.last_hurt_by = Some(Who::Mob(3));
+            golem.ai.last_hurt_by_time = 2;
+            assert!(goal.can_use(&mut golem, &mut cx));
+            goal.start(&mut golem, &mut cx);
+            assert_eq!(golem.ai.target, Some(Who::Mob(3)));
+        });
+    }
+
+    /// A village golem (not built by a player) still goes after the player
+    /// who angered it.
+    #[test]
+    fn a_village_golem_still_targets_the_player_who_angered_it() {
+        with_test_world(&[], |w, _| {
+            let mut w = w.clone();
+            w.player = Some(test_player(Vec3::new(3.5, 64.0, 0.5)));
+            let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
+            golem.extra.anger = 100;
+            let mut events = Vec::new();
+            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut cx = Cx {
+                w: &w,
+                lr: &mut lr,
+                events: &mut events,
+            };
+            let mut goal = NearestTarget::player(true)
+                .interval(0)
+                .when(|m, _| m.extra.anger > 0);
+            assert!(goal.can_use(&mut golem, &mut cx));
+            goal.start(&mut golem, &mut cx);
+            assert_eq!(golem.ai.target, Some(Who::Player));
+        });
+    }
 }

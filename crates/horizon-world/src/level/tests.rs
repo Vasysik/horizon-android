@@ -1108,6 +1108,31 @@ impl World<'_> {
             player,
         )
     }
+    /// Right-click the north face of `pos` with `item` (or an empty hand),
+    /// and which of `useItemOn` and `useWithoutItem` answered.
+    fn use_branch(&mut self, pos: BlockPos, item: Option<&str>) -> (InteractionResult, UseBranch) {
+        let player = PlayerContext {
+            yaw: 0.0,
+            pitch: 0.0,
+            may_build: true,
+            can_eat: false,
+            game_master: false,
+        };
+        let hit = horizon_core::geometry::Vec3::new(
+            f64::from(pos.x) + 0.5,
+            f64::from(pos.y) + 0.5,
+            f64::from(pos.z),
+        );
+        self.f.behaviours.use_item_on_branch(
+            &mut self.level,
+            &mut self.ticks,
+            pos,
+            Direction::North,
+            hit,
+            player,
+            item,
+        )
+    }
     /// Right-click the north face of `pos` holding `item` in the main hand.
     fn use_item(&mut self, pos: BlockPos, item: &str) -> InteractionResult {
         self.use_item_on(pos, Some(item), 0.5)
@@ -1144,6 +1169,44 @@ impl World<'_> {
             item,
         )
     }
+}
+
+#[test]
+fn use_on_a_block_says_which_branch_answered() {
+    // ServerPlayerGameMode.useItemOn: ITEM_USED_ON_BLOCK when useItemOn
+    // consumes the click, DEFAULT_BLOCK_USE when useWithoutItem does.
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    // A lever has no useItemOn of its own: it flips with any hand.
+    let lever = w.id("lever", &[("face", "floor"), ("facing", "north")]);
+    for item in [None, Some("minecraft:stick")] {
+        w.put(pos, lever);
+        let (result, branch) = w.use_branch(pos, item);
+        assert!(result.consumes_action(), "{item:?}");
+        assert_eq!(branch, UseBranch::WithoutItem, "{item:?}");
+    }
+    // RespawnAnchorBlock.useItemOn: glowstone charges it.
+    let anchor = w.id("respawn_anchor", &[("charges", "0")]);
+    w.put(pos, anchor);
+    assert_eq!(
+        w.use_branch(pos, Some("minecraft:glowstone")),
+        (InteractionResult::Success, UseBranch::ItemOn)
+    );
+    // CandleBlock.useItemOn: an empty hand snuffs a lit candle.
+    let candle = w.id("candle", &[("candles", "1"), ("lit", "true")]);
+    w.put(pos, candle);
+    assert_eq!(
+        w.use_branch(pos, None),
+        (InteractionResult::Success, UseBranch::ItemOn)
+    );
+    // SweetBerryBushBlock.useItemOn: bone meal on a growing bush passes on
+    // to the item without trying the empty hand.
+    let bush = w.id("sweet_berry_bush", &[("age", "0")]);
+    w.put(pos, bush);
+    assert_eq!(
+        w.use_branch(pos, Some("minecraft:bone_meal")),
+        (InteractionResult::Pass, UseBranch::ItemOn)
+    );
 }
 
 #[test]
@@ -2599,6 +2662,52 @@ fn an_empty_hand_on_a_lit_candle_cake_eats_it_or_snuffs_its_candle() {
         InteractionResult::Pass
     );
     assert_eq!(w.get(pos), lit);
+}
+
+#[test]
+fn flowers_and_saplings_can_be_placed_in_flower_pots() {
+    // FlowerPotBlock.useItemOn: placing a plant in an empty pot pots it.
+    // Clicking a potted plant with another plant CONSUMEs without change.
+    // Clicking a potted plant with an empty hand takes the plant out (useWithoutItem).
+    // Clicking an empty pot with empty hand or non-plant item CONSUMEs.
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let empty_pot = w.id("flower_pot", &[]);
+    for (item, potted_block) in [
+        ("minecraft:poppy", "potted_poppy"),
+        ("minecraft:dandelion", "potted_dandelion"),
+        ("minecraft:oak_sapling", "potted_oak_sapling"),
+        ("minecraft:cactus", "potted_cactus"),
+        ("minecraft:red_mushroom", "potted_red_mushroom"),
+        ("minecraft:fern", "potted_fern"),
+    ] {
+        w.put(pos, empty_pot);
+        assert_eq!(w.use_item(pos, item), InteractionResult::Success);
+        assert_eq!(w.get(pos), w.id(potted_block, &[]));
+
+        // Right-clicking a potted plant with another flower does nothing (CONSUME).
+        assert_eq!(
+            w.use_item(pos, "minecraft:poppy"),
+            InteractionResult::Consume
+        );
+        assert_eq!(w.get(pos), w.id(potted_block, &[]));
+
+        // Right-clicking a potted plant with empty hand extracts the plant.
+        assert_eq!(w.use_block(pos), InteractionResult::Success);
+        assert_eq!(w.get(pos), empty_pot);
+    }
+
+    // Right-clicking an empty flower pot with an empty hand does nothing (CONSUME).
+    w.put(pos, empty_pot);
+    assert_eq!(w.use_block(pos), InteractionResult::Consume);
+    assert_eq!(w.get(pos), empty_pot);
+
+    // Right-clicking an empty flower pot with a non-plant item does nothing (CONSUME).
+    assert_eq!(
+        w.use_item(pos, "minecraft:stone"),
+        InteractionResult::Consume
+    );
+    assert_eq!(w.get(pos), empty_pot);
 }
 
 #[test]

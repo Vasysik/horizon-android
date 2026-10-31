@@ -112,6 +112,7 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
         f.click("Join Server"),
         Action::Connect {
             address: "localhost:25569".into(),
+            lan: false,
         }
     );
     assert_eq!(f.title.last_server, "localhost:25569");
