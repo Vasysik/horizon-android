@@ -42,6 +42,10 @@ pub struct Config {
     pub server: String,
     #[serde(skip)]
     pub microsoft_client_id: String,
+    /// Set when this load applied the low-power-GPU defaults; the launcher
+    /// shows one status note about it. Never serialized.
+    #[serde(skip)]
+    pub low_end_tuned: bool,
     pub renderer: RendererMode,
     pub render_scale: crate::display::RenderScale,
     pub orientation: Orientation,
@@ -106,12 +110,24 @@ impl Config {
         if cfg!(target_pointer_width = "32") && value.get("renderer").is_none() {
             config.renderer = RendererMode::OpenGl;
         }
+        // PowerVR GE-series boards (Helio A22 class): their Vulkan driver
+        // renders but glitches, so a fresh install starts on the stable
+        // OpenGL ES backend at a resolution the tiny fill rate can sustain.
+        let mut low_end = false;
+        if value.get("renderer").is_none() && crate::device_runtime::low_end_gpu() {
+            config.renderer = RendererMode::OpenGl;
+            low_end = true;
+        }
+        if low_end && value.get("render_scale").is_none() {
+            config.render_scale = crate::display::RenderScale::new(67);
+        }
         // Ignore saved app registrations while this dev build uses the fixed ID.
         config.microsoft_client_id =
             crate::account::client_id().unwrap_or_else(|| MICROSOFT_CLIENT_ID.into());
         if value.get("renderer").is_none() && value["gpu_batching"].as_bool() == Some(true) {
             config.renderer = RendererMode::Vulkan;
         }
+        config.low_end_tuned = low_end && config.renderer == RendererMode::OpenGl;
         let legacy = std::fs::read(config.game_home(home).join("horizon-touch.json"))
             .ok()
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -205,6 +221,11 @@ pub struct LocalItem {
     pub enabled: bool,
 }
 impl Catalog {
+    /// Anything the launcher paints as movement: a running download, search
+    /// or their workers. The idle redraw pacing keeps 10 Hz while this is true.
+    pub fn animating(&self) -> bool {
+        self.downloading.is_some() || self.worker.is_some() || self.search_worker.is_some()
+    }
     pub fn new(home: &Path) -> Self {
         let config = Config::load(home);
         let mut result = Self {

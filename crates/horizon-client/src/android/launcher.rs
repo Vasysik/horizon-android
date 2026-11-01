@@ -56,6 +56,10 @@ pub(super) struct Launcher {
     login: login::Login,
     session_worker: Option<mpsc::Receiver<std::result::Result<Option<PathBuf>, String>>>,
     session_ready: bool,
+    // Idle redraw pacing: real events ask for an immediate frame; an
+    // unchanged launcher repaints at 2 Hz instead of 10 Hz.
+    redraw_now: bool,
+    idle_ticks: u32,
     focus: Option<usize>,
     diagnostic_export: Option<mpsc::Receiver<std::result::Result<String, String>>>,
 }
@@ -82,6 +86,9 @@ impl Launcher {
                 log::warn!("Could not save graphics recovery choice: {error}");
             }
             catalog.status = "Previous Vulkan startup was interrupted. Using OpenGL ES recovery; you can change Rendering mode in Settings.".into();
+        }
+        if catalog.status.is_empty() && catalog.config.low_end_tuned {
+            catalog.status = "Low-power GPU detected: starting on OpenGL ES at 67% resolution for stability. Rendering and Client resolution in Settings can change both.".into();
         }
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
@@ -110,6 +117,8 @@ impl Launcher {
             login: login::Login::new(),
             session_worker: None,
             session_ready: false,
+            redraw_now: true,
+            idle_ticks: 0,
             focus: None,
             diagnostic_export: None,
         }
@@ -119,6 +128,7 @@ impl Launcher {
         if !horizon_client::android_runtime::take_launcher_return() {
             return;
         }
+        self.redraw_now = true;
         if let Some(mut game) = self.game.take() {
             game.exiting(events);
             drop(game);
@@ -350,6 +360,7 @@ impl Launcher {
 impl ApplicationHandler for Launcher {
     fn resumed(&mut self, events: &ActiveEventLoop) {
         self.configure_screen();
+        self.redraw_now = true;
         if let Some(game) = &mut self.game {
             return game.resumed(events);
         }
@@ -369,6 +380,9 @@ impl ApplicationHandler for Launcher {
         }
     }
     fn window_event(&mut self, events: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if !matches!(event, WindowEvent::RedrawRequested) {
+            self.redraw_now = true;
+        }
         if crate::documents::handle_event(&event) {
             return;
         }
@@ -468,6 +482,7 @@ impl ApplicationHandler for Launcher {
         }
     }
     fn device_event(&mut self, events: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
+        self.redraw_now = true;
         if let Some(game) = &mut self.game {
             game.device_event(events, id, event);
         } else {
@@ -556,9 +571,30 @@ impl ApplicationHandler for Launcher {
             }
         }
 
-        if let Some(window) = &self.window {
-            window.request_redraw();
+        // Repainting an unchanged launcher ten times a second burns scarce
+        // CPU and GPU on Helio A22 class devices for identical frames. Keep
+        // the 100 ms wake for channel polling, repaint at once after real
+        // events or while anything visibly animates, and heartbeat idle
+        // frames at 2 Hz so polled state changes still appear quickly.
+        let animating = self.feedback.is_some()
+            || self.catalog.editing.is_some()
+            || self.catalog.animating()
+            || self.worker.is_some()
+            || self.session_worker.is_some()
+            || self.diagnostic_export.is_some()
+            || self.login.visible
+            || crate::documents::busy();
+        if animating || self.redraw_now {
+            self.idle_ticks = 0;
+        } else {
+            self.idle_ticks = self.idle_ticks.wrapping_add(1);
         }
+        if animating || self.redraw_now || self.idle_ticks % 5 == 0 {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        self.redraw_now = false;
         events.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(100),
         ));
