@@ -24,7 +24,7 @@ in the [Android guide](android.md#check).
 | Play with Friends | Shared core exists, but relay/account/clipboard/background behavior needs an Android end-to-end pass before advertising parity |
 | Saves and backups | Engine save logic works; Android Storage Access Framework import/export and share UI remain to implement. Uninstalling the app deletes internal data |
 | Lifecycle | Touch/key cancellation, vibration stop and surface release/recreation. Leaving the game returns to the native launcher; background process termination still needs broader save/recovery testing |
-| Android file access | System-picker import for add-ons; Horizon Android in system Files exposes mods, resource packs, shaders and reports. Game files stay internal. F2 gallery export uses MediaStore; Android 8.1–9 requests storage access for that explicit action. World import/export remains separate |
+| Android file access | System-picker import for add-ons; Horizon Android in system Files exposes mods, resource packs, shaders, worlds and reports. Physical game files stay internal. F2 gallery export uses MediaStore; Android 8.1–9 requests storage access for that explicit action. World folders can be copied in Files while the game is closed; dedicated ZIP-world import/export remains separate |
 | Physical device tuning | Thermal/frame-pacing and GPU-driver comparisons need measurements on the target phone; an emulator is not evidence of phone performance |
 | Desktop updates / telemetry services | Desktop deployment/auto-update infrastructure is not an Android updater; fork exports keep original workflows inactive |
 

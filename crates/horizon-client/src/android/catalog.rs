@@ -180,6 +180,7 @@ enum Reply {
 }
 pub struct Catalog {
     pub local: Vec<LocalItem>,
+    pub bundled_enabled: std::collections::BTreeSet<String>,
     pub sections: [bool; 3],
     pub pending_delete: Option<LocalItem>,
     downloaded: Vec<(browser::SourceId, String)>,
@@ -211,6 +212,7 @@ impl Catalog {
         let config = Config::load(home);
         let mut result = Self {
             local: vec![],
+            bundled_enabled: Default::default(),
             sections: [false, false, false],
             pending_delete: None,
             downloaded: vec![],
@@ -256,6 +258,7 @@ impl Catalog {
             .map(|e| (e.source, e.project.clone()))
             .collect();
         let on = horizon_client::mod_list::ModList::load(&game);
+        self.bundled_enabled = on.enabled.difference(&on.disabled).cloned().collect();
         let settings = horizon_client::settings::Settings::load(&game.join("options.txt"));
         self.local.clear();
         for kind in horizon_client::content_files::Kind::ALL {
