@@ -1523,9 +1523,7 @@ impl Hub {
         if g.left_reason.is_empty() {
             g.left_reason = reason.to_owned();
         }
-        if std::env::var_os("HORIZON_NET_DEBUG").is_some() {
-            log::info!("[lan] {} left: {reason}", g.name);
-        }
+        log::info!("[lan] {} left: {reason}", g.name);
         if !g.placed {
             return g;
         }
