@@ -896,6 +896,8 @@ impl Game<'_> {
     /// fields, the LAN port.
     fn pad_typing(&self) -> bool {
         (self.screen == Screen::Chat && self.title.is_none())
+            || self.screen == Screen::CommandBlock
+            || self.block_editor_typing()
             || self.sign_edit.is_some()
             || matches!(self.book, Some(super::books::BookScreen::Edit { .. }))
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
@@ -964,6 +966,10 @@ impl Game<'_> {
             if let Err(error) = self.dialog_key(key.unwrap_or(KeyCode::Space), None, text) {
                 log::warn!("Dialog keyboard: {error}");
             }
+        } else if self.screen == Screen::BlockEditor {
+            self.block_editor_ime(key, text);
+        } else if self.screen == Screen::CommandBlock {
+            self.command_block_ime(key, text);
         } else if self.screen == Screen::Chat && self.title.is_none() {
             match text {
                 Some(t) => self.chat_type(t),
@@ -991,9 +997,6 @@ impl Game<'_> {
             if key != Some(KeyCode::Enter) {
                 self.station_text(text, backspace);
             }
-        } else if cfg!(target_os = "android") && self.screen == Screen::CommandBlock {
-            #[cfg(target_os = "android")]
-            self.command_block_ime(key, text);
         } else if self.screen == Screen::WorldOptions {
             if key != Some(KeyCode::Enter) {
                 self.world_options_text(text);

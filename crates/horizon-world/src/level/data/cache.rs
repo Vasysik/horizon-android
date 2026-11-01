@@ -138,11 +138,9 @@ struct Item {
 fn fingerprint(registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
     let mut hasher = Sha256::new();
     hasher.update(b"horizon resolved behaviours 3");
-    // Include package version so APK updates on Android invalidate the cache even though
-    // /proc/self/exe points to /system/bin/app_process64 whose mtime is frozen in the OS ROM.
-    hash_str(&mut hasher, env!("CARGO_PKG_VERSION"));
-    // Hash all recognised block class names and their exact sequence so any enum addition,
-    // deletion, or reordering automatically invalidates stale caches.
+    // Class ordinals are serialized. Android's current_exe is app_process,
+    // so its timestamp cannot invalidate them when our native library changes.
+    // Include variant names and order; loader/schema changes still bump VERSION.
     hasher.update((Class::ALL.len() as u32).to_le_bytes());
     for class in Class::ALL {
         hash_str(&mut hasher, class.as_str());

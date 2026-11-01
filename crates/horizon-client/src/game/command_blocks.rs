@@ -782,7 +782,6 @@ impl Game<'_> {
             })
             .unwrap_or_default()
     }
-    #[cfg(target_os = "android")]
     pub(super) fn command_block_ime(&mut self, key: Option<KeyCode>, text: Option<&str>) {
         if key == Some(KeyCode::Enter) {
             if let Some(screen) = self.command_block_screen.take() {

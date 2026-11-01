@@ -451,10 +451,17 @@ impl Options {
     /// A bad command line is a [`launch_api::UsageError`] (exit code 2, no crash report).
     fn read() -> Result<Option<Self>> {
         #[cfg(not(target_os = "android"))]
-        let args = std::env::args().skip(1);
+        {
+            Self::read_arguments(std::env::args().skip(1))
+        }
         #[cfg(target_os = "android")]
-        let args = crate::android_arguments()?.into_iter();
-        let Some(mut o) = Self::parse(args).map_err(|e| launch_api::UsageError(e.to_string()))?
+        {
+            Err("Android game startup requires explicit launch arguments".into())
+        }
+    }
+    fn read_arguments(args: impl IntoIterator<Item = String>) -> Result<Option<Self>> {
+        let Some(mut o) =
+            Self::parse(args.into_iter()).map_err(|e| launch_api::UsageError(e.to_string()))?
         else {
             return Ok(None);
         };
@@ -19005,9 +19012,9 @@ fn loading_app(
 }
 
 #[cfg(target_os = "android")]
-pub(crate) fn android_game() -> Result<Box<dyn ApplicationHandler>> {
+pub(crate) fn android_game(arguments: Vec<String>) -> Result<Box<dyn ApplicationHandler>> {
     horizon_client::auth::clear_current();
-    let mut options = Options::read()?.ok_or("missing Android options")?;
+    let mut options = Options::read_arguments(arguments)?.ok_or("missing Android options")?;
     if crate::performance::active() {
         options.spikes = Some(50.0);
     }

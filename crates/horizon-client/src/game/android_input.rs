@@ -410,6 +410,13 @@ impl Game<'_> {
         }
         let initial = if self.dialog_open() {
             self.dialog_edit_value()
+        } else if self.screen == Screen::BlockEditor {
+            let Some(value) = self.block_editor_edit_value() else {
+                return;
+            };
+            value
+        } else if self.screen == Screen::CommandBlock {
+            self.command_block_edit_value()
         } else if self.sign_edit.is_some() {
             self.sign_input(Some(KeyCode::End), None);
             self.sign_current().unwrap_or_default()
@@ -434,8 +441,6 @@ impl Game<'_> {
             self.ui.options.android_edit_value(&self.gui.atlas)
         } else if self.screen == Screen::WorldOptions {
             self.world_options_edit_value()
-        } else if self.screen == Screen::CommandBlock {
-            self.command_block_edit_value()
         } else if self.mod_browser_typing() {
             self.mod_browser_edit_value()
         } else if self.station_typing() {
