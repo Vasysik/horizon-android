@@ -131,6 +131,7 @@ pub mod ui_theme;
 pub mod vanillagen;
 pub mod win_screen;
 pub mod world_spawn;
+pub mod voice;
 pub use horizon_client_core::Result;
 pub use horizon_client_core::block_entity_nbt;
 pub use horizon_client_core::bossbar;

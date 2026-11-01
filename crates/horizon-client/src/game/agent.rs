@@ -426,6 +426,7 @@ impl Game<'_> {
             Screen::Win => "win",
             Screen::Mod => "mod",
             Screen::DebugOptions => "debug-options",
+            Screen::VoiceChat => "voice-chat",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {

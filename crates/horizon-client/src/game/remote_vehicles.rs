@@ -246,11 +246,13 @@ impl Game<'_> {
     /// Seat position for an armor stand (including GSit seats riding another player or entity).
     fn remote_stand_seat(&mut self, id: u32) -> Option<Vec3> {
         let i = self.armor_stands.iter().position(|a| a.id == id)?;
-        let a = &self.armor_stands[i];
-        let mut pos = a.position;
+        let vehicle = self.armor_stands[i].vehicle;
+        let marker = self.armor_stands[i].marker;
+        let small = self.armor_stands[i].small;
+        let mut pos = self.armor_stands[i].position;
         // If the armor stand is a passenger of another entity (e.g. GSit player sit: Player B -> ArmorStand -> Me),
         // resolve the host vehicle's attachment point so the seat tracks the host entity smoothly every tick.
-        if let Some(vehicle_id) = a.vehicle {
+        if let Some(vehicle_id) = vehicle {
             if let Some(m) = self.mobs.iter().find(|m| m.id == vehicle_id) {
                 pos = horizon_client::mobs::riders::seat(
                     horizon_client::mobs::riders::passenger_attachment(m),
@@ -274,9 +276,9 @@ impl Game<'_> {
                 self.armor_stands[i].position = pos;
             }
         }
-        let height = if a.marker {
+        let height = if marker {
             0.0
-        } else if a.small {
+        } else if small {
             0.9875
         } else {
             1.975

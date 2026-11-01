@@ -725,3 +725,33 @@ pub fn display_rotation() -> i32 {
     })
     .unwrap_or(0)
 }
+
+/// Check if RECORD_AUDIO permission is granted; if not, request it asynchronously and return false.
+pub fn ensure_microphone_permission() -> bool {
+    with_context(|env, activity| {
+        let perm_str = env.new_string("android.permission.RECORD_AUDIO")?;
+        let perm_obj = JObject::from(perm_str);
+        let check_res = env
+            .call_method(
+                activity,
+                "checkSelfPermission",
+                "(Ljava/lang/String;)I",
+                &[JValue::Object(&perm_obj)],
+            )?
+            .i()?;
+        if check_res == 0 {
+            return Ok(true);
+        }
+        let string_class = env.find_class("java/lang/String")?;
+        let perm_array = env.new_object_array(1, string_class, perm_obj)?;
+        let perm_array_obj = JObject::from(perm_array);
+        env.call_method(
+            activity,
+            "requestPermissions",
+            "([Ljava/lang/String;I)V",
+            &[JValue::Object(&perm_array_obj), JValue::Int(9001)],
+        )?;
+        Ok(false)
+    })
+    .unwrap_or(true)
+}

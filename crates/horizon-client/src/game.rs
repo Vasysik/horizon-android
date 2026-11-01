@@ -90,6 +90,7 @@ mod crossbow;
 pub(crate) mod cushions;
 mod debug_keys;
 mod debug_options;
+mod voice_ui;
 mod debug_stick;
 mod decorated_pot;
 mod dedicated;
@@ -730,6 +731,8 @@ enum Screen {
     Mod,
     /// DebugOptionsScreen, F3+F6 (game/debug_options.rs).
     DebugOptions,
+    /// Simple Voice Chat modal screen
+    VoiceChat,
 }
 struct Mining {
     pos: [i32; 3],
@@ -1998,6 +2001,7 @@ struct Game<'a> {
     pause: bool,
     debug: bool,
     screen: Screen,
+    pub voice: horizon_client::voice::VoiceChatClient,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     /// CPU geometry storage retained across frames, including empty/title frames.
@@ -7770,9 +7774,11 @@ impl Game<'_> {
             }
             Screen::Chat => self.draw_chat_screen(&mut batch),
             Screen::Mod => self.draw_mod_screen(&mut batch),
+            Screen::VoiceChat => self.draw_voice_chat_screen(&mut batch),
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
         horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_saving_indicator(b));
+        self.draw_voice_hud_indicator(&mut batch);
         horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_toasts(b, !show_hud));
         horizon_client::hud::inset_overlay(&mut batch, margins, |b| {
             self.draw_pack_toasts(b, !show_hud)
@@ -14440,6 +14446,10 @@ impl Game<'_> {
                 Screen::Win => self.close_win_screen()?,
                 Screen::Mod => self.close_mod_screen(true),
                 Screen::DebugOptions => self.close_debug_options(),
+                Screen::VoiceChat => {
+                    self.screen = Screen::Playing;
+                    self.capture(true);
+                }
             },
             KeyCode::Digit1
             | KeyCode::Digit2
@@ -14528,6 +14538,20 @@ impl Game<'_> {
             KeyCode::KeyQ if self.screen == Screen::Playing => {
                 let all = drop_whole_stack(&self.physical_keys);
                 self.drop_held(all);
+            }
+            KeyCode::KeyV if self.screen == Screen::VoiceChat => {
+                self.screen = Screen::Playing;
+                self.capture(true);
+            }
+            KeyCode::KeyV if self.screen == Screen::Playing => {
+                self.screen = Screen::VoiceChat;
+                self.capture(false);
+            }
+            KeyCode::KeyM if self.screen == Screen::Playing => {
+                self.voice_toggle_mute();
+            }
+            KeyCode::KeyN if self.screen == Screen::Playing => {
+                self.voice_toggle_disable();
             }
             KeyCode::Digit1
             | KeyCode::Digit2
@@ -15919,6 +15943,9 @@ impl ApplicationHandler for Game<'_> {
                         Screen::DebugOptions if pressed && button == MouseButton::Left => {
                             self.debug_options_click()
                         }
+                        Screen::VoiceChat if pressed && button == MouseButton::Left => {
+                            self.voice_chat_click();
+                        }
                         Screen::ConfirmLink if pressed && button == MouseButton::Left => {
                             self.confirm_link_click()
                         }
@@ -16184,6 +16211,9 @@ impl ApplicationHandler for Game<'_> {
                     };
                     self.mod_key(key, event.state == ElementState::Pressed, event.repeat);
                     self.native_key_event(key, event.state == ElementState::Pressed, event.repeat);
+                    if key == KeyCode::CapsLock {
+                        self.voice_ptt(event.state == ElementState::Pressed);
+                    }
                     // Screen.keyPressed sees the physical key, repeats included.
                     if event.state == ElementState::Pressed
                         && self.screen == Screen::Inventory
@@ -16747,6 +16777,7 @@ impl<'a> Game<'a> {
             pause: false,
             debug: false,
             screen: Screen::Playing,
+            voice: horizon_client::voice::VoiceChatClient::new(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))),
             window: None,
             renderer: None,
             entity_vertices: Vec::new(),

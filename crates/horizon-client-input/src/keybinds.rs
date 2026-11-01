@@ -73,13 +73,20 @@ pub const MAPPINGS: &[(&str, &str, &str)] = &[
     ("key.debug.networkCharts", "key.keyboard.3", "debug"),
     ("key.debug.lightmapTexture", "key.keyboard.4", "debug"),
     ("key.debug.improvedTransparency", "key.keyboard.x", "debug"),
+    // Simple Voice Chat (SVC)
+    ("key.voice_chat", "key.keyboard.v", "voicechat"),
+    ("key.push_to_talk", "key.keyboard.caps.lock", "voicechat"),
+    ("key.whisper", "key.keyboard.unknown", "voicechat"),
+    ("key.mute_microphone", "key.keyboard.m", "voicechat"),
+    ("key.disable_voice_chat", "key.keyboard.n", "voicechat"),
+    ("key.hide_icons", "key.keyboard.h", "voicechat"),
 ];
 /// Mappings Options builds as `ToggleKeyMapping` (hold or toggle by option).
 pub fn is_toggle(name: &str) -> bool {
     matches!(name, "key.sneak" | "key.sprint" | "key.use" | "key.attack")
 }
 /// KeyMapping.Category sort order.
-pub const CATEGORIES: [&str; 8] = [
+pub const CATEGORIES: [&str; 9] = [
     "movement",
     "misc",
     "multiplayer",
@@ -87,6 +94,7 @@ pub const CATEGORIES: [&str; 8] = [
     "inventory",
     "creative",
     "spectator",
+    "voicechat",
     "debug",
 ];
 

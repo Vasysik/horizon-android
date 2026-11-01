@@ -2641,6 +2641,9 @@ impl Game<'_> {
             C::CustomPayload(p) if p.channel == horizon_protocol::mod_net::CHANNEL => {
                 self.remote_native_net(&p.data);
             }
+            C::CustomPayload(p) if p.channel.starts_with("voicechat:") => {
+                self.remote_voicechat_payload(&p.channel, &p.data);
+            }
             // PingDebugMonitor.onPongReceived.
             C::PongResponse(p) => {
                 let delay = self.debug_millis() - p.time;
@@ -2687,6 +2690,7 @@ impl Game<'_> {
                     r.sent_info = info.clone();
                 }
                 self.send(S::ClientInformation(info));
+                self.initiate_voice_handshake();
             }
             C::Respawn(p) => {
                 // A new player, without effects (the server sends them
@@ -5109,6 +5113,7 @@ impl Game<'_> {
         self.tick_mods();
         self.native_net.to_server = 0;
         self.native_tick();
+        self.tick_voice_chat();
         // Minecraft.tick sends this even when the player cannot tick yet,
         // including while waiting for chunks. Keep it outside early returns.
         if self.remote.as_ref().is_some_and(|r| r.joined) {
@@ -8616,6 +8621,43 @@ impl Game<'_> {
             "decode_errors": r.decode_errors,
             "chat": r.chat.iter().rev().take(10).rev().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
         }))
+    }
+
+    pub(super) fn remote_voicechat_payload(&mut self, channel: &str, data: &[u8]) {
+        match self.voice.handle_custom_payload(channel, data) {
+            Ok(Some((resp_channel, resp_data))) => {
+                self.send(S::CustomPayload(horizon_protocol::packets::configuration::CustomPayload {
+                    channel: resp_channel,
+                    data: resp_data,
+                }));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("SVC: Failed to handle voicechat payload on {channel}: {e}");
+            }
+        }
+    }
+
+    pub(super) fn initiate_voice_handshake(&mut self) {
+        if let Some(r) = self.remote.as_ref() {
+            let addr = &r.session.address;
+            let host = addr.split(':').next().unwrap_or(addr);
+            self.voice.set_server_host(host);
+        }
+        let (ch, data) = self.voice.initiate_handshake();
+        self.send(S::CustomPayload(horizon_protocol::packets::configuration::CustomPayload {
+            channel: ch,
+            data,
+        }));
+    }
+
+    pub(super) fn tick_voice_chat(&mut self) {
+        if let Some((ch, data)) = self.voice.check_handshake_timeout() {
+            self.send(S::CustomPayload(horizon_protocol::packets::configuration::CustomPayload {
+                channel: ch,
+                data,
+            }));
+        }
     }
 }
 
