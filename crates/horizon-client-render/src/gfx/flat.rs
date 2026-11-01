@@ -137,6 +137,7 @@ pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
         || is_broken_intel_vulkan(&info)
         || cfg!(target_os = "android")
             && info.backend == wgpu::Backend::Vulkan
+            && !is_broken_mobile_vulkan(&info)
             && !crate::android_runtime::compatibility())
         && supported(adapter, device)
 }
@@ -144,6 +145,25 @@ pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
 /// Intel Gen11 (Ice Lake) ANV Vulkan driver has broken `first_instance` for instance-step
 /// vertex attributes (#3529), causing terrain sections to be drawn with another section's origin
 /// and flicker.
+/// Older or budget Qualcomm Adreno drivers (e.g. Adreno 610/612/616 on Snapdragon 680/685)
+/// have broken storage buffer vertex attributes in Vulkan, causing crashes on world entry (#57).
+pub fn is_broken_mobile_vulkan(info: &wgpu::AdapterInfo) -> bool {
+    if info.backend != wgpu::Backend::Vulkan {
+        return false;
+    }
+    let name = info.name.to_ascii_lowercase();
+    if name.contains("adreno") {
+        if name.contains("610")
+            || name.contains("612")
+            || name.contains("615")
+            || name.contains("616")
+            || name.contains("506")
+        {
+            return true;
+        }
+    }
+    false
+}
 pub fn is_broken_intel_vulkan(info: &wgpu::AdapterInfo) -> bool {
     info.backend == wgpu::Backend::Vulkan
         && info.vendor == 0x8086
