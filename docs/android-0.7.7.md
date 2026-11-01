@@ -46,3 +46,19 @@ Tablet menu measurements still show roughly 31 ms GPU time with radius 5 blur
 versus 12 ms at radius 0. Bind-group reuse alone does not resolve this GPU cost.
 These short diagnostic runs used different native build profiles and are not
 a release-to-release FPS benchmark.
+
+## Installer cache recovery
+
+Installer inputs remain in Android's disposable cache. Preparation now reopens
+the index, client JAR and each asset through bounded missing-file recovery,
+redownloading an evicted input with its existing size/SHA-1 verification.
+An open source handle remains alive during extraction/copy. Download retries
+recreate missing cache directories, and failures identify the affected input.
+This does not change worlds, accounts, the installation destination or cache
+cleanup after success. Persistent storage exhaustion still needs free space.
+
+Four cache-recovery regression tests and the Android content harness passed
+(31 passed, one fixture-dependent test ignored), as did ARM64 check and Clippy.
+The report for Android #55 records RC1 source `2a6dd4d80861`; the same vulnerable
+cache lifetime assumptions remained in the final 0.7.6 installer. Its generic
+error alone does not establish which particular input was evicted.

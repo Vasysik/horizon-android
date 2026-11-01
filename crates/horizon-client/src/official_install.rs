@@ -13,6 +13,9 @@ use std::{
     },
 };
 
+#[path = "official_install_cache.rs"]
+mod cache_input;
+
 const CATALOG: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 const LOCK: &str = include_str!("../../../research-lock.json");
 static INSTALLATION: Mutex<()> = Mutex::new(());
@@ -164,8 +167,7 @@ fn json(url: &str) -> Result<Value> {
     Ok(serde_json::from_slice(&metadata_bytes(url)?)?)
 }
 
-fn hash(path: &Path) -> Result<String> {
-    let mut file = fs::File::open(path)?;
+fn hash(mut file: impl Read) -> Result<String> {
     let mut digest = Sha1::new();
     let mut buffer = [0; 65536];
     loop {
@@ -206,16 +208,27 @@ impl Download {
         Ok(file)
     }
     fn get(&self) -> Result<()> {
-        if self.path.is_file()
-            && fs::metadata(&self.path)?.len() == self.size
-            && hash(&self.path)? == self.sha1
-        {
-            return Ok(());
+        // Keep the opened inode while checking it: Android may unlink cache
+        // entries between metadata, checksum validation and preparation.
+        match fs::File::open(&self.path) {
+            Ok(file) if file.metadata()?.len() == self.size && hash(&file)? == self.sha1 => {
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Could not read cached Minecraft file {}: {error}",
+                    self.path.display()
+                )
+                .into());
+            }
         }
-        fs::create_dir_all(self.path.parent().ok_or("Missing download directory")?)?;
         let partial = self.path.with_extension("partial");
         for attempt in 0..3 {
             let result = (|| -> Result<()> {
+                // Recreate on every retry, not only before the first attempt.
+                fs::create_dir_all(self.path.parent().ok_or("Missing download directory")?)?;
                 let mut input = agent()
                     .get(&self.url)
                     .call()?
@@ -225,7 +238,7 @@ impl Download {
                 let count = std::io::copy(&mut input, &mut output)?;
                 output.flush()?;
                 drop(output);
-                if count != self.size || hash(&partial)? != self.sha1 {
+                if count != self.size || hash(fs::File::open(&partial)?)? != self.sha1 {
                     return Err("Mojang file checksum or size mismatch".into());
                 }
                 fs::rename(&partial, &self.path)?;
@@ -236,11 +249,21 @@ impl Download {
             }
             let _ = fs::remove_file(&partial);
             if attempt == 2 {
-                return result;
+                return result.map_err(|error| {
+                    format!(
+                        "Could not download Minecraft file {}: {error}",
+                        self.path.display()
+                    )
+                    .into()
+                });
             }
             std::thread::sleep(std::time::Duration::from_millis(500 * (attempt + 1)));
         }
         unreachable!()
+    }
+
+    fn open(&self) -> Result<fs::File> {
+        cache_input::open(&self.path, || self.get())
     }
 }
 
@@ -354,7 +377,7 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
     let manifest = validate_manifest(&bytes, checksum, version, pins)?;
     let index = Download::from(&manifest["assetIndex"], cache.join("asset-index.json"))?;
     index.get()?;
-    let index: Value = serde_json::from_reader(fs::File::open(&index.path)?)?;
+    let index: Value = serde_json::from_reader(index.open()?)?;
     let objects = index["objects"]
         .as_object()
         .ok_or("Missing asset objects")?;
@@ -423,7 +446,7 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
     fs::create_dir(&stage)?;
     let result = (|| -> Result<()> {
         report(InstallStage::Extract, 0, 0);
-        let mut zip = zip::ZipArchive::new(fs::File::open(&files[0].path)?)?;
+        let mut zip = zip::ZipArchive::new(files[0].open()?)?;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i)?;
             let name = entry.name()?;
@@ -438,10 +461,20 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
             fs::create_dir_all(path.parent().ok_or("Missing resource parent")?)?;
             std::io::copy(&mut entry, &mut fs::File::create(path)?)?;
         }
+        let downloads: std::collections::HashMap<_, _> = files
+            .iter()
+            .map(|file| (file.path.as_path(), file))
+            .collect();
         for (name, from) in assets {
             let path = stage.join("assets").join(relative(name)?);
             fs::create_dir_all(path.parent().ok_or("Missing asset parent")?)?;
-            fs::copy(from, path)?;
+            let input = downloads
+                .get(from.as_path())
+                .ok_or("Missing asset download metadata")?;
+            // Hold the verified source open throughout the copy, even if its
+            // disposable cache directory is reclaimed in the meantime.
+            std::io::copy(&mut input.open()?, &mut fs::File::create(&path)?)
+                .map_err(|error| format!("Could not prepare Minecraft asset {name}: {error}"))?;
         }
         crate::resource_install::extract(&home.join("engine-data.zip"), &stage)?;
         report(InstallStage::WorldData, 0, 0);
