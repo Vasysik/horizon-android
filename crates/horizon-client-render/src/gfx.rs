@@ -28,6 +28,7 @@ const CRUMBLING_BLEND: wgpu::BlendState = wgpu::BlendState {
 const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
     wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
 
+mod entity_source;
 mod terrain_source;
 use terrain_source::terrain_shader;
 
@@ -2403,7 +2404,7 @@ impl Renderer {
         hud.atlas_texture = Some(atlas.clone());
         let entity_source = entity_shader();
         let entity_source = if adapter.get_info().backend == wgpu::Backend::Gl {
-            terrain_source::gles_uniforms(&entity_source)
+            terrain_source::gles_uniforms(&self::entity_source::legacy_overlay(&entity_source))
         } else {
             entity_source
         };

@@ -28,9 +28,10 @@ glam = "0.30"
 ''', encoding='utf-8')
     modules = '\n'.join(
         f'#[path = "{(ROOT / "crates/horizon-client-render/src/gfx" / (name + ".rs")).as_posix()}"] pub mod {name};'
-        for name in ('arena', 'upload', 'timing', 'frame_timing', 'opaque_output', 'terrain_source')
+        for name in ('arena', 'upload', 'timing', 'frame_timing', 'opaque_output', 'terrain_source', 'entity_source')
     )
     (work / 'src/lib.rs').write_text('''#![allow(dead_code)]
+#[path = "C:/Users/vasia/Documents/Projects/horizon-main/crates/horizon-client-render/src/overlay.rs"] pub mod overlay;
 mod spans {
     pub fn time<T>(_: &str, f: impl FnOnce() -> T) -> T { f() }
 }
