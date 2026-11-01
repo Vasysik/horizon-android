@@ -46,7 +46,7 @@ jobs:
           else
             "$JAVA_HOME_17_X64/bin/keytool" -genkeypair -keystore out/debug.keystore \
               -storepass android -keypass android -alias androiddebugkey \
-              -keyalg RSA -validity 3650 -dname 'CN=Horizon Android Development'
+              -keyalg RSA -validity 3650 -dname 'CN=Oxide Android Development'
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -165,12 +165,12 @@ jobs:
         run: |
           version=$(sed -n "s/.*versionName '\([^']*\)'.*/\1/p" packaging/android/build.gradle | head -1)
           cp ".local/android/apk/${{ matrix.abi }}/horizon-android-public.apk" \
-            "Horizon-Android-${version}-${{ matrix.abi }}.apk"
-          ls -la Horizon-Android-*.apk
+            "Oxide-Android-${version}-${{ matrix.abi }}.apk"
+          ls -la Oxide-Android-*.apk
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: apk-${{ matrix.abi }}
-          path: Horizon-Android-*.apk
+          path: Oxide-Android-*.apk
           retention-days: 90
   release:
     needs: apk
@@ -194,7 +194,7 @@ jobs:
 
           Public release APK built from commit \`${commit}\`.
 
-          - **Horizon-Android-${version}-armeabi-v7a.apk** - 32-bit ARMv7 devices
+          - **Oxide-Android-${version}-armeabi-v7a.apk** - 32-bit ARMv7 devices
             (installs on ARMv8/64-bit phones too, in 32-bit mode)
 
           Includes the Minecraft-styled dark stone launcher UI (PR #1). Release-optimized
@@ -207,6 +207,6 @@ jobs:
           \`ANDROID_DEV_KEYSTORE_B64\` repository secret (base64 of a \`debug.keystore\`
           with alias \`androiddebugkey\`, store/key password \`android\`) before the next run.
           EOF
-          gh release create "$GITHUB_REF_NAME" out/Horizon-Android-*.apk \
-            --title "Horizon Android ${version} (${GITHUB_REF_NAME})" \
+          gh release create "$GITHUB_REF_NAME" out/Oxide-Android-*.apk \
+            --title "Oxide Android ${version} (${GITHUB_REF_NAME})" \
             --notes-file notes.md

@@ -276,7 +276,7 @@ impl Launcher {
             32.0 + title_size + 10.0,
             title_y,
             color::TEXT,
-            &format!("Horizon Android {}", crate::backend::VERSION),
+            &format!("Oxide {}", crate::backend::VERSION),
         );
         button(
             &mut ui,
@@ -425,7 +425,7 @@ impl Launcher {
                         "{} / {} control files verified",
                         progress.done, progress.total
                     ),
-                    _ => "Please keep Horizon open. Downloaded files are kept for retry.".into(),
+                    _ => "Please keep Oxide open. Downloaded files are kept for retry.".into(),
                 };
                 ui.text(
                     Face::Regular,

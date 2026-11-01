@@ -1,4 +1,4 @@
-# Horizon Android
+# Oxide Android
 
 A native Android port of [Horizon](https://github.com/ludovic111/horizon), the
 Rust engine for Minecraft Java 26.3. Unofficial and in active development.

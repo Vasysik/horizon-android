@@ -1,4 +1,4 @@
-# Contributing to Horizon Android
+# Contributing to Oxide Android
 
 This is an unofficial Android fork of Horizon. Start with small changes and keep
 the upstream attribution and history intact. Read [CONTRIBUTING.md](CONTRIBUTING.md)

@@ -1,5 +1,5 @@
 <resources>
-    <style name="HorizonGameTheme" parent="android:style/Theme.Material.NoActionBar">
+    <style name="OxideGameTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowNoTitle">true</item>

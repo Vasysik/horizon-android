@@ -1,6 +1,6 @@
-# Horizon on Android
+# Oxide on Android
 
-Horizon Android is a native Rust/wgpu client for Minecraft Java **26.3**.
+Oxide Android is a native Rust/wgpu client for Minecraft Java **26.3**.
 It downloads the required resources on the device and supports single player
 and Java multiplayer. It does not run arbitrary Minecraft JAR versions.
 
