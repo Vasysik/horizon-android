@@ -728,10 +728,26 @@ impl Item {
     }
     pub fn label(self, s: &Settings) -> Text {
         match self {
-            Item::Vanilla(Opt::RenderDistance) if s.horizon.lod_distance > 0 => labelled(
-                "Full Detail Distance",
-                lang::tr("%s chunks", &[&s.render_distance]),
-            ),
+            Item::Vanilla(Opt::RenderDistance) if s.horizon.lod_distance > 0 => {
+                if let Some(limit) = crate::graphics::recommended_render_distance() {
+                    if s.render_distance > limit as i32 {
+                        labelled(
+                            "Full Detail Distance",
+                            format!("{} (High)", lang::tr("%s chunks", &[&s.render_distance])),
+                        )
+                    } else {
+                        labelled(
+                            "Full Detail Distance",
+                            lang::tr("%s chunks", &[&s.render_distance]),
+                        )
+                    }
+                } else {
+                    labelled(
+                        "Full Detail Distance",
+                        lang::tr("%s chunks", &[&s.render_distance]),
+                    )
+                }
+            }
             Item::Vanilla(o) => o.label(s),
             Item::Horizon(h) => h.label(s),
         }

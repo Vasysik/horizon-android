@@ -577,7 +577,23 @@ impl Opt {
                 110 => generic(c, tr("options.fov.max")),
                 v => generic(c, Text::literal(v.to_string())),
             },
-            Opt::RenderDistance => generic(c, Text::tr("options.chunks", &[&s.render_distance])),
+            Opt::RenderDistance => {
+                if let Some(limit) = crate::graphics::recommended_render_distance() {
+                    if s.render_distance > limit as i32 {
+                        generic(
+                            c,
+                            Text::literal(format!(
+                                "{} (High)",
+                                Text::tr("options.chunks", &[&s.render_distance]).plain()
+                            )),
+                        )
+                    } else {
+                        generic(c, Text::tr("options.chunks", &[&s.render_distance]))
+                    }
+                } else {
+                    generic(c, Text::tr("options.chunks", &[&s.render_distance]))
+                }
+            }
             Opt::SimulationDistance => {
                 generic(c, Text::tr("options.chunks", &[&s.simulation_distance]))
             }
@@ -2546,6 +2562,31 @@ impl OptionsUi {
                         list: false,
                     });
                 }
+                if page == Page::Video {
+                    if let Some(limit) = crate::graphics::recommended_render_distance() {
+                        if s.render_distance > limit as i32 {
+                            let tier_name = crate::graphics::device_tier()
+                                .map(|t| t.name())
+                                .unwrap_or("this device");
+                            let warn_msg = format!(
+                                "Render distance exceeds recommended limit ({} chunks for {}). Higher values may cause lag or OOM.",
+                                limit, tier_name
+                            );
+                            out.push(Widget {
+                                x: 0.0,
+                                y: if s.horizon.api != s.startup_api { 26.0 } else { 15.0 },
+                                w,
+                                h: 9.0,
+                                kind: WKind::Text {
+                                    text: Text::literal(warn_msg),
+                                    color: rgba(240, 200, 90, 255),
+                                    centered: true,
+                                },
+                                list: false,
+                            });
+                        }
+                    }
+                }
                 let list_start = out.len();
                 let mut y = top + 2.0 - self.scroll;
                 let mut last_category = "";
@@ -3088,6 +3129,17 @@ impl OptionsUi {
                 } = &wd.kind
                 {
                     tooltip = Some(atlas.font.split(&graphics_api_tooltip(s), 170.0));
+                }
+                if let WKind::Slider { opt: Opt::RenderDistance, .. } = &wd.kind {
+                    if let Some(limit) = crate::graphics::recommended_render_distance() {
+                        if s.render_distance > limit as i32 {
+                            let msg = format!(
+                                "Above recommended limit ({} chunks). High render distance increases memory usage and may cause lag or crashes on this device.",
+                                limit
+                            );
+                            tooltip = Some(atlas.font.split(&Text::literal(msg), 170.0));
+                        }
+                    }
                 }
                 if let WKind::Button {
                     act: Act::Cycle(opt),

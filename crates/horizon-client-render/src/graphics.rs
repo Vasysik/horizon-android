@@ -301,6 +301,66 @@ impl Upscaling {
     }
 }
 
+pub use crate::device_tier::DeviceTier;
+
+static DETECTED_TIER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+static RECOMMENDED_RENDER_DISTANCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Configures device tier and recommended render distance using GPU info and limits.
+pub fn configure_device_tier_with_gpu(info: &wgpu::AdapterInfo, limits: &wgpu::Limits) {
+    let ram_kib = crate::device_tier::read_mem_total_kib();
+    let tier = crate::device_tier::classify_tier(
+        ram_kib,
+        Some((&info.name, limits.max_texture_dimension_2d)),
+    );
+    set_device_tier(tier);
+}
+
+/// Sets the detected hardware tier and updates recommended render distance.
+pub fn set_device_tier(tier: DeviceTier) {
+    let val = match tier {
+        DeviceTier::Low => 1,
+        DeviceTier::Mid => 2,
+        DeviceTier::High => 3,
+    };
+    DETECTED_TIER.store(val, std::sync::atomic::Ordering::Relaxed);
+    RECOMMENDED_RENDER_DISTANCE.store(
+        tier.recommended_render_distance(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// Returns the detected hardware tier on Android, if available.
+pub fn device_tier() -> Option<DeviceTier> {
+    match DETECTED_TIER.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Some(DeviceTier::Low),
+        2 => Some(DeviceTier::Mid),
+        3 => Some(DeviceTier::High),
+        _ => {
+            if cfg!(target_os = "android") {
+                let tier = crate::device_tier::classify_tier(
+                    crate::device_tier::read_mem_total_kib(),
+                    None,
+                );
+                set_device_tier(tier);
+                Some(tier)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Returns the recommended maximum render distance for this device on Android.
+pub fn recommended_render_distance() -> Option<u32> {
+    let rec = RECOMMENDED_RENDER_DISTANCE.load(std::sync::atomic::Ordering::Relaxed);
+    if rec > 0 {
+        Some(rec)
+    } else {
+        device_tier().map(|t| t.recommended_render_distance())
+    }
+}
+
 static REDUCED_SUGGESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Whether the settings suggest Reduced far detail: set when the renderer
 /// starts, on the GPUs `lod_capped` names (far terrain slows them most).
