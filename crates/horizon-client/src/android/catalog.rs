@@ -242,6 +242,125 @@ pub struct LocalItem {
     pub file: String,
     pub title: String,
     pub enabled: bool,
+    /// Set for Java mod JARs (Fabric/Forge/Quilt/NeoForge) found in the mods
+    /// folder: a loader+name summary. Oxide is a Rust client, so these are
+    /// listed for explanation and removal, never loaded.
+    pub java: Option<String>,
+}
+
+/// Summarises a Java mod JAR so the launcher can list it and explain why it
+/// cannot run: the loader flavour plus the name/version from its metadata.
+fn java_mod_summary(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() > 64 << 20 {
+        return None;
+    }
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    let mut meta: Option<(&'static str, String)> = None;
+    for (loader, entry) in [
+        ("Fabric", "fabric.mod.json"),
+        ("Quilt", "quilt.mod.json"),
+        ("NeoForge", "META-INF/neoforge.mods.toml"),
+        ("Forge", "META-INF/mods.toml"),
+        ("Forge", "mcmod.info"),
+    ] {
+        if let Ok(mut entry) = zip.by_name(entry) {
+            let mut raw = Vec::new();
+            if entry.take(256 * 1024).read_to_end(&mut raw).is_ok() {
+                meta = Some((loader, String::from_utf8_lossy(&raw).into_owned()));
+                break;
+            }
+        }
+    }
+    let (loader, text) = meta?;
+    let (name, version) = if matches!(loader, "Forge" | "NeoForge")
+        && !text.trim_start().starts_with('[')
+    {
+        (toml_field(&text, "displayName"), toml_field(&text, "version"))
+    } else {
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+        let field = |key: &str| {
+            value
+                .get(key)
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    value
+                        .pointer(&format!("/quilt_loader/metadata/{key}"))
+                        .and_then(|v| v.as_str())
+                })
+                .or_else(|| {
+                    value
+                        .pointer(&format!("/quilt_loader/{key}"))
+                        .and_then(|v| v.as_str())
+                })
+                .or_else(|| value.get(0).and_then(|v| v.get(key)).and_then(|v| v.as_str()))
+                .map(str::to_owned)
+        };
+        (field("name"), field("version"))
+    };
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = name.filter(|n| !n.is_empty()).unwrap_or(stem);
+    let mut summary = format!("{loader} mod: {name}");
+    if let Some(version) = version.filter(|v| !v.is_empty() && v.len() <= 40) {
+        summary.push(' ');
+        summary.push_str(&version);
+    }
+    Some(summary)
+}
+
+/// Reads a `key = "value"` line from a Forge/NeoForge mods.toml.
+fn toml_field(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        if let Some(rest) = line.trim().strip_prefix(key) {
+            if let Some(rest) = rest.trim_start().strip_prefix('=') {
+                let value = rest.trim().trim_matches(['"', '\'']);
+                if !value.is_empty() {
+                    return Some(value.to_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Explains, for a Java mod found on a mod source, that Oxide cannot run it
+/// and what the native equivalent of the popular ones is.
+fn java_mod_status(project: &browser::Project) -> String {
+    let loader = project
+        .loaders
+        .iter()
+        .find(|l| {
+            matches!(
+                l.as_str(),
+                "fabric" | "forge" | "quilt" | "neoforge" | "liteloader"
+            )
+        })
+        .map(String::as_str)
+        .unwrap_or("Java");
+    let slug = project.slug.to_ascii_lowercase();
+    let equivalent = if slug.contains("sodium")
+        || slug.contains("rubidium")
+        || slug.contains("embeddium")
+        || slug.contains("magnesium")
+    {
+        "Oxide's renderer is already native Rust; tune Client resolution and Rendering in Settings for performance."
+    } else if slug.contains("lithium") || slug.contains("pheromone") || slug.contains("krypton") {
+        "Oxide's game loop and networking are native Rust rewrites; no optimizer mod is needed."
+    } else if slug.contains("iris") || slug.contains("optifine") || slug.contains("oculus") {
+        "For shader packs use the Shaders page: Horizon .hshader packs and experimental shader ZIPs."
+    } else if slug.contains("starlight") || slug.contains("phosphor") {
+        "Oxide's lighting engine is a native Rust rewrite; no mod is needed."
+    } else {
+        "Browse the Horizon source on the Mods page for sandboxed .hmod mods, or see docs/mods.md to build one."
+    };
+    format!(
+        "{} is a {loader} (Java) mod: Oxide is a Rust client and cannot run Java bytecode. {equivalent}",
+        project.title
+    )
 }
 impl Catalog {
     /// Anything the launcher paints as movement: a running download, search
@@ -310,7 +429,19 @@ impl Catalog {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
-                if !horizon_client::content_files::plain_name(&name) || !kind.accepts(&name) {
+                if !horizon_client::content_files::plain_name(&name) {
+                    continue;
+                }
+                // Java mod JARs are listed (never loaded) so players get an
+                // explanation instead of a mod that silently does nothing.
+                let java = if kind == horizon_client::content_files::Kind::Mods
+                    && name.to_ascii_lowercase().ends_with(".jar")
+                {
+                    java_mod_summary(&entry.path())
+                } else {
+                    None
+                };
+                if java.is_none() && !kind.accepts(&name) {
                     continue;
                 }
                 let enabled = match kind {
@@ -329,6 +460,7 @@ impl Catalog {
                     file: name.clone(),
                     title: name,
                     enabled,
+                    java,
                 });
             }
         }
@@ -553,6 +685,10 @@ impl Catalog {
             self.status = "This .hnmod needs a separately compiled client. Android support is planned; sandboxed .hmod mods can be installed now.".into();
             return;
         }
+        if project.kind == Kind::Mod && project.source != browser::SourceId::Horizon {
+            self.status = java_mod_status(&project);
+            return;
+        }
         if self.busy() || self.download_label(&project).is_some() {
             return;
         }
@@ -612,6 +748,10 @@ impl Catalog {
         let Some(item) = self.local.get(index).cloned() else {
             return;
         };
+        if let Some(summary) = &item.java {
+            self.status = format!("{summary}: Java mods cannot run in Oxide, a Rust client. Delete it here; docs/mods.md lists the native equivalents.");
+            return;
+        }
         let game = self.config.game_home(home);
         let path = game.join("options.txt");
         let mut settings = horizon_client::settings::Settings::load(&path);

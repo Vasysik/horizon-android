@@ -823,9 +823,18 @@ impl Launcher {
                         42.0,
                         y + 32.0,
                         color::MUTED,
-                        kind.label(),
+                        item.java.as_deref().unwrap_or_else(|| kind.label()),
                     );
-                    if kind == Kind::Mods && !cfg!(target_pointer_width = "64") {
+                    if item.java.is_some() {
+                        ui.text(
+                            Face::Regular,
+                            14.0,
+                            if compact { 32.0 } else { w - 300.0 },
+                            y + if compact { 62.0 } else { 12.0 },
+                            color::MUTED,
+                            "Java mod: cannot run",
+                        );
+                    } else if kind == Kind::Mods && !cfg!(target_pointer_width = "64") {
                         ui.text(
                             Face::Regular,
                             14.0,

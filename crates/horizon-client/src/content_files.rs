@@ -56,6 +56,12 @@ pub fn validate(
     name: &str,
     cancelled: impl Fn() -> bool,
 ) -> crate::Result<bool> {
+    if kind == Kind::Mods && name.to_ascii_lowercase().ends_with(".jar") {
+        return Err(
+            "Java mods (.jar for Fabric, Forge, Quilt or NeoForge) cannot run in Oxide: it is a Rust client with sandboxed .hmod mods. See docs/mods.md."
+                .into(),
+        );
+    }
     if !plain_name(name) || !kind.accepts(name) {
         return Err(
             "Choose a ZIP pack, .hshader shader pack or sandboxed .hmod matching this folder"

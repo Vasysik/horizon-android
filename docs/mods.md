@@ -12,6 +12,25 @@ Horizon has none. What carries over is the data and assets inside a jar ([modpac
 
 Mods are **off by default**. A fresh install has no `horizon-mods` folder and plays exactly like vanilla 26.3.
 
+## Java mods from Modrinth (Sodium, Lithium, Iris and friends)
+
+Java mod loaders (Fabric, Forge, Quilt, NeoForge) patch Minecraft's Java bytecode at runtime. Horizon and its
+Android build Oxide are rewritten in Rust: there is no JVM and no Java classes to patch, so those mods cannot
+run, and no launcher setting can make them run. What the launcher does instead:
+
+- Tapping a Java mod on the Mods page (Modrinth source) explains why it cannot run and names the native
+  equivalent where one exists: Sodium/Rubidium/Embeddium map to the native Rust renderer plus the Client
+  resolution and Rendering settings; Lithium/Pheromone/Krypton to the native Rust game loop and networking;
+  Iris/OptiFine shader support to Horizon `.hshader` packs on the Shaders page; Starlight/Phosphor to the
+  native lighting engine.
+- A `.jar` sitting in `horizon-mods` is listed in Installed as "<loader> mod: <name> <version>" with
+  "Java mod: cannot run", and can be deleted from there.
+- Importing a `.jar` is refused with the same explanation.
+
+To carry mod *content* (blocks, items, recipes, textures) over from a Java mod, port its data and assets as
+described in [modpacks.md](modpacks.md); to write behaviour, build a sandboxed `.hmod` (below) or a native
+`.hnmod` ([native-mods.md](native-mods.md)).
+
 ## Playing with mods
 
 1. Install a mod from the launcher's Mods page ([mod-browser.md](mod-browser.md)), or put its files by hand in the
