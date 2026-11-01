@@ -4,6 +4,8 @@
 #[allow(dead_code, clippy::collapsible_match)]
 // Shared vanilla match structure and desktop harnesses.
 mod game;
+#[path = "android/game_launch.rs"]
+mod game_launch;
 #[path = "android/launcher.rs"]
 mod launcher;
 // Share the desktop launcher's actual search, compatibility checks, downloads,
@@ -64,9 +66,9 @@ mod skins;
 // The shared account protocol needs only the launcher's version and data path.
 mod backend {
     pub const VERSION: &str = if crate::PUBLIC_BUILD {
-        "0.7.6"
+        "0.7.7"
     } else {
-        "0.7.6-dev"
+        "0.7.7-dev"
     };
     static HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     pub fn initialize(home: std::path::PathBuf) {
@@ -149,44 +151,6 @@ pub(crate) fn android_event_loop() -> Result<EventLoop<()>, winit::error::EventL
             )
             .build()
     })
-}
-
-/// Development overrides for testing both of Horizon's single-player paths.
-pub(crate) fn android_arguments() -> horizon_client::Result<Vec<String>> {
-    let home = APP.with(|app| app.borrow().as_ref().unwrap().internal_data_path().unwrap());
-    let config = catalog::Config::load(&home);
-    let mut args = vec![
-        "--resources".into(),
-        home.join(".local/horizon-client/26.3")
-            .to_string_lossy()
-            .into_owned(),
-    ];
-    if !PUBLIC_BUILD {
-        args.extend([
-            "--control-socket".into(),
-            home.join("control.json").to_string_lossy().into_owned(),
-        ]);
-    }
-    if let Some(session) = crate::launcher::session_argument() {
-        args.extend([
-            "--session-file".into(),
-            session.to_string_lossy().into_owned(),
-        ]);
-    } else if !config.name.is_empty() {
-        // Offline identity must never override a licensed session's profile.
-        args.extend(["--name".into(), config.name.clone()]);
-    }
-    if !config.server.is_empty() {
-        args.extend(["--server".into(), config.server.clone()]);
-    }
-    if !PUBLIC_BUILD {
-        match std::fs::read(home.join("android-launch.json")) {
-            Ok(bytes) => args.extend(serde_json::from_slice::<Vec<String>>(&bytes)?),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(args)
 }
 
 fn init_logging() {

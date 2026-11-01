@@ -97,6 +97,14 @@ pub fn atlas_limit() -> u32 {
     ATLAS_LIMIT.load(Ordering::Relaxed)
 }
 static GPU_BATCHING: AtomicBool = AtomicBool::new(false);
+static SMALL_GPU_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
+pub fn configure_gpu_memory(small: bool) {
+    SMALL_GPU_ALLOCATIONS.store(small, Ordering::Relaxed);
+}
+pub fn small_gpu_allocations() -> bool {
+    cfg!(target_os = "android") && SMALL_GPU_ALLOCATIONS.load(Ordering::Relaxed)
+}
+
 static KEYPAD_ENABLED: AtomicBool = AtomicBool::new(false);
 static KEYPAD: std::sync::LazyLock<std::sync::Mutex<crate::keypad::Keypad>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(crate::keypad::Keypad::default()));

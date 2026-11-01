@@ -1,16 +1,12 @@
 //! A native Rust installer and version screen, sharing the game's Vulkan renderer.
 use crate::catalog::{Catalog, Page};
 use crate::game;
-#[path = "login.rs"]
-mod login;
-thread_local! {static SESSION:std::cell::RefCell<Option<PathBuf>>=const{std::cell::RefCell::new(None)};}
-pub(crate) fn session_argument() -> Option<PathBuf> {
-    SESSION.with(|s| s.borrow_mut().take())
-}
 #[path = "chooser.rs"]
 mod chooser;
 #[path = "launcher_gesture.rs"]
 mod gesture;
+#[path = "login.rs"]
+mod login;
 #[path = "launcher_pages.rs"]
 mod pages;
 use horizon_client::{
@@ -53,9 +49,11 @@ pub(super) struct Launcher {
     pending_focus: Option<pages::Action>,
     drag: Option<gesture::Drag>,
     chooser: Option<chooser::Chooser>,
+    exit_confirmation: bool,
     login: login::Login,
     session_worker: Option<mpsc::Receiver<std::result::Result<Option<PathBuf>, String>>>,
     session_ready: bool,
+    prepared_session: Option<PathBuf>,
     focus: Option<usize>,
     diagnostic_export: Option<mpsc::Receiver<std::result::Result<String, String>>>,
 }
@@ -107,9 +105,11 @@ impl Launcher {
             pending_focus: None,
             drag: None,
             chooser: None,
+            exit_confirmation: false,
             login: login::Login::new(),
             session_worker: None,
             session_ready: false,
+            prepared_session: None,
             focus: None,
             diagnostic_export: None,
         }
@@ -127,11 +127,13 @@ impl Launcher {
         crate::platform::hide();
         horizon_client::auth::clear_current();
         self.session_ready = false;
+        self.prepared_session = None;
         horizon_client::discord_presence::stop();
         horizon_client::ui_theme::reset_atlas();
         self.cursor = (0.0, 0.0);
         self.drag = None;
         self.chooser = None;
+        self.exit_confirmation = false;
         self.focus = None;
         self.pending_focus = None;
         if let Err(error) = std::env::set_current_dir(&self.home) {
@@ -175,6 +177,9 @@ impl Launcher {
         self.configure_screen();
         crate::display::set_scale(self.catalog.config.render_scale);
         horizon_client::android_runtime::configure_gpu(false);
+        horizon_client::android_runtime::configure_gpu_memory(
+            self.catalog.config.device.small_gpu_allocations,
+        );
         if let Some(renderer) = &mut self.renderer {
             if let Some(size) = crate::display::prepare(self.window.as_ref().unwrap())? {
                 renderer.resize(size[0], size[1]);
@@ -212,8 +217,33 @@ impl Launcher {
         Ok(())
     }
 
+    fn request_back(&mut self) {
+        crate::platform::hide();
+        if self.exit_confirmation {
+            self.exit_confirmation = false;
+        } else if self.login.visible {
+            self.login.hide();
+        } else if self.chooser.take().is_some() {
+            // Back dismisses the current dialog, including the exit question.
+        } else if self.catalog.editing.take().is_none() {
+            self.exit_confirmation = true;
+        }
+        self.focus = None;
+        self.pending_focus = self.exit_confirmation.then_some(pages::Action::Dismiss);
+        self.targets.clear();
+        self.list_targets.clear();
+        self.drag = None;
+        if let Err(error) = self.catalog.config.save(&self.home) {
+            self.fail(error);
+        }
+    }
+
     fn action(&mut self, events: &ActiveEventLoop) -> Result<()> {
-        if self.worker.is_some() || self.session_worker.is_some() {
+        if self.exit_confirmation
+            || self.chooser.is_some()
+            || self.worker.is_some()
+            || self.session_worker.is_some()
+        {
             return Ok(());
         }
         if self.login.pending() {
@@ -235,12 +265,6 @@ impl Launcher {
             )?;
             crate::platform::hide();
             self.catalog.config.save(&self.home)?;
-            horizon_client::android_runtime::configure_graphics(
-                self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl,
-            );
-            horizon_client::android_runtime::configure_gpu(
-                self.catalog.config.renderer == crate::catalog::RendererMode::Vulkan,
-            );
             // Migrate the earlier launcher preset once; subsequent edits belong to Key Binds.
             let keypad_path = self
                 .catalog
@@ -282,7 +306,16 @@ impl Launcher {
             }
             self.session_ready = false;
             std::fs::create_dir_all(&game_home)?;
-            std::env::set_current_dir(game_home)?;
+            let extra_arguments = if crate::PUBLIC_BUILD {
+                Vec::new()
+            } else {
+                match std::fs::read(self.home.join("android-launch.json")) {
+                    Ok(bytes) => serde_json::from_slice::<Vec<String>>(&bytes)?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                    Err(e) => return Err(e.into()),
+                }
+            };
+
             self.audio = None;
             self.error = None;
             let _ = std::fs::remove_file(self.home.join("android-error.txt"));
@@ -296,6 +329,7 @@ impl Launcher {
                         "source_dirty": option_env!("HORIZON_ANDROID_BUILD_DIRTY"),
                         "performance_recording": self.catalog.config.record_performance,
                         "gpu_profiling": self.catalog.config.device.gpu_profile,
+                        "small_gpu_allocations": self.catalog.config.device.small_gpu_allocations,
                     }),
                 )?;
             }
@@ -303,7 +337,22 @@ impl Launcher {
             horizon_client::android_runtime::clear_gamepads();
             self.controller_edges = Default::default();
             self.controller_repeat = None;
-            let game = match game::android_game() {
+            let request = crate::game_launch::LaunchRequest {
+                resources: self
+                    .home
+                    .join(".local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION),
+                game_home,
+                session_file: self.prepared_session.take(),
+                offline_name: self.catalog.config.name.clone(),
+                server: self.catalog.config.server.clone(),
+                control_socket: (!crate::PUBLIC_BUILD).then(|| self.home.join("control.json")),
+                extra_arguments,
+                open_gl: self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl,
+                gpu_batching: self.catalog.config.renderer == crate::catalog::RendererMode::Vulkan,
+                small_gpu_allocations: self.catalog.config.device.small_gpu_allocations,
+            };
+            let game = match crate::game_launch::start(request) {
                 Ok(game) => game,
                 Err(error) => {
                     crate::performance::stop();
@@ -386,11 +435,7 @@ impl ApplicationHandler for Launcher {
         }
         let result = match event {
             WindowEvent::CloseRequested => {
-                if self.login.visible || self.login.pending() {
-                    self.login.hide();
-                    return;
-                }
-                events.exit();
+                self.request_back();
                 Ok(())
             }
             WindowEvent::Resized(size) => {
@@ -429,6 +474,9 @@ impl ApplicationHandler for Launcher {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                if self.exit_confirmation {
+                    return;
+                }
                 let y = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y * 42.0,
                     winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / self.ui_density(),
@@ -442,7 +490,14 @@ impl ApplicationHandler for Launcher {
             }
             WindowEvent::RedrawRequested => self.draw_pages(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                if self.navigate(&event) {
+                if event.physical_key
+                    == winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Escape)
+                    || event.logical_key
+                        == winit::keyboard::Key::Named(winit::keyboard::NamedKey::BrowserBack)
+                {
+                    self.type_key(event);
+                    Ok(())
+                } else if self.navigate(&event) {
                     Ok(())
                 } else if self.catalog.editing.is_none()
                     && !event.repeat
@@ -547,7 +602,7 @@ impl ApplicationHandler for Launcher {
             self.session_worker = None;
             match result {
                 Ok(file) => {
-                    SESSION.with(|s| *s.borrow_mut() = file);
+                    self.prepared_session = file;
                     self.session_ready = true;
                     if let Err(e) = self.action(events) {
                         self.fail(e);

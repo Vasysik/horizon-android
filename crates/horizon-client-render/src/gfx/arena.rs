@@ -130,7 +130,7 @@ impl Arena {
             bytes = bytes.min(limits.max_storage_buffer_binding_size);
         }
         let page_limit = (bytes / stride) / GRAIN * GRAIN;
-        let growth_limit = if cfg!(target_os = "android") {
+        let growth_limit = if crate::android_runtime::small_gpu_allocations() {
             ((8 * 1024 * 1024 / stride) / GRAIN * GRAIN)
                 .max(GRAIN)
                 .min(page_limit)

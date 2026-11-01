@@ -21,6 +21,7 @@ pub(super) enum Action {
     ToggleLocal(usize),
     DeleteLocal(usize),
     ConfirmDeleteLocal,
+    ConfirmExit,
     Next,
     Previous,
     Profile,
@@ -56,6 +57,7 @@ pub(super) enum Action {
     ChooseDisplayHz(u16),
     PerformanceHints,
     GpuProfile,
+    GpuMemory,
 }
 
 pub(super) fn button(
@@ -832,6 +834,16 @@ impl Launcher {
                     Action::PerformanceHints,
                 ),
                 (
+                    "GPU memory",
+                    if c.device.small_gpu_allocations {
+                        "Small (experimental)"
+                    } else {
+                        "Standard"
+                    }
+                    .into(),
+                    Action::GpuMemory,
+                ),
+                (
                     "GPU profiling",
                     if c.device.gpu_profile {
                         "On / included in report"
@@ -1060,6 +1072,41 @@ impl Launcher {
                 }
             }
         }
+        if self.exit_confirmation {
+            self.targets.clear();
+            self.list_targets.clear();
+            self.list_view = None;
+            ui.rounded(0.0, 0.0, w, h, 0.0, horizon_client::hud::rgba(0, 0, 0, 160));
+            let width = (w - 32.0).min(360.0);
+            let x = (w - width) * 0.5;
+            let y = (h - 160.0) * 0.5;
+            ui.rounded(x, y, width, 160.0, 8.0, color::RAISED);
+            ui.text(
+                Face::Medium,
+                22.0,
+                x + 20.0,
+                y + 24.0,
+                color::TEXT,
+                "Exit application?",
+            );
+            let bw = (width - 52.0) * 0.5;
+            button(
+                &mut ui,
+                &mut self.targets,
+                [x + 20.0, y + 92.0, bw, 44.0],
+                "Cancel",
+                Action::Dismiss,
+                false,
+            );
+            button(
+                &mut ui,
+                &mut self.targets,
+                [x + 32.0 + bw, y + 92.0, bw, 44.0],
+                "Exit",
+                Action::ConfirmExit,
+                false,
+            );
+        }
         if let Some(action) = self.pending_focus.take() {
             self.focus = self.targets.iter().position(|(_, a)| *a == action);
         }
@@ -1119,7 +1166,7 @@ impl Launcher {
         Ok(())
     }
     pub(super) fn activate(&mut self, events: &ActiveEventLoop) -> Result<()> {
-        if self.session_worker.is_some() {
+        if self.session_worker.is_some() && self.chooser.is_none() && !self.exit_confirmation {
             return Ok(());
         }
         let Some(r) = &self.renderer else {
@@ -1167,6 +1214,9 @@ impl Launcher {
             audio.play_button_click();
         }
         match action {
+            Some(Action::ConfirmExit) => {
+                events.exit();
+            }
             Some(Action::Immersive) => {
                 self.catalog.config.screen.immersive ^= true;
                 self.catalog.config.save(&self.home)?;
@@ -1197,6 +1247,12 @@ impl Launcher {
                 self.catalog.status="ADPF gives Android CPU frame-work hints on supported devices. It does not cap FPS or guarantee a speedup.".into();
                 self.catalog.config.save(&self.home)?;
                 crate::device_runtime::configure(self.catalog.config.device);
+            }
+            Some(Action::GpuMemory) => {
+                self.catalog.config.device.small_gpu_allocations ^= true;
+                self.catalog.config.save(&self.home)?;
+                crate::device_runtime::configure(self.catalog.config.device);
+                self.catalog.status = "Experimental smaller GPU allocations. Applies to the next game launch; restart the app to apply to the launcher. Standard restores the previous policy. No image-quality change.".into();
             }
             Some(Action::GpuProfile) => {
                 self.catalog.config.device.gpu_profile ^= true;
@@ -1269,17 +1325,28 @@ impl Launcher {
                 crate::platform::hide();
                 self.catalog.editing = None;
             }
-            Some(Action::DeviceSignIn) => self
-                .login
-                .start_device(&self.catalog.config.microsoft_client_id),
+            Some(Action::DeviceSignIn) => {
+                self.session_ready = false;
+                self.prepared_session = None;
+                self.login
+                    .start_device(&self.catalog.config.microsoft_client_id);
+            }
             Some(Action::CopyLoginCode) => self.login.copy_code(),
             Some(Action::CancelLogin) => {
                 self.login.close();
                 self.login.visible = true;
             }
             Some(Action::ReviewApp) => self.login.review_app(),
-            Some(Action::SignIn) => self.login.start(&self.catalog.config.microsoft_client_id),
-            Some(Action::SignOut) => self.login.sign_out(),
+            Some(Action::SignIn) => {
+                self.session_ready = false;
+                self.prepared_session = None;
+                self.login.start(&self.catalog.config.microsoft_client_id);
+            }
+            Some(Action::SignOut) => {
+                self.session_ready = false;
+                self.prepared_session = None;
+                self.login.sign_out();
+            }
             Some(Action::LoginLink) => self.login.open_link(),
             Some(Action::Page(page)) => {
                 self.catalog.editing = None;
@@ -1369,7 +1436,14 @@ impl Launcher {
                 self.catalog.refresh(&self.home);
                 self.chooser = None;
             }
-            Some(Action::Dismiss) => self.chooser = None,
+            Some(Action::Dismiss) => {
+                self.exit_confirmation = false;
+                self.chooser = None;
+                if self.session_worker.is_none() {
+                    self.session_ready = false;
+                    self.prepared_session = None;
+                }
+            }
             Some(Action::Logs) => {
                 self.catalog.status = crate::diagnostics::summary(&self.home);
                 if let Ok(error) = std::fs::read_to_string(self.home.join("android-error.txt")) {
@@ -1468,18 +1542,9 @@ impl Launcher {
             || key.logical_key
                 == winit::keyboard::Key::Named(winit::keyboard::NamedKey::BrowserBack)
         {
-            if self.login.visible {
-                self.login.hide();
-                crate::platform::hide();
-                self.catalog.editing = None;
-                return;
+            if !key.repeat {
+                self.request_back();
             }
-            if self.chooser.take().is_some() {
-                return;
-            }
-            crate::platform::hide();
-            self.catalog.editing = None;
-            let _ = self.catalog.config.save(&self.home);
             return;
         }
         if self.catalog.editing.is_none() {
