@@ -541,16 +541,13 @@ impl Game<'_> {
             }
             #[cfg(target_os = "android")]
             "key.sprint" => {
-                if down {
-                    self.keys.insert(KeyCode::ControlLeft);
-                } else {
-                    self.keys.remove(&KeyCode::ControlLeft);
-                    if crate::touch_visible()
-                        && self.settings.touch.sprint_toggle
-                        && let Some(player) = &mut self.player
-                    {
-                        player.sprinting = false;
-                    }
+                self.mapped_key(KeyCode::ControlLeft, down, false)?;
+                if !down
+                    && crate::touch_visible()
+                    && self.settings.touch.sprint_toggle
+                    && let Some(player) = &mut self.player
+                {
+                    player.sprinting = false;
                 }
                 Ok(())
             }

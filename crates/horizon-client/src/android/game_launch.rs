@@ -18,6 +18,8 @@ impl LaunchRequest {
         let mut args = vec![
             "--resources".into(),
             self.resources.to_string_lossy().into_owned(),
+            "--game-dir".into(),
+            self.game_home.to_string_lossy().into_owned(),
         ];
         if let Some(socket) = &self.control_socket {
             args.extend([
@@ -93,6 +95,7 @@ mod tests {
         r.offline_name = "Changed".into();
         assert_eq!(snapshot[1], "resources with spaces");
         assert!(snapshot.windows(2).any(|a| a == ["--name", "Offline"]));
+        assert!(snapshot.windows(2).any(|a| a == ["--game-dir", "profile"]));
         assert!(
             snapshot
                 .windows(2)

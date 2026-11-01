@@ -7416,6 +7416,9 @@ impl Game<'_> {
                 Some(KeyCode::ControlLeft | KeyCode::ControlRight) => control,
                 _ => continue,
             };
+            // OS modifier bits describe physical keys, not an independently
+            // held controller/touch action. Its release is delivered by pad_action.
+            let held = held || self.pad.holds_action(&self.settings.controller, mapping);
             if !held {
                 self.toggles.0[slot].set_down(false, needs_toggle);
                 self.sync_toggle(slot);

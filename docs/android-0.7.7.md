@@ -232,3 +232,28 @@ The final F-03L nightly build has not passed device startup, despite progressing
 beyond the corrected shader compilation failures; do not infer ARMv7 readiness
 from its successful Rust build. This is suitable for further ARM64 candidate
 validation, not a completed multi-device release sign-off.
+
+## Adreno 304 cloud-program driver exit
+
+The post-nightly startup failure was isolated separately from transparent terrain.
+A private exit probe established status 1 from the Adreno shader compiler during
+`core_glLinkProgram`, not a Rust panic or a confirmed memory-pressure kill. The
+saved `vs_cloud`/`fs_entity` GLSL pair reproduced the exit in a standalone Rust
+EGL test without a launcher, world, mods or performance recording.
+
+The trigger in that program is the dynamic `WHITE_OVERLAY_ALPHA[overlay - 16u]`
+lookup in `overlay_texel`. A bounded index and signed indexing still failed;
+selecting the same sixteen constant table entries linked successfully. GLES
+entity source now uses that exact lookup. Hurt red, TNT flash, creeper white
+flashes, clouds, fog and lighting are retained; Vulkan entity source is unchanged.
+The change does not suppress exit or continue with an invalid GPU program.
+
+A GPU regression test compares original/lowered RGBA bits for overlay codes
+0..63 and u32::MAX, covering every white column. The entity module's entrypoints
+are validated too. The full isolated GPU suite passed 29 tests. Temporary native
+exit hooks, shader simplifications and binary probes are not part of the APK.
+
+After upstream renderer/shader synchronizations, require a GLES 3.0 device smoke
+test through launcher, title and world, in addition to Rust compilation and a
+modern Vulkan device. A published nightly is not a multi-device compatibility
+certificate.

@@ -128,18 +128,34 @@ Do not present emulator/probe FPS as phone FPS or mark unresolved issue families
 - Content/storage/import tests: 36 passed, one resource-fixture-dependent test ignored.
 - Android input/navigation tests: 26 passed.
 - Launch contract/preferences: 4 passed.
-- GPU arena/upload/readback and actual terrain/sunrise rendering: 25 passed, including pixel equality for the original and packed terrain shaders with a colored-light case.
+- GPU arena/upload/readback and actual terrain/sunrise rendering: 29 passed, including the exact white-overlay lookup and pixel equality for the original and packed terrain shaders with a colored-light case.
 - Isolated account/skin/session tests: 55 passed, one ignored; no real accounts used.
 - Public-tree audit passed before final staging.
 - Tablet Vulkan Compatibility: entered an existing disposable world, rendered terrain,
   opened inventory, returned from Home to a paused game, quit back to the launcher,
   and opened the five-folder Android Files root through Game files.
-- F-03L GLES: two newly introduced compile failures (nested arrays and unsigned
-  switch labels in HDR statistics) were identified and adapted without changing
-  Vulkan shader sources. The follow-up progressed through terrain/sky/outline/HDR
-  pipeline creation and reached HUD initialization, but the process then ended
-  without a new Rust panic in the captured log. The cause is not established;
-  the final nightly ARMv7 device test has NOT passed. Do not publish this as a
-  verified fix for all Adreno 304 rendering or as a full four-ABI release.
+- F-03L GLES: the remaining startup driver exit was isolated to the dynamic
+  white-overlay palette index in the cloud vertex program. Constant-index lookup
+  preserves all sixteen exact values. The standalone failing GLSL pair links
+  after that change. A normal source-built diagnostic APK (no binary patches or
+  exit hook) reached launcher, title, world-renderer readiness and joined its
+  integrated server. The normal source-built APK rendered opaque terrain, trees
+  and water in an open landscape view on the device.
+  World startup and runtime are very slow on this device; performance regression
+  remains unresolved and this is not a four-ABI release sign-off.
 - x86/x86_64 and a final ThinLTO release APK have not been built in this pass.
+- Sprint regression: in the isolated tablet world, controller/touch action held Ctrl across
+  simulation frames, ground forward velocity was 1.300000 times the walk velocity,
+  and release removed Ctrl. Physical-key/touch combinations still need manual testing.
 - No matched release-to-release performance benchmark was completed in this pass.
+
+## Candidate regressions reported after initial ARM64 testing
+
+The owner reported a nonfunctional Sprint button and worse GPU performance on
+commit da0b893b9. The candidate must not be released until these are resolved.
+The initial missing-world report was withdrawn after the owner checked again;
+no world relocation or migration is needed. The two supplied reports both identify that commit and Vulkan
+Compatibility at 100% resolution. They are different devices/scenes, not a
+matched 0.7.6/0.7.7 benchmark. CPU time alone does not account for the GPU-limited
+samples with no outstanding chunk jobs. Do not silently relocate/delete worlds
+or infer data loss from an empty list; establish the old and current paths first.
