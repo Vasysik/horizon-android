@@ -103,3 +103,52 @@ sky and outline shader bodies remain unchanged. GPU readback tests compare
 original and packed shaders byte for byte for RGB, fog, fade and emission tiers.
 All 23 isolated GPU tests passed on the host GPU; ARM64 Clippy and the optimized
 ARMv7 build passed. Other GLES devices still require testing.
+
+## Optional CPU and reusable-cache budgets
+
+Launch settings offer a chunk-worker ceiling (1–64), disabled by default.
+It caps the engine's chosen generation/meshing pool; it does not increase a
+smaller pool or cap render, audio, server and all other process threads.
+Changes apply on the next Play. Existing automatic selection is unchanged
+when no additional ceiling is selected.
+
+The reusable RAM-cache setting defaults to the existing budgets: 16 MiB
+for empty mesh buffers per streaming pool and 64 MiB for decoded sounds per
+audio cache. Custom totals split 20%/80% between these categories. Eviction
+releases reusable buffers and least-recently-used sound entries; playing
+channels retain their own sample references. Active terrain, textures, worlds
+and sound playback are excluded. This is not a total RAM or VRAM cap.
+Smaller caches retain the same output quality but may require more CPU work.
+Unused GPU arena pages already return to the allocator after upload batches;
+no artificial live-VRAM cap is added.
+
+## Early-menu D-pad navigation
+
+Standalone startup frames publish their widget targets and combine enabled
+labelled buttons with explicit fields/list targets. Previously early focus
+could miss ordinary title buttons until Game took over.
+Host tests cover replacement of standalone focus targets and default/custom
+worker and cache policies. Early Android controller D-pad/confirm events are also consumed during loading,
+instead of being ignored until Game takes over. Physical-controller startup
+stalls in Android #57 still need separate device verification.
+
+On GLES, world-only renderer creation remains on the event thread, but now
+waits for a world/server request and a presented loading frame. The title menu
+no longer freezes automatically to create unused world pipelines. This moves
+existing GPU initialization to explicit world loading; it does not make shader
+compilation itself faster. Vulkan retains background renderer preparation.
+
+## GPU timestamp readback failure
+
+A failed mapped-range read no longer unmaps a destroyed readback buffer.
+Mapping/readback failures disable that timer, preventing reuse of its dead
+slot on later frames. A GPU regression test completes a real async mapping,
+destroys its buffer, collects the result and attempts a subsequent frame.
+All 24 isolated GPU tests passed. This addresses the validation-panic path
+reported on Adreno 610; it does not establish why the driver/device lost the
+buffer, nor prove every crash in Android #57 has the same cause.
+
+On the isolated F-03L build, D-pad Down followed by Enter opened the title's
+Credits screen before world-renderer creation. Selecting the test world then
+showed a loading overlay while GLES initialized. These checks do not cover an
+Android TV controller's analog-stick navigation or vibration.

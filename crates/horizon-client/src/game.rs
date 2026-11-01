@@ -18665,6 +18665,10 @@ impl Loading {
         #[cfg(target_os = "android")]
         self.menu_android_keyboard();
         #[cfg(target_os = "android")]
+        if let Err(error) = self.menu_gamepad_frame(event_loop) {
+            self.error = Some(error);
+        }
+        #[cfg(target_os = "android")]
         self.tick_menu_audio();
         // The loop may run once more after exit(): keep the first error, the
         // one that ended loading.
@@ -18712,6 +18716,7 @@ impl Loading {
         );
         let mut batch = HudBatch::new(size);
         self.draw_menu(&mut batch);
+        horizon_client::widgets::publish_frame();
         let mut frame = loading_frame(&batch);
         frame.yaw = self.panorama_rotation.update(
             self.started.elapsed().as_secs_f32(),
@@ -18719,8 +18724,11 @@ impl Loading {
         );
         if let Some(renderer) = &mut self.renderer {
             match renderer.render(&frame) {
-                Ok(true) if self.gui.is_some() && self.menu.pending.is_none() => {
-                    self.menu.perf.title_shown()
+                Ok(true) => {
+                    self.menu.entry_presented = self.menu.pending.is_some();
+                    if self.gui.is_some() && self.menu.pending.is_none() {
+                        self.menu.perf.title_shown();
+                    }
                 }
                 Ok(_) => {}
                 Err(e) => log::warn!("Horizon: loading screen frame failed: {e}"),
@@ -18871,8 +18879,18 @@ impl ApplicationHandler for App {
         }
     }
     fn device_event(&mut self, event_loop: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
-        if let App::Ready(game) = self {
-            game.device_event(event_loop, id, event);
+        match self {
+            App::Ready(game) => game.device_event(event_loop, id, event),
+            App::Loading(_loading) =>
+            {
+                #[cfg(target_os = "android")]
+                if _loading.settings.controller.enabled {
+                    horizon_client::android_runtime::gamepad_event(
+                        winit::platform::android::native_device_id(id),
+                        &event,
+                    );
+                }
+            }
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -18906,7 +18924,19 @@ impl ApplicationHandler for App {
                     crate::game::exit_app(event_loop);
                     return;
                 }
-                match if loading.menu.reload_packs || loading.renderer_job.is_some() {
+                // GLES pipeline creation must stay on the event thread. Do not
+                // freeze an otherwise interactive title menu to build world-only
+                // pipelines. Start after a world/server request and its loading frame.
+                let defer_gles_world = cfg!(target_os = "android")
+                    && loading
+                        .renderer
+                        .as_ref()
+                        .is_some_and(|r| r.info.backend == wgpu::Backend::Gl)
+                    && (loading.menu.pending.is_none() || !loading.menu.entry_presented);
+                match if loading.menu.reload_packs
+                    || loading.renderer_job.is_some()
+                    || defer_gles_world
+                {
                     None
                 } else {
                     loading.loaded.take()

@@ -16,6 +16,8 @@ pub(super) struct StartupMenu {
     #[cfg(target_os = "android")]
     keyboard_navigation: bool,
     #[cfg(target_os = "android")]
+    controller_edges: horizon_client::gamepad::Edges,
+    #[cfg(target_os = "android")]
     controls: horizon_client::touch::TouchControls,
     #[cfg(target_os = "android")]
     pub(super) audio: Option<horizon_client::audio::Audio>,
@@ -39,6 +41,7 @@ pub(super) struct StartupMenu {
     clipboard: SystemClipboard,
     selection: AppendSelection,
     pub pending: Option<PendingWorldEntry>,
+    pub(super) entry_presented: bool,
     pub reload_packs: bool,
     pub perf: horizon_client::telemetry::Session,
 }
@@ -628,15 +631,20 @@ impl Loading {
     }
     #[cfg(target_os = "android")]
     fn startup_navigation(&mut self, events: &ActiveEventLoop, event: &KeyEvent) -> Result<bool> {
-        use horizon_client::{
-            gamepad::{self, Button},
-            widgets,
-        };
         let Some(key) = horizon_client::keypad::resolve_key(event.physical_key, &event.logical_key)
         else {
             return Ok(false);
         };
-        if crate::platform::active()
+        self.startup_navigation_key(events, key)
+    }
+    #[cfg(target_os = "android")]
+    fn startup_navigation_key(&mut self, events: &ActiveEventLoop, key: KeyCode) -> Result<bool> {
+        use horizon_client::{
+            gamepad::{self, Button},
+            widgets,
+        };
+        if self.menu.controls.editor.is_some()
+            || crate::platform::active()
             || self.menu.options.selected_key.is_some()
             || self
                 .menu
@@ -653,7 +661,7 @@ impl Loading {
             KeyCode::ArrowRight => Some(Button::DPadRight),
             _ => None,
         };
-        let targets = widgets::last_targets();
+        let targets = widgets::navigation_targets();
         if let Some(direction) = direction {
             self.menu.keyboard_navigation = true;
             let rects: Vec<_> = targets.iter().map(|t| t.rect).collect();
@@ -692,6 +700,36 @@ impl Loading {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    #[cfg(target_os = "android")]
+    pub(super) fn menu_gamepad_frame(&mut self, events: &ActiveEventLoop) -> Result<()> {
+        use horizon_client::gamepad::Button;
+        crate::platform::poll_gamepad_connections();
+        let state = if self.settings.controller.enabled {
+            horizon_client::android_runtime::gamepad_state()
+        } else {
+            Default::default()
+        };
+        for (button, down) in self
+            .menu
+            .controller_edges
+            .update(&state, self.settings.controller.trigger_threshold)
+        {
+            if !down {
+                continue;
+            }
+            let key = match button {
+                Button::DPadUp => KeyCode::ArrowUp,
+                Button::DPadDown => KeyCode::ArrowDown,
+                Button::DPadLeft => KeyCode::ArrowLeft,
+                Button::DPadRight => KeyCode::ArrowRight,
+                Button::South => KeyCode::Enter,
+                _ => continue,
+            };
+            self.startup_navigation_key(events, key)?;
+        }
+        Ok(())
     }
 
     #[cfg(target_os = "android")]
@@ -1160,7 +1198,9 @@ impl Loading {
         #[cfg(target_os = "android")]
         if self.menu.keyboard_navigation
             && self.menu.keyboard_focus.is_none()
-            && let Some(t) = horizon_client::widgets::last_targets().first().copied()
+            && let Some(t) = horizon_client::widgets::navigation_targets()
+                .first()
+                .copied()
         {
             self.menu.keyboard_focus = Some(t);
             self.menu.cursor = t.center();
@@ -1174,7 +1214,17 @@ impl Loading {
             horizon_client::level_loading::draw_loading_overlay(
                 batch,
                 &gui.atlas,
-                self.progress.line(),
+                if cfg!(target_os = "android")
+                    && self
+                        .renderer
+                        .as_ref()
+                        .is_some_and(|r| r.info.backend == wgpu::Backend::Gl)
+                    && matches!(self.loaded, Some(Ok(_)))
+                {
+                    "Preparing world graphics"
+                } else {
+                    self.progress.line()
+                },
                 self.progress.fraction(),
                 self.settings.file.bool("darkMojangStudiosBackground"),
             );

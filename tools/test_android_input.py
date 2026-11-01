@@ -22,6 +22,7 @@ pub use horizon_client_input::{gamepad, keybinds, clipboard};
 #[path = "../../../../crates/horizon-client-render/src/android_gamepad.rs"] mod android_gamepad;
 #[path = "../../../../crates/horizon-client-render/src/android_runtime.rs"] mod android_runtime;
 #[path = "../../../../crates/horizon-client-render/src/keypad.rs"] mod keypad;
+#[path = "../../../../crates/horizon-client-render/src/widgets.rs"] mod widgets;
 mod graphics { pub enum GraphicsApi {OpenGl, Vulkan} }
 ''', encoding='utf-8')
     subprocess.run(['cargo', 'test', '--manifest-path', str(harness / 'Cargo.toml'), '--', '--test-threads=1'], cwd=ROOT, check=True)

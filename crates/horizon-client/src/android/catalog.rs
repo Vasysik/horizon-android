@@ -50,6 +50,8 @@ pub struct Config {
     pub input_host: InputHost,
     pub keypad_controls: bool,
     pub record_performance: bool,
+    pub worker_limit: u32,
+    pub cache_budget_mib: u32,
     #[serde(flatten)]
     pub device: crate::device_preferences::Settings,
     pub shader_source: crate::shader_catalog::Origin,

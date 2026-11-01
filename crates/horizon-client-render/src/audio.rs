@@ -147,6 +147,7 @@ struct SoundCache {
     bytes: usize,
     clock: u64,
 }
+#[cfg(any(test, not(target_os = "android")))]
 const CACHE_BYTES: usize = 64 << 20;
 impl SoundCache {
     fn get(&mut self, key: &str) -> Option<Samples> {
@@ -161,7 +162,16 @@ impl SoundCache {
         if let Some((old, _)) = self.entries.insert(key, (samples, self.clock)) {
             self.bytes -= Self::size(&old);
         }
-        while self.bytes > CACHE_BYTES && self.entries.len() > 1 {
+        #[cfg(target_os = "android")]
+        let budget = crate::android_runtime::sound_cache_budget();
+        #[cfg(not(target_os = "android"))]
+        let budget = CACHE_BYTES;
+        // Playing channels own their Arc; eviction never interrupts a sound.
+        let strict =
+            cfg!(target_os = "android") && crate::android_runtime::cache_budget_overridden();
+        while self.bytes > budget
+            && (self.entries.len() > 1 || (strict && !self.entries.is_empty()))
+        {
             let Some(oldest) = self
                 .entries
                 .iter()

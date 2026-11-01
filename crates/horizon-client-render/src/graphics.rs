@@ -599,6 +599,13 @@ impl Graphics {
     }
     /// Worker threads for chunk generation and meshing.
     pub fn worker_threads(&self) -> usize {
+        let requested = self.requested_worker_threads();
+        #[cfg(target_os = "android")]
+        return crate::android_runtime::limit_workers(requested);
+        #[cfg(not(target_os = "android"))]
+        requested
+    }
+    fn requested_worker_threads(&self) -> usize {
         if self.workers > 0 {
             return self.workers as usize;
         }

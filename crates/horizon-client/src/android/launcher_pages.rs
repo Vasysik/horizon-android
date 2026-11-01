@@ -55,6 +55,10 @@ pub(super) enum Action {
     ChooseAspect(crate::display::Aspect),
     DisplayHz,
     ChooseDisplayHz(u16),
+    CacheBudget,
+    ChooseCacheBudget(u32),
+    WorkerLimit,
+    ChooseWorkerLimit(u32),
     PerformanceHints,
     GpuProfile,
 }
@@ -778,11 +782,11 @@ impl Launcher {
             self.catalog.scroll = self
                 .catalog
                 .scroll
-                .clamp(0.0, (15.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
+                .clamp(0.0, (17.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
             self.list_view = Some([
                 195.0,
                 h - 130.0,
-                (15.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
+                (17.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
             ]);
             for (i, (title, value, action)) in [
                 ("Rendering", c.renderer.label().to_owned(), Action::Renderer),
@@ -794,6 +798,24 @@ impl Launcher {
                         format!("{}%", c.render_scale.percent())
                     },
                     Action::RenderScale,
+                ),
+                (
+                    "Chunk worker limit",
+                    if c.worker_limit == 0 {
+                        "No additional limit".into()
+                    } else {
+                        c.worker_limit.to_string()
+                    },
+                    Action::WorkerLimit,
+                ),
+                (
+                    "Reusable RAM cache",
+                    if c.cache_budget_mib == 0 {
+                        "Engine default (80 MiB)".into()
+                    } else {
+                        format!("{} MiB", c.cache_budget_mib)
+                    },
+                    Action::CacheBudget,
                 ),
                 ("Profile", format!("Profile {}", c.profile), Action::Profile),
                 (
@@ -1222,6 +1244,20 @@ impl Launcher {
                 self.catalog.config.save(&self.home)?;
                 self.configure_screen();
                 self.chooser = None;
+            }
+            Some(Action::CacheBudget) => self.open_chooser(chooser::Kind::CacheBudget),
+            Some(Action::ChooseCacheBudget(mib)) => {
+                self.catalog.config.cache_budget_mib = mib.min(1024);
+                self.catalog.config.save(&self.home)?;
+                self.chooser = None;
+                self.catalog.status = "Disposable cache budget saved. Applies on next Play; not a total RAM or VRAM limit.".into();
+            }
+            Some(Action::WorkerLimit) => self.open_chooser(chooser::Kind::WorkerLimit),
+            Some(Action::ChooseWorkerLimit(limit)) => {
+                self.catalog.config.worker_limit = limit.min(64);
+                self.catalog.config.save(&self.home)?;
+                self.chooser = None;
+                self.catalog.status = "Chunk worker ceiling saved. Applies on the next Play; other engine threads are unchanged.".into();
             }
             Some(Action::DisplayHz) => self.open_chooser(chooser::Kind::DisplayHz),
             Some(Action::ChooseDisplayHz(hz)) => {
