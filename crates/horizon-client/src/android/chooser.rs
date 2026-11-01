@@ -1,10 +1,10 @@
 //! Explicit, scrollable selections. Values never cycle on repeated button taps.
 use super::{
     Launcher,
-    pages::{Action, button},
+    pages::{Action, button, m3},
 };
 use crate::catalog::RendererMode;
-use horizon_client::ui_theme::{Face, Ui, color};
+use horizon_client::ui_theme::{Face, Ui};
 
 pub(super) enum Kind {
     Aspect,
@@ -263,11 +263,25 @@ impl Chooser {
     pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>) {
         let (w, h) = (ui.w, ui.h);
         targets.clear();
-        ui.rounded(0.0, 0.0, w, h, 0.0, color::BG);
-        ui.text(Face::Medium, 28.0, 32.0, 35.0, color::TEXT, self.title);
-        ui.text(Face::Regular, 15.0, 32.0, 85.0, color::MUTED, self.help);
+        ui.rounded(0.0, 0.0, w, h, 0.0, m3::SURFACE);
+        ui.text(Face::SemiBold, 28.0, 32.0, 35.0, m3::ON_SURFACE, self.title);
+        ui.text(
+            Face::Regular,
+            15.0,
+            32.0,
+            85.0,
+            m3::ON_SURFACE_VARIANT,
+            self.help,
+        );
         if let Some(device) = &self.device {
-            ui.text(Face::Regular, 13.0, 32.0, 111.0, color::MUTED, device);
+            ui.text(
+                Face::Regular,
+                13.0,
+                32.0,
+                111.0,
+                m3::ON_SURFACE_VARIANT,
+                device,
+            );
         }
         let top = 137.0;
         let bottom = h - 100.0;
@@ -275,19 +289,52 @@ impl Chooser {
             0.0,
             (self.choices.len() as f32 * 84.0 - (bottom - top)).max(0.0),
         );
+        let last = self.choices.len().saturating_sub(1);
         for (i, (label, detail, action, selected)) in self.choices.iter().enumerate() {
             let y = top + i as f32 * 84.0 - self.scroll;
             if y < top || y + 76.0 > bottom {
                 continue;
             }
-            ui.rounded(34.0, y + 10.0, 22.0, 22.0, 11.0, color::TEXT);
-            ui.rounded(36.0, y + 12.0, 18.0, 18.0, 9.0, color::BG);
+            let radius = if i == 0 || i == last { 28.0 } else { 16.0 };
+            ui.rounded(
+                32.0,
+                y,
+                w - 64.0,
+                76.0,
+                radius,
+                if *selected {
+                    m3::SECONDARY_CONTAINER
+                } else {
+                    m3::CONTAINER
+                },
+            );
+            // Radio button.
+            let (rx, ry) = (52.0, y + 28.0);
             if *selected {
-                ui.rounded(40.0, y + 16.0, 10.0, 10.0, 5.0, color::TEXT);
+                ui.rounded(rx, ry, 20.0, 20.0, 10.0, m3::PRIMARY);
+                ui.rounded(rx + 3.0, ry + 3.0, 14.0, 14.0, 7.0, m3::SECONDARY_CONTAINER);
+                ui.rounded(rx + 5.0, ry + 5.0, 10.0, 10.0, 5.0, m3::PRIMARY);
+            } else {
+                ui.rounded(rx, ry, 20.0, 20.0, 10.0, m3::ON_SURFACE_VARIANT);
+                ui.rounded(rx + 2.0, ry + 2.0, 16.0, 16.0, 8.0, m3::CONTAINER);
             }
-            ui.text(Face::Medium, 19.0, 80.0, y + 8.0, color::TEXT, label);
-            ui.text(Face::Regular, 14.0, 80.0, y + 40.0, color::MUTED, detail);
-            ui.rounded(32.0, y + 75.0, w - 64.0, 1.0, 0.0, color::BORDER);
+            let room = w - 64.0 - 76.0 - 20.0;
+            let label = ui.fit_text(Face::Medium, 18.0, label, room);
+            let detail = ui.fit_text(Face::Regular, 14.0, detail, room);
+            let text_y = if detail.is_empty() {
+                y + 25.0
+            } else {
+                y + 12.0
+            };
+            ui.text(Face::Medium, 18.0, 92.0, text_y, m3::ON_SURFACE, &label);
+            ui.text(
+                Face::Regular,
+                14.0,
+                92.0,
+                y + 42.0,
+                m3::ON_SURFACE_VARIANT,
+                &detail,
+            );
             targets.push(([32.0, y, w - 64.0, 76.0], *action));
         }
         button(

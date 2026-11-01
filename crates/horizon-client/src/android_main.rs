@@ -19,6 +19,8 @@ mod account;
 mod browser;
 #[path = "android/dns.rs"]
 mod android_dns;
+#[path = "android/bridge.rs"]
+mod bridge;
 #[path = "android/catalog.rs"]
 mod catalog;
 #[path = "android/device_preferences.rs"]
@@ -64,9 +66,9 @@ mod skins;
 // The shared account protocol needs only the launcher's version and data path.
 mod backend {
     pub const VERSION: &str = if crate::PUBLIC_BUILD {
-        "0.7.6"
+        "0.8.0"
     } else {
-        "0.7.6-dev"
+        "0.8.0-dev"
     };
     static HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     pub fn initialize(home: std::path::PathBuf) {
@@ -189,7 +191,7 @@ pub(crate) fn android_arguments() -> horizon_client::Result<Vec<String>> {
     Ok(args)
 }
 
-fn init_logging() {
+pub(crate) fn init_logging() {
     let trace_gles = !PUBLIC_BUILD && std::env::var_os("HORIZON_GLES_TRACE").is_some();
     let mut logger = android_logger::Config::default()
         .with_max_level(if trace_gles {
@@ -297,6 +299,10 @@ fn android_main(app: AndroidApp) {
         }
     }
     let mut launcher = launcher::Launcher::new(home.clone());
+    // The Compose launcher (main process) starts this `:game` process to play.
+    if std::fs::remove_file(home.join(bridge::LAUNCH_REQUEST)).is_ok() {
+        launcher.play_directly();
+    }
     let result = android_event_loop()
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })
         .and_then(|events| events.run_app(&mut launcher).map_err(Into::into));
