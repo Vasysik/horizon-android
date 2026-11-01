@@ -348,6 +348,9 @@ pub fn rows(level: Level) -> Vec<Row> {
 const UPLOAD_STEPS: [u32; 8] = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
 /// What the LOD Distance slider stops at, in chunks: off, then each doubling
 /// up to the whole world.
+#[cfg(target_os = "android")]
+const LOD_STEPS: [u32; 4] = [0, 32, 64, 128];
+#[cfg(not(target_os = "android"))]
 const LOD_STEPS: [u32; 18] = [
     0,
     64,
@@ -725,10 +728,26 @@ impl Item {
     }
     pub fn label(self, s: &Settings) -> Text {
         match self {
-            Item::Vanilla(Opt::RenderDistance) if s.horizon.lod_distance > 0 => labelled(
-                "Full Detail Distance",
-                lang::tr("%s chunks", &[&s.render_distance]),
-            ),
+            Item::Vanilla(Opt::RenderDistance) if s.horizon.lod_distance > 0 => {
+                if let Some(limit) = crate::graphics::recommended_render_distance() {
+                    if s.render_distance > limit as i32 {
+                        labelled(
+                            "Full Detail Distance",
+                            format!("{} (High)", lang::tr("%s chunks", &[&s.render_distance])),
+                        )
+                    } else {
+                        labelled(
+                            "Full Detail Distance",
+                            lang::tr("%s chunks", &[&s.render_distance]),
+                        )
+                    }
+                } else {
+                    labelled(
+                        "Full Detail Distance",
+                        lang::tr("%s chunks", &[&s.render_distance]),
+                    )
+                }
+            }
             Item::Vanilla(o) => o.label(s),
             Item::Horizon(h) => h.label(s),
         }

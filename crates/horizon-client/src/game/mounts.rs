@@ -414,49 +414,22 @@ impl Game<'_> {
             return;
         };
         let m = &self.mobs[i];
-        let mut at = Vec3::new(m.position.x, m.position.y + seat(m.species()), m.position.z);
-        if horizon_client::mobs::camel::is_camel(m.species()) {
-            // Camel.getPassengerAttachmentPoint: the driver half a block
-            // forward, at the body anchor (lower while sitting), turned with
-            // the camel.
-            let a = horizon_client::mobs::camel::passenger_attachment(m);
-            let turned = Vec3::new(a[0], a[1], a[2])
-                .rotate_y(-m.yaw * (std::f64::consts::PI / 180.0) as f32);
-            at = Vec3::new(
-                m.position.x + turned.x,
-                m.position.y + turned.y - 0.6,
-                m.position.z + turned.z,
-            );
-        }
-        if m.species() == Species::HappyGhast {
+        let at = if m.species() == Species::HappyGhast {
             // The first passenger attachment (0, 4, 1.7) of the harnessed back.
             let yaw = f64::from(m.yaw.to_radians());
-            at = Vec3::new(
+            Vec3::new(
                 m.position.x - 1.7 * yaw.sin(),
                 m.position.y + 4.0 - 0.6,
                 m.position.z + 1.7 * yaw.cos(),
-            );
-        }
-        if horizon_client::mobs::llama::is_llama(m.species()) {
-            // The passenger attachment (0, 1.37, -0.3), half of it for a baby.
-            let (y, z) = if m.is_baby() {
-                (0.81, -0.15)
-            } else {
-                (1.37, -0.3)
-            };
-            let yaw = f64::from(m.yaw.to_radians());
-            at = Vec3::new(
-                m.position.x - z * yaw.sin(),
-                m.position.y + y - 0.6,
-                m.position.z + z * yaw.cos(),
-            );
-        }
-        // AbstractHorse.getPassengerAttachmentPoint: the rider slides back and
-        // up while the horse rears.
-        let rear = equine::rear_offset(m);
-        let rear = Vec3::new(rear[0], rear[1], rear[2])
-            .rotate_y(-m.yaw * (std::f64::consts::PI / 180.0) as f32);
-        at = Vec3::new(at.x + rear.x, at.y + rear.y, at.z + rear.z);
+            )
+        } else {
+            horizon_client::mobs::riders::seat(
+                horizon_client::mobs::riders::passenger_attachment(m),
+                0.6,
+                m.position,
+                m.yaw,
+            )
+        };
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
             p.position = at;

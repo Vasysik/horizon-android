@@ -232,12 +232,31 @@ impl Game<'_> {
                     if self.remote.is_some() {
                         self.remote_start_attack();
                     } else {
-                        self.attack();
+                        if self.attack() {
+                            self.reset_attack_strength();
+                        }
+                        self.swing_arm();
                     }
                 } else if !held_use {
-                    // Preserve normal block placement and empty-hand interaction.
-                    // Items with a use action wait for the long-press instead.
-                    touch.triggers[0] = 1.0;
+                    if self.pick().is_none()
+                        && self.using.is_none()
+                        && self.screen == Screen::Playing
+                    {
+                        // In Java Edition, clicking in air initiates an attack / arm swing.
+                        if self.remote.is_some() {
+                            self.remote_start_attack();
+                        } else {
+                            if !self.creative {
+                                self.clicks.miss_time = 10;
+                            }
+                            self.reset_attack_strength();
+                            self.swing_arm();
+                        }
+                    } else {
+                        // Preserve normal block placement and empty-hand interaction.
+                        // Items with a use action wait for the long-press instead.
+                        touch.triggers[0] = 1.0;
+                    }
                 }
             }
             state.merge(&touch)

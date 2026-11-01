@@ -137,6 +137,7 @@ pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
         || is_broken_intel_vulkan(&info)
         || cfg!(target_os = "android")
             && info.backend == wgpu::Backend::Vulkan
+            && !is_broken_mobile_vulkan(&info)
             && !crate::android_runtime::compatibility())
         && supported(adapter, device)
 }
@@ -144,6 +145,35 @@ pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
 /// Intel Gen11 (Ice Lake) ANV Vulkan driver has broken `first_instance` for instance-step
 /// vertex attributes (#3529), causing terrain sections to be drawn with another section's origin
 /// and flicker.
+/// Older or budget Qualcomm Adreno drivers (e.g. Adreno 610/612/616 on Snapdragon 680/685)
+/// have broken storage buffer vertex attributes in Vulkan, causing crashes on world entry (#57).
+/// Mobile ARM Mali/Immortalis/PowerVR GPUs (TBDR architecture) suffer massive pipeline stalls from
+/// dependent storage buffer reads in the vertex stage (`vs_terrain_flat`), causing severe FPS
+/// degradation in regular 3D worlds where drawn section count exceeds 512 (#63).
+pub fn is_broken_mobile_vulkan(info: &wgpu::AdapterInfo) -> bool {
+    if info.backend != wgpu::Backend::Vulkan {
+        return false;
+    }
+    let name = info.name.to_ascii_lowercase();
+    if name.contains("adreno") {
+        if name.contains("610")
+            || name.contains("612")
+            || name.contains("615")
+            || name.contains("616")
+            || name.contains("506")
+        {
+            return true;
+        }
+    }
+    // ARM Mali / Immortalis / PowerVR GPUs (TBDR): dependent SSBO vertex lookups bypass
+    // hardware attribute fetchers, causing massive memory bus saturation and pipeline stalls,
+    // severely degrading regular world performance (#63).
+    if name.contains("mali") || name.contains("immortalis") || name.contains("powervr") {
+        return true;
+    }
+    false
+}
+
 pub fn is_broken_intel_vulkan(info: &wgpu::AdapterInfo) -> bool {
     info.backend == wgpu::Backend::Vulkan
         && info.vendor == 0x8086
@@ -1082,5 +1112,79 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn detects_broken_mobile_vulkan_gpus() {
+        let adapter = |name: &str, backend: wgpu::Backend| wgpu::AdapterInfo {
+            name: name.into(),
+            vendor: 0,
+            device: 0,
+            device_type: wgpu::DeviceType::IntegratedGpu,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        };
+
+        // Budget Adreno with broken storage buffer vertex attributes
+        assert!(is_broken_mobile_vulkan(&adapter(
+            "Adreno (TM) 610",
+            wgpu::Backend::Vulkan
+        )));
+        assert!(is_broken_mobile_vulkan(&adapter(
+            "Adreno (TM) 612",
+            wgpu::Backend::Vulkan
+        )));
+        assert!(is_broken_mobile_vulkan(&adapter(
+            "Adreno (TM) 616",
+            wgpu::Backend::Vulkan
+        )));
+        assert!(is_broken_mobile_vulkan(&adapter(
+            "Adreno (TM) 506",
+            wgpu::Backend::Vulkan
+        )));
+
+        // ARM Mali and Immortalis GPUs (TBDR SSBO vertex stalls)
+        assert!(is_broken_mobile_vulkan(&adapter(
+            "Mali-G615 MC2",
+            wgpu::Backend::Vulkan
+        )));
+        assert!(is_broken_mobile_vulkan(&adapter(
+            "Mali-G57 MC4",
+            wgpu::Backend::Vulkan
+        )));
+        assert!(is_broken_mobile_vulkan(&adapter(
+            "Mali-G720",
+            wgpu::Backend::Vulkan
+        )));
+        assert!(is_broken_mobile_vulkan(&adapter(
+            "Immortalis-G715",
+            wgpu::Backend::Vulkan
+        )));
+        assert!(is_broken_mobile_vulkan(&adapter(
+            "PowerVR Rogue GE8320",
+            wgpu::Backend::Vulkan
+        )));
+
+        // Flagship Adreno GPUs are not excluded
+        assert!(!is_broken_mobile_vulkan(&adapter(
+            "Adreno (TM) 740",
+            wgpu::Backend::Vulkan
+        )));
+        assert!(!is_broken_mobile_vulkan(&adapter(
+            "Adreno (TM) X1-85",
+            wgpu::Backend::Vulkan
+        )));
+
+        // Non-Vulkan backends are not affected
+        assert!(!is_broken_mobile_vulkan(&adapter(
+            "Mali-G615 MC2",
+            wgpu::Backend::Gl
+        )));
     }
 }
