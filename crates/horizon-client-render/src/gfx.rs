@@ -1512,6 +1512,7 @@ impl Renderer {
         crate::android_runtime::configure_atlas_limit(device.limits().max_texture_dimension_2d);
         let info = adapter.get_info();
         crate::graphics::suggest_reduced_far_detail(crate::graphics::lod_capped(&info));
+        crate::graphics::configure_device_tier_with_gpu(&info, &device.limits());
         let size = window.inner_size();
         let max_side = device.limits().max_texture_dimension_2d;
         let (config, present_modes, hdr_output) = if let Some(surface) = &surface {
