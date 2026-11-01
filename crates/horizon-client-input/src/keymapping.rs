@@ -169,6 +169,20 @@ impl ToggleKeys {
             self.0[slot].click();
         }
     }
+    /// Ends a controller's toggle on `slot` (touch crouch while swimming,
+    /// flying or riding, where the button holds instead). Returns whether a
+    /// toggle was dropped. A held key or the vanilla option's toggle is kept.
+    pub fn drop_pad_toggle(&mut self, slot: usize) -> bool {
+        let key = &mut self.0[slot];
+        if !key.pad_toggled {
+            return false;
+        }
+        key.pad_toggled = false;
+        key.is_down = false;
+        // A screen that released it must not restore it when it closes.
+        key.released_by_screen_when_down = false;
+        true
+    }
     /// `MouseHandler.onButton` for a button bound to `slot`: only without a
     /// screen or overlay.
     pub fn button(&mut self, slot: usize, pressed: bool, screen_open: bool, needs_toggle: bool) {
@@ -280,6 +294,40 @@ mod tests {
         assert!(keys.is_down(SNEAK));
         // A press with a screen open does nothing.
         keys.pad_toggle(SNEAK, true);
+        assert!(keys.is_down(SNEAK));
+    }
+    /// #71: a touch crouch toggled on land ends in water, in flight and on a
+    /// mount, and stays ended after a screen; a held sneak is untouched.
+    #[test]
+    fn dropping_the_pad_toggle_ends_it() {
+        let off = [false; 4];
+        let mut keys = ToggleKeys::default();
+        keys.pad_toggle(SNEAK, false);
+        assert!(keys.drop_pad_toggle(SNEAK));
+        assert!(!keys.is_down(SNEAK));
+        assert!(!keys.drop_pad_toggle(SNEAK), "nothing left to drop");
+        // The shift key holds again afterwards.
+        keys.key(SNEAK, KeyAction::Press, false, false);
+        assert!(keys.is_down(SNEAK));
+        assert!(!keys.drop_pad_toggle(SNEAK), "a held sneak is kept");
+        assert!(keys.is_down(SNEAK));
+        keys.key(SNEAK, KeyAction::Release, false, false);
+        assert!(!keys.is_down(SNEAK));
+        // Dropped behind a screen, it is not restored when the screen closes.
+        keys.pad_toggle(SNEAK, false);
+        keys.screen_opened(off);
+        assert!(keys.drop_pad_toggle(SNEAK));
+        keys.screen_closed(off);
+        assert!(!keys.is_down(SNEAK));
+    }
+    /// The vanilla toggle-crouch option is not the pad's toggle: it stays.
+    #[test]
+    fn dropping_keeps_the_vanilla_option_toggle() {
+        let mut keys = ToggleKeys::default();
+        keys.key(SNEAK, KeyAction::Press, false, true);
+        keys.key(SNEAK, KeyAction::Release, false, true);
+        assert!(keys.is_down(SNEAK));
+        assert!(!keys.drop_pad_toggle(SNEAK));
         assert!(keys.is_down(SNEAK));
     }
     #[test]

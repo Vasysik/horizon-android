@@ -200,6 +200,15 @@ impl Game<'_> {
         #[cfg(target_os = "android")]
         let state = {
             self.pad.touch.shield_available = self.touch_shield_available();
+            // #71: a crouch toggled on land would keep sinking, descending or
+            // dismounting once the player swims, flies or rides; there the
+            // button holds, so the toggle ends.
+            if crate::touch_visible()
+                && self.android_touch_descending()
+                && self.toggles.drop_pad_toggle(SNEAK)
+            {
+                self.sync_toggle(SNEAK);
+            }
             let mut touch = self.pad.touch.poll_state();
             self.pad.touch_shield = crate::touch_visible()
                 && !self.pad_in_menu()
@@ -463,11 +472,19 @@ impl Game<'_> {
         })
     }
 
-    /// Touch fly/swim down is held even when ground sneaking is toggled.
+    /// Touch fly/swim down and dismount are held even when ground sneaking
+    /// is toggled. Any water counts, not only the sprint-swim pose: a toggled
+    /// crouch there sinks the player (#71).
     fn android_touch_descending(&self) -> bool {
         #[cfg(target_os = "android")]
         {
-            self.pad.touch.vertical_movement || self.pad.touch.swimming
+            self.pad.touch.vertical_movement
+                || self.pad.touch.swimming
+                || self.pad.touch.mounted
+                || self
+                    .player
+                    .as_ref()
+                    .is_some_and(|p| p.fluids.was_touching_water)
         }
         #[cfg(not(target_os = "android"))]
         {
