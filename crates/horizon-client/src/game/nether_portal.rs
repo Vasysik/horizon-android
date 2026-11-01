@@ -6,10 +6,9 @@
 //! End portals here (`EndPortalBlock.entityInside` / `getPortalDestination`);
 //! the player's End portals are game/end.rs's.
 //!
-//! Only one dimension is loaded at a time. The player's destination is found
-//! once the other dimension has loaded around it. An item or mob that goes
-//! through waits as an `Arrival` (its saved compound and where it stood in its
-//! portal) until the player is in that dimension and its exit is loaded.
+//! A server keeps one level per dimension. Entity portal processes and
+//! cooldowns follow their level; shared `Arrival`s hold each traveller's
+//! saved compound until its destination chunks are loaded.
 use super::{Dim, Game, Screen};
 use horizon_client::Result;
 use horizon_client::fast_hash::FxHashMap;
@@ -86,7 +85,7 @@ pub(super) struct Portals {
     /// `LocalPlayer.portalProcess.isInsidePortalThisTick`.
     client_inside: bool,
     /// Items and mobs, by entity id.
-    entities: HashMap<u32, PortalState>,
+    pub(super) entities: HashMap<u32, PortalState>,
     /// Positions before this tick's moves, by entity id.
     pub(super) before: FxHashMap<u32, Vec3>,
     arrivals: Vec<Arrival>,
@@ -198,7 +197,7 @@ fn arrival_from_tag(a: &Tag) -> Option<Arrival> {
 
 impl Game<'_> {
     /// The world border's extent.
-    fn border_bounds(&self) -> BorderBounds {
+    pub(super) fn border_bounds(&self) -> BorderBounds {
         let [min_x, min_z, max_x, max_z] = self.border.bounds();
         BorderBounds {
             min_x,
@@ -322,16 +321,18 @@ impl Game<'_> {
                 let saved;
                 let chunk = match self.world.chunks.get(&(x, z)) {
                     Some(c) => &**c,
-                    None => match self
-                        .save
-                        .load(x, z, self.pack.assets.registry, self.res.biomes())
-                    {
-                        Some(c) => {
-                            saved = c;
-                            &saved
+                    None => {
+                        match self
+                            .save
+                            .load(x, z, self.pack.assets.registry, world_biomes!(self))
+                        {
+                            Some(c) => {
+                                saved = c;
+                                &saved
+                            }
+                            None => continue,
                         }
-                        None => continue,
-                    },
+                    }
                 };
                 for (s, section) in chunk.sections.iter().enumerate() {
                     if !section.blocks.maybe_has(|v| {
@@ -952,7 +953,7 @@ impl Game<'_> {
                 uuid,
                 self.persist_raw(id),
             );
-            self.dropped.remove(i);
+            self.remove_dropped(i);
             self.forget_entity(id);
             self.portals.arrivals.push(Arrival { plan, tag });
             self.portals.dirty = true;
@@ -992,6 +993,7 @@ impl Game<'_> {
             if !self.may_enter(plan.dim) {
                 return;
             }
+            self.release_vehicle_container(id);
             let uuid = self.uuid_for(id);
             let b = &self.boats[i];
             let tag = horizon_client::entity_nbt::boat_to_nbt(
@@ -1017,6 +1019,7 @@ impl Game<'_> {
             if !self.may_enter(plan.dim) {
                 return;
             }
+            self.release_vehicle_container(id);
             let uuid = self.uuid_for(id);
             let tag = self.carts[i].to_nbt(uuid, self.persist_raw(id));
             self.carts.remove(i);
@@ -1097,6 +1100,60 @@ impl Game<'_> {
                 None => self.world.loaded_entities.push((key, vec![tag])),
             }
         }
+    }
+
+    /// `FallingBlockEntity.tick`: block effects mark its portal, then
+    /// `Entity.handlePortal` transfers it before the landing branch runs.
+    pub(super) fn falling_through_portal(&mut self, f: &mut super::FallingBlock) -> Option<Dim> {
+        if self.remote.is_some() {
+            return None;
+        }
+        let mut sections = std::mem::take(&mut self.portals.sections);
+        let entry = self.swept_portal(f.previous, f.position, 0.98, 0.98, &mut sections);
+        self.portals.sections = sections;
+        if let Some(entry) = entry {
+            f.portal.set_inside(entry, ENTITY_DELAY);
+        }
+        let entry = f.portal.handle(true, 0, ENTITY_DELAY)?;
+        let plan = self.entity_plan(entry, f.position, 0.98, 0.98, false);
+        if !self.may_enter(plan.dim) {
+            return None;
+        }
+        let uuid = f.saved.as_ref().map_or_else(
+            || {
+                if f.id == 0 {
+                    horizon_client::save::random_uuid()
+                } else {
+                    self.uuid_for(f.id)
+                }
+            },
+            |saved| saved.0,
+        );
+        let modelled = horizon_client::entity_nbt::falling_block_to_nbt(
+            self.state_to_nbt(f.state),
+            f.position,
+            f.velocity,
+            f.age,
+            f.drop_item,
+            f.damage,
+            f.fall_distance,
+            uuid,
+        );
+        let mut tag = super::persist::with_raw(modelled, f.saved.as_ref().map(|s| &s.1));
+        if let Tag::Compound(fields) = &mut tag {
+            fields.insert("PortalCooldown".into(), Tag::Int(ENTITY_DELAY));
+            if f.no_gravity {
+                fields.insert("NoGravity".into(), Tag::Byte(1));
+            } else {
+                fields.remove(&"NoGravity".into());
+            }
+        }
+        if f.id != 0 {
+            self.forget_entity(f.id);
+        }
+        self.portals.arrivals.push(Arrival { plan, tag });
+        self.portals.dirty = true;
+        Some(plan.dim)
     }
 
     // ---- persistence ----

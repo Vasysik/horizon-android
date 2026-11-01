@@ -578,3 +578,71 @@ fn a_deleted_message_shows_60_ticks_then_becomes_the_marker() {
     assert_eq!(lines(&chat), [marker.clone(), marker]);
     assert!(chat.deletions.is_empty());
 }
+
+/// `SuggestionsList.select` says an entry once (`lastNarratedEntry`), as
+/// "suggestion N out of M", with its tooltip when it has one.
+#[test]
+fn a_suggestion_is_narrated_by_its_place_once() {
+    let suggestion = |text: &str, tooltip: Option<&str>| Suggestion {
+        range: (1, 1),
+        text: text.into(),
+        tooltip: tooltip.map(str::to_owned),
+        int_value: None,
+    };
+    let mut l = SuggestionList {
+        rect: [0; 4],
+        original: "/".into(),
+        list: vec![
+            suggestion("give", None),
+            suggestion("gamemode", Some("Mode")),
+        ],
+        offset: 0,
+        current: 1,
+        last_mouse: (0, 0),
+        tab_cycles: false,
+        last_narrated: 0,
+    };
+    let said = l.narration_message().component();
+    assert_eq!(l.last_narrated, 1);
+    assert_eq!(said["translate"], "narration.suggestion.tooltip");
+    assert_eq!(said["with"].as_array().map(Vec::len), Some(4));
+    l.current = 0;
+    let said = l.narration_message().component();
+    assert_eq!(said["translate"], "narration.suggestion");
+    assert_eq!(said["with"].as_array().map(Vec::len), Some(3));
+}
+
+#[test]
+fn a_chat_message_is_trimmed_and_its_whitespace_runs_collapsed() {
+    // ChatScreen.normalizeChatMessage: String.trim, then StringUtils
+    // .normalizeSpace, so a command gets the arguments the player meant.
+    assert_eq!(normalize_chat_message("  hello   there  "), "hello there");
+    assert_eq!(normalize_chat_message("/msg  Alex\thi"), "/msg Alex hi");
+    assert_eq!(normalize_chat_message("a\n\nb\r\nc"), "a b c");
+    assert_eq!(normalize_chat_message("\t \n"), "");
+    assert_eq!(normalize_chat_message(""), "");
+    // Character.isWhitespace is not str::trim's Unicode whitespace: U+00A0 is
+    // no Java whitespace, so it is neither trimmed nor collapsed, while the
+    // ideographic space U+3000 and Java's U+001C separators are.
+    assert_eq!(normalize_chat_message(" \u{a0} hi"), "\u{a0} hi");
+    assert_eq!(normalize_chat_message("a\u{a0}\u{a0}b"), "a\u{a0}\u{a0}b");
+    assert_eq!(normalize_chat_message("a\u{3000}\u{3000}b"), "a b");
+    assert_eq!(normalize_chat_message("a\u{1c}b"), "a b");
+}
+
+#[test]
+fn a_chat_message_is_cut_to_the_256_utf16_units_the_packet_holds() {
+    // StringUtil.trimChatMessage counts String.length(), UTF-16 code units:
+    // 256 ASCII characters are all kept, 257 are cut to 256.
+    assert_eq!(normalize_chat_message(&"a".repeat(256)).len(), 256);
+    assert_eq!(normalize_chat_message(&"a".repeat(300)).len(), 256);
+    // An emoji is two units, so 128 of them fill the packet and the 129th is
+    // dropped: chars().take(256) would keep all 129 and the server would
+    // reject the message.
+    let emoji = normalize_chat_message(&"\u{1f600}".repeat(129));
+    assert_eq!(emoji, "\u{1f600}".repeat(128));
+    assert_eq!(emoji.encode_utf16().count(), 256);
+    // A cut between the halves of a pair keeps the character below it.
+    let mixed = format!("{}\u{1f600}", "b".repeat(255));
+    assert_eq!(normalize_chat_message(&mixed), "b".repeat(255));
+}

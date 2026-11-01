@@ -283,6 +283,25 @@ fn custom_only(saved: &Tag) -> Compound {
     }
 }
 
+/// `BlockEntity.collectComponents`: explicit components plus the type's implicit components.
+/// Unlike Ctrl + Pick Block, this does not carry the remaining block entity NBT.
+pub fn collected_components(saved: &Tag) -> Compound {
+    let id = block_entity_nbt::id(saved).unwrap_or_default();
+    let mut collected = match saved.get("components") {
+        Some(Tag::Compound(c)) => c.clone(),
+        _ => Compound::new(),
+    };
+    for part in parts(&id) {
+        if let Some((component, value)) = collect(*part, saved) {
+            match value {
+                Some(v) => collected.insert(component.into(), v),
+                None => collected.remove(&JavaString::from(component)),
+            };
+        }
+    }
+    collected
+}
+
 /// `addBlockDataToItem`: the component patch Ctrl + Pick Block gives the clone
 /// item of the block entity saved as `saved` (a full, canonical compound).
 pub fn pick(saved: &Tag) -> Compound {
@@ -310,19 +329,7 @@ pub fn pick(saved: &Tag) -> Compound {
     // ItemStack.applyComponents(collectComponents()): the block entity's own
     // components, then the implicit ones; a value equal to the item's own is
     // no change.
-    let mut collected = match saved.get("components") {
-        Some(Tag::Compound(c)) => c.clone(),
-        _ => Compound::new(),
-    };
-    for part in parts(&id) {
-        if let Some((component, value)) = collect(*part, saved) {
-            match value {
-                Some(v) => collected.insert(component.into(), v),
-                None => collected.remove(&JavaString::from(component)),
-            };
-        }
-    }
-    for (component, value) in collected {
+    for (component, value) in collected_components(saved) {
         if item_default(&component.to_string_lossy()).as_ref() == Some(&value) {
             patch.remove(&component);
         } else {

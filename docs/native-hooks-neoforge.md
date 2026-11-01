@@ -92,7 +92,6 @@ proposals, to be confirmed against the Javadoc linked from the documentation whe
 | `entity_join_level` | `EntityJoinLevelEvent` | server | yes | `ServerLevel.addEntity` |
 | `living_incoming_damage` | `LivingIncomingDamageEvent` | server | yes | `LivingEntity.hurtServer` |
 | `living_death` | `LivingDeathEvent` | server | yes | `LivingEntity.die` |
-| `chunk_load` / `chunk_unload` | `ChunkEvent.Load` / `.Unload` | server | no | chunk map load/unload |
 | `container_open` / `_close` | `PlayerContainerEvent.Open` / `.Close` | server | no | `ServerPlayer.openMenu`, `doCloseContainer` |
 | `client_tick_pre` / `_post` | `ClientTickEvent.Pre` / `.Post` | client | no | the window's half of `tick` |
 

@@ -9,6 +9,7 @@ description = "Horizon's own shader packs (WGSL, docs/shaders.md): the format, t
 [dependencies]
 bytemuck = { version = "1.24", features = ["derive"] }
 # Parses and validates a pack's WGSL, and translates it as wgpu does for Vulkan, Metal and DirectX 12.
+png = "0.18"
 naga = { version = "30.0.1", features = ["wgsl-in", "spv-out", "msl-out", "hlsl-out"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

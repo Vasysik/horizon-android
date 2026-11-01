@@ -26,6 +26,8 @@ pub(in crate::game) enum Slot {
     /// An armor stand's equipment (`ArmorStand::SLOTS` index).
     Stand(u32, usize),
     Frame(u32),
+    /// A chest or hopper minecart's slot (`ContainerEntity.getChestVehicleSlot`).
+    Cart(u32, usize),
     Block([i32; 3], usize),
     /// A slot of another player (`for_player`): reached with their state in place.
     Guest(u32, Box<Slot>),
@@ -168,6 +170,19 @@ impl Game<'_> {
                     add(Slot::Frame(*id));
                 }
             }
+            // `getChestVehicleSlot` takes any index below `getContainerSize`.
+            Owner::Entity(Target::Cart(id)) => {
+                let size = self
+                    .carts
+                    .iter()
+                    .find(|c| c.id == *id)
+                    .map_or(0, |c| c.kind.slots());
+                for i in 0..size {
+                    if matches_name(name, &format!("container.{i}")) {
+                        add(Slot::Cart(*id, i));
+                    }
+                }
+            }
             Owner::Entity(_) => {}
         }
         out
@@ -209,6 +224,7 @@ impl Game<'_> {
                 .cloned()
                 .flatten(),
             Slot::Frame(id) => self.item_frames.iter().find(|f| f.id == *id)?.item.clone(),
+            Slot::Cart(id, i) => self.cart_slots(*id)?.get(*i).cloned().flatten(),
             Slot::Block(p, i) => match self.world.block_entities.get(&(p[0], p[1], p[2])) {
                 Some(horizon_client::containers::BlockEntity::Chest(items)) => {
                     items.get(*i).cloned().flatten()
@@ -292,6 +308,13 @@ impl Game<'_> {
             Slot::Frame(id) => match self.item_frames.iter_mut().find(|f| f.id == *id) {
                 Some(f) => {
                     f.item = stack;
+                    true
+                }
+                None => false,
+            },
+            Slot::Cart(id, i) => match self.cart_slots(*id).and_then(|c| c.get_mut(*i)) {
+                Some(slot) => {
+                    *slot = stack;
                     true
                 }
                 None => false,

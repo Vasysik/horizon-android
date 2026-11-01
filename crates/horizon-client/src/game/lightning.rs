@@ -47,7 +47,7 @@ impl Game<'_> {
     pub(super) fn tick_thunder(&mut self) {
         // isRaining (rain level > 0.2) and isThundering (> 0.9, sky light, no ceiling).
         let (rain, thunder) = self.world.weather.levels(1.0);
-        if rain <= 0.2 || thunder <= 0.9 || self.dim != super::Dim::Overworld {
+        if rain <= 0.2 || thunder <= 0.9 || self.dim != super::Dim::Overworld || self.world_debug {
             return;
         }
         let mut scratch = std::mem::take(&mut self.spawn_scratch);
@@ -579,11 +579,13 @@ impl Game<'_> {
                 .map(|e| e.id),
         );
         // Dropped items burn up (ItemEntity health 5), save fire-resistant ones.
+        let before = self.dropped_ids();
         self.dropped.retain(|e| {
             !inside([e.position.x, e.position.y, e.position.z])
                 || e.stack.item.contains("netherite")
                 || (e.age < 20 && b.spared.contains(&e.id))
         });
+        self.native_items_left_since(&before);
         struck.into_iter().map(|(_, view)| view).collect()
     }
     /// `LightningBolt.shouldRenderAtSqrDistance`: a bolt is drawn within 64

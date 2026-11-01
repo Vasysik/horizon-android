@@ -74,13 +74,36 @@ pub fn watch_playing(tx: std::sync::mpsc::Sender<backend::Msg>) {
     });
 }
 
+/// The official server's address from links.json once read (`set_official_server`; empty: none),
+/// the built-in one until then.
+static OFFICIAL_SERVER: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// The official server [`watch_official`] asks from now on: `Links::official_server`.
+pub fn set_official_server(address: &str) {
+    *OFFICIAL_SERVER.write().unwrap_or_else(|e| e.into_inner()) = Some(address.trim().to_owned());
+}
+
+fn official_server() -> String {
+    OFFICIAL_SERVER
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_else(|| crate::server_list::OFFICIAL_ADDRESS.to_owned())
+}
+
 /// How many play on the official server now: its server-list status ping, as the game's
-/// Multiplayer list sends it, with a 3-second timeout. None when it doesn't answer.
-pub fn official_players() -> Option<u64> {
-    let address = crate::server_list::OFFICIAL.1;
-    horizon_telemetry::server_status::players(address, std::time::Duration::from_secs(3))
-        .ok()
-        .map(|players| players.online)
+/// Multiplayer list sends it (through the address's SRV record), with a 3-second timeout. None
+/// when it doesn't answer or there is no official server.
+pub fn official_players(address: &str) -> Option<u64> {
+    let (host, port) = horizon_telemetry::server_status::split_address(address)?;
+    let (host, port) = horizon_protocol::server_redirect(&host, port);
+    horizon_telemetry::server_status::players_at(
+        address,
+        (&host, port),
+        std::time::Duration::from_secs(3),
+    )
+    .ok()
+    .map(|players| players.online)
 }
 
 /// Sends [`official_players`] to the window as `Msg::OfficialPlayers` now and every minute, on
@@ -92,7 +115,9 @@ pub fn watch_official(tx: std::sync::mpsc::Sender<backend::Msg>) {
     }
     std::thread::spawn(move || {
         while tx
-            .send(backend::Msg::OfficialPlayers(official_players()))
+            .send(backend::Msg::OfficialPlayers(official_players(
+                &official_server(),
+            )))
             .is_ok()
         {
             std::thread::sleep(horizon_telemetry::live::INTERVAL);
@@ -382,6 +407,21 @@ pub fn set(kinds: &[Kind], on: bool) -> Result<Consent, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The official server's count through its SRV record, from the live server (network):
+    /// `cargo test --lib official_count -- --ignored`. Its port 25565 is another server.
+    #[test]
+    #[ignore = "asks the live official server"]
+    fn official_count_follows_the_srv_record() {
+        let (host, port) =
+            horizon_protocol::server_redirect(crate::server_list::OFFICIAL_ADDRESS, 25565);
+        assert_eq!(
+            (host.trim_end_matches('.'), port),
+            ("play.playhorizon.dev", 24454)
+        );
+        assert!(official_players(crate::server_list::OFFICIAL_ADDRESS).is_some());
+        assert_eq!(official_players(""), None);
+    }
 
     #[test]
     fn the_stats_page_is_on_the_website() {

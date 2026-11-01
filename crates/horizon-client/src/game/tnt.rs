@@ -176,13 +176,18 @@ impl Game<'_> {
                     t.position.y + PrimedTnt::SIZE * 0.0625,
                     t.position.z,
                 ];
+                let bounds = t.bounds();
+                let in_water = self.bounds_in_water(bounds);
                 self.tnts.remove(i);
                 count -= 1;
                 // ExplosionInteraction.TNT: the tnt_explosion_drop_decay rule.
                 let interaction = self.destroy_type("tnt_explosion_drop_decay");
-                self.with_hive_emptying_blast(|g| {
+                self.combat.explosion_in_water = in_water;
+                let result = self.with_hive_emptying_blast(|g| {
                     g.server_explode(center, 4.0, interaction, false)
-                })?;
+                });
+                self.combat.explosion_in_water = false;
+                result?;
             } else {
                 i += 1;
             }

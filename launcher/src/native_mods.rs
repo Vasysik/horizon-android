@@ -30,7 +30,7 @@ mod crates;
 const PREFIX: &str = "native-";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
-pub const MIXINS_REV: &str = "4342a0bfbe71d4d14185528d64e496d6022f16a1";
+pub const MIXINS_REV: &str = "a2af5c0dd4117d51ecd70066ba7a00b4a2c10dab";
 /// The features of the release's own game (game-build.yml).
 const FEATURES: &str = "horizon-client/mods";
 
@@ -591,11 +591,15 @@ fn hooks_at(revision: &str) -> Option<u32> {
 
 /// The revision to build `mods` on: `pinned` (the pins' agreement, else the installed version's)
 /// when every mod naming a hook points' version finds it or a later one there (`at` reads a
-/// revision's). Else, when nothing pins it, the revision those mods were tested on.
+/// revision's). Else, when nothing pins it, the revision those mods were tested on. Else the
+/// revision of the release or Nightly the build starts from (`game`), when they find theirs
+/// there: a rebuild that stayed on an older Horizon, or mods pinning one, then move to the game
+/// the player installed, and pinned mods wait for the player's Build anyway ([`mismatch`]).
 fn with_hooks(
     mods: &[Bundle],
     pinned: String,
     free: bool,
+    game: impl FnOnce() -> Option<String>,
     at: impl Fn(&str) -> Option<u32>,
 ) -> Result<String, String> {
     let hooked: Vec<&Bundle> = mods.iter().filter(|b| b.hooks.is_some()).collect();
@@ -618,8 +622,14 @@ fn with_hooks(
             return Ok(revision);
         }
     }
+    if let Some(revision) = game().filter(|r| *r != pinned && fits(r)) {
+        return Ok(revision);
+    }
+    // Only the mods that need more than `pinned` has: the others would build there.
+    let found = at(&pinned);
     let list: Vec<String> = hooked
         .iter()
+        .filter(|b| found.is_none() || b.hooks > found)
         .map(|b| format!("{} (hook points v{})", b.id, b.hooks.unwrap_or_default()))
         .collect();
     Err(format!(
@@ -815,6 +825,27 @@ pub fn digest<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
         hash.update(bytes);
     }
     hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The digest of a bundle's files as the Mods page reads it (`native_status::enabled`): an
+/// unpacked `.hnmod`'s whole folder, its `horizon-native.json` included, else the bundle's own
+/// folder. A build records it, so a build of the mods turned on reads as up to date.
+fn source_digest(bundle: &Bundle) -> Option<String> {
+    let root = bundle
+        .dir
+        .parent()
+        .and_then(Path::parent)
+        .filter(|root| {
+            root.join(NATIVE_MANIFEST).is_file()
+                && bundle.dir == root.join("mixins").join(&bundle.id)
+        })
+        .unwrap_or(&bundle.dir);
+    let read: Vec<_> = files(root)
+        .ok()?
+        .into_iter()
+        .map(|(name, path)| Some((name, fs::read(path).ok()?)))
+        .collect::<Option<_>>()?;
+    Some(digest(read.iter().map(|(n, b)| (n.as_str(), b.as_slice()))))
 }
 
 /// Where a build is.
@@ -1206,6 +1237,11 @@ pub fn build(
     for b in &found {
         backend::copy_dir(&b.dir, &incoming.join(&b.id)).map_err(|e| e.to_string())?;
     }
+    // Read before `repin` rewrites a copy's manifest.
+    let digests: std::collections::HashMap<String, Option<String>> = found
+        .iter()
+        .map(|b| (b.id.clone(), source_digest(b)))
+        .collect();
     let mods: Vec<Bundle> = found
         .into_iter()
         .map(|b| Bundle {
@@ -1227,7 +1263,8 @@ pub fn build(
         None,
         |r| committed(backend::REPO, r),
     )?;
-    let revision = with_hooks(&mods, pinned, free, hooks_at)?;
+    let game = || revision_of(origin).ok();
+    let revision = with_hooks(&mods, pinned, free, game, hooks_at)?;
     let other = mismatch(&mods, &revision);
     if let (Some(list), false) = (&other, anyway) {
         return Err(format!("{MISMATCH}{list}."));
@@ -1345,10 +1382,7 @@ pub fn build(
             "mods": mods.iter().map(|m| serde_json::json!({
                 "id": m.id,
                 "version": m.version,
-                "sha256": files(&m.dir).ok().map(|list| {
-                    let read: Vec<_> = list.iter().filter_map(|(n, p)| Some((n.clone(), fs::read(p).ok()?))).collect();
-                    digest(read.iter().map(|(n, b)| (n.as_str(), b.as_slice())))
-                }),
+                "sha256": digests.get(&m.id).cloned().flatten(),
             })).collect::<Vec<_>>(),
         });
         install(base, &version, &binary, &about, |dir| {
@@ -1404,15 +1438,7 @@ fn install(
     fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
     for entry in fs::read_dir(&from).map_err(|e| e.to_string())?.flatten() {
         let name = entry.file_name();
-        if [
-            backend::CLIENT,
-            ".installed",
-            "Horizon.app",
-            "native-mods.json",
-        ]
-        .iter()
-        .any(|n| name == *n)
-        {
+        if !carried_over(&name) {
             continue;
         }
         let to = partial.join(&name);
@@ -1436,6 +1462,21 @@ fn install(
         return Err(e);
     }
     fs::write(dir.join(".installed"), "").map_err(|e| e.to_string())
+}
+
+/// Whether a file of the version a build starts from goes into the new build. The game, its
+/// record, and the mods' post-build data (`native-data/`, which the new build's steps write
+/// again) are the new build's own: a mod turned off leaves none of its data behind.
+fn carried_over(name: &std::ffi::OsStr) -> bool {
+    ![
+        backend::CLIENT,
+        ".installed",
+        "Horizon.app",
+        "native-mods.json",
+        "native-data",
+    ]
+    .iter()
+    .any(|n| name == *n)
 }
 
 /// How many native builds no instance plays stay installed, the newest first: switching a mod
@@ -1483,6 +1524,22 @@ fn stale(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rebuild_leaves_the_old_builds_mod_data_behind() {
+        use std::ffi::OsStr;
+        for own in [
+            backend::CLIENT,
+            ".installed",
+            "native-mods.json",
+            "native-data",
+        ] {
+            assert!(!carried_over(OsStr::new(own)), "{own}");
+        }
+        for kept in ["horizon-ctl", "resources", "LICENSE"] {
+            assert!(carried_over(OsStr::new(kept)), "{kept}");
+        }
+    }
 
     fn dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("horizon-native-{name}-{}", std::process::id()));
@@ -1609,6 +1666,21 @@ mod tests {
         assert_eq!(
             (found[0].id.as_str(), found[0].horizon.as_deref()),
             ("veinminer", Some(A))
+        );
+        // What a build records of it is what the Mods page compares: up to date, not Needs rebuild.
+        assert_eq!(
+            crate::native_status::enabled(&home),
+            [(
+                "veinminer".to_string(),
+                "0.3.0".to_string(),
+                source_digest(&found[0])
+            )]
+        );
+        repin(&found[0], "f".repeat(40).as_str()).unwrap();
+        assert_ne!(
+            crate::native_status::enabled(&home)[0].2,
+            source_digest(&found[0]),
+            "a build reads the digest before repinning its copy"
         );
         pack(
             "veinminer.hnmod",
@@ -1779,36 +1851,86 @@ mod tests {
             b'b' => Some(2),
             _ => None,
         };
+        let none = || None;
         let zoom = [mod_("zoom", B, Some(1)), mod_("minimap", &c, Some(1))];
         assert_eq!(
-            with_hooks(&zoom, A.into(), true, at).unwrap(),
+            with_hooks(&zoom, A.into(), true, none, at).unwrap(),
             A,
             "the game's own"
         );
         let tested = [mod_("zoom", A, Some(1))];
         assert_eq!(
-            with_hooks(&tested, c.clone(), true, at).unwrap(),
+            with_hooks(&tested, c.clone(), true, none, at).unwrap(),
             A,
             "an older game"
         );
         assert_eq!(
-            with_hooks(&tested, B.into(), false, at).unwrap(),
+            with_hooks(&tested, B.into(), false, none, at).unwrap(),
             B,
             "v1 mods on v2"
         );
         let newer = [mod_("recipes", B, Some(2))];
-        let err = with_hooks(&newer, A.into(), false, at).unwrap_err();
+        let err = with_hooks(&newer, A.into(), false, none, at).unwrap_err();
         assert!(
             err.contains("aaaaaaa") && err.contains("recipes (hook points v2)"),
             "{err}"
         );
         assert_eq!(
-            with_hooks(&newer, A.into(), true, at).unwrap(),
+            with_hooks(&newer, A.into(), true, none, at).unwrap(),
             B,
             "its tested commit"
         );
         let pinned_only = [mod_("veinminer", B, None)];
-        assert_eq!(with_hooks(&pinned_only, B.into(), false, at).unwrap(), B);
+        assert_eq!(
+            with_hooks(&pinned_only, B.into(), false, none, at).unwrap(),
+            B
+        );
+    }
+
+    /// Players on launcher 0.2.31 (#5352): a rebuild that stayed on an older Horizon (A, hook
+    /// points v1), or a mod pinning it, met mods needing newer hook points, tested on different
+    /// commits, and the build was refused although the installed game (B) has them all.
+    #[test]
+    fn mods_needing_newer_hook_points_move_the_build_to_the_installed_game() {
+        let mod_ = |id: &str, horizon: &str, hooks: Option<u32>| Bundle {
+            id: id.into(),
+            version: "1".into(),
+            dir: PathBuf::new(),
+            horizon: Some(horizon.into()),
+            mixins: None,
+            hooks,
+        };
+        let (c, d) = ("c".repeat(40), "d".repeat(40));
+        // A (the old build's revision) has hook points v1, B (the installed game) v7.
+        let at = |r: &str| match r.as_bytes()[0] {
+            b'a' => Some(1),
+            b'b' => Some(7),
+            _ => None,
+        };
+        let game = || Some(B.to_owned());
+        let hooked = [
+            mod_("zoom", &c, Some(1)),
+            mod_("recipes", &d, Some(2)),
+            mod_("xtoxray", B, Some(7)),
+        ];
+        assert_eq!(
+            with_hooks(&hooked, A.into(), true, game, at).unwrap(),
+            B,
+            "a rebuild that stayed on an older Horizon moves to the game"
+        );
+        let with_pin = [mod_("carryblock", A, None), mod_("recipes", &d, Some(2))];
+        let revision = with_hooks(&with_pin, A.into(), false, game, at).unwrap();
+        assert_eq!(revision, B, "a pinned mod no longer blocks the build");
+        let asked = mismatch(&with_pin, &revision).expect("the pinned mod waits for Build anyway");
+        assert!(
+            asked.contains("carryblock") && !asked.contains("recipes"),
+            "{asked}"
+        );
+        // A game without them still refuses, naming only the mods that don't fit.
+        let err = with_hooks(&hooked, A.into(), true, || Some(c.clone()), at).unwrap_err();
+        assert!(err.contains("recipes (hook points v2)"), "{err}");
+        assert!(err.contains("xtoxray (hook points v7)"), "{err}");
+        assert!(!err.contains("zoom"), "zoom builds on A: {err}");
     }
 
     #[test]

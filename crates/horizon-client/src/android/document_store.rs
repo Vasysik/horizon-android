@@ -9,6 +9,21 @@ use std::{
 pub const ROOT: &str = "horizon";
 const DIRECTORY: &str = "vnd.android.document/directory";
 const MAX_CHILDREN: usize = 32768;
+static GAME_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn set_game_active(active: bool) {
+    GAME_ACTIVE.store(active, std::sync::atomic::Ordering::Release);
+}
+fn world_access(id: &str) -> io::Result<()> {
+    if id.split('/').nth(1) == Some("worlds")
+        && GAME_ACTIVE.load(std::sync::atomic::Ordering::Acquire)
+    {
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "Return to the launcher before copying or editing worlds",
+        ));
+    }
+    Ok(())
+}
 
 fn invalid() -> io::Error {
     io::Error::new(ErrorKind::InvalidInput, "Invalid Horizon document")
@@ -70,6 +85,7 @@ fn resolve(home: &Path, id: &str) -> io::Result<Document> {
             Some("mods") => ("horizon-mods", "Mods"),
             Some("packs") => ("resourcepacks", "Resource Packs"),
             Some("shaders") => ("shaderpacks", "Shader Packs"),
+            Some("worlds") => ("saves", "Worlds"),
             _ => return Err(invalid()),
         };
         (root.join(folder), label, false)
@@ -163,14 +179,21 @@ fn row(home: &Path, id: &str) -> io::Result<Value> {
 }
 pub fn children(home: &Path, id: &str) -> io::Result<Vec<Value>> {
     if id == ROOT {
-        return ["mods", "packs", "shaders", "reports"]
+        return ["mods", "packs", "shaders", "worlds", "reports"]
             .iter()
             .map(|folder| row(home, &folder_id(profile(home), folder)))
             .collect();
     }
+    world_access(id)?;
     let doc = resolve(home, id)?;
     let mut result = Vec::new();
-    for entry in fs::read_dir(doc.path)?.take(MAX_CHILDREN) {
+    for (index, entry) in fs::read_dir(doc.path)?.enumerate() {
+        if index == MAX_CHILDREN {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Too many files in one folder to list safely",
+            ));
+        }
         let entry = entry?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
@@ -200,6 +223,7 @@ pub fn is_child(home: &Path, parent: &str, child: &str) -> bool {
                     .is_some_and(|rest| rest.starts_with('/'))))
 }
 pub fn open(home: &Path, id: &str, mode: &str) -> io::Result<File> {
+    world_access(id)?;
     let doc = resolve(home, id)?;
     if !fs::metadata(&doc.path)?.is_file() || (doc.reports && mode != "r") {
         return Err(invalid());
@@ -226,6 +250,9 @@ pub fn open(home: &Path, id: &str, mode: &str) -> io::Result<File> {
     options.open(doc.path)
 }
 pub fn call(home: &Path, op: &str, id: &str, arg: &str) -> io::Result<Value> {
+    if !matches!(op, "document" | "path" | "child") {
+        world_access(id)?;
+    }
     match op {
         "roots" => Ok(json!([{"root_id": ROOT, "document_id": ROOT,
             "title": "Horizon Android", "flags": 18, "mime_types": "*/*"}])),
@@ -346,13 +373,13 @@ mod tests {
         ));
         fs::create_dir_all(&home).unwrap();
         let roots = children(&home, ROOT).unwrap();
-        assert_eq!(roots.len(), 4);
+        assert_eq!(roots.len(), 5);
         assert_eq!(roots[0]["document_id"], "p0/mods");
         for id in [
             "../tokens",
             "p0/mods/../account.json",
             "p0/mods/a\\b",
-            "p0/worlds",
+            "p0/accounts",
             "p00/mods",
             "p0/mods/.secret",
         ] {
@@ -394,6 +421,39 @@ mod tests {
             assert!(resolve(&home, "p0/mods/link/report.jsonl").is_err());
             assert!(!is_child(&home, ROOT, "p0/mods/link/report.jsonl"));
         }
+        fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+    #[test]
+    fn worlds_roundtrip_and_busy_guard() {
+        let home =
+            std::env::temp_dir().join(format!("horizon-world-documents-{}", std::process::id()));
+        fs::create_dir_all(&home).unwrap();
+        let id = call(&home, "mkdir", "p0/worlds", "Example").unwrap();
+        assert_eq!(id, "p0/worlds/Example");
+        call(&home, "create", id.as_str().unwrap(), "level.dat").unwrap();
+        use std::io::{Read, Write};
+        open(&home, "p0/worlds/Example/level.dat", "wt")
+            .unwrap()
+            .write_all(b"fixture")
+            .unwrap();
+        let mut data = Vec::new();
+        open(&home, "p0/worlds/Example/level.dat", "r")
+            .unwrap()
+            .read_to_end(&mut data)
+            .unwrap();
+        assert_eq!(data, b"fixture");
+        set_game_active(true);
+        let blocked = open(&home, "p0/worlds/Example/level.dat", "r").is_err()
+            && call(&home, "delete", "p0/worlds/Example/level.dat", "").is_err()
+            && children(&home, "p0/worlds").is_err();
+        set_game_active(false);
+        assert!(blocked);
+        assert!(open(&home, "p0/worlds/Example/level.dat", "r").is_ok());
         fs::remove_dir_all(home).unwrap();
     }
 }

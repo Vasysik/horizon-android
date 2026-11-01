@@ -241,7 +241,7 @@ pub fn main() -> horizon_client::Result<()> {
     let items = Items::catalog(root, &PackOverlay::NONE)?;
     let enchantments = Enchantments::load(root);
     let names = horizon_client::creative::Names::default();
-    let trades = Trades::load(root);
+    let trades = Trades::load(root, &PackOverlay::NONE);
     let recipes = horizon_client::crafting::Recipes::load(root, &items, &PackOverlay::NONE)?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items, &PackOverlay::NONE);
     let banners = horizon_client::banner::Banners::load(root);

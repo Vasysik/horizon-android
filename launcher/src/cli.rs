@@ -108,7 +108,17 @@ enum AccountCmd {
     List,
     /// Sign in with a Microsoft account in your browser (device code). Play needs one that owns
     /// Minecraft: Java Edition
-    SignIn,
+    SignIn {
+        /// Sign this account (name or UUID) in again: another Microsoft account is refused and
+        /// who plays stays the same
+        #[arg(long = "for")]
+        target: Option<String>,
+    },
+    /// Renew an account's session now, even when its access token is still fresh
+    Refresh { who: String },
+    /// Renew an account's session for a game already running: prints the read-once session file
+    /// it hands over (`--json`: {"session_file"} or {"authentication"} when it can't)
+    Session { who: String },
     /// Sign out: the account's tokens leave the keychain
     SignOut {
         /// Its name or UUID
@@ -735,6 +745,10 @@ enum Cmd {
         /// --server-thread
         #[arg(long = "arg", value_name = "ARG", allow_hyphen_values = true)]
         arg: Vec<String>,
+        /// Play this launch as this signed-in account (its name or UUID), without changing
+        /// the one `account select` picked: several games can play as several accounts at once
+        #[arg(long, value_name = "WHO")]
+        account: Option<String>,
     },
     /// Run a dedicated server here; type commands into its console
     Server {
@@ -996,7 +1010,10 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
             use horizon_launcher::themes::Accent;
             s.accent = Accent::parse(value).ok_or_else(|| {
                 let names: Vec<_> = Accent::ALL.iter().map(|a| a.name()).collect();
-                format!("{value}: say {}", names.join(", "))
+                format!(
+                    "{value}: say {} or a hue in degrees (0 to 360)",
+                    names.join(", ")
+                )
             })?
         }
         "background" => {
@@ -1293,16 +1310,22 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             join,
             server,
             arg,
+            account,
         } => {
             let instance = match instance {
                 Some(name) => instances::find(&name)?,
                 None => instances::selected(),
             };
             if instance.java.is_some() {
-                if version.is_some() || world.is_some() || join.is_some() || creative {
+                if version.is_some()
+                    || world.is_some()
+                    || join.is_some()
+                    || creative
+                    || account.is_some()
+                {
                     return Err(format!(
-                        "{} plays Minecraft: Java Edition: --version, --world, --creative and \
-                         --join are for Horizon instances.",
+                        "{} plays Minecraft: Java Edition: --version, --world, --creative, \
+                         --join and --account are for Horizon instances.",
                         instance.name
                     ));
                 }
@@ -1326,7 +1349,26 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 after_exit(&instance, &vars);
                 return played;
             }
-            let mut cmd = backend::client(&instance.resolve_version(version.as_deref())?)?;
+            // Who plays this launch; the accounts below choose it in memory only, for its
+            // `--name` and look.
+            let mut accounts = Accounts::load();
+            let who = match account {
+                Some(who) => Some(account::Player::Microsoft(
+                    accounts
+                        .find(&who)
+                        .ok_or_else(|| {
+                            format!("No signed-in account {who}. See `horizon-launcher account`.")
+                        })?
+                        .uuid
+                        .clone(),
+                )),
+                None => None,
+            };
+            if let Some(who) = &who {
+                accounts.play_as(account::store(), who.clone())?;
+            }
+            let mut cmd =
+                backend::client_as(&instance.resolve_version(version.as_deref())?, who.as_ref())?;
             instances::apply(&mut cmd, &instance)?;
             if let Some(code) = join {
                 backend::join_friend(&mut cmd, &code)?;
@@ -1344,7 +1386,6 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             cmd.args(arg);
             let started = std::time::Instant::now();
-            let accounts = Accounts::load();
             if let Some(name) = accounts.name_arg() {
                 cmd.arg("--name").arg(name);
             }
@@ -1421,7 +1462,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
         }
         Cmd::AgentConfig { test: true, .. } => {
-            let tools = horizon_launcher::agents::self_test(backend::exe_path())?;
+            let tools = horizon_launcher::agents::self_test(&backend::update_target())?;
             if as_json {
                 json(serde_json::json!({ "answered": true, "tools": tools }));
             } else {
@@ -1430,7 +1471,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         }
         Cmd::AgentConfig { client, .. } => {
             use horizon_launcher::agents;
-            let exe = backend::exe_path();
+            let exe = &backend::update_target();
             if as_json {
                 let mut all = agents::json(exe);
                 if let Some(id) = &client {
@@ -1723,6 +1764,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     "accounts": accounts.accounts.iter().map(|a| serde_json::json!({
                         "name": a.name, "uuid": a.uuid,
                         "selected": accounts.selected.as_ref() == Some(&a.uuid),
+                        "authentication": account::session::status(account::store(), &a.uuid),
                     })).collect::<Vec<_>>(),
                     "offline": accounts.offline.iter().map(|n| serde_json::json!({
                         "name": n,
@@ -1743,7 +1785,8 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     } else {
                         " "
                     };
-                    println!("{mark} {}  {}", a.name, a.uuid);
+                    let status = account::session::status(account::store(), &a.uuid);
+                    println!("{mark} {}  {}  {}", a.name, a.uuid, status.label());
                 }
                 for n in &accounts.offline {
                     let on = accounts.player() == account::Player::Offline(n.clone());
@@ -1759,7 +1802,57 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 }
             }
         }
-        AccountCmd::SignIn => {
+        AccountCmd::Refresh { who } => {
+            let status = account::session::refresh(&who)?;
+            if as_json {
+                json(serde_json::to_value(&status).map_err(|e| e.to_string())?);
+            } else if status.state != account::session::State::Ready {
+                return Err(format!("{}: {}", status.label(), status.message));
+            } else {
+                println!("{}: {}", status.label(), status.message);
+            }
+        }
+        AccountCmd::Session { who } => {
+            let dir = backend::game_home().join("sessions");
+            match (account::session::renew_for_game(&dir, &who), as_json) {
+                (Ok(file), true) => json(serde_json::json!({ "session_file": file })),
+                (Ok(file), false) => println!("{}", file.display()),
+                (Err(status), true) => json(serde_json::json!({ "authentication": status })),
+                (Err(status), false) => return Err(status.message),
+            }
+        }
+        AccountCmd::SignIn { target: Some(who) } => {
+            let a = find(&accounts, &who)?;
+            let sign_in = account::SignIn::start_for(a.clone());
+            let mut shown = false;
+            let signed_in = loop {
+                match sign_in.state() {
+                    account::SignInState::Code(code) if !shown => {
+                        shown = true;
+                        if as_json {
+                            json(serde_json::json!({
+                                "link": code.verification_uri,
+                                "code": code.user_code,
+                            }));
+                        } else {
+                            eprintln!(
+                                "To sign {} in again, open {} in a browser and enter the code {}",
+                                a.name, code.verification_uri, code.user_code
+                            );
+                        }
+                    }
+                    account::SignInState::Done(result) => break result?,
+                    _ => {}
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            };
+            if as_json {
+                json(serde_json::json!({ "signed_in": signed_in.uuid }));
+            } else {
+                println!("Signed in as {} again.", signed_in.name);
+            }
+        }
+        AccountCmd::SignIn { target: None } => {
             let client_id = account::client_id().ok_or(account::NOT_CONFIGURED)?;
             let ep = account::Endpoints::live();
             let code = account::device_code(&ep, &client_id)?;
@@ -2897,7 +2990,7 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 None => instances::selected(),
             };
             let paths = match remove {
-                false => shortcut::make(backend::exe_path(), &i.id, &i.name)?,
+                false => shortcut::make(&backend::update_target(), &i.id, &i.name)?,
                 true => shortcut::remove(&i.id)?,
             };
             if as_json {
@@ -3478,6 +3571,15 @@ mod tests {
         );
         set_setting(&mut settings, "language", "system").unwrap();
         assert_eq!(settings.language, None);
+    }
+
+    #[test]
+    fn play_takes_an_account_for_one_launch() {
+        let cli = Cli::try_parse_from(["horizon-launcher", "play", "--account", "Alex"]).unwrap();
+        match cli.command {
+            Some(Cmd::Play { account, .. }) => assert_eq!(account.as_deref(), Some("Alex")),
+            _ => panic!("not play"),
+        }
     }
 
     #[test]

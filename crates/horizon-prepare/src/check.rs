@@ -101,13 +101,33 @@ fn lacks_packs(resources: &Path) -> bool {
         .any(|pack| !resources.join("assets").join(pack).is_file())
 }
 
-/// The first panorama face is missing or the client jar's 1x1 placeholder (a PNG's width is the
-/// big-endian word at byte 16, in the IHDR chunk).
+/// The panorama needs six equally sized, non-placeholder square faces and an overlay: prepared
+/// resources may hold only some of the full-size assets after an interrupted import, and the
+/// client jar's faces are 1x1 placeholders (a PNG's width and height are the big-endian words at
+/// bytes 16 and 20, in the IHDR chunk).
 fn lacks_panorama(resources: &Path) -> bool {
-    let face = resources.join("assets/minecraft/textures/gui/title/background/panorama_0.png");
-    std::fs::read(face).map_or(true, |png| {
-        png.get(16..20).is_none_or(|width| width == [0, 0, 0, 1])
-    })
+    let background = resources.join("assets/minecraft/textures/gui/title/background");
+    let mut expected = None;
+    for face in 0..6 {
+        let Ok(png) = std::fs::read(background.join(format!("panorama_{face}.png"))) else {
+            return true;
+        };
+        if png.get(..16) != Some(b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR") {
+            return true;
+        }
+        let Some(dimensions) = png.get(16..24) else {
+            return true;
+        };
+        let width =
+            u32::from_be_bytes([dimensions[0], dimensions[1], dimensions[2], dimensions[3]]);
+        let height =
+            u32::from_be_bytes([dimensions[4], dimensions[5], dimensions[6], dimensions[7]]);
+        if width <= 1 || width != height || expected.is_some_and(|size| size != width) {
+            return true;
+        }
+        expected = Some(width);
+    }
+    !background.join("panorama_overlay.png").is_file()
 }
 
 fn lacks_unifont(resources: &Path) -> bool {
@@ -148,6 +168,36 @@ mod tests {
         fs::write(path, data).unwrap();
     }
 
+    /// A PNG's signature and IHDR size, all `lacks_panorama` reads.
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend(width.to_be_bytes());
+        png.extend(height.to_be_bytes());
+        png
+    }
+
+    #[test]
+    fn panorama_check_finds_missing_and_inconsistent_faces() {
+        let dir = folder("panorama");
+        let background = dir.join("assets/minecraft/textures/gui/title/background");
+        for face in 0..6 {
+            file(
+                &background.join(format!("panorama_{face}.png")),
+                &png_header(2, 2),
+            );
+        }
+        assert!(lacks_panorama(&dir));
+        file(&background.join("panorama_overlay.png"), b"overlay");
+        assert!(!lacks_panorama(&dir));
+        file(&background.join("panorama_4.png"), &png_header(1, 1));
+        assert!(lacks_panorama(&dir));
+        file(&background.join("panorama_4.png"), &png_header(3, 3));
+        assert!(lacks_panorama(&dir));
+        fs::remove_file(background.join("panorama_4.png")).unwrap();
+        assert!(lacks_panorama(&dir));
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn unprepared_resources_need_a_preparation() {
         let root = folder("unprepared");
@@ -172,12 +222,14 @@ mod tests {
         for pack in crate::BUILT_IN_PACKS {
             file(&assets.join(pack), b"zip");
         }
-        let mut png = vec![0; 24];
-        png[16..20].copy_from_slice(&[0, 0, 4, 0]);
-        file(
-            &assets.join("minecraft/textures/gui/title/background/panorama_0.png"),
-            &png,
-        );
+        let background = assets.join("minecraft/textures/gui/title/background");
+        for face in 0..6 {
+            file(
+                &background.join(format!("panorama_{face}.png")),
+                &png_header(1024, 1024),
+            );
+        }
+        file(&background.join("panorama_overlay.png"), b"overlay");
         file(&assets.join("minecraft/font/unifont.zip"), b"zip");
         file(&assets.join("pack.mcmeta"), b"{}");
         file(&assets.join("minecraft/sounds.json"), b"{}");

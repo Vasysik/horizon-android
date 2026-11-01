@@ -22,7 +22,7 @@ ChatAbilities.selectVisibleMessages	port	crates/horizon-client-render/src/chat.r
 ChatAbilities.Builder.build	inline	crates/horizon-client-render/src/chat.rs::ChatAbilities::new	restrictions come from the Chat option alone; new() maps the visibility to them
 ChatListener.tick	missing		player: the Chat Delay option does nothing; lines show at once instead of after the delay
 ChatListener.setMessageDelay	missing		player: no delayed-message queue, so Chat Delay has no effect
-ChatListener.flushQueue	missing		player: no queue to flush (part of Chat Delay)
+ChatListener.flushQueue	port	crates/horizon-client/src/game/remote.rs::Game::flush_chat_queue	each message through accept_chat, so it counts as processed
 ChatListener.removeFromDelayedMessageQueue	inline	crates/horizon-client/src/game/remote.rs::Game::handle_delete_chat	
 ChatListener.handleMessage	missing		player: nothing is held back, so Chat Delay is ignored
 ChatListener.handlePlayerChatMessage	port	crates/horizon-client/src/game/remote.rs::Game::handle_packet	gap: player: no Only Show Secure Chat filter, no server filter-mask text, no block or friend-only hiding of chat lines

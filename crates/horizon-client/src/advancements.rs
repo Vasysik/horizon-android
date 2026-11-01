@@ -486,6 +486,9 @@ pub struct EntityView {
     pub effects: Vec<(String, i32, i32)>,
     /// Player: game mode name.
     pub gamemode: Option<String>,
+    /// Player: the sneak input is held (`Input.shift`, what `input.sneak`
+    /// asks; not the sneaking pose).
+    pub input_sneak: bool,
     /// Lightning: entities it struck.
     pub struck: Vec<EntityView>,
     /// Lightning: blocks it set on fire (`LightningBolt.blocksSetOnFire`).
@@ -608,6 +611,19 @@ pub fn item(v: &Value, it: &ItemView, w: &dyn World) -> bool {
         }
     }
     true
+}
+/// `LockCode.canUnlock`: a spectator opens any container; otherwise the
+/// player's main hand must match the lock's `ItemPredicate`. An empty hand
+/// holds nothing to match (`getMainHandItem` is `ItemStack.EMPTY`), while
+/// `LockCode.NO_LOCK`'s empty predicate takes any stack.
+pub fn can_unlock(
+    lock: &Value,
+    spectator: bool,
+    main_hand: Option<&ItemView>,
+    w: &dyn World,
+) -> bool {
+    let empty = ItemView::default();
+    spectator || item(lock, main_hand.unwrap_or(&empty), w)
 }
 /// `BlockPredicate`.
 pub fn block(v: &Value, pos: [i32; 3], w: &dyn World) -> bool {
@@ -780,14 +796,19 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
                 })
             }),
             "minecraft:type_specific/player" => {
-                p["gamemode"].as_array().is_none_or(|modes| {
-                    e.gamemode
-                        .as_deref()
-                        .is_some_and(|g| modes.iter().any(|m| m.as_str() == Some(g)))
-                }) && (p["looking_at"].is_null()
-                    || e.looking_at
-                        .as_ref()
-                        .is_some_and(|t| entity(&p["looking_at"], t, w, origin)))
+                // `PlayerPredicate.matches`: `instanceof ServerPlayer` first,
+                // then the game mode, what it looks at and its `input`.
+                e.kind == "minecraft:player"
+                    && p["gamemode"].as_array().is_none_or(|modes| {
+                        e.gamemode
+                            .as_deref()
+                            .is_some_and(|g| modes.iter().any(|m| m.as_str() == Some(g)))
+                    })
+                    && (p["looking_at"].is_null()
+                        || e.looking_at
+                            .as_ref()
+                            .is_some_and(|t| entity(&p["looking_at"], t, w, origin)))
+                    && (p["input"].is_null() || input(&p["input"], e))
             }
             "minecraft:type_specific/lightning" => {
                 range_i(&p["blocks_set_on_fire"], i64::from(e.blocks_set_on_fire))
@@ -808,6 +829,14 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
         }
     }
     true
+}
+/// `InputPredicate.matches`: the player's held inputs. The sneak input is
+/// what the game holds; the other inputs have no source here yet and count
+/// as unconstrained.
+fn input(p: &Value, e: &EntityView) -> bool {
+    p["sneak"]
+        .as_bool()
+        .is_none_or(|want| want == e.input_sneak)
 }
 /// `KilledByArrowTrigger.TriggerInstance.matches`: the weapon, each listed
 /// victim condition matched by a distinct victim, and the count of entity types.
@@ -1407,6 +1436,32 @@ mod tests {
                 || (tag == "minecraft:is_projectile"
                     && matches!(id, "minecraft:fireball" | "minecraft:arrow"))
         }
+    }
+    /// `LockCode.canUnlock` for a chest with
+    /// `lock:{items:"minecraft:gold_ingot"}`: a gold ingot opens it, an empty
+    /// hand or another item does not, and a spectator always does.
+    #[test]
+    fn a_lock_takes_its_item_and_any_spectator() {
+        let lock = serde_json::json!({"items": "minecraft:gold_ingot"});
+        let gold = ItemView {
+            id: "minecraft:gold_ingot".into(),
+            count: 1,
+            ..Default::default()
+        };
+        let stick = ItemView {
+            id: "minecraft:stick".into(),
+            count: 1,
+            ..Default::default()
+        };
+        assert!(can_unlock(&lock, false, Some(&gold), &Flat));
+        assert!(!can_unlock(&lock, false, Some(&stick), &Flat));
+        assert!(!can_unlock(&lock, false, None, &Flat));
+        assert!(can_unlock(&lock, true, None, &Flat));
+        assert!(can_unlock(&lock, true, Some(&stick), &Flat));
+        // `LockCode.NO_LOCK` is the empty predicate: it takes any stack, and
+        // `unlocksWith(EMPTY)` too.
+        let none = serde_json::json!({});
+        assert!(can_unlock(&none, false, None, &Flat));
     }
     /// `PassengerPredicate.matches`: ride_a_boat_with_a_goat's vehicle holds a goat.
     #[test]

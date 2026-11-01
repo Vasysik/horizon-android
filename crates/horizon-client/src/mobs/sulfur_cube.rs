@@ -10,13 +10,15 @@ use super::{
     goals::{Cx, Goal, JUMP, LOOK, MOVE, goal_clone},
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 // Sulfur cube state (on top of `cube`'s `size`, `counter` jump delay,
 // `flag` aggressive, `flag2` was on ground, `vector[0]` direction):
 // `head` the swallowed block, `counter2` the fuse plus one (0 unprimed),
-// `ints[3]` the pickup timer, `scratch[1]` a fuse just lit (sound pending),
+// `ints[3]` the pickup timer, `scratch[1]` the sounds pending (1 a fuse just
+// lit, 2 a hit),
 // `scratch[2]` the push sound cooldown, `scratch[3]` from a bucket,
 // `point` the item it is after.
 pub const PICKUP_TIMER: i32 = 100;
@@ -246,6 +248,31 @@ pub fn swallowable(m: &Mob, item: &str) -> bool {
 pub fn has_body(m: &Mob) -> bool {
     m.extra.head.is_some()
 }
+
+#[cfg(test)]
+mod knockback_sync_tests {
+    use super::*;
+    use crate::mobs::{Mob, Species};
+    use std::sync::Arc;
+
+    /// `SulfurCube.knockback` sets `needsSync`, as `LivingEntity.knockback`
+    /// does, so a guest sees a cube with a block knocked about at once.
+    #[test]
+    fn a_knocked_cube_with_a_block_syncs_at_once() {
+        load_archetype_items(&HashMap::from([(
+            "minecraft:sulfur_cube_archetype/explosive".to_owned(),
+            HashSet::from(["minecraft:tnt".to_owned()]),
+        )]));
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::SulfurCube;
+        let mut m = Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0);
+        m.extra.head = Some("minecraft:tnt".into());
+        assert!(!m.needs_sync);
+        m.damage(5.0, Damage::player([2.0, 0.0, 0.0]));
+        assert!(m.velocity.x < 0.0, "velocity {:?}", m.velocity);
+        assert!(m.needs_sync);
+    }
+}
 pub fn archetype(m: &Mob) -> Option<&'static Archetype> {
     m.extra.head.as_deref().and_then(archetype_of)
 }
@@ -264,6 +291,78 @@ pub fn fuse(m: &Mob) -> i32 {
 pub fn primed(m: &Mob) -> bool {
     fuse(m) >= 0
 }
+/// `hurtServer`'s priming by a hit whose direct entity is a burning
+/// `AbstractArrow` (an arrow or a trident): a cube with a block that can
+/// explode lights its fuse, the long one.
+pub fn burning_arrow_hit(m: &mut Mob) -> bool {
+    has_body(m) && can_explode(m) && prime(m, false)
+}
+
+#[cfg(test)]
+mod burning_arrow_tests {
+    use super::*;
+    use crate::mobs::{Mob, Species};
+    use std::sync::Arc;
+
+    fn cube(head: Option<&str>) -> Mob {
+        load_archetype_items(&HashMap::from([(
+            "minecraft:sulfur_cube_archetype/explosive".to_owned(),
+            HashSet::from(["minecraft:tnt".to_owned()]),
+        )]));
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::SulfurCube;
+        let mut m = Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0);
+        m.extra.head = head.map(Into::into);
+        m
+    }
+
+    #[test]
+    fn a_burning_arrow_lights_the_long_fuse() {
+        let mut m = cube(Some("minecraft:tnt"));
+        assert!(burning_arrow_hit(&mut m));
+        let (fuse_ticks, _, _) = archetype(&m).and_then(|a| a.explosion).unwrap();
+        assert_eq!(fuse(&m), fuse_ticks);
+        assert!(m.invulnerable_flag);
+        // lit once: a second arrow leaves the fuse alone.
+        m.extra.counter2 -= 5;
+        assert!(!burning_arrow_hit(&mut m));
+        assert_eq!(fuse(&m), fuse_ticks - 5);
+    }
+
+    #[test]
+    fn a_burning_arrow_lights_only_an_explosive_block() {
+        for head in [None, Some("minecraft:dirt")] {
+            let mut m = cube(head);
+            assert!(!burning_arrow_hit(&mut m), "{head:?}");
+            assert!(!primed(&m) && !m.invulnerable_flag, "{head:?}");
+        }
+    }
+
+    /// the arrow's knock, then the fuse lit: the next tick plays
+    /// `entity.tnt.primed`, then the archetype's hit sound.
+    #[test]
+    fn a_knock_and_a_lit_fuse_both_sound() {
+        let mut events = Vec::new();
+        let ran = crate::mobs::world::with_test_world(&[], |w, _| {
+            let mut m = cube(Some("minecraft:tnt"));
+            m.damage(5.0, Damage::player([2.0, 0.0, 0.0]));
+            assert!(burning_arrow_hit(&mut m));
+            ai_step(&mut m, w, &mut events);
+        });
+        if !ran {
+            return; // needs the prepared 26.3 data
+        }
+        let sounds: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                MobEvent::Sound(id, ..) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let hit = archetype_of("minecraft:tnt").unwrap().hit_sound;
+        assert_eq!(sounds, ["entity.tnt.primed", hit]);
+    }
+}
 /// Client copy of `tickFuse`: count the fuse down for the renderer. The
 /// server alone explodes (`ai_step`); a guest never fires `Explode` here.
 pub fn client_tick(m: &mut Mob) {
@@ -273,6 +372,54 @@ pub fn client_tick(m: &mut Mob) {
 }
 fn can_explode(m: &Mob) -> bool {
     archetype(m).is_some_and(|a| a.explosion.is_some()) && m.alive() && !primed(m)
+}
+
+#[cfg(test)]
+mod immune_tests {
+    use super::*;
+    use crate::mobs::{Mob, Species};
+    use std::sync::Arc;
+
+    fn cube(head: Option<&str>) -> Mob {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::SulfurCube;
+        let mut m = Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0);
+        m.extra.head = head.map(Into::into);
+        m
+    }
+
+    /// `#sulfur_cube_with_block_immune_to` has these too: a cube with a block
+    /// takes none of them, a cube without one does.
+    #[test]
+    fn a_cube_with_a_block_shrugs_off_the_whole_tag() {
+        for kind in [
+            DamageKind::FallingAnvil,
+            DamageKind::FallingBlock,
+            DamageKind::FallingStalactite,
+            DamageKind::DryOut,
+            DamageKind::Spit,
+            DamageKind::Stalagmite,
+            DamageKind::SulfurCubeHot,
+            DamageKind::WindCharge,
+        ] {
+            let mut m = cube(Some("minecraft:dirt"));
+            let health = m.health;
+            assert!(!m.damage(1.0, Damage::of(kind)), "{kind:?}");
+            assert_eq!(m.health, health, "{kind:?}");
+            let mut m = cube(None);
+            assert!(m.damage(1.0, Damage::of(kind)), "{kind:?}");
+            assert_eq!(m.health, health - 1.0, "{kind:?}");
+        }
+    }
+
+    /// outside the tag (`magic`) a cube with a block is hurt.
+    #[test]
+    fn a_cube_with_a_block_takes_magic() {
+        let mut m = cube(Some("minecraft:dirt"));
+        let health = m.health;
+        assert!(m.damage(1.0, Damage::of(DamageKind::Magic)));
+        assert_eq!(m.health, health - 1.0);
+    }
 }
 pub fn register(m: &mut Mob) {
     use super::cube;
@@ -342,12 +489,23 @@ pub fn sounds(m: &Mob) -> [&'static str; 3] {
         ["", "entity.sulfur_cube.hurt", "entity.sulfur_cube.death"]
     }
 }
-/// `primeTime`: light the fuse (short when an explosion did it).
+thread_local! {
+    /// The `tnt_explodes` game rule of the level this thread ticks, which
+    /// `primeTime` and `tickFuse` read (shared by the game each tick and on
+    /// a rule change).
+    static TNT_EXPLODES: Cell<bool> = const { Cell::new(true) };
+}
+/// Share the `tnt_explodes` rule with this thread's sulfur cubes.
+pub fn set_tnt_explodes(on: bool) {
+    TNT_EXPLODES.set(on);
+}
+/// `primeTime`: light the fuse (short when an explosion did it), only
+/// while `tnt_explodes` is on.
 pub fn prime(m: &mut Mob, imminent: bool) -> bool {
     let Some((fuse, _, _)) = archetype(m).and_then(|a| a.explosion) else {
         return false;
     };
-    if !m.alive() || primed(m) {
+    if !m.alive() || !TNT_EXPLODES.get() || primed(m) {
         return false;
     }
     let t = if imminent {
@@ -357,7 +515,7 @@ pub fn prime(m: &mut Mob, imminent: bool) -> bool {
     };
     m.invulnerable_flag = true;
     m.extra.counter2 = t + 1;
-    m.extra.scratch[1] = 1;
+    m.extra.scratch[1] |= 1;
     true
 }
 /// `hurtServer`: fire or `#is_explosion` (a firework rocket's burst too)
@@ -390,6 +548,14 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, amount: f32) -> bool {
             | DamageKind::Freeze
             | DamageKind::SweetBerryBush
             | DamageKind::HotFloor
+            | DamageKind::FallingAnvil
+            | DamageKind::FallingBlock
+            | DamageKind::FallingStalactite
+            | DamageKind::DryOut
+            | DamageKind::Spit
+            | DamageKind::Stalagmite
+            | DamageKind::SulfurCubeHot
+            | DamageKind::WindCharge
     );
     if immune {
         // `dealDefaultKnockback`, unless the damage type is tagged no_knockback.
@@ -567,20 +733,23 @@ pub fn knockback(m: &mut Mob, direction: (f64, f64), from: Option<[f64; 3]>, dam
     );
     // The hit sound plays on the next tick (no event queue here).
     m.extra.scratch[1] = 2;
+    // needsSync: the push reaches the other players at once.
+    m.needs_sync = true;
     true
 }
 /// `SulfurCube.tick` and `customServerAiStep` additions after the cube's
 /// own: the fuse, the timers, a swallowed block's stillness, buoyancy and
 /// facing, growing up, and players pushing it.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    match m.extra.scratch[1] {
-        1 => events.push(MobEvent::Sound("entity.tnt.primed", m.center(), 1.0, 1.0)),
-        2 => {
-            if let Some(a) = archetype(m) {
-                events.push(MobEvent::Sound(a.hit_sound, m.center(), 1.0, 1.0));
-            }
-        }
-        _ => {}
+    // primeTime's sound, then knockback's: a burning arrow plays both.
+    let pending = m.extra.scratch[1];
+    if pending & 1 != 0 {
+        events.push(MobEvent::Sound("entity.tnt.primed", m.center(), 1.0, 1.0));
+    }
+    if pending & 2 != 0
+        && let Some(a) = archetype(m)
+    {
+        events.push(MobEvent::Sound(a.hit_sound, m.center(), 1.0, 1.0));
     }
     m.extra.scratch[1] = 0;
     // tickFuse.
@@ -590,22 +759,26 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if fuse(m) == 0
         && let Some((_, power, _)) = archetype(m).and_then(|a| a.explosion)
     {
-        // `level.explode(this, ...)`: the cube is the blast's source and its
-        // causing entity, so its entity query leaves it out.
-        let name = match &m.custom_name {
-            Some(name) => crate::text::Text::literal(name.clone()),
-            None => crate::text::Text::translate("entity.minecraft.sulfur_cube", &[]),
-        };
-        events.push(MobEvent::ExplosionSource {
-            mob: m.id,
-            charged: false,
-            name,
-        });
-        events.push(MobEvent::Explode(
-            [m.position.x, m.position.y + 0.0625, m.position.z],
-            power,
-            m.species(),
-        ));
+        // With `tnt_explodes` off the cube still goes, without a blast.
+        if TNT_EXPLODES.get() {
+            // `level.explode(this, ...)`: the cube is the blast's source and its
+            // causing entity, so its entity query leaves it out.
+            let name = match &m.custom_name {
+                Some(name) => crate::text::Text::literal(name.clone()),
+                None => crate::text::Text::translate("entity.minecraft.sulfur_cube", &[]),
+            };
+            events.push(MobEvent::ExplosionSource {
+                mob: m.id,
+                charged: false,
+                name,
+                in_water: m.fluids.in_water,
+            });
+            events.push(MobEvent::Explode(
+                [m.position.x, m.position.y + 0.0625, m.position.z],
+                power,
+                m.species(),
+            ));
+        }
         m.removed = true;
         return;
     }
@@ -853,6 +1026,68 @@ pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
     m.extra.counter2 = int("fuse").unwrap_or(-1).max(-1) + 1;
     if primed(m) {
         m.invulnerable_flag = true;
+    }
+}
+
+#[cfg(test)]
+mod tnt_rule_tests {
+    use super::*;
+    use crate::mobs::{Damage, DamageKind, Mob, Species};
+    use horizon_core::geometry::Vec3;
+    use std::sync::Arc;
+
+    fn tnt_cube() -> Mob {
+        load_archetype_items(&HashMap::from([(
+            "minecraft:sulfur_cube_archetype/explosive".to_owned(),
+            HashSet::from(["minecraft:tnt".to_owned()]),
+        )]));
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.species = Species::SulfurCube;
+        let mut m = Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0);
+        m.extra.head = Some("minecraft:tnt".into());
+        m
+    }
+
+    #[test]
+    fn no_fuse_is_lit_while_tnt_does_not_explode() {
+        // primeTime checks the tnt_explodes rule: no fuse, no invulnerability,
+        // and no draw for the short fuse.
+        let mut m = tnt_cube();
+        let state = m.random.state();
+        set_tnt_explodes(false);
+        m.damage(5.0, Damage::of(DamageKind::Explosion));
+        let lit = prime(&mut m, true);
+        let (unprimed, vulnerable) = (!primed(&m), !m.invulnerable_flag);
+        set_tnt_explodes(true);
+        assert!(!lit && unprimed && vulnerable);
+        assert_eq!(m.random.state(), state);
+        assert!(prime(&mut m, false));
+        assert!(m.invulnerable_flag);
+    }
+
+    #[test]
+    fn a_fuse_running_out_while_tnt_does_not_explode_makes_no_blast() {
+        // tickFuse: the blast (and its source) only with tnt_explodes, the
+        // discard either way.
+        let mut events = Vec::new();
+        let ran = crate::mobs::world::with_test_world(&[], |w, _| {
+            let mut m = tnt_cube();
+            assert!(prime(&mut m, false));
+            m.extra.counter2 = 2; // fuse 1, 0 after this tick
+            set_tnt_explodes(false);
+            ai_step(&mut m, w, &mut events);
+            set_tnt_explodes(true);
+            assert!(m.removed);
+        });
+        if !ran {
+            return; // needs the prepared 26.3 data
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, MobEvent::Explode(..) | MobEvent::ExplosionSource { .. })),
+            "{events:?}"
+        );
     }
 }
 

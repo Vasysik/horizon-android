@@ -220,25 +220,27 @@ pub fn apply(
 }
 
 /// The settings the control API may change: none of `[engine]` (which program runs), `[panel]` and `[api]`
-/// (who can reach the server), nor the vanilla keys that open another remote console.
+/// (who can reach the server), `[discord]` (its webhook is a secret), nor the vanilla keys that open another remote console.
 pub fn changeable_remotely(key: &str) -> bool {
     let (section, field) = key.split_once('.').unwrap_or((key, ""));
-    !matches!(section, "engine" | "panel" | "api")
+    !matches!(section, "engine" | "panel" | "api" | "discord")
         && !(section == "properties"
             && (field.starts_with("rcon.")
                 || field.starts_with("management-server-")
                 || matches!(field, "enable-rcon" | "enable-query" | "query.port")))
 }
 
-/// The settings as JSON, the API's token hidden.
+/// The settings as JSON, the API's token and the Discord webhook hidden.
 pub fn shown(dir: &Path) -> Result<Value, String> {
     let mut table = toml::Table::try_from(config::Config::load(dir)?).map_err(|e| e.to_string())?;
-    if let Some(token) = table
-        .get_mut("api")
-        .and_then(|a| a.get_mut("token"))
-        .filter(|t| t.as_str() != Some(""))
-    {
-        *token = toml::Value::String("(set)".into());
+    for (section, field) in [("api", "token"), ("discord", "webhook")] {
+        if let Some(secret) = table
+            .get_mut(section)
+            .and_then(|a| a.get_mut(field))
+            .filter(|t| t.as_str() != Some(""))
+        {
+            *secret = toml::Value::String("(set)".into());
+        }
     }
     serde_json::to_value(&table).map_err(|e| e.to_string())
 }

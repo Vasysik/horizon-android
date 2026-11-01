@@ -155,6 +155,7 @@ enforce_whitelist = false
 view_distance = 10
 simulation_distance = 10
 max_view_distance = 0        # past view_distance, saved chunks only, up to this (0: off)
+admin_feedback_to_ops = true # operators see each other's commands ([name: ...]); false: only the log
 
 [world]
 name = "world"
@@ -173,6 +174,7 @@ hardcore = false
 path = ""                    # the game program; empty: the one beside horizon-server
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
 restart_on_crash = true
+low_memory = false           # true: less memory, slightly slower ticks (see below)
 
 [backups]
 every = "6h"                 # 30m, 6h, 1d...; "0" turns automatic backups off
@@ -192,6 +194,13 @@ The defaults are vanilla 26.3's. Unknown keys and values vanilla would refuse ar
 start instead of being ignored. When the game changes a setting itself (`/whitelist on`), the change is copied
 back into `server.toml` when it stops, and your comments are kept. Changes to the file apply at the next
 restart: there is no live reload yet.
+
+### Operators' commands: `admin_feedback_to_ops`
+
+On by default, as vanilla: when an operator runs a command that reports to admins (`/gamemode`, `/give`, `/tp`...),
+the other operators read `[name: ...]` in gray, and the console logs it. Players who aren't operators never see it
+either way. `false` keeps it to the console's log (`logs/latest.log`): nobody in game sees an operator's commands,
+while each operator still reads their own command's answer.
 
 ### Seeing further: `max_view_distance`
 
@@ -342,8 +351,92 @@ token = "a long random string only the bot knows"
 ```
 
 The same rules as the panel's hold: a tailnet or loopback address, unless `allow_public = true` (the token is then
-all that guards the server, and it warns at every start). The API can't change `[engine]`, `[panel]` or `[api]`,
-nor turn on RCON or another remote console.
+all that guards the server, and it warns at every start). The API can't change `[engine]`, `[panel]`, `[api]` or
+`[discord]`, nor turn on RCON or another remote console.
+
+### Chat in a Discord channel
+
+`[discord]` posts the server's chat, joins, leaves and deaths to a Discord channel. In the channel's settings,
+Integrations → Webhooks → New Webhook → Copy Webhook URL, then:
+
+```toml
+[discord]
+webhook = "https://discord.com/api/webhooks/..."   # a secret: whoever has it can post in the channel
+events = ["chat", "join", "leave", "death"]        # and "kick"
+enabled = true                                     # false pauses it and keeps the webhook
+```
+
+The lines of each 2 seconds are drawn as one picture of the in-game chat (transparent, shadowed letters, colours
+included), and a channel gets at most one post every 2 seconds (more when Discord asks for it: a burst beyond 20
+lines is counted, not drawn). Only `chat` is forwarded, never a message the server's chat filter held back. Posts
+never ping: they allow no mention, and an `@everyone` typed in game reaches Discord defused. Every post comes
+from the webhook's own name and avatar (set them in Discord), never a player's; players' addresses are never sent,
+and a player is always named by their account's name (a nickname only next to it). The server only makes outgoing HTTPS calls to Discord;
+the API and the panel show the webhook as `(set)`. The letters are Pixelify Sans (SIL Open Font License,
+`crates/horizon-theme/fonts`), not Minecraft's font.
+
+### Tools written for vanilla's management protocol
+
+Vanilla 26.3 has its own management protocol, JSON-RPC over a WebSocket, and Horizon's server speaks it too, so a
+tool written for a vanilla server manages a Horizon one. It's off by default; turn it on in `server.toml`:
+
+```toml
+[properties]
+management-server-enabled = true
+management-server-port = 8132          # 0: a free port, logged at the start
+# management-server-secret: 40 letters and digits; left out, the server makes one and writes it here
+# management-server-tls-keystore = "management.p12"   # your certificate (PKCS12); left out, see below
+# management-server-tls-keystore-password = "..."     # or MINECRAFT_MANAGEMENT_TLS_KEYSTORE_PASSWORD
+```
+
+It listens on `localhost` (`management-server-host`). A client sends the secret as `Authorization: Bearer <secret>`,
+or, from a browser, in the WebSocket subprotocol (`minecraft-v1,<secret>`) from an origin listed in
+`management-server-allowed-origins`. `rpc.discover` lists the methods; Horizon answers more of them with each release
+([api/server.md](api/server.md#not-there-yet)).
+
+TLS is on, as in vanilla (`wss://`). The certificate and its key come from a PKCS12 keystore, as vanilla's do:
+
+- `keytool -genkeypair -storetype PKCS12 ...` makes one, or `openssl pkcs12 -export` turns a PEM certificate and
+  key into one.
+- Its password comes from the `MINECRAFT_MANAGEMENT_TLS_KEYSTORE_PASSWORD` variable, else from
+  `management-server-tls-keystore-password`.
+
+Where vanilla refuses to start without a keystore, Horizon makes one:
+
+- a self-signed certificate for `localhost`, `127.0.0.1` and `management-server-host`, saved in
+  `.horizon/management-keystore.p12`, which only the server's user can read;
+- its path and password are written to `[properties]`;
+- each start logs the certificate's SHA-256 fingerprint, which a client pins or adds to its trusted certificates.
+
+Keep the protocol on `localhost` or your tailnet even so. `management-server-tls-enabled = false` turns TLS off.
+As in vanilla, a wrong secret or keystore stops the server from starting.
+
+### Tools that speak RCON
+
+Hosting panels, Discord bridges and scripts often run commands through RCON, vanilla's remote console, and Horizon's
+server serves it. It's off by default and needs a password; turn it on in `server.toml` (the dotted keys are
+quoted in TOML):
+
+```toml
+[properties]
+enable-rcon = true
+"rcon.port" = 25575
+"rcon.password" = "a long random string"
+```
+
+It listens on the address `[server] bind` names (`server-ip`; every address when it's empty), as vanilla's does.
+
+A client logs in with the password and each command runs as one typed in the server's console, with the same
+output (`horizon-server cmd` does the same from the shell). RCON isn't encrypted: the password and every command
+travel in clear text, and it gives full control of the server. Keep its port closed to the internet: a firewall, a
+tailnet or an SSH tunnel. As in vanilla, an empty password or a port outside 1 to 65535 leaves RCON off with a
+warning in the log, and a port already in use is a warning too, not a server that doesn't start. The settings are
+read when the server starts. To turn it off again, set `enable-rcon = false`: taking the lines out of
+`server.toml` leaves what `server.properties` already holds, as for any other key.
+
+Where it differs from vanilla: a connection that hasn't logged in within 30 seconds is closed, at most 16 are open
+at once, and a command a client's TCP splits in two still works. A command shows as the console's (`Server`, not
+`Rcon`), and `broadcast-rcon-to-ops` isn't honoured yet.
 
 ## 7. Backups
 
@@ -426,6 +519,24 @@ short:
   stopped it.
 
 For more than 50 active players, give it more cores.
+
+### Less memory: `low_memory`
+
+Off by default. On Linux, the game's allocator (mimalloc) backs its memory with transparent huge pages
+(2 MB each) where the system allows them. Many of those pages are only partly used, so the server holds
+more memory than it needs, but the tick runs a little faster. Under `[engine]`, `low_memory = true` starts
+the game with huge pages off. Measured on a 4-core EPYC VPS with 20 bots playing (2026-11-01):
+
+| | Default | `low_memory = true` |
+|---|---|---|
+| Memory, idle after start | ~300 MB | ~245 MB (−60 MB) |
+| Memory, 20 players | ~1180 MB | ~980 MB (−190 MB) |
+| Average tick, 20 players | 27.1 ms | 27.5 ms (+1.2 %) |
+| Start | 2.1 s | 2.2 s |
+
+Turn it on when memory is what you're short of, for example on a small VPS. It applies at the next start.
+A game started without `horizon-server` (`horizon-client --dedicated`, a container of your own) gets the same
+effect from the environment variable `MIMALLOC_ALLOW_THP=0`. On macOS and Windows it changes nothing.
 
 ## When something goes wrong
 

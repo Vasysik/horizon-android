@@ -101,6 +101,13 @@ impl Game<'_> {
     pub(super) fn ime_commit(&mut self, text: &str) {
         preedit::set_preedit(None);
         let text: String = text.chars().filter(|c| !c.is_control()).collect();
+        // ScreenEvent.CharacterTyped.Pre: the input method's committed text
+        // reaches a text box by characters, as a key's own text does, so the
+        // open screen hears of each of them first and a cancelled one never
+        // reaches the box.
+        let Some(text) = self.screen_text_typed(&text) else {
+            return;
+        };
         if text.is_empty() || !self.text_field_focused() {
             return;
         }

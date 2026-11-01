@@ -4,15 +4,25 @@
 //!
 //! The launcher shows the official server's count beside "N playing now", and the telemetry
 //! server writes it down every minute for playhorizon.dev/stats (`history`, the `official`
-//! series). [`OFFICIAL_ADDRESS`] is the one place the official server's address is kept for both.
+//! series). [`OFFICIAL_ADDRESS`] is the official server's built-in address for both; the launcher
+//! takes the current one from `launcher/links.json`.
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 /// Horizon's official survival server (SMP). The launcher's server list offers the same entry
-/// (`launcher/src/server_list.rs`); the telemetry server's `HORIZON_TELEMETRY_OFFICIAL_SERVER`
-/// overrides it there.
-pub const OFFICIAL_ADDRESS: &str = "horizon.bunchy7s.dev";
+/// (`launcher/src/server_list.rs`) until links.json names another; the telemetry server's
+/// `HORIZON_TELEMETRY_OFFICIAL_SERVER` overrides it there. Its SRV record leads to the port.
+pub const OFFICIAL_ADDRESS: &str = "play.playhorizon.dev";
+
+/// The official server's earlier addresses: the game and the launcher move a server list's
+/// entries for them to [`OFFICIAL_ADDRESS`], once. A move appends the old address here (and to
+/// `official_server_previous` in `launcher/links.json`).
+pub const OFFICIAL_PREVIOUS: &[&str] = &["horizon.bunchy7s.dev"];
+
+/// [`OFFICIAL_ADDRESS`] with the port its SRV record gives, for askers that don't look SRV up
+/// (the telemetry server).
+pub const OFFICIAL_STATUS_ADDRESS: &str = "play.playhorizon.dev:24454";
 
 /// The port a server address without one means.
 pub const DEFAULT_PORT: u16 = 25565;
@@ -56,7 +66,18 @@ pub fn split_address(address: &str) -> Option<(String, u16)> {
 /// write), and returns its player count.
 pub fn players(address: &str, timeout: Duration) -> Result<Players, String> {
     let (host, port) = split_address(address).ok_or("not a server address")?;
-    let addr = (host.as_str(), port)
+    players_at(address, (&host, port), timeout)
+}
+
+/// [`players`], connecting to `target` instead: where the address's SRV record leads. The
+/// handshake still names the address, as vanilla's status ping does.
+pub fn players_at(
+    address: &str,
+    target: (&str, u16),
+    timeout: Duration,
+) -> Result<Players, String> {
+    let (host, port) = split_address(address).ok_or("not a server address")?;
+    let addr = target
         .to_socket_addrs()
         .map_err(|e| e.to_string())?
         .next()

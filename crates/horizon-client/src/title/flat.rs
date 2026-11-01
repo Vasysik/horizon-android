@@ -649,6 +649,44 @@ fn draw_layers(
     );
     let offset = state.scroll.amount.trunc();
     let selected = state.selected;
+    // DetailsList: its header row ("Layer Material. Height"), then the layers
+    // top first, each "Selected: <item>. Height. <height>".
+    crate::widgets::narratable(|| {
+        use crate::widgets::{ListKind, Narratable, Row, join_for_narration as join};
+        let tr = |key: &str| Text::translate(key, &[]).plain();
+        let height = tr("createWorld.customize.flat.height");
+        let row = |i: usize| {
+            let narration = match i.checked_sub(1) {
+                None => join(&[&tr("createWorld.customize.flat.tile"), &height]),
+                Some(layer) => {
+                    let layer = &state.settings.layers[state.settings.layers.len() - 1 - layer];
+                    let item = Text::translate(
+                        "narrator.select",
+                        &[Text::literal(item_name(&layer.block))],
+                    )
+                    .plain();
+                    join(&[&item, &height, &layer.height.to_string()])
+                }
+            };
+            Row::new(i, narration)
+        };
+        let over_header = cursor.1 >= top
+            && cursor.1 < bottom
+            && cursor.1 - top - 2.0 + state.scroll.amount < HEADER;
+        let hovered = if over_header {
+            Some(0)
+        } else {
+            layer_row(state, cursor, (w, h)).map(|r| r + 1)
+        };
+        Narratable::list(
+            ListKind::Object,
+            state.settings.layers.len() + 1,
+            hovered.map(row),
+            selected.map(|r| row(r + 1)),
+            [0.0, top, w, bottom - top],
+        )
+        .key(crate::widgets::key_of(&"create_world/flat/layers"))
+    });
     for (row, layer) in state.settings.layers.iter().rev().enumerate() {
         let y = top + 2.0 + HEADER + row as f32 * LAYER_ROW - offset;
         let target = [left - 2.0, y - 1.0, ROW_WIDTH + 4.0, LAYER_ROW];
@@ -761,6 +799,9 @@ fn draw_presets(
         state.share_focused,
         title.started,
     );
+    crate::widgets::name_last_edit_box(|| {
+        Text::translate("createWorld.customize.presets.share", &[]).plain()
+    });
     batch.text(
         atlas,
         &lang::get_or(
@@ -778,6 +819,22 @@ fn draw_presets(
     let first = batch.vertices.len();
     let mut pending = Vec::new();
     let offset = state.preset_scroll.amount.trunc();
+    // PresetsList: "Selected: <preset>".
+    crate::widgets::narratable(|| {
+        use crate::widgets::{ListKind, Narratable, Row};
+        let row = |i: usize| {
+            let name = Text::literal(preset_name(&state.presets[i].id));
+            Row::new(i, Text::translate("narrator.select", &[name]).plain())
+        };
+        Narratable::list(
+            ListKind::Object,
+            state.presets.len(),
+            preset_row(state, cursor, (w, h)).map(row),
+            state.preset_selected.map(row),
+            [0.0, top, w, bottom - top],
+        )
+        .key(crate::widgets::key_of(&"create_world/flat/presets"))
+    });
     for (row, preset) in state.presets.iter().enumerate() {
         let y = top + 2.0 + row as f32 * PRESET_ROW - offset;
         let target = [left - 2.0, y - 1.0, ROW_WIDTH + 4.0, PRESET_ROW];

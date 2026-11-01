@@ -122,7 +122,7 @@ impl Game<'_> {
                 let e = &mut self.dropped[j];
                 e.stack.count -= take as u32;
                 if e.stack.count == 0 {
-                    self.dropped.remove(j);
+                    self.remove_dropped(j);
                 }
                 let at = [pos.x, pos.y, pos.z];
                 let pitch =

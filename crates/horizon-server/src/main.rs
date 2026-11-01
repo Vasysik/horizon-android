@@ -7,14 +7,20 @@ mod backup;
 mod cli;
 mod config;
 mod console;
+mod discord;
 mod engine;
 mod events;
 mod http;
 mod init;
 mod lists;
+mod management;
+mod management_methods;
+mod management_schema;
+mod management_tls;
 mod mcp;
 mod panel;
 mod process;
+mod rcon;
 #[cfg(test)]
 mod reference;
 mod service;
@@ -22,6 +28,7 @@ mod settings;
 mod signals;
 mod supervisor;
 mod update;
+mod websocket;
 
 use std::{path::PathBuf, process::ExitCode};
 

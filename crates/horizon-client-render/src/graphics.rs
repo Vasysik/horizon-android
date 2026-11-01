@@ -373,6 +373,8 @@ pub fn reduced_far_detail_suggested() -> bool {
 
 /// The name the options screen waits on to bind `Graphics::hdr_key`.
 pub const HDR_KEY: &str = "horizon.hdrSettings";
+/// The Screenshot Quality choices, times the game's resolution.
+pub const SCREENSHOT_QUALITIES: [u32; 4] = [1, 2, 4, 8];
 static HDR_OFFERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Whether the display path offers HDR output (HDR10 or scRGB): set when the renderer
 /// opens its surface; the settings open HDR's screen only then.
@@ -422,10 +424,16 @@ pub struct Graphics {
     pub chunk_updates: u32,
     /// Section mesh bytes uploaded per frame, in KiB; 0 is unlimited.
     pub upload_budget_kib: u32,
+    /// The block textures' video memory (their top mip level), in MiB; 0 leaves it to
+    /// Horizon (`sprites::DEFAULT_TEXTURE_BUDGET`). Applies when resources next load.
+    pub texture_budget_mib: u32,
     pub sky: bool,
     pub fog: bool,
     pub weather: bool,
     pub animated_textures: bool,
+    /// Dithers the small mip levels of cutouts from 64 texels up, so a high-resolution pack's
+    /// fine plants keep their coverage in the distance; off is vanilla's look.
+    pub dither_cutout_mips: bool,
     pub present_mode: PresentMode,
     pub pacing: Pacing,
     /// Chunk worker threads; 0 uses every core but one. Applies at the next start.
@@ -439,6 +447,8 @@ pub struct Graphics {
     pub taa: bool,
     /// TAA upscaling; anything but `Native` comes with `taa` on.
     pub upscaling: Upscaling,
+    /// F2 screenshots at this many times the game's resolution: 1, 2, 4 or 8.
+    pub screenshot_quality: u32,
     /// HDR output (HDR10, or scRGB), where the display path offers it.
     pub hdr: bool,
     /// HDR paper white (where SDR white sits), in nits; 0 is Auto: the desktop's SDR
@@ -459,6 +469,10 @@ pub struct Graphics {
     /// or behind other windows, and half the worker threads. Off by default;
     /// it changes when frames are drawn, never what they show or the ticks.
     pub battery: bool,
+    /// Reuse the shader pack's last shadow map when sun, view, scene revision and
+    /// pack uniforms still match. Off by default: vanilla loaders redraw every frame
+    /// (or every `shadowInterval`), and a hit with a stale key shows old shadows.
+    pub shadow_cache: bool,
     /// The graphics API (Windows only; see `GraphicsApi`).
     pub api: GraphicsApi,
     /// The shader pack picked in `shaderpacks/` (`shader_pack_list`); empty: none. Its key is
@@ -476,10 +490,12 @@ impl Default for Graphics {
             entity_culling: false,
             chunk_updates: 0,
             upload_budget_kib: 0,
+            texture_budget_mib: 0,
             sky: true,
             fog: true,
             weather: true,
             animated_textures: true,
+            dither_cutout_mips: false,
             present_mode: PresentMode::Auto,
             pacing: Pacing::Efficient,
             workers: 0,
@@ -488,6 +504,7 @@ impl Default for Graphics {
             fxaa: false,
             taa: false,
             upscaling: Upscaling::Native,
+            screenshot_quality: 1,
             hdr: false,
             hdr_paper_white: 0,
             hdr_peak: 0,
@@ -495,6 +512,7 @@ impl Default for Graphics {
             hdr_ui_brightness: 100,
             hdr_key: "key.keyboard.unknown".into(),
             battery: false,
+            shadow_cache: false,
             api: GraphicsApi::Auto,
             shader_pack: String::new(),
         }
@@ -540,10 +558,14 @@ impl Graphics {
                 "entityCulling" => g.entity_culling = flag(g.entity_culling),
                 "chunkUpdates" => g.chunk_updates = number(g.chunk_updates).min(512),
                 "uploadBudgetKiB" => g.upload_budget_kib = number(g.upload_budget_kib).min(65536),
+                "textureBudgetMiB" => {
+                    g.texture_budget_mib = number(g.texture_budget_mib).min(16384);
+                }
                 "sky" => g.sky = flag(g.sky),
                 "fog" => g.fog = flag(g.fog),
                 "weather" => g.weather = flag(g.weather),
                 "animatedTextures" => g.animated_textures = flag(g.animated_textures),
+                "ditherCutoutMips" => g.dither_cutout_mips = flag(g.dither_cutout_mips),
                 "presentMode" => g.present_mode = PresentMode::parse(value),
                 "framePacing" => {
                     g.pacing = if value == "precise" {
@@ -557,6 +579,11 @@ impl Graphics {
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "taa" => g.taa = flag(g.taa),
                 "upscaling" => g.upscaling = Upscaling::parse(value),
+                "screenshotQuality" => {
+                    g.screenshot_quality = Some(number(0))
+                        .filter(|q| SCREENSHOT_QUALITIES.contains(q))
+                        .unwrap_or(1)
+                }
                 "hdr" => g.hdr = flag(g.hdr),
                 "hdrPaperWhite" => {
                     g.hdr_paper_white = match number(g.hdr_paper_white) {
@@ -576,6 +603,7 @@ impl Graphics {
                 }
                 "hdrKey" if value.starts_with("key.") => g.hdr_key = value.to_owned(),
                 "batteryMode" => g.battery = flag(g.battery),
+                "shadowCache" => g.shadow_cache = flag(g.shadow_cache),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
                 "pickedShaderPack" => g.shader_pack = value.to_owned(),
                 "overlay" => {
@@ -592,7 +620,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nhdrKey:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nscreenshotQuality:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nhdrKey:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -600,10 +628,12 @@ impl Graphics {
             bool_text(self.entity_culling),
             self.chunk_updates,
             self.upload_budget_kib,
+            self.texture_budget_mib,
             bool_text(self.sky),
             bool_text(self.fog),
             bool_text(self.weather),
             bool_text(self.animated_textures),
+            bool_text(self.dither_cutout_mips),
             self.present_mode.name(),
             match self.pacing {
                 Pacing::Efficient => "efficient",
@@ -619,6 +649,7 @@ impl Graphics {
             bool_text(self.fxaa),
             bool_text(self.taa),
             self.upscaling.name(),
+            self.screenshot_quality,
             bool_text(self.hdr),
             self.hdr_paper_white,
             self.hdr_peak,
@@ -626,6 +657,7 @@ impl Graphics {
             self.hdr_ui_brightness,
             self.hdr_key,
             bool_text(self.battery),
+            bool_text(self.shadow_cache),
             self.api.name(),
             self.shader_pack,
         )
@@ -761,10 +793,12 @@ mod tests {
             entity_culling: true,
             chunk_updates: 12,
             upload_budget_kib: 4096,
+            texture_budget_mib: 1536,
             sky: false,
             fog: false,
             weather: false,
             animated_textures: false,
+            dither_cutout_mips: true,
             present_mode: PresentMode::Mailbox,
             pacing: Pacing::Precise,
             workers: 6,
@@ -773,6 +807,7 @@ mod tests {
             fxaa: true,
             taa: true,
             upscaling: Upscaling::Balanced,
+            screenshot_quality: 4,
             hdr: true,
             hdr_paper_white: 240,
             hdr_peak: 1400,
@@ -780,6 +815,7 @@ mod tests {
             hdr_ui_brightness: 60,
             hdr_key: "key.keyboard.h".into(),
             battery: true,
+            shadow_cache: true,
             api: GraphicsApi::Dx12,
             shader_pack: "Golden Hour".into(),
         };
@@ -790,6 +826,19 @@ mod tests {
         assert_eq!(Graphics::parse("hdrPeak:50\n").hdr_peak, 200);
         assert_eq!(Graphics::parse("hdrPaperWhite:0\n").hdr_paper_white, 0);
         assert_eq!(Graphics::parse("hdrPaperWhite:5\n").hdr_paper_white, 10);
+        // Only the button's choices.
+        assert_eq!(
+            Graphics::parse("screenshotQuality:8\n").screenshot_quality,
+            8
+        );
+        assert_eq!(
+            Graphics::parse("screenshotQuality:3\n").screenshot_quality,
+            1
+        );
+        assert_eq!(
+            Graphics::parse("screenshotQuality:16\n").screenshot_quality,
+            1
+        );
         // The old menus' Simple / Advanced choice is ignored, and so is the
         // shader pack older versions saved.
         assert_eq!(Graphics::parse("level:advanced\n"), Graphics::default());

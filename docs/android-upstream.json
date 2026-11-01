@@ -7,11 +7,12 @@
   "compared_source_files": 3147,
   "modified_existing_files": 41,
   "branch": "android",
-  "merged_upstream_commit": "c0b65f1d2",
-  "merged_upstream_commits": 7041,
+  "merged_upstream_commit": "8c02c0b8534e11b7bb8be14238b140a8534280a0",
+  "merged_upstream_commits": 8887,
   "last_reviewed_date": "2026-11-01",
-  "last_update_commits": 571,
+  "last_update_commits": 1846,
   "latest_fetched_commit": "abbfe4996",
-  "review": "Merged stable main through c0b65f1d2. Reviewed gameplay, SRV handshake, player persistence, archive hardening, audio discovery, rendering and server-side resource optimizations. Preserved Android system DNS, sandboxed .hmod execution, native queue reset, input/IME, renderer selection, smaller GPU heaps and startup recovery. Resolved new boot-renderer API and ZIP 9 integration; retained background device discovery with upstream fingerprint caching. Combined anticheat attack handling with queued-move ordering and restored required Win32 boot-paint features. Upstream deployment workflows remain inactive. Device validation of new upstream gameplay/rendering remains required; native .hnmod compilation is still unsupported. Follow-up: fetched main through 51f26d057 (1,697 additional commits). Inspected selected renderer changes including surface reconfiguration, arena compaction, sprite sampling, HDR emission and atlas limits. Kept the current c0b65f1d2 base for the installation hotfix and legacy GLES investigation; the pending batch also changes shader-pack rendering, native hooks and frame interpolation and is not yet an Android-validated release baseline. Follow-up review: fetched abbfe4996 (2,416 commits beyond the retained base). Android PRs #75 and #79 were reviewed and merged separately; this does not merge or validate the pending upstream batch.",
-  "pending_review_commits": 2416
+  "review": "Integrated the published 2026-11-01 nightly, not the moving main branch. Reconciled 26 conflict files across rendering, EventLoopCtl/splitscreen wrappers, keyboard focus, native content hooks, sandboxed hmod runtime and account session recovery. Preserved Android system DNS, IME/SAF/DocumentsProvider, launcher-selected graphics, lifecycle return, optional worker/cache limits and fixed opt-in mod bundle. GLES terrain packs all current varying fields and lowers colored-light nested arrays without changing uniform bytes; Vulkan WGSL remains upstream. Kept deployment workflows disabled. ARM64 Clippy, optimized ARM64/ARMv7 builds and targeted input/content/account/GPU tests passed. Tablet Vulkan Compatibility world, inventory, Home/resume, launcher return and provider root were exercised. Final F-03L GLES retest is recorded in docs/android-0.7.7-testing.md; other ABIs and final release APKs still need validation. No blanket resolution of low-end crashes or performance reports is claimed.",
+  "pending_review_commits": 570,
+  "selected_upstream_release": "nightly-2026-11-01"
 }

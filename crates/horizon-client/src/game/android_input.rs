@@ -19,7 +19,7 @@ impl Game<'_> {
 
     pub(super) fn android_keypad_menu_key(
         &mut self,
-        events: &ActiveEventLoop,
+        events: &dyn super::event_loop::EventLoopCtl,
         event: &winit::event::KeyEvent,
     ) -> Result<bool> {
         if !self.pad_in_menu()
@@ -68,7 +68,7 @@ impl Game<'_> {
     /// A freely moving physical pointer can use the same utility buttons as touch.
     pub(super) fn android_aux_mouse(
         &mut self,
-        events: &ActiveEventLoop,
+        events: &dyn super::event_loop::EventLoopCtl,
         id: WindowId,
         event: &WindowEvent,
     ) -> bool {
@@ -118,7 +118,7 @@ impl Game<'_> {
             force: None,
             id: POINTER,
         };
-        self.window_event(events, id, WindowEvent::Touch(touch));
+        self.handle_window_event(events, id, WindowEvent::Touch(touch));
         true
     }
 
@@ -242,7 +242,7 @@ impl Game<'_> {
 
     fn android_menu_mouse(
         &mut self,
-        events: &ActiveEventLoop,
+        events: &dyn super::event_loop::EventLoopCtl,
         id: WindowId,
         right: bool,
         down: bool,
@@ -255,7 +255,7 @@ impl Game<'_> {
         if matches!(self.screen, Screen::Inventory | Screen::Creative) {
             self.android_custom_mouse(button, down)
         } else {
-            self.window_event(
+            self.handle_window_event(
                 events,
                 id,
                 WindowEvent::MouseInput {
@@ -274,7 +274,7 @@ impl Game<'_> {
     pub(super) fn android_aux_touch(
         &mut self,
         t: &Touch,
-        events: &ActiveEventLoop,
+        events: &dyn super::event_loop::EventLoopCtl,
         id: WindowId,
     ) -> Result<bool> {
         if t.phase == TouchPhase::Ended
@@ -583,7 +583,12 @@ impl Game<'_> {
             }
         }
     }
-    pub(super) fn android_menu_touch(&mut self, t: &Touch, events: &ActiveEventLoop, id: WindowId) {
+    pub(super) fn android_menu_touch(
+        &mut self,
+        t: &Touch,
+        events: &dyn super::event_loop::EventLoopCtl,
+        id: WindowId,
+    ) {
         if self.pad.touch_ui.virtual_mouse {
             self.android_virtual_touch(t, events, id);
             return;
@@ -593,7 +598,7 @@ impl Game<'_> {
         };
         let p = [t.location.x as f32 / b.scale, t.location.y as f32 / b.scale];
         let direct = self.pad.touch_ui.direct_pointer(t.id, p, t.phase);
-        self.window_event(
+        self.handle_window_event(
             events,
             id,
             WindowEvent::CursorMoved {
@@ -603,7 +608,7 @@ impl Game<'_> {
         );
         if direct {
             if t.phase != TouchPhase::Moved {
-                self.window_event(
+                self.handle_window_event(
                     events,
                     id,
                     WindowEvent::MouseInput {
@@ -627,7 +632,7 @@ impl Game<'_> {
             Gesture::Tap => {
                 let field = crate::platform::field_at(p);
                 for state in [ElementState::Pressed, ElementState::Released] {
-                    self.window_event(
+                    self.handle_window_event(
                         events,
                         id,
                         WindowEvent::MouseInput {
@@ -641,7 +646,7 @@ impl Game<'_> {
                     self.android_show_keyboard();
                 }
             }
-            Gesture::Scroll(y) => self.window_event(
+            Gesture::Scroll(y) => self.handle_window_event(
                 events,
                 id,
                 WindowEvent::MouseWheel {
@@ -656,7 +661,7 @@ impl Game<'_> {
     pub(super) fn android_virtual_touch(
         &mut self,
         t: &Touch,
-        events: &ActiveEventLoop,
+        events: &dyn super::event_loop::EventLoopCtl,
         id: WindowId,
     ) {
         let Some(b) = self.gui_scale() else {
@@ -671,7 +676,7 @@ impl Game<'_> {
             self.settings.touch.virtual_mouse_sensitivity,
             !self.pad.touch_ui.mouse_held(),
         );
-        self.window_event(
+        self.handle_window_event(
             events,
             id,
             WindowEvent::CursorMoved {
@@ -683,7 +688,10 @@ impl Game<'_> {
             },
         );
     }
-    pub(super) fn android_virtual_mouse_clicks(&mut self, events: &ActiveEventLoop) {
+    pub(super) fn android_virtual_mouse_clicks(
+        &mut self,
+        events: &dyn super::event_loop::EventLoopCtl,
+    ) {
         if !self.focused || !self.pad_in_menu() || !self.pad.touch_ui.virtual_mouse {
             self.pad.touch_ui.cancel_relative();
             for right in self.pad.touch_ui.release_all_mouse() {
@@ -712,7 +720,7 @@ impl Game<'_> {
             }
         } else if let Some(id) = self.window.as_ref().map(|w| w.id()) {
             for state in [ElementState::Pressed, ElementState::Released] {
-                self.window_event(
+                self.handle_window_event(
                     events,
                     id,
                     WindowEvent::MouseInput {

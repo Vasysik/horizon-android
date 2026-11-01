@@ -87,6 +87,7 @@ Horizon server settings (docs/server.md). The server writes them into server.pro
 | `view_distance` | `10` | `view-distance` | chunks sent around each player |
 | `simulation_distance` | `10` | `simulation-distance` | chunks around each player where mobs, crops and redstone tick |
 | `max_view_distance` | `0` | `horizon-max-view-distance` | past view_distance, saved chunks only, up to this (never generated; 0: off) |
+| `admin_feedback_to_ops` | `true` | `horizon-admin-feedback-to-ops` | operators see each other's commands ([name: ...], vanilla); false: only the log |
 
 ### `[world]`
 
@@ -109,6 +110,7 @@ Any other server.properties key, spelled as vanilla spells it, for example: spaw
 | `path` | `""` |  | the game program; empty: the one installed beside horizon-server |
 | `resources` | `""` |  | the prepared game files; empty: resources/ here, else the usual places |
 | `restart_on_crash` | `true` |  | start the game again when it crashes |
+| `low_memory` | `false` |  | true: no transparent huge pages, ~60 MB less idle for ~1 % more tick time |
 
 ### `[backups]`
 
@@ -138,6 +140,16 @@ Any other server.properties key, spelled as vanilla spells it, for example: spaw
 | `token` | `""` |  | its token (16 characters or more); "" a new random one at every start |
 | `allow_public` | `false` |  | true lets bind be any address; the token is then all that guards the server |
 
+### `[discord]`
+
+Post the chat, joins, leaves and deaths to a Discord channel, drawn like the in-game chat (docs/hosting.md)
+
+| Key | Default | In `server.properties` | What it does |
+| --- | --- | --- | --- |
+| `webhook` | `""` |  | the channel's webhook URL (a secret: anyone with it can post there); "" off |
+| `events` | `["chat", "join", "leave", "death"]` |  | what is posted; "kick" too if you like |
+| `enabled` | `true` |  | false pauses it and keeps the webhook |
+
 ## Control API (`/api/v1`)
 
 HTTP and JSON on 127.0.0.1. A running server writes its address and a random token to `.horizon/api.json`, readable only by its own user; every request sends `Authorization: Bearer <token>` and a `Host` that is that address. Errors answer `{"error": "..."}` with 400, 401, 403, 404, 405 or 409. The web panel uses the same routes with its session.
@@ -147,7 +159,7 @@ HTTP and JSON on 127.0.0.1. A running server writes its address and a random tok
 | `GET` | `/api/v1/status` | nothing | `phase`, `version`, `pid`, `uptime_seconds`, `engine_pid`, `engine_uptime_seconds`, `crashes`, `last_crash`, `sample` (TPS, MSPT, players, RAM, CPU), `update` | How the server does |
 | `GET` | `/api/v1/metrics` | `?since=T` (seconds since 1970) | `{"samples": [...]}`: one a second, the last 10 minutes | The samples taken after T, for graphs |
 | `GET` | `/api/v1/logs` | `?since=N` | `{"next": N, "lines": [...]}` | The log lines after the Nth (the last 2000 are kept) |
-| `GET` | `/api/v1/events` | `?since=N` (or `Last-Event-ID`), `?types=join,leave,kick,chat,death,log,phase` (all by default) | with `Accept: text/event-stream`, server-sent events as they happen (`id`, `event`: the type, `data`: JSON); otherwise `{"next": N, "events": [...]}` | Log lines, the supervisor's phase, and the game's joins, leaves, kicks, chat and deaths (the last 2000 kept) |
+| `GET` | `/api/v1/events` | `?since=N` (or `Last-Event-ID`), `?types=join,leave,kick,chat,chat_filtered,death,log,phase` (all by default) | with `Accept: text/event-stream`, server-sent events as they happen (`id`, `event`: the type, `data`: JSON); otherwise `{"next": N, "events": [...]}` | Log lines, the supervisor's phase, and the game's joins, leaves, kicks, chat, messages the chat filter refused (`chat_filtered`, without their text) and deaths (the last 2000 kept) |
 | `POST` | `/api/v1/command` | `{"line": "<one command>"}` | the lines the command logged | Run a console command on the running game |
 | `POST` | `/api/v1/stop` | nothing | `{"ok": true}` | Stop the game and the supervisor |
 | `POST` | `/api/v1/restart` | nothing | `{"ok": true}` | Restart the game |

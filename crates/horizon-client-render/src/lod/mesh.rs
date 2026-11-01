@@ -1,8 +1,8 @@
 //! Exposed voxel-column faces, merged without changing their block-scale UVs.
-use super::{Column, Span, TileKey};
+use super::{Column, Span, Spans, TileKey};
 use crate::{
     fast_hash::{FxHashMap, FxHashSet},
-    mesher::{OPAQUE_LAYER, SectionMesh, TerrainVertex},
+    mesher::{OPAQUE_LAYER, SectionMesh, TerrainVertex, fluid_face},
     streaming::WorkerContext,
 };
 use horizon_assets::model::Direction;
@@ -12,10 +12,10 @@ use std::collections::BTreeMap;
 
 const CELLS: usize = 16;
 
-pub(super) struct EdgeColumn {
+pub(super) struct EdgeColumn<'a> {
     pub start: i32,
     pub end: i32,
-    pub column: Column,
+    pub column: &'a Column,
 }
 
 #[derive(Clone, Copy)]
@@ -60,11 +60,11 @@ impl Mesher {
     pub(super) fn mesh(
         &mut self,
         key: TileKey,
-        columns: &[Column],
+        columns: &[&Column],
         covered: &FxHashSet<(i32, i32)>,
         covered_bounds: Option<[i32; 4]>,
         context: &WorkerContext,
-        neighbors: &[Vec<EdgeColumn>; 4],
+        neighbors: &[Vec<EdgeColumn<'_>>; 4],
         finer: &[TileKey],
     ) -> SectionMesh {
         mesh_columns_with_edges(
@@ -253,6 +253,13 @@ type Faces = BTreeMap<FaceKey, Vec<Rect>>;
 fn add_face(faces: &mut Faces, direction: Direction, plane: f32, rect: Rect, material: Material) {
     for (overlay, paint) in material.faces.into_iter().enumerate() {
         let Some(paint) = paint else { continue };
+        // The same fluid flags the section mesher sets, so the material stage's water
+        // reaches the distant tiles too and the LOD boundary keeps one look.
+        let color = if material.fluid != 0 {
+            fluid_face(paint.color, direction as usize)
+        } else {
+            paint.color
+        };
         faces
             .entry(FaceKey {
                 direction,
@@ -260,7 +267,7 @@ fn add_face(faces: &mut Faces, direction: Direction, plane: f32, rect: Rect, mat
                 overlay: overlay as u8,
                 layer: paint.layer,
                 light: paint.light,
-                color: paint.color,
+                color,
                 translucent: paint.translucent,
             })
             .or_default()
@@ -289,6 +296,7 @@ fn mesh_columns_with_neighbors(
 ) -> SectionMesh {
     assert!(neighbors.is_empty() || neighbors.len() == 4 * CELLS);
     let stride = key.size() / CELLS as i32;
+    let columns: Vec<&Column> = columns.iter().collect();
     let edges = std::array::from_fn(|side| {
         neighbors
             .get(side * CELLS..(side + 1) * CELLS)
@@ -298,11 +306,19 @@ fn mesh_columns_with_neighbors(
             .map(|(row, column)| EdgeColumn {
                 start: row as i32 * stride,
                 end: (row as i32 + 1) * stride,
-                column: column.clone(),
+                column,
             })
             .collect()
     });
-    mesh_columns_with_edges(key, columns, covered, covered_bounds, &edges, &[], material)
+    mesh_columns_with_edges(
+        key,
+        &columns,
+        covered,
+        covered_bounds,
+        &edges,
+        &[],
+        material,
+    )
 }
 /// From this tile level up a cell is 64 blocks wide or more: the strata
 /// inside the ground cannot be told apart, so a column is its surface.
@@ -318,7 +334,7 @@ fn heightmap(column: &Column, mut fluid: impl FnMut(&Span) -> bool) -> Column {
         min: crate::chunk::MIN_Y as i16,
         ..*span
     };
-    let mut spans = Vec::with_capacity(2);
+    let mut spans = Spans::with_capacity(2);
     match below.last() {
         Some(under) if fluid(top) => {
             spans.push(ground(under));
@@ -334,33 +350,44 @@ fn heightmap(column: &Column, mut fluid: impl FnMut(&Span) -> bool) -> Column {
 }
 fn mesh_columns_with_edges(
     key: TileKey,
-    columns: &[Column],
+    columns: &[&Column],
     covered: &FxHashSet<(i32, i32)>,
     covered_bounds: Option<[i32; 4]>,
-    neighbors: &[Vec<EdgeColumn>; 4],
+    neighbors: &[Vec<EdgeColumn<'_>>; 4],
     finer: &[TileKey],
     mut material: impl FnMut(&Span, Direction, [i32; 2]) -> Material,
 ) -> SectionMesh {
     assert_eq!(columns.len(), CELLS * CELLS);
-    let heightmap_columns;
-    let heightmap_neighbors;
+    // The heightmap columns are built here and borrowed like the tile's own.
+    let heightmap_columns: Vec<Column>;
+    let heightmap_refs: Vec<&Column>;
+    let heightmap_edges: [Vec<Column>; 4];
+    let heightmap_neighbors: [Vec<EdgeColumn<'_>>; 4];
     let (columns, neighbors) = if key.level >= HEIGHTMAP_LEVEL {
         let [ox, _, oz] = key.origin();
         let mut fluid = |span: &Span| material(span, Direction::Up, [ox, oz]).fluid != 0;
         heightmap_columns = columns
             .iter()
             .map(|column| heightmap(column, &mut fluid))
-            .collect::<Vec<_>>();
-        heightmap_neighbors = neighbors.each_ref().map(|side| {
+            .collect();
+        heightmap_edges = neighbors.each_ref().map(|side| {
             side.iter()
-                .map(|edge| EdgeColumn {
+                .map(|edge| heightmap(edge.column, &mut fluid))
+                .collect()
+        });
+        heightmap_refs = heightmap_columns.iter().collect();
+        heightmap_neighbors = std::array::from_fn(|side| {
+            neighbors[side]
+                .iter()
+                .zip(&heightmap_edges[side])
+                .map(|(edge, column)| EdgeColumn {
                     start: edge.start,
                     end: edge.end,
-                    column: heightmap(&edge.column, &mut fluid),
+                    column,
                 })
-                .collect::<Vec<_>>()
+                .collect()
         });
-        (&heightmap_columns[..], &heightmap_neighbors)
+        (&heightmap_refs[..], &heightmap_neighbors)
     } else {
         (columns, neighbors)
     };
@@ -410,18 +437,16 @@ fn mesh_columns_with_edges(
             [ox, oz]
         }
     };
+    let mut materials = Vec::new();
     let prepared: Vec<Vec<Segment<'_>>> = filled
         .iter()
-        .map(|column| &**column)
-        .chain(neighbors.iter().flatten().map(|edge| &edge.column))
+        .map(|column| column.as_ref())
+        .chain(neighbors.iter().flatten().map(|edge| edge.column))
         .enumerate()
         .map(|(index, column)| {
             let at = centre(index);
-            let materials: Vec<_> = column
-                .spans
-                .iter()
-                .map(|s| material(s, Direction::Up, at))
-                .collect();
+            materials.clear();
+            materials.extend(column.spans.iter().map(|s| material(s, Direction::Up, at)));
             column
                 .spans
                 .iter()
@@ -555,7 +580,6 @@ fn mesh_columns_with_edges(
                                 x1,
                             ),
                         ] {
-                            let side = material(segment.span, direction, centre(z * CELLS + x));
                             // Near meshes may have culled against the real neighbor.
                             // Keep a finite seal where their full-detail area begins:
                             // opaque only, as the near water carries on into the far
@@ -570,13 +594,20 @@ fn mesh_columns_with_edges(
                                         u1,
                                         segment,
                                         &[],
-                                        side,
+                                        || material(segment.span, direction, centre(z * CELLS + x)),
                                         own_sky,
                                     );
                                 }
                             } else if !edge {
                                 add_side(
-                                    &mut faces, direction, plane, u0, u1, segment, column, side,
+                                    &mut faces,
+                                    direction,
+                                    plane,
+                                    u0,
+                                    u1,
+                                    segment,
+                                    column,
+                                    || material(segment.span, direction, centre(z * CELLS + x)),
                                     own_sky,
                                 );
                             } else if (0..CELLS as i32).contains(&nx)
@@ -590,7 +621,7 @@ fn mesh_columns_with_edges(
                                     u1,
                                     segment,
                                     &prepared[nz as usize * CELLS + nx as usize],
-                                    side,
+                                    || material(segment.span, direction, centre(z * CELLS + x)),
                                     own_sky,
                                 );
                             } else {
@@ -610,7 +641,7 @@ fn mesh_columns_with_edges(
                                         u1,
                                         segment,
                                         &[],
-                                        side,
+                                        || material(segment.span, direction, centre(z * CELLS + x)),
                                         own_sky,
                                     );
                                 }
@@ -628,7 +659,13 @@ fn mesh_columns_with_edges(
                                             end,
                                             segment,
                                             &prepared[edge_offsets[edge_side] + i],
-                                            side,
+                                            || {
+                                                material(
+                                                    segment.span,
+                                                    direction,
+                                                    centre(z * CELLS + x),
+                                                )
+                                            },
                                             own_sky,
                                         );
                                     }
@@ -647,6 +684,7 @@ fn mesh_columns_with_edges(
             emit(&mut mesh, key, rect)
         }
     }
+    mesh.finish_sprite_layers();
     mesh
 }
 
@@ -676,15 +714,17 @@ mod refinement_tests {
                     biome: 0,
                     light: 240,
                 }]
+                .into()
             };
             256
         ];
+        let columns: Vec<&Column> = columns.iter().collect();
         let mesh = mesh_columns_with_edges(
             parent,
             &columns,
             &FxHashSet::default(),
             None,
-            &std::array::from_fn(|_| Vec::new()),
+            &[Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             &[fine],
             |_, _, _| Material {
                 faces: [
@@ -745,8 +785,8 @@ mod refinement_tests {
 /// block. Unknown neighbours, and cells that `whole` rejects (they meet
 /// full-detail or finer terrain), count as open; those cells keep their gaps.
 fn fill_buried_gaps<'a>(
-    columns: &'a [Column],
-    neighbors: &[Vec<EdgeColumn>; 4],
+    columns: &'a [&'a Column],
+    neighbors: &'a [Vec<EdgeColumn<'a>>; 4],
     stride: i32,
     whole: impl Fn(usize, usize) -> bool,
     mut fluid: impl FnMut(&Span) -> bool,
@@ -772,19 +812,17 @@ fn fill_buried_gaps<'a>(
     };
     let meets =
         |(lo, hi): (i16, i16), (other_lo, other_hi): (i16, i16)| lo < other_hi && other_lo < hi;
-    let tops: Vec<_> = (0..CELLS * CELLS)
+    let tops: [i16; CELLS * CELLS] = std::array::from_fn(|i| {
+        if whole(i % CELLS, i / CELLS) {
+            top(columns[i])
+        } else {
+            i16::MIN
+        }
+    });
+    let gaps: Vec<Vec<(usize, i16, i16)>> = (0..CELLS * CELLS)
         .map(|i| {
             if whole(i % CELLS, i / CELLS) {
-                top(&columns[i])
-            } else {
-                i16::MIN
-            }
-        })
-        .collect();
-    let gaps: Vec<_> = (0..CELLS * CELLS)
-        .map(|i| {
-            if whole(i % CELLS, i / CELLS) {
-                gaps_of(&columns[i])
+                gaps_of(columns[i])
             } else {
                 Vec::new()
             }
@@ -798,7 +836,7 @@ fn fill_buried_gaps<'a>(
     };
     let edge = |side: usize, cell: usize| {
         touching(side, cell)
-            .map(|edge| top(&edge.column))
+            .map(|edge| top(edge.column))
             .min()
             .unwrap_or(i16::MIN)
     };
@@ -806,7 +844,7 @@ fn fill_buried_gaps<'a>(
     // see: it counts as open.
     let edge_gap = |side: usize, cell: usize, gap: (i16, i16)| {
         touching(side, cell).any(|edge| {
-            gaps_of(&edge.column)
+            gaps_of(edge.column)
                 .iter()
                 .any(|&(_, lo, hi)| meets((lo, hi), gap))
         })
@@ -871,12 +909,13 @@ fn fill_buried_gaps<'a>(
         .iter()
         .enumerate()
         .map(|(i, column)| {
+            let column = *column;
             if open[i].iter().all(|&open| open) {
                 return Cow::Borrowed(column);
             }
             let mut filled = Column {
                 surface: column.surface,
-                spans: Vec::with_capacity(column.spans.len()),
+                spans: Spans::with_capacity(column.spans.len()),
             };
             for (k, &span) in column.spans.iter().enumerate() {
                 let mut span = span;
@@ -911,13 +950,22 @@ fn add_side(
     u1: f32,
     segment: &Segment<'_>,
     neighbor: &[Segment<'_>],
-    side: Material,
+    mut side: impl FnMut() -> Material,
     own_sky: u16,
 ) {
     let (open, sky) = neighbor.last().map_or((f32::NEG_INFINITY, own_sky), |top| {
         (f32::from(top.span.max), top.span.light & 0xff)
     });
+    let mut cached = None;
     let mut add = |v0: f32, v1: f32| {
+        let side = match cached {
+            Some(side) => side,
+            None => {
+                let side = side();
+                cached = Some(side);
+                side
+            }
+        };
         let mut lit = side;
         for paint in lit.faces.iter_mut().flatten() {
             paint.light = (paint.light & 0xff00) | (paint.light & 0xff).max(sky);
@@ -1026,6 +1074,7 @@ fn emit(mesh: &mut SectionMesh, key: FaceKey, rect: Rect) {
 /// `uv_scale` shrinks the UVs, in blocks from the face's corner, of a face
 /// too wide for them.
 fn emit_quad(mesh: &mut SectionMesh, key: FaceKey, rect: Rect, uv_scale: f32) {
+    mesh.note_sprite_layer(key.layer);
     let Rect { u0, v0, u1, v1 } = rect;
     let p = f32::from_bits(key.plane);
     let mut points = match key.direction {
@@ -1046,8 +1095,8 @@ fn emit_quad(mesh: &mut SectionMesh, key: FaceKey, rect: Rect, uv_scale: f32) {
     };
     // Tile origins are integer multiples of a block, so local coordinates
     // retain the world texture phase without distant-coordinate precision loss;
-    // a whole number of blocks off each UV keeps it (the sampler repeats) and
-    // counts it from the face's corner.
+    // a whole number of blocks off each UV keeps it (terrain.wgsl's `tile_uv`
+    // repeats the sprite per block) and counts it from the face's corner.
     let uvs = points.map(|pos| match key.direction {
         Direction::Up | Direction::Down => [pos[0], -pos[2]],
         Direction::North | Direction::South => [pos[0], -pos[1]],
@@ -1089,7 +1138,7 @@ mod tests {
         (0..CELLS * CELLS)
             .map(|_| Column {
                 surface: None,
-                spans: Vec::new(),
+                spans: Spans::new(),
             })
             .collect()
     }
@@ -1169,13 +1218,13 @@ mod tests {
         let fluid = |s: &Span| s.state.0 == 2;
         let strata = Column {
             surface: None,
-            spans: vec![span(0, 60, 1), span(60, 63, 3), span(63, 64, 4)],
+            spans: vec![span(0, 60, 1), span(60, 63, 3), span(63, 64, 4)].into(),
         };
         let flat = heightmap(&strata, fluid);
         assert_eq!(flat.spans, [span(-64, 64, 4)]);
         let sea = Column {
             surface: None,
-            spans: vec![span(0, 50, 1), span(50, 62, 2)],
+            spans: vec![span(0, 50, 1), span(50, 62, 2)].into(),
         };
         let flat = heightmap(&sea, fluid);
         assert_eq!(flat.spans, [span(-64, 50, 1), span(50, 62, 2)]);
@@ -1190,7 +1239,8 @@ mod tests {
                         span(0, top - 4, 1),
                         span(top - 4, top - 1, 3),
                         span(top - 1, top, 4),
-                    ],
+                    ]
+                    .into(),
                 }
             })
             .collect();
@@ -1250,7 +1300,7 @@ mod tests {
     fn flat_solid_cube_merges_to_six_faces_with_block_scaled_uvs() {
         let mut columns = columns();
         for column in &mut columns {
-            column.spans = vec![span(0, 16, 1)]
+            column.spans = vec![span(0, 16, 1)].into()
         }
         let mesh = mesh(&columns);
         assert_eq!(mesh.solid.len(), 6 * 4);
@@ -1285,7 +1335,7 @@ mod tests {
     #[test]
     fn gaps_and_real_bottoms_remain_open_without_floor_curtains() {
         let mut columns = columns();
-        columns[0].spans = vec![span(3, 5, 1), span(8, 9, 1)];
+        columns[0].spans = vec![span(3, 5, 1), span(8, 9, 1)].into();
         let mesh = mesh(&columns);
         assert_eq!(mesh.solid.len(), 12 * 4);
         assert!(
@@ -1304,8 +1354,8 @@ mod tests {
     #[test]
     fn neighbor_hides_only_its_occupied_side_intervals() {
         let mut columns = columns();
-        columns[0].spans = vec![span(0, 10, 1)];
-        columns[1].spans = vec![span(0, 3, 1), span(7, 10, 1)];
+        columns[0].spans = vec![span(0, 10, 1)].into();
+        columns[1].spans = vec![span(0, 3, 1), span(7, 10, 1)].into();
         let mesh = mesh(&columns);
         let opening: Vec<_> = mesh
             .solid
@@ -1339,9 +1389,9 @@ mod tests {
         };
         // A reduced column whose lower blocks were buried (no light), next to
         // a lower column, and to one with a cave below its top.
-        columns[0].spans = vec![dark(0, 9), span(9, 10, 1)];
-        columns[1].spans = vec![span(0, 4, 1)];
-        columns[CELLS].spans = vec![span(0, 2, 1), span(6, 12, 1)];
+        columns[0].spans = vec![dark(0, 9), span(9, 10, 1)].into();
+        columns[1].spans = vec![span(0, 4, 1)].into();
+        columns[CELLS].spans = vec![span(0, 2, 1), span(6, 12, 1)].into();
         let mesh = mesh(&columns);
         let quads = mesh.solid.as_chunks::<4>().0;
         let bounds = |q: &[TerrainVertex; 4]| {
@@ -1372,19 +1422,21 @@ mod tests {
     fn air_under_a_canopy_stays_open_through_a_clearing() {
         let column = |spans: Vec<Span>| Column {
             surface: None,
-            spans,
+            spans: spans.into(),
         };
         // The tile's neighbours are solid hills: no open air from the sides.
+        let hill_column = column(vec![span(0, 20, 1)]);
         let hill = || EdgeColumn {
             start: 0,
             end: CELLS as i32,
-            column: column(vec![span(0, 20, 1)]),
+            column: &hill_column,
         };
         let neighbors = [vec![hill()], vec![hill()], vec![hill()], vec![hill()]];
         let fill = |columns: &[Column]| -> Vec<Vec<Span>> {
-            fill_buried_gaps(columns, &neighbors, 1, |_, _| true, |_| false)
+            let columns: Vec<&Column> = columns.iter().collect();
+            fill_buried_gaps(&columns, &neighbors, 1, |_, _| true, |_| false)
                 .iter()
-                .map(|filled| filled.spans.clone())
+                .map(|filled| filled.spans.as_slice().to_vec())
                 .collect()
         };
         let mut forest = vec![column(vec![span(0, 5, 1), span(10, 14, 3)]); CELLS * CELLS];
@@ -1395,23 +1447,27 @@ mod tests {
         forest[5 * CELLS + 5] = column(vec![span(0, 5, 1)]);
         let filled = fill(&forest);
         for (filled, column) in filled.iter().zip(&forest) {
-            assert_eq!(filled, &column.spans);
+            assert_eq!(filled.as_slice(), column.spans.as_slice());
         }
         // A cave two columns wide sealed in rock is still filled.
         let mut rock = vec![column(vec![span(0, 20, 1)]); CELLS * CELLS];
         for cave in [5 * CELLS + 5, 5 * CELLS + 6] {
             rock[cave] = column(vec![span(0, 8, 1), span(12, 20, 1)]);
         }
-        assert!(fill(&rock).iter().all(|spans| spans == &[span(0, 20, 1)]));
+        assert!(
+            fill(&rock)
+                .iter()
+                .all(|spans| spans.as_slice() == [span(0, 20, 1)])
+        );
     }
     #[test]
     fn caves_no_neighbor_sees_into_add_no_faces() {
         let mut columns = columns();
         for column in &mut columns {
-            column.spans = vec![span(0, 20, 1)];
+            column.spans = vec![span(0, 20, 1)].into();
         }
         let cave = 5 * CELLS + 5;
-        columns[cave].spans = vec![span(0, 8, 1), span(12, 20, 1)];
+        columns[cave].spans = vec![span(0, 8, 1), span(12, 20, 1)].into();
         let at = |mesh: &SectionMesh, y: f32| {
             mesh.solid
                 .as_chunks::<4>()
@@ -1430,14 +1486,14 @@ mod tests {
                 .all(|v| v.pos[1] == 0.0 || v.pos[1] == 20.0)
         );
         // A lower neighbour's open air looks in: the cave stays.
-        columns[cave + 1].spans = vec![span(0, 10, 1)];
+        columns[cave + 1].spans = vec![span(0, 10, 1)].into();
         let open = mesh(&columns);
         assert_eq!((at(&open, 8.0), at(&open, 12.0)), (1, 1));
         // Kelp leaves a gap in water: water fills it, without inner faces.
         for column in &mut columns {
-            column.spans = vec![span(0, 5, 1), span(5, 10, 2)];
+            column.spans = vec![span(0, 5, 1), span(5, 10, 2)].into();
         }
-        columns[cave].spans = vec![span(0, 5, 1), span(5, 7, 2), span(8, 10, 2)];
+        columns[cave].spans = vec![span(0, 5, 1), span(5, 7, 2), span(8, 10, 2)].into();
         let water = mesh(&columns);
         assert!(
             water
@@ -1451,12 +1507,13 @@ mod tests {
     #[test]
     fn greedy_faces_preserve_material_and_light_boundaries() {
         let mut columns = columns();
-        columns[0].spans = vec![span(0, 1, 1)];
-        columns[1].spans = vec![span(0, 1, 3)];
+        columns[0].spans = vec![span(0, 1, 1)].into();
+        columns[1].spans = vec![span(0, 1, 3)].into();
         columns[2].spans = vec![Span {
             light: 16,
             ..span(0, 1, 3)
-        }];
+        }]
+        .into();
         let mesh = mesh(&columns);
         let tops: Vec<_> = mesh
             .solid
@@ -1475,7 +1532,7 @@ mod tests {
     #[test]
     fn water_keeps_ground_surface_and_culls_shared_fluid_faces() {
         let mut columns = columns();
-        columns[0].spans = vec![span(0, 3, 1), span(3, 6, 2)];
+        columns[0].spans = vec![span(0, 3, 1), span(3, 6, 2)].into();
         columns[1].spans = columns[0].spans.clone();
         let mesh = mesh(&columns);
         assert!(
@@ -1502,42 +1559,44 @@ mod tests {
     fn coarse_edge_clips_separate_fine_neighbor_heights() {
         let mut columns = columns();
         for column in &mut columns {
-            column.spans = vec![span(0, 16, 1)];
+            column.spans = vec![span(0, 16, 1)].into();
         }
         let key = TileKey {
             x: -1,
             z: -1,
             level: 1,
         };
-        let mut neighbors: [Vec<EdgeColumn>; 4] = std::array::from_fn(|_| {
+        let mut neighbors: [Vec<EdgeColumn<'_>>; 4] = std::array::from_fn(|_| {
             vec![EdgeColumn {
                 start: 0,
                 end: 32,
-                column: columns[0].clone(),
+                column: &columns[0],
             }]
         });
         // One fine column is lower than both the coarse cell and its sibling.
         // Sampling only the first neighbor would incorrectly hide this wall.
+        let low = Column {
+            surface: None,
+            spans: vec![span(0, 8, 1)].into(),
+        };
         neighbors[0] = vec![
             EdgeColumn {
                 start: 0,
                 end: 1,
-                column: columns[0].clone(),
+                column: &columns[0],
             },
             EdgeColumn {
                 start: 1,
                 end: 2,
-                column: Column {
-                    surface: None,
-                    spans: vec![span(0, 8, 1)],
-                },
+                column: &low,
             },
             EdgeColumn {
                 start: 2,
                 end: 32,
-                column: columns[0].clone(),
+                column: &columns[0],
             },
         ];
+        let columns: Vec<&Column> = columns.iter().collect();
         let mesh = mesh_columns_with_edges(
             key,
             &columns,
@@ -1565,7 +1624,7 @@ mod tests {
     fn tile_halo_culls_shared_walls_but_keeps_steps_and_gaps() {
         let mut columns = columns();
         for column in &mut columns {
-            column.spans = vec![span(0, 16, 1)];
+            column.spans = vec![span(0, 16, 1)].into();
         }
         let mut neighbors = columns[..4 * CELLS].to_vec();
         let key = TileKey {
@@ -1589,10 +1648,10 @@ mod tests {
         );
 
         for column in &mut neighbors[CELLS..2 * CELLS] {
-            column.spans = vec![span(0, 8, 1)];
+            column.spans = vec![span(0, 8, 1)].into();
         }
         for column in &mut neighbors[..CELLS] {
-            column.spans = vec![span(0, 3, 1), span(7, 16, 1)];
+            column.spans = vec![span(0, 3, 1), span(7, 16, 1)].into();
         }
         let mesh = mesh_columns_with_neighbors(key, &columns, &covered, None, &neighbors, material);
         assert_eq!(mesh.solid.len(), 4 * 4);
@@ -1619,7 +1678,7 @@ mod tests {
     fn negative_parent_clips_chunks_without_internal_piece_walls() {
         let mut columns = columns();
         for column in &mut columns {
-            column.spans = vec![span(10, 12, 1)]
+            column.spans = vec![span(10, 12, 1)].into()
         }
         let key = TileKey {
             x: -1,

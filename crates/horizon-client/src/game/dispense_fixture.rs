@@ -123,7 +123,7 @@ impl Game<'_> {
     fn fixture_reset(&mut self, seed: i64) {
         self.world = World::new(self.res.facts().air, seed);
         // The oracle level is plains everywhere (bone meal's flowers, freezing).
-        let plains = u32::from(self.res.biomes().id("minecraft:plains"));
+        let plains = u32::from(world_biomes!(self).id("minecraft:plains"));
         for cx in -2..=2 {
             for cz in -2..=2 {
                 let mut chunk = Chunk::empty(cx, cz);
@@ -357,7 +357,7 @@ impl Game<'_> {
         for p in containers {
             let entity = &self.world.block_entities[&p];
             let single = match entity {
-                BlockEntity::Jukebox(j) => std::slice::from_ref(&j.record),
+                BlockEntity::Jukebox(j) => &j.items,
                 _ => entity.slots(),
             };
             for (i, slot) in single.iter().enumerate() {
@@ -744,7 +744,7 @@ impl Game<'_> {
         let jukebox =
             &*self.res.facts().get(self.world.block(p.0, p.1, p.2)).name == "minecraft:jukebox";
         match self.world.block_entities.get_mut(&p) {
-            Some(BlockEntity::Jukebox(j)) => j.record = stack,
+            Some(BlockEntity::Jukebox(j)) => j.items[0] = stack,
             Some(BlockEntity::Lectern(l)) => l.book = stack,
             Some(BlockEntity::Campfire(c)) => {
                 if let Some(cell) = c.items.get_mut(slot) {
@@ -761,7 +761,7 @@ impl Game<'_> {
                 self.world.block_entities.insert(
                     p,
                     BlockEntity::Jukebox(horizon_client::containers::Jukebox {
-                        record: stack,
+                        items: [stack],
                         ticks: 0,
                         playing: false,
                     }),

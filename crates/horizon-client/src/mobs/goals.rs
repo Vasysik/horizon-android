@@ -669,11 +669,16 @@ impl Mob {
                 | Species::ZombieNautilus
         )
     }
+    /// `IronGolem.isPlayerCreated`: a golem a player built, which
+    /// `IronGolem.canAttack` never lets attack a player.
+    pub fn built_by_player(&self) -> bool {
+        self.species() == Species::IronGolem && self.extra.player_created
+    }
     /// `canAttack` for the player: a golem a player built never attacks
     /// players (`IronGolem.canAttack`), and a pet never attacks its owner
     /// (`TamableAnimal.canAttack`: `isOwnedBy`).
     pub fn spares_players(&self, w: &MobWorld) -> bool {
-        (self.species() == Species::IronGolem && self.extra.player_created)
+        self.built_by_player()
             || (self.is_tamable_animal()
                 && self.extra.tame
                 && w.player
@@ -1898,7 +1903,7 @@ pub struct AvoidEntity {
     pub when: Option<fn(&Mob) -> bool>,
     /// Extra condition on the player or mob avoided (`AvoidEntityGoal`'s
     /// predicate: a sneaking player, a tame wolf).
-    pub player_when: Option<fn(&super::PlayerView) -> bool>,
+    pub player_when: Option<fn(&Mob, &super::PlayerView) -> bool>,
     pub seen_when: Option<fn(&Seen) -> bool>,
     from: Vec3,
     /// The mob being avoided (`toAvoid`), when it is one.
@@ -1922,7 +1927,7 @@ impl AvoidEntity {
         self.when = Some(f);
         self
     }
-    pub fn player_when(mut self, f: fn(&super::PlayerView) -> bool) -> Self {
+    pub fn player_when(mut self, f: fn(&Mob, &super::PlayerView) -> bool) -> Self {
         self.player_when = Some(f);
         self
     }
@@ -1950,7 +1955,7 @@ impl Goal for AvoidEntity {
                     .filter(|p| {
                         p.alive
                             && !p.creative
-                            && self.player_when.is_none_or(|f| f(p))
+                            && self.player_when.is_none_or(|f| f(m, p))
                             && m.distance_sqr(p.position) <= max * max
                             && (p.position.y - m.position.y).abs() <= max + 3.0
                     })
@@ -2813,5 +2818,31 @@ impl MoveToBlock {
             self.reached = true;
             self.try_ticks -= 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod built_by_player_tests {
+    use super::*;
+
+    /// A mob of `species`, from a made-up type.
+    fn mob(species: Species) -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        Arc::make_mut(&mut kind).species = species;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    /// `IronGolem.canAttack`: only a golem a player built spares players, so
+    /// the save restore drops that target (`Mob.asValidTarget`) while another
+    /// mob's `PlayerCreated` byte means nothing.
+    #[test]
+    fn only_a_golem_spares_the_player_that_built_it() {
+        let mut built = mob(Species::IronGolem);
+        built.extra.player_created = true;
+        assert!(built.built_by_player());
+        assert!(!mob(Species::IronGolem).built_by_player());
+        let mut zombie = mob(Species::Zombie);
+        zombie.extra.player_created = true;
+        assert!(!zombie.built_by_player());
     }
 }

@@ -35,6 +35,19 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
         },
     );
     write("filtering", &[0.0, 16.0, 0.0, 0.0]);
+    if variant == 3 {
+        write(
+            "colored_lights",
+            &[0.0, 0.0, 32.0, 8.0, 1.0, 0.25, 0.5, 1.0],
+        );
+        // This field is u32, unlike the floating-point helpers above.
+        let member = members
+            .iter()
+            .find(|m| m.name.as_deref() == Some("colored_count"))
+            .unwrap();
+        bytes[member.offset as usize..member.offset as usize + 4]
+            .copy_from_slice(&1u32.to_le_bytes());
+    }
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: &bytes,
@@ -70,7 +83,7 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
     });
     let light = white.create_view(&Default::default());
     let sampler = device.create_sampler(&Default::default());
-    let entries: Vec<_> = (0..12)
+    let entries: Vec<_> = (0..13)
         .map(|binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -84,7 +97,7 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
                 2 | 4 => wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 _ => wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: if binding == 3 {
+                    view_dimension: if binding == 3 || binding == 12 {
                         wgpu::TextureViewDimension::D2
                     } else {
                         wgpu::TextureViewDimension::D2Array
@@ -98,13 +111,13 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
         label: None,
         entries: &entries,
     });
-    let entries: Vec<_> = (0..12)
+    let entries: Vec<_> = (0..13)
         .map(|binding| wgpu::BindGroupEntry {
             binding,
             resource: match binding {
                 0 => uniform.as_entire_binding(),
                 2 | 4 => wgpu::BindingResource::Sampler(&sampler),
-                3 => wgpu::BindingResource::TextureView(&light),
+                3 | 12 => wgpu::BindingResource::TextureView(&light),
                 _ => wgpu::BindingResource::TextureView(&array),
             },
         })
@@ -264,7 +277,7 @@ fn packed_interface_preserves_rgb_fog_fade_and_all_hdr_tiers_on_gpu() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-    for variant in 0..3 {
+    for variant in 0..4 {
         let original = render(&device, &queue, &super::terrain_shader(false), variant);
         let packed = render(&device, &queue, &super::terrain_shader(true), variant);
         assert_eq!(original, packed, "RGB/alpha differs for scene {variant}");
@@ -273,9 +286,9 @@ fn packed_interface_preserves_rgb_fog_fade_and_all_hdr_tiers_on_gpu() {
                 let p = 4 * (2 * emission + 1);
                 let alpha = match emission {
                     0 => 255,
-                    1 => 134,
-                    2 => 89,
-                    3 => 45,
+                    1 | 5 => 134,
+                    2 | 6 => 89,
+                    3 | 7 => 45,
                     _ => 0,
                 };
                 assert_eq!(packed[p + 3], alpha, "HDR tier {emission} lost");

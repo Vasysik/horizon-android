@@ -354,7 +354,7 @@ impl Game<'_> {
                 }
                 match rest {
                     None => {
-                        self.dropped.remove(j);
+                        self.remove_dropped(j);
                     }
                     Some(rest) => {
                         self.dropped[j].stack.count = rest.count;

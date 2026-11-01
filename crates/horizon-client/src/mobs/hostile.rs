@@ -338,6 +338,7 @@ pub fn creeper_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
             mob: m.id,
             charged: m.extra.charged,
             name,
+            in_water: m.fluids.in_water,
         });
         events.push(MobEvent::Explode(
             [m.position.x, m.position.y, m.position.z],

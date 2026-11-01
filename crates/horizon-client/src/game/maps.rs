@@ -623,8 +623,8 @@ fn packed_rgba(packed: u8) -> [u8; 4] {
     let ch = |s: u32| ((col >> s & 255) * modifier / 255) as u8;
     [ch(16), ch(8), ch(0), 255]
 }
-/// `has(DataComponents.MAP_ID)`: filled maps and the explorer map items
-/// (`buried_treasure_map`, `woodland_mansion_map`, ..., all `MapItem`s).
+/// `get(DataComponents.MAP_ID)`: the map id any stack carries. Filled maps
+/// (explorer maps included) carry one; a command can give it to any item.
 pub(super) fn map_id(stack: &ItemStack) -> Option<i32> {
     stack.data().and_then(|d| d.map_id)
 }
@@ -1379,8 +1379,13 @@ impl Game<'_> {
             let framed: Vec<(i32, std::sync::Arc<str>, Framed)> = self
                 .item_frames
                 .iter()
+                // ServerEntity.sendChanges: only a framed MapItem (a filled
+                // map), not any stack that carries a map id.
                 .filter_map(|f| {
                     let item = f.item.as_ref()?;
+                    if &*item.item != "minecraft:filled_map" {
+                        return None;
+                    }
                     let frame = Framed {
                         pos: f.pos,
                         facing: f.facing,

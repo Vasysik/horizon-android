@@ -1,0 +1,30 @@
+[
+  {
+    "id": "zoom",
+    "commit": "e3ee0a7c450b28c3ed58fa59a4881ec78c5ee2e0",
+    "repository": "https://github.com/horizon-rust/horizon-mods",
+    "license": "MIT",
+    "changes": "Static Android adapters; helper visibility/names adapted; reset profile state. SmartF3 preserves the Android F3 scale and code-of-conduct screen."
+  },
+  {
+    "id": "minimap",
+    "commit": "e3ee0a7c450b28c3ed58fa59a4881ec78c5ee2e0",
+    "repository": "https://github.com/horizon-rust/horizon-mods",
+    "license": "MIT",
+    "changes": "Static Android adapters; helper visibility/names adapted; reset profile state. SmartF3 preserves the Android F3 scale and code-of-conduct screen."
+  },
+  {
+    "id": "recipes",
+    "commit": "e3ee0a7c450b28c3ed58fa59a4881ec78c5ee2e0",
+    "repository": "https://github.com/horizon-rust/horizon-mods",
+    "license": "MIT",
+    "changes": "Static Android adapters; helper visibility/names adapted; reset profile state. SmartF3 preserves the Android F3 scale and code-of-conduct screen."
+  },
+  {
+    "id": "smartf3",
+    "commit": "184b92bab7851684bbe6b840c5b8cacc10fa05f2",
+    "repository": "https://github.com/d3grando/smartf3",
+    "license": "MIT",
+    "changes": "Static Android adapters; helper visibility/names adapted; reset profile state. SmartF3 preserves the Android F3 scale and code-of-conduct screen."
+  }
+]

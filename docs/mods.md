@@ -18,9 +18,10 @@ Mods are **off by default**. A fresh install has no `horizon-mods` folder and pl
    game folder (the one holding `options.txt`): a content mod's `.hmod` (or a folder holding `horizon-mod.toml`) in
    `horizon-mods/`. Native mods go in `horizon-native-mods/`, and the launcher builds them
    ([native-mods.md](native-mods.md)).
-2. Options > **Mods** lists them with what each may do ("May add blocks, items and mob effects to your worlds") and a
-   switch. They start off. The choice is kept in `horizon-mods.txt` (`mod.<id>:true`).
-3. A content mod's blocks, items and mob effects load once, when the game starts: restart the game after a switch.
+2. Options > **Mods** lists them with what each may do ("May add blocks, items, mob effects and entity types to your
+   worlds") and a switch. They start off. The choice is kept in `horizon-mods.txt` (`mod.<id>:true`).
+3. A content mod's blocks, items, mob effects and entity types load once, when the game starts: restart the game after
+   a switch.
 4. A mod that can't load shows why, in red, on its row.
 
 Two turned-on content mods never own the same namespace: the first by file name loads, and the other stays out with
@@ -79,6 +80,27 @@ template ([modpacks.md](modpacks.md#registries-02-data-driven-blocks-items-and-m
   "item": true }
 ```
 
+A block copies its template's states. It can also declare state properties of
+its own, which its template does not have — how a pipe says which sides it
+connects to, or a machine whether it is running. Its states then become its
+template's states times the combinations of the ones it declares, in a fixed
+order with every declared default first, so ids do not move between loads:
+
+```json
+{ "template": "minecraft:stone",
+  "state_properties": {
+    "facing": { "type": "enum", "values": ["north", "south", "east", "west"] },
+    "lit": { "type": "boolean" } },
+  "default_state": { "lit": "true" } }
+```
+
+A `boolean` is `false` and `true`, as vanilla spells them; an `enum` is a list
+of values, and a name or value is lower case letters, digits and underscores.
+A declared name may not be one the template already has, and `default_state`
+takes one value per declared property too, so a block's default is exactly one
+state of its own. Every combination has to fit in the states a world holds
+(2^20), so a declaration that would not is refused when the mods load.
+
 An item copies its template's data components, with `max_stack_size` and
 `rarity` changed, and any other 26.3 component set or removed in
 `components`, written as a data component patch is: `minecraft:<type>` sets
@@ -95,6 +117,13 @@ gets its own damage and durability, or a tool its mining speed:
     "!minecraft:repairable": {} } }
 ```
 
+Native mods can register component types before content loads. A content item
+can set a registered type with a JSON value, such as `"sample:charge": {"charge": 42}`.
+JSON values become NBT values. Values must fit the network NBT limits and
+round-trip through saved NBT; negative zero is not supported. A key such as
+`"!sample:charge": {}` removes the template's default. Unknown types fail when Horizon builds the content root;
+`cargo horizon-mod check` cannot check native registrations.
+
 A block's item takes the same `components`, over the components of its
 template block's item; a block with `"item": false` can't have them. Block files
 have no `max_stack_size` or `rarity` keys, so those two go in `components` here
@@ -106,6 +135,21 @@ have no `max_stack_size` or `rarity` keys, so those two go in `components` here
     "minecraft:max_stack_size": 16,
     "minecraft:damage_resistant": { "types": "#minecraft:is_fire" } } }
 ```
+
+A block that joins its neighbours in six directions (a cable, a pipe) copies
+`minecraft:chorus_plant`, vanilla's `PipeBlock`, and names the block tag it
+connects to besides itself:
+
+```json
+{ "template": "minecraft:chorus_plant", "connects_to": "#mymod:cable_connects" }
+```
+
+It keeps the chorus plant's six sides but none of its rules: it needs no
+support, and each side is joined when the block there is the same block or in
+the tag, on placement and whenever that neighbour changes. Its shapes are the
+chorus plant's (10 pixels across) unless it sets `"thickness"`, 2 to 14
+pixels: its outline and collision are then built as `PipeBlock` builds its
+own, a core and an arm to each joined side.
 
 A mod's creative inventory tabs are `data/<id>/horizon/creative_tab/*.json`:
 a title, the item on the tab's button, and its items in order (items the game
@@ -136,10 +180,49 @@ category (`beneficial`, `harmful` or `neutral`) and its RGB colour (0 to `0xFFFF
 
 It is the effect `<id>:<name>`: `/effect give @s ruby:glow 30` gives it, saves and mobs keep it, and it reaches LAN and
 dedicated server players who run the same mods (its network id follows vanilla's). Its name is the translation
-`effect.<id>.<name>` from the mod's `assets/<id>/lang/`. Its icon is not drawn yet: the HUD shows the effect's frame and
-the inventory its frame and name, without an icon. It does nothing on its own yet: no tick behaviour and no attribute
-modifiers. A world opened without the mod drops the effect from its players and mobs. Clients join a server only with
-the same mods' effects, as with its blocks.
+`effect.<id>.<name>` from the mod's `assets/<id>/lang/`, its icon `assets/<id>/textures/mob_effect/<name>.png` (18x18,
+as vanilla's; without one it draws as the missing texture). It does nothing on its own yet: no tick behaviour and no
+attribute modifiers. A world opened without the mod drops the effect from its players and mobs. Clients join a server
+only with the same mods' effects, as with its blocks.
+
+A mod entity type is declared in `data/<id>/horizon/entity_type/<name>.json`. It copies a vanilla type: for now only
+`minecraft:snowball`, a thrown item projectile. `item` is one of the mod's own items (one type per item), and `damage`
+(0 by default) is what a hit deals to anything it hits, as `thrown` damage from the thrower (the snowball's 3 to blazes
+is not copied):
+
+```json
+{ "template": "minecraft:snowball", "item": "ruby:ember", "damage": 2.0 }
+```
+
+It is the entity type `<id>:<name>`, with its network id after vanilla's. Using its item throws it as a snowball is
+thrown: same speed, spread, sound and cooldown, and one item used outside creative. It flies as a snowball, breaks on
+what it hits with its item's crumbs, and is drawn as its item's model (`ThrownItemRenderer`). Its name is the translation
+`entity.<id>.<name>`. It works in single player and on LAN with the same mods. Dedicated servers share that code,
+untested so far. Clients join a server only with the same mods' entity types, as with its blocks. It is saved with its
+chunk, `/summon <id>:<name>` makes one, and it has its template's row in `entity-types.json`. A world opened without the
+mod keeps the saved ones as they are, frozen in place. Not yet: a dispenser doesn't throw it, and a vanilla client on a
+server with it may be disconnected when one spawns.
+
+#### Menu types
+
+A mod menu type (vanilla's `MenuType`) is declared in `data/<id>/horizon/menu/<name>.json`: its container's slot count
+(1 to 256), the data slots its menu syncs (`ContainerData`, 0 to 256, 0 by default), and the slots players only take
+from (`results`, as a furnace's result slot):
+
+```json
+{ "slots": 9, "data_slots": 2, "results": [7, 8] }
+```
+
+It is the menu type `<id>:<name>`, with its network id after vanilla's. A mod block's container opens it when its
+`menu` names it with as many slots ([native-mods.md](native-mods.md), `native_block_entity_container`). The menu holds
+its slots, then the player's 36. A shift-click from the inventory goes to the first slots with room, never a result
+slot, and one on the container goes to the inventory, as a chest's does. `results` fence players only: hoppers follow the
+container's faces and `inputs`, so leave result slots out of `inputs`. The data slots are the block entity's `data`
+(16-bit on the network, as vanilla's), all sent when it opens, then each change. A Horizon client shows it through the
+mod's own screen (`native_screen`); without one it closes again. Clients join a server only with the same mods' menu
+types, as with its blocks, and a client that isn't Horizon's is never sent one: the block opens nothing for it. Not
+yet: per-slot rules beyond `results`, hooks for shift-click routing and `stillValid`, opening with extra data, and
+client prediction of its clicks.
 
 `crafting_remainder` names what the item leaves in the crafting grid when a
 recipe uses it, as a milk bucket leaves a bucket (vanilla's
@@ -201,6 +284,29 @@ itself. A name nobody defines is skipped.
 A pool addition holds `"elements"` as a pool does, a processor list addition `"processors"`. This is what
 Lithostitched's `add_structure_set_entries`, `add_template_pool_elements` and `add_processor_list_processors` modifiers
 do on NeoForge and Fabric, and `horizon-port-pack carry` writes the last two from those.
+
+A mod's own configured and placed features (`data/<ns>/worldgen/configured_feature/`, `placed_feature/`) generate in
+biomes it does not own (vanilla's) through NeoForge's biome modifiers, files in `data/<ns>/neoforge/biome_modifier/`
+(older Forge mods: `data/<ns>/forge/biome_modifier/`, `forge:` types). `add_features` appends its `features` to one
+generation `step` of every biome in `biomes`; `remove_features` takes them out of its `steps` (every step when it lists
+none); `none` does nothing. `biomes` and `features` are an id, a `#tag` or a list of ids; `biomes` may also be
+NeoForge's `any`, `or`, `and` or `not`. Every addition comes before every removal, each in mod and file order, and a
+feature already in the step is not added twice.
+
+```json
+{ "type": "neoforge:add_features", "biomes": "#minecraft:is_overworld",
+  "features": "zinc:ore_zinc", "step": "underground_ores" }
+```
+
+The modifiers rewrite the biomes when the content root builds, and the generator orders every biome's features as
+vanilla's `FeatureSorter` does, so an added feature takes its place in that order (its random seed follows from it). A
+biome no modifier names keeps its text, and a world without mods keeps vanilla's biomes byte for byte. A modifier
+naming a biome, biome tag, feature or feature tag the game doesn't have (another mod's, a `#c:` convention tag), or of a
+type not read yet (spawns and climate: `add_spawns`, `add_carvers`, a mod's own serializer), is skipped with a warning
+naming the mod and file, as NeoForge skips what it can't resolve; the mods still load. A malformed modifier of a type
+that is read (an unknown step, a missing field) stops the build, and the game starts without content mods ("content
+mods not loaded: ..." in the log). Feature tags are vanilla's for now (`#tag` in `features` doesn't read a mod's
+`placed_feature` tags yet); a world's data pack that replaces a biome replaces the mods' changes to it too.
 
 A pool element may be one of Lithostitched's: `lithostitched:limited` (`delegate`, `limit`, `min_depth`) places its
 `delegate` at most `limit` times in one structure start, and `lithostitched:guaranteed` (`delegate`, `count`,

@@ -1,6 +1,7 @@
 //! Identity of the ordered block-state registry used by chunk packets, and of
-//! the item and mob effect registries once content mods add to them (item
-//! stacks and effect packets carry their network ids).
+//! the item, mob effect, entity type and menu registries once content mods
+//! add to them (item stacks, effect, entity and open screen packets carry
+//! their network ids).
 use horizon_protocol::registry::Builtin;
 use serde::{Deserialize, Serialize, de::IgnoredAny};
 use sha2::{Digest, Sha256};
@@ -71,6 +72,27 @@ pub fn identity(root: &Path) -> Result<[u8; 32], IdentityError> {
             }
         }
     }
+    let components: Vec<_> = horizon_protocol::item::custom::entries()
+        .map(|(id, name)| (id as u64, name.to_owned()))
+        .collect();
+    if !components.is_empty() {
+        hash = hash_entries(hash, "horizon:nbt_components/v1", &components);
+        // Defaults are not sent in a stack patch. Both peers must therefore
+        // agree on their values as well as the registered wire IDs, native
+        // mods' changes included.
+        let items = horizon_world::item_defaults::read(root).map_err(IdentityError::Read)?;
+        let mut defaults = Vec::new();
+        for (item, components) in items {
+            for (name, value) in components.as_object().into_iter().flatten() {
+                if horizon_protocol::item::custom::id(name).is_some() {
+                    defaults.push((defaults.len() as u64, format!("{item}\0{name}\0{value}")));
+                }
+            }
+        }
+        if !defaults.is_empty() {
+            hash = hash_entries(hash, "horizon:nbt_component_defaults/v1", &defaults);
+        }
+    }
     identities.insert(root.to_owned(), hash);
     Ok(hash)
 }
@@ -87,7 +109,12 @@ fn hash_facts(bytes: &[u8]) -> Result<[u8; 32], IdentityError> {
 }
 
 /// The built-in registries whose network ids content mods extend besides blocks.
-const REGISTRIES: [&str; 2] = ["minecraft:item", "minecraft:mob_effect"];
+const REGISTRIES: [&str; 4] = [
+    "minecraft:item",
+    "minecraft:mob_effect",
+    "minecraft:entity_type",
+    "minecraft:menu",
+];
 
 fn parse_registries(bytes: &[u8]) -> Result<Builtin, IdentityError> {
     let text = std::str::from_utf8(bytes).map_err(|e| IdentityError::Registries(e.to_string()))?;
@@ -153,6 +180,32 @@ mod tests {
             hash_entries(blocks, ITEM, &glow),
             hash_entries(blocks, EFFECT, &glow)
         );
+    }
+
+    /// a mod menu type in the report changes the identity, so a client
+    /// without it is refused before it could be sent an id it lacks.
+    #[test]
+    fn a_mod_menu_type_joins_the_identity() {
+        let root = |name: &str, extra: &str| {
+            let root = std::env::temp_dir().join(format!(
+                "horizon-content-identity-menu-{name}-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            let facts = br#"{"states":[["minecraft:stone",false,false,"Block{minecraft:stone}",{"id":"minecraft:stone"}]]}"#;
+            std::fs::write(root.join("facts.json"), facts).unwrap();
+            let report = format!(
+                r#"{{"minecraft:menu":{{"entries":{{"minecraft:generic_9x1":{{"protocol_id":0}}{extra}}}}}}}"#
+            );
+            std::fs::write(root.join("registries.json"), report).unwrap();
+            let hash = identity(&root).unwrap();
+            std::fs::remove_dir_all(&root).unwrap();
+            hash
+        };
+        let vanilla = root("vanilla", "");
+        let press = root("press", r#","ruby:press":{"protocol_id":25}"#);
+        assert_ne!(press, vanilla);
+        assert_ne!(press, root("mill", r#","ruby:mill":{"protocol_id":25}"#));
     }
 
     #[test]

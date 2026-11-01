@@ -8,6 +8,12 @@ developers, with upstream fixes applied
 [gfx-rs/wgpu#10714](https://github.com/gfx-rs/wgpu/pull/10714)). It is licensed under MIT or
 Apache-2.0; both licenses are in that folder (`LICENSE.MIT`, `LICENSE.APACHE`).
 
+## naga
+
+`third_party/naga` is [naga](https://github.com/gfx-rs/wgpu) 30.0.1 by the gfx-rs developers, with
+fixes to its GLSL frontend that shader packs need, each applied in the commit that needed it. It is licensed under MIT or Apache-2.0; both licenses
+are in that folder (`LICENSE.MIT`, `LICENSE.APACHE`).
+
 ## Pixelify Sans
 
 `crates/horizon-theme/fonts/PixelifySans-*.ttf` is [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans)
@@ -29,13 +35,14 @@ has local mouse and modifier-event fixes described in `third_party/winit/PATCHES
 
 ## AMD FidelityFX SDK (FSR 3.1 frame generation)
 
-`crates/horizon-client-render/src/gfx/frame_gen/optical_flow.wgsl` is a port to WGSL of the
-optical flow shaders of the [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK)
-1.1.4 (`sdk/include/FidelityFX/gpu/opticalflow`, at commit
+`crates/horizon-client-render/src/gfx/frame_gen/optical_flow.wgsl` and `interpolation.wgsl` are
+ports to WGSL of the optical flow and frame interpolation shaders of the
+[AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 1.1.4
+(`sdk/include/FidelityFX/gpu/{opticalflow,frameinterpolation}`, at commit
 [c6efa6bf7f20](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/c6efa6bf7f2027b3ec94f28578bb5965eabb9e55)),
 and `optical_flow.rs` follows the SDK's `sdk/src/components/opticalflow/ffx_opticalflow.cpp`
 (its passes, their order and their dispatch sizes). Copyright (C) 2024 Advanced Micro Devices,
-Inc., under the MIT license, whose text heads both files. AMD and FidelityFX are AMD's
+Inc., under the MIT license, whose text heads each file. AMD and FidelityFX are AMD's
 trademarks; Horizon is not affiliated with AMD.
 
 ## Mod loader logos
@@ -65,3 +72,15 @@ with Microsoft accounts
 The four-square Microsoft symbol in `launcher/src/microsoft.rs` reproduces the squares, positions and
 colours of Microsoft's official `ms-symbollockup_mssymbol_19.svg` from that page, unmodified. Microsoft
 and its logo are trademarks of the Microsoft group of companies; Horizon is not endorsed by Microsoft.
+
+
+## Statically bundled Android mods
+
+Zoom, Minimap and Recipes are adapted from [horizon-rust/horizon-mods](https://github.com/horizon-rust/horizon-mods/tree/e3ee0a7c450b28c3ed58fa59a4881ec78c5ee2e0/native),
+copyright 2026 Ludovic Marie and the Horizon contributors, MIT.
+SmartF3 is adapted from [d3grando/smartf3](https://github.com/d3grando/smartf3),
+copyright 2026 d3grando, MIT. Exact revisions and adaptation notes are recorded in
+`crates/horizon-client/src/game/android_bundled/PROVENANCE.json`; each bundled
+module retains its full MIT LICENSE. Changes provide static Android hook
+adapters, opt-in configuration, profile-state reset and compatibility guards.
+These are a fixed compiled set, not support for loading arbitrary native mods.

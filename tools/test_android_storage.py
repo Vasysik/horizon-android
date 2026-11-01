@@ -34,7 +34,7 @@ public final class Probe extends Activity {
             Uri mods = DocumentsContract.buildDocumentUri(authority, "p0/mods");
             Uri children = DocumentsContract.buildChildDocumentsUri(authority, "horizon");
             try (Cursor c = getContentResolver().query(children, null, null, null, null)) {
-                check(c != null && c.getCount() == 4, "four directories");
+                check(c != null && c.getCount() == 5, "five directories");
             }
             Uri file = DocumentsContract.createDocument(getContentResolver(), mods, "application/zip", "probe.hmod");
             check(file != null, "create");
@@ -49,6 +49,14 @@ public final class Probe extends Activity {
                         DocumentsContract.buildTreeDocumentUri(authority, "p0/mods"), "p0/mods"));
             check(path != null && path.getPath().contains("p0/mods"), "navigation path");
             check(DocumentsContract.deleteDocument(getContentResolver(), renamed), "delete");
+            Uri worlds = DocumentsContract.buildDocumentUri(authority, "p0/worlds");
+            Uri world = DocumentsContract.createDocument(getContentResolver(), worlds, DocumentsContract.Document.MIME_TYPE_DIR, "World Transfer Probe");
+            check(world != null, "create world folder");
+            Uri level = DocumentsContract.createDocument(getContentResolver(), world, "application/octet-stream", "level.dat");
+            try (OutputStream s = getContentResolver().openOutputStream(level, "wt")) { s.write(new byte[]{9,8,7}); }
+            try (InputStream s = getContentResolver().openInputStream(level)) { check(s.read() == 9 && s.read() == 8 && s.read() == 7, "world file round trip"); }
+            check(DocumentsContract.deleteDocument(getContentResolver(), level), "delete fixture level");
+            check(DocumentsContract.deleteDocument(getContentResolver(), world), "delete fixture world");
             Uri secret = DocumentsContract.buildDocumentUri(authority, "p0/mods/../android-launcher.json");
             boolean denied = false;
             try (ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(secret, "r")) {}
@@ -167,7 +175,7 @@ extern "system" fn Java_dev_horizon_storageprobe_Probe_nativeCheck(
     run([jdk / 'bin/java.exe', '-jar', bt / 'lib/apksigner.jar', 'sign', '--ks', ROOT / '.local/android/debug.keystore',
          '--ks-key-alias', 'androiddebugkey', '--ks-pass', 'pass:android', apk])
     if args.serial:
-        adb = Path('C:/Program Files/platform-tools/adb.exe')
+        adb = sdk / 'platform-tools/adb.exe'
         run([adb, '-s', args.serial, 'install', '--no-incremental', '-r', apk])
         run([adb, '-s', args.serial, 'shell', 'am', 'start', '-n', 'dev.horizon.storageprobe/.Probe', '--ez', 'browse', str(args.browse).lower()])
     print(apk)

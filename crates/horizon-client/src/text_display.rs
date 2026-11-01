@@ -416,6 +416,13 @@ impl Lines {
     }
 }
 
+/// The corners of each six-vertex `HudBatch` quad that `draw` fills, in the
+/// order the world draws them: `Font`'s glyphs go top left, bottom left,
+/// bottom right, top right, so under `Lines::pose` they wind
+/// counter-clockwise on the side the text reads from, the face the culled
+/// `TEXT_POLYGON_OFFSET` and `TEXT_SEE_THROUGH` keep.
+pub const CORNERS: [usize; 4] = [5, 2, 1, 0];
+
 /// `TextDisplayRenderer.submitInner` after its `translate(1 - width / 2,
 /// -height, 0)`: the background and each line, in text units, each quad's
 /// `depth` its z (the background 0.01 behind, `Font.prepareBackground`).
@@ -476,6 +483,88 @@ pub fn draw(
 mod tests {
     use super::*;
     use horizon_world::nbt::Compound;
+
+    /// Whether a text quad seen from `camera` (yaw, pitch, at `eye` from the
+    /// display) faces it (counter-clockwise on screen, the face back-face
+    /// culling keeps) and whether its text reads left to right.
+    fn seen(d: &TextDisplayData, entity: [f32; 2], camera: [f32; 2], eye: glam::Vec3) -> [bool; 2] {
+        let lines = Lines {
+            lines: vec![],
+            width: 10.0,
+        };
+        let mut batch = crate::hud::HudBatch::new([1, 1]);
+        batch.quad(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            [[0.0; 2]; 4],
+            u32::MAX,
+        );
+        let view_proj = glam::Mat4::perspective_rh(1.2, 1.0, 1000.0, 0.05)
+            * crate::camera::view_matrix(camera[0], camera[1])
+            * glam::Mat4::from_translation(-eye);
+        let matrix = view_proj * d.matrix(entity, camera) * lines.pose();
+        let [a, b, c, _] = CORNERS.map(|i| {
+            let v = batch.vertices[i];
+            matrix.project_point3(glam::Vec3::new(v.pos[0], v.pos[1], v.depth))
+        });
+        let ccw = (b - a).truncate().perp_dot((c - a).truncate()) > 0.0;
+        // The text's x axis, from the left edge to the right, on screen.
+        let right =
+            matrix.project_point3(glam::Vec3::X).x > matrix.project_point3(glam::Vec3::ZERO).x;
+        [ccw, right]
+    }
+
+    #[test]
+    fn text_quads_face_the_side_they_read_from() {
+        let mut d = TextDisplayData::default();
+        // A fixed display at yaw 0 reads from the south: in front it faces
+        // the camera, from the north it shows its back, which the text
+        // pipelines cull.
+        assert_eq!(
+            seen(&d, [0.0, 0.0], [180.0, 0.0], glam::Vec3::Z * 3.0),
+            [true, true]
+        );
+        assert_eq!(
+            seen(&d, [0.0, 0.0], [0.0, 0.0], glam::Vec3::Z * -3.0),
+            [false, false]
+        );
+        assert_eq!(
+            seen(&d, [90.0, 0.0], [-90.0, 0.0], glam::Vec3::X * -3.0),
+            [true, true]
+        );
+        // A mirrored scale turns the readable side round with the front.
+        d.scale = [-1.0, 1.0, 1.0];
+        assert_eq!(
+            seen(&d, [0.0, 0.0], [0.0, 0.0], glam::Vec3::Z * -3.0),
+            [true, true]
+        );
+        assert_eq!(
+            seen(&d, [0.0, 0.0], [180.0, 0.0], glam::Vec3::Z * 3.0),
+            [false, false]
+        );
+        // Billboards face the camera from anywhere it looks at them.
+        d.scale = [1.0; 3];
+        for billboard in 1..=3 {
+            d.billboard = billboard;
+            for yaw in [0.0, 37.0, 90.0, 180.0, -135.0] {
+                let pitch = if billboard == 1 { 0.0 } else { 30.0 };
+                let forward = glam::Vec3::new(
+                    -f32::to_radians(yaw).sin() * f32::to_radians(pitch).cos(),
+                    -f32::to_radians(pitch).sin(),
+                    f32::to_radians(yaw).cos() * f32::to_radians(pitch).cos(),
+                );
+                let entity = if billboard == 2 {
+                    [180.0 + yaw, 0.0]
+                } else {
+                    [0.0, 0.0]
+                };
+                assert_eq!(
+                    seen(&d, entity, [yaw, pitch], forward * -3.0),
+                    [true, true],
+                    "billboard {billboard} at yaw {yaw}"
+                );
+            }
+        }
+    }
     #[test]
     fn partial_updates_retain_values_and_bad_vectors_do_not_panic() {
         let mut d = TextDisplayData::default();

@@ -10,7 +10,6 @@ use horizon_client::{
     gizmos::Gizmos,
     hud::HudBatch,
     hud_layout, keybinds,
-    save::VERSION_NAME,
     text::Text,
 };
 use horizon_core::geometry::{Axis, Vec3};
@@ -41,6 +40,7 @@ impl DebugHost for Host<'_, '_> {
         let g = &mut *self.game;
         if without_menu && g.screen == Screen::Playing {
             g.pause_menu = !g.has_singleplayer_server() || g.is_published();
+            g.pause_focus = None;
             g.screen = Screen::Paused;
             g.capture(false);
             g.mining = None;
@@ -297,7 +297,6 @@ impl Game<'_> {
         {
             return;
         }
-        let on = |path: &str| self.debug_entries.enabled(path, self.debug, reduced);
         let framebuffer = size.map(|v| v as i32);
         #[cfg(target_os = "android")]
         let scale_debug = debug_overlay::touch_scale;
@@ -311,47 +310,7 @@ impl Game<'_> {
             [batch.width as i32, batch.height as i32],
         );
         let mut d = debug_overlay::Displayer::default();
-        // fps: DebugEntryFps.
-        if on("fps") {
-            self.debug_fps_line(&mut d);
-        }
-        // game_version: DebugEntryVersion (the launched version and brand).
-        if on("game_version") {
-            d.priority(format!("Minecraft {VERSION_NAME} ({VERSION_NAME}/horizon)"));
-        }
-        // player_position, player_section_position.
-        if let Some(p) = self.player.as_ref() {
-            let mut lines = debug_overlay::position(
-                [p.position.x, p.position.y, p.position.z],
-                self.yaw,
-                self.pitch,
-                self.dim.id(),
-                self.streaming.forced.len(),
-            );
-            let section = lines.pop().unwrap_or_default();
-            if on("player_position") {
-                d.group("position", lines);
-            }
-            if on("player_section_position") {
-                d.group("position", [section]);
-            }
-        }
-        if on("simple_performance_impactors") {
-            self.debug_performance_lines(&mut d);
-        }
-        if on("system_specs") {
-            self.debug_system_lines(&mut d, framebuffer);
-        }
-        // Horizon's own: the shader pack's GPU time per pass (an empty group would move others).
-        let pass_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
-            debug_overlay::shader_pass_lines(&r.shader_pass_times())
-        });
-        if self.debug && !pass_lines.is_empty() {
-            d.group("shader pack", pass_lines);
-        }
-        if on("tps") {
-            self.debug_tps_line(&mut d);
-        }
+        self.debug_entry_lines(&mut d, framebuffer);
         // The chart keys and the charts only while the overlay is open.
         let footer = if self.debug {
             self.debug_chart_lines().to_vec()
@@ -388,7 +347,7 @@ impl Game<'_> {
         hud_layout::paint(batch, atlas, &draws);
     }
     /// `DebugEntryFps`.
-    fn debug_fps_line(&self, d: &mut debug_overlay::Displayer) {
+    pub(super) fn debug_fps_line(&self, d: &mut debug_overlay::Displayer) {
         let limit = self.framerate_limit();
         let present = self
             .renderer
@@ -419,7 +378,7 @@ impl Game<'_> {
         ));
     }
     /// `DebugEntrySimplePerformanceImpactors`.
-    fn debug_performance_lines(&self, d: &mut debug_overlay::Displayer) {
+    pub(super) fn debug_performance_lines(&self, d: &mut debug_overlay::Displayer) {
         let s = &self.settings;
         d.line(format!(
             "{}{}B: {}",
@@ -446,7 +405,11 @@ impl Game<'_> {
         ));
     }
     /// `DebugEntrySystemSpecs` (no Java line: Horizon has no JVM).
-    fn debug_system_lines(&self, d: &mut debug_overlay::Displayer, framebuffer: [i32; 2]) {
+    pub(super) fn debug_system_lines(
+        &self,
+        d: &mut debug_overlay::Displayer,
+        framebuffer: [i32; 2],
+    ) {
         if let Some(r) = self.renderer.as_ref() {
             static CPU: std::sync::OnceLock<String> = std::sync::OnceLock::new();
             d.group(
@@ -514,7 +477,7 @@ impl Game<'_> {
         }
     }
     /// `DebugEntryTps` for local and remote connections.
-    fn debug_tps_line(&self, d: &mut debug_overlay::Displayer) {
+    pub(super) fn debug_tps_line(&self, d: &mut debug_overlay::Displayer) {
         if self.player.is_some() {
             let [tx, rx] = self.debug_charts.packet_rates.map(|n| n.round() as i64);
             let (target, status) = if self.clock.sprinting() {
@@ -557,12 +520,17 @@ impl Game<'_> {
         let prefix = Text::translate("debug.prefix", &[])
             .with_color(color)
             .bold();
-        self.system_message(
+        self.show_debug_chat(
             Text::empty()
                 .append(prefix)
                 .append(Text::literal(" "))
                 .append(message),
         );
+    }
+    /// `Minecraft.showDebugChat`: a client system message the narrator says.
+    fn show_debug_chat(&mut self, message: Text) {
+        self.say_system_queued(&message);
+        self.system_message(message);
     }
     fn debug_feedback(&mut self, message: Text) {
         self.debug_decorated(YELLOW, message);
@@ -704,7 +672,7 @@ impl Game<'_> {
             DebugAction::DumpVersion => {
                 self.debug_translated("debug.version.header");
                 for line in self.version_lines() {
-                    self.system_message(line);
+                    self.show_debug_chat(line);
                 }
                 true
             }
@@ -918,6 +886,7 @@ impl Game<'_> {
     pub(super) fn debug_gizmos(&self, alpha: f32, camera: [f64; 3]) -> Gizmos {
         let mut g = Gizmos::default();
         self.bounding_box_gizmos(camera, &mut g);
+        self.debug_renderer_gizmos(&mut g);
         if self.debug_entry("chunk_borders")
             && let Some(p) = &self.player
         {
@@ -989,6 +958,20 @@ impl Game<'_> {
             let p = c.position;
             g.entity_box(min, max, [p.x, p.y, p.z], 0.2125, false, (0.0, c.yaw));
         }
+        // Interaction: EntityDimensions.scalable(width, height), so its eyes
+        // are at 0.85 of the height. Its rotation is not kept here.
+        for i in self.interactions.values() {
+            let b = i.bounds();
+            let p = i.position;
+            g.entity_box(
+                [b.min(Axis::X), b.min(Axis::Y), b.min(Axis::Z)],
+                [b.max(Axis::X), b.max(Axis::Y), b.max(Axis::Z)],
+                [p.x, p.y, p.z],
+                i.height.max(0.0) * 0.85,
+                false,
+                (0.0, 0.0),
+            );
+        }
         for a in self.armor_stands.iter().filter(|a| !a.invisible) {
             // ArmorStand.getDimensions: a marker has none, a small one is
             // half scale with its eyes at 0.9875.
@@ -997,8 +980,13 @@ impl Game<'_> {
                 (_, true) => ((0.25, 0.9875), 0.9875),
                 _ => ((0.5, 1.975), 1.7775),
             };
-            let p = a.position;
-            g.hitbox([p.x, p.y, p.z], size, eye, true, (0.0, a.yaw));
+            g.hitbox(
+                at(a.previous, a.position),
+                size,
+                eye,
+                true,
+                (0.0, a.render_yaw(alpha)),
+            );
         }
         for b in &self.boats {
             let h = super::boats::HEIGHT as f32;
@@ -1058,9 +1046,12 @@ impl Game<'_> {
             use horizon_client::projectiles::ProjectileKind as K;
             let (size, eye) = match p.kind {
                 K::Arrow { .. } | K::Trident => (0.5, 0.13),
-                K::Snowball | K::Egg | K::EnderPearl | K::LlamaSpit | K::Potion { .. } => {
-                    (0.25, 0.2125)
-                }
+                K::Snowball
+                | K::Egg
+                | K::EnderPearl
+                | K::LlamaSpit
+                | K::Potion { .. }
+                | K::Thrown(_) => (0.25, 0.2125),
                 K::SmallFireball | K::ShulkerBullet { .. } | K::WitherSkull { .. } => {
                     (0.3125, 0.265_625)
                 }
@@ -1219,6 +1210,39 @@ impl DebugQuery {
     }
 }
 
+/// `DebugEntryChunkGeneration`'s `lastPos` and `result`: F3's `Density` line is sampled again
+/// only when the feet block or the dimension changes. Vanilla adds the group only inside its
+/// server-level branch, so with no generator (a remote server, a LAN world joined, the server
+/// thread not there yet) nothing is drawn and nothing of the last world is kept.
+#[derive(Default)]
+pub(super) struct DensityCache(Option<(&'static str, [i32; 3], Option<String>)>);
+impl DensityCache {
+    /// The line to draw; `sample` is `None` without a generator.
+    pub(super) fn line(
+        &mut self,
+        dim: &'static str,
+        feet: [i32; 3],
+        sample: Option<impl FnOnce() -> Option<String>>,
+    ) -> Option<&str> {
+        let Some(sample) = sample else {
+            self.0 = None;
+            return None;
+        };
+        if !self
+            .0
+            .as_ref()
+            .is_some_and(|(d, f, _)| *d == dim && *f == feet)
+        {
+            self.0 = Some((dim, feet, sample()));
+        }
+        self.0.as_ref().and_then(|(_, _, line)| line.as_deref())
+    }
+    /// Another world: its generator, not the last one's line.
+    pub(super) fn clear(&mut self) {
+        self.0 = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1243,5 +1267,50 @@ mod tests {
         assert_eq!(q.start(block(3)), 2);
         assert_eq!(q.answer(1), None);
         assert_eq!(q.answer(2), Some(block(3)));
+    }
+
+    #[test]
+    fn the_density_line_is_sampled_when_the_block_or_the_dimension_changes() {
+        let mut cache = DensityCache::default();
+        let samples = std::cell::Cell::new(0);
+        let at = |cache: &mut DensityCache, dim, feet, present: bool| {
+            let sample = || {
+                samples.set(samples.get() + 1);
+                Some(format!("Density {}", samples.get()))
+            };
+            cache
+                .line(dim, feet, if present { Some(sample) } else { None })
+                .map(str::to_owned)
+        };
+        // Standing still draws the first sample again and again.
+        assert_eq!(
+            at(&mut cache, "o", [0, 70, 0], true).as_deref(),
+            Some("Density 1")
+        );
+        assert_eq!(
+            at(&mut cache, "o", [0, 70, 0], true).as_deref(),
+            Some("Density 1")
+        );
+        // A new block, then a new dimension at the same block, sample again.
+        assert_eq!(
+            at(&mut cache, "o", [1, 70, 0], true).as_deref(),
+            Some("Density 2")
+        );
+        assert_eq!(
+            at(&mut cache, "n", [1, 70, 0], true).as_deref(),
+            Some("Density 3")
+        );
+        // No generator: nothing is drawn, nothing is kept, even on the same block.
+        assert_eq!(at(&mut cache, "n", [1, 70, 0], false), None);
+        assert_eq!(
+            at(&mut cache, "n", [1, 70, 0], true).as_deref(),
+            Some("Density 4")
+        );
+        // Another world clears it too.
+        cache.clear();
+        assert_eq!(
+            at(&mut cache, "n", [1, 70, 0], true).as_deref(),
+            Some("Density 5")
+        );
     }
 }

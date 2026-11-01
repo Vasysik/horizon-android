@@ -124,6 +124,7 @@ pub struct Guest {
     /// The bed (its head) the player sleeps in (`LivingEntity.getSleepingPos`),
     /// `Player.sleepCounter`, and the bed last told to the player itself.
     pub bed: Option<[i32; 3]>,
+    pub woke_from: Option<[i32; 3]>,
     pub sleep_timer: u32,
     pub sent_bed: Option<[i32; 3]>,
     /// Where the player respawns (a bed's spot; `ServerPlayer.respawnConfig`),
@@ -172,6 +173,10 @@ pub struct Guest {
     pub moved: bool,
     /// The client finished loading terrain (ServerboundPlayerLoadedPacket).
     pub loaded: bool,
+    /// Since it joined or respawned, the client hasn't said it loaded the level
+    /// (ServerboundPlayerLoadedPacket): it may still be on its loading screen, where it doesn't
+    /// move, even once the server stops waiting for it (`load_timeout`).
+    pub loading: bool,
     /// Ticks left before the server stops waiting for that packet
     /// (ServerGamePacketListenerImpl.clientLoadedTimeoutTimer): 60 at join and
     /// after a respawn, 0 once it comes.
@@ -273,6 +278,9 @@ pub struct Guest {
     pub death_time: u32,
     /// The join packets were sent (PlayerList.placeNewPlayer ran).
     pub placed: bool,
+    /// `Abilities.flyingSpeed`: vanilla's 0.05, unless a server mod set
+    /// another (`native_set_flying_speed`). Saved with the player.
+    pub flying_speed: f32,
     /// The level the player is in (`ServerPlayer.level().dimension()`): the
     /// hub's level passes only reach the players in theirs.
     pub dimension: String,
@@ -347,6 +355,7 @@ impl Guest {
             stuck: (0, 0),
             shoulders: [None; 2],
             bed: None,
+            woke_from: None,
             sleep_timer: 0,
             sent_bed: None,
             spawn: None,
@@ -368,6 +377,7 @@ impl Guest {
             changes: Default::default(),
             moved: false,
             loaded: false,
+            loading: true,
             load_timeout: CLIENT_LOADED_TIMEOUT,
             center: None,
             sent_chunks: Default::default(),
@@ -420,6 +430,7 @@ impl Guest {
             dead: false,
             death_time: 0,
             placed: false,
+            flying_speed: 0.05,
             dimension: "minecraft:overworld".into(),
             menu: None,
             next_window: 0,
@@ -436,6 +447,14 @@ impl Guest {
             scoreboard: Default::default(),
             recipes_unlocked: Vec::new(),
         }
+    }
+    /// `ServerPlayer.onUpdateAbilities`: the guest's abilities, flying speed included.
+    pub fn abilities(&self) -> play::Clientbound {
+        play::Clientbound::PlayerAbilities(play::PlayerAbilities {
+            flags: self.ability_flags(),
+            flying_speed: self.flying_speed,
+            walking_speed: 0.1,
+        })
     }
     pub fn send(&self, packet: &play::Clientbound) {
         if self.anticheat.record.is_some() {
@@ -457,9 +476,21 @@ impl Guest {
                 Some(k) => Change::Knockback(k),
                 None => return,
             },
-            C::UpdateAttributes(p) if own(p.id) => Change::State,
-            C::UpdateMobEffect(p) if own(p.id) => Change::State,
-            C::RemoveMobEffect(p) if own(p.id) => Change::State,
+            C::UpdateAttributes(p) if own(p.id) => {
+                let speed = self.motion.as_ref().and_then(|m| {
+                    m.attributes
+                        .key("minecraft:movement_speed")
+                        .map(|k| k.attribute().registry_id())
+                });
+                let sprint = p
+                    .values
+                    .iter()
+                    .find(|a| Some(a.attribute) == speed)
+                    .map(|a| a.modifiers.iter().any(|m| m.id == "minecraft:sprinting"));
+                Change::Attributes { sprint }
+            }
+            C::UpdateMobEffect(p) if own(p.id) => Change::Effects,
+            C::RemoveMobEffect(p) if own(p.id) => Change::Effects,
             C::PlayerAbilities(_) => Change::Abilities,
             // The chest slot (InventoryMenu's slot 6): a glider.
             C::ContainerSetSlot(p) if p.container == 0 && p.slot == 6 => Change::Abilities,
@@ -722,6 +753,33 @@ fn network_stack(
         ));
     }
     if let Some(d) = s.data() {
+        // Unbreakable is a unit component; clients need its presence for the
+        // durability bar, tooltip and item model, including in single player.
+        if d.other("minecraft:unbreakable").is_some() {
+            stack.added.push((
+                horizon_protocol::item::component::UNBREAKABLE,
+                horizon_protocol::item::Component::Unit,
+            ));
+        }
+        for (name, value) in &d.other {
+            let (removed, kind) = match name.strip_prefix('!') {
+                Some(kind) => (true, kind),
+                None => (false, name.as_str()),
+            };
+            if horizon_protocol::item::custom::id(kind).is_some() {
+                if let Some(id) = synced_id("minecraft:data_component_type", kind) {
+                    if removed {
+                        stack.removed.push(id);
+                    } else {
+                        stack
+                            .added
+                            .push((id, horizon_protocol::item::Component::Nbt(value.clone())));
+                    }
+                } else {
+                    log::warn!("Cannot send custom component {kind} to this peer");
+                }
+            }
+        }
         if let Some(rgb) = d.dyed_color {
             stack.added.push((
                 horizon_protocol::item::component::DYED_COLOR,
@@ -990,6 +1048,16 @@ fn network_stack(
         stack.added.push((
             horizon_protocol::item::component::ITEM_MODEL,
             horizon_protocol::item::Component::Ident(model),
+        ));
+    }
+    // Arbitrary NBT other mods and item models read back client-side
+    // (`item_model.rs`'s `custom_data_at`), as vanilla's DataComponentPatch does.
+    if let Some(tag @ horizon_world::nbt::Tag::Compound(_)) =
+        s.data().and_then(|d| d.other("minecraft:custom_data"))
+    {
+        stack.added.push((
+            horizon_protocol::item::component::CUSTOM_DATA,
+            horizon_protocol::item::Component::Nbt(tag.clone()),
         ));
     }
     if let Some(t) = s

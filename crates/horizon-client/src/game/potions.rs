@@ -13,7 +13,7 @@ use horizon_assets::item_model::DisplayContext;
 use horizon_client::{
     block_entity_render::vertex_light,
     brewing,
-    effects::{EffectAction, EffectInstance, PlayerEffects},
+    effects::{EffectAction, EffectInstance, OmenTick, PlayerEffects},
     hud::HudBatch,
     hud_layout, hud_overlays, inventory_effects,
     items::ItemStack,
@@ -425,9 +425,7 @@ impl Game<'_> {
     pub(super) fn use_potion_item(&mut self, stack: &ItemStack) -> horizon_client::Result<bool> {
         match &*stack.item {
             "minecraft:potion" | "minecraft:ominous_bottle" => {
-                if self.using.is_none() {
-                    self.using = Some((self.held_slot(), 0));
-                }
+                self.start_using_item();
                 Ok(true)
             }
             "minecraft:splash_potion"
@@ -665,14 +663,22 @@ impl Game<'_> {
                 }
             }
             Who::Mob(id) => {
-                let tags = &self.res.stations().enchantments.entity_tags;
-                let Some(m) = self.mobs.iter_mut().find(|m| m.id == id && m.alive()) else {
+                let Some(i) = self.mobs.iter().position(|m| m.id == id && m.alive()) else {
                     return;
                 };
-                let inverted = tags
+                let inverted = self
+                    .res
+                    .stations()
+                    .enchantments
+                    .entity_tags
                     .get("minecraft:inverted_healing_and_harm")
-                    .is_some_and(|t| t.contains(&m.kind.id));
+                    .is_some_and(|t| t.contains(&self.mobs[i].kind.id));
                 for (effect, duration, amp) in effects {
+                    let tags = &self.res.stations().enchantments.entity_tags;
+                    // A mod's `onEffectAdded` may have changed the mobs.
+                    let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
+                        return;
+                    };
                     match effect {
                         "instant_damage" | "instant_health" => {
                             // `LivingEntity.addEffect` refuses nothing here; the
@@ -688,7 +694,9 @@ impl Game<'_> {
                             if mob_can_be_affected(tags, &m.kind.id, effect)
                                 && let Some(name) = mob_effect_id(effect)
                             {
+                                let new = !m.has_effect(name);
                                 m.add_effect(name, duration, amp);
+                                self.mod_effect_added(name, Some(id as i32), amp, new);
                             }
                         }
                     }
@@ -700,6 +708,7 @@ impl Game<'_> {
         let creative = self.creative;
         let rules = self.world.health_rules;
         let Some(p) = self.player.as_mut() else {
+            self.combat.forget_noted(false);
             return;
         };
         match action {
@@ -711,12 +720,14 @@ impl Game<'_> {
                 }
             }
             EffectAction::Hurt(source, amount) => {
-                if creative {
-                    return;
+                let mut canceled = false;
+                if !creative
+                    && let Some(id) = self.motion.health.damage.id(source)
+                    && let Ok(o) = p.hurt_blocking(&self.motion.health, rules, id, amount, None)
+                {
+                    canceled = o.canceled;
                 }
-                if let Some(id) = self.motion.health.damage.id(source) {
-                    let _ = p.hurt(&self.motion.health, rules, id, amount);
-                }
+                self.combat.forget_noted(canceled);
             }
             EffectAction::Poison => {
                 if !creative
@@ -779,14 +790,24 @@ impl Game<'_> {
             }
         }
         // The omens act from inside the effect tick (BadOmenMobEffect,
-        // RaidOmenMobEffect).
+        // RaidOmenMobEffect), as a content mod's effects do.
         let absorption_empty = self
             .player
             .as_ref()
             .is_some_and(|p| p.health.absorption() <= 0.0);
         let mut effects = std::mem::take(&mut self.potions.effects);
-        let (actions, raid_omen_added) =
-            effects.tick_with(&mut |e| self.omen_tick(e), absorption_empty);
+        let (actions, raid_omen_added) = effects.tick_with(
+            &mut |e, t| {
+                if !brewing::is_mod_effect(e.id) {
+                    self.omen_tick(e)
+                } else if self.mod_effect_tick(e.id, None, t, e.amplifier) {
+                    OmenTick::Continue
+                } else {
+                    OmenTick::Remove
+                }
+            },
+            absorption_empty,
+        );
         self.potions.effects = effects;
         if raid_omen_added {
             self.raid_omen_added();
@@ -828,6 +849,7 @@ impl Game<'_> {
     pub(super) fn add_player_effect(&mut self, effect: EffectInstance) -> bool {
         let id = effect.id;
         let amp = effect.amplifier;
+        let new = self.potions.effects.get(id).is_none();
         let changed = self.potions.effects.add(effect);
         self.apply_effect_status();
         if id == "absorption"
@@ -837,7 +859,43 @@ impl Game<'_> {
             let current = p.health.absorption();
             let _ = p.set_health(current.max(target), true);
         }
+        self.mod_effect_added(id, None, amp, new);
         changed
+    }
+    /// `LivingEntity.addEffect` for a content mod's effect: its
+    /// `onEffectAdded` when it is new, then its `onEffectStarted`, on a
+    /// server. `entity` is a mob's id, None for the player.
+    pub(super) fn mod_effect_added(
+        &mut self,
+        effect: &str,
+        entity: Option<i32>,
+        amplifier: i32,
+        new: bool,
+    ) {
+        if self.remote.is_none() && brewing::is_mod_effect(effect) {
+            if new {
+                self.native_on_effect_added(effect, entity, amplifier);
+            }
+            self.native_mob_effect_added(effect, entity, amplifier);
+        }
+    }
+    /// `MobEffectInstance.tickServer` for a content mod's effect: its
+    /// `shouldApplyEffectTickThisTick`, then its `applyEffectTick`, which
+    /// may end it. Whether it stays.
+    fn mod_effect_tick(
+        &self,
+        effect: &str,
+        entity: Option<i32>,
+        tick_count: i32,
+        amplifier: i32,
+    ) -> bool {
+        let mut apply = false;
+        self.native_should_apply_effect_tick_this_tick(effect, tick_count, amplifier, &mut apply);
+        let mut keep = true;
+        if apply {
+            self.native_apply_effect_tick(effect, self.dim.id(), entity, amplifier, &mut keep);
+        }
+        keep
     }
     /// The effects' attribute modifiers, armor protection and status flags
     /// on `self.player`.
@@ -1127,7 +1185,11 @@ impl Game<'_> {
                     .get("minecraft:inverted_healing_and_harm")
                     .is_some_and(|t| t.contains(&self.mobs[i].kind.id));
                 for (id, duration, amp) in effects {
-                    let m = &mut self.mobs[i];
+                    let tags = &world_stations!(self).enchantments.entity_tags;
+                    // A mod's `onEffectAdded` may have changed the mobs.
+                    let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) else {
+                        return;
+                    };
                     match *id {
                         "instant_damage" | "instant_health" => {
                             let amount =
@@ -1145,6 +1207,7 @@ impl Game<'_> {
                             if mob_can_be_affected(tags, &m.kind.id, id)
                                 && let Some(name) = mob_effect_id(id)
                             {
+                                let new = !m.has_effect(name);
                                 m.add_effect_with(
                                     name,
                                     scaled(*duration),
@@ -1152,6 +1215,7 @@ impl Game<'_> {
                                     ambient.contains(id),
                                     !hidden.contains(id),
                                 );
+                                self.mod_effect_added(name, Some(mob as i32), *amp, new);
                             }
                         }
                     }
@@ -1524,6 +1588,13 @@ impl Game<'_> {
             "active": self.potions.effects.list.iter().map(|e| serde_json::json!({ "id": e.id, "duration": e.duration, "amplifier": e.amplifier })).collect::<Vec<_>>(),
             "thrown": self.potions.thrown.iter().map(|t| [t.position.x, t.position.y, t.position.z]).collect::<Vec<_>>(),
         })
+    }
+}
+
+/// A mob's content mod effects tick in its own tick (`ai::tick_effects`).
+impl horizon_client::mobs::ModEffectTicks for Game<'_> {
+    fn tick_mod_effect(&self, effect: &str, mob: u32, tick_count: i32, amplifier: i32) -> bool {
+        self.mod_effect_tick(effect, Some(mob as i32), tick_count, amplifier)
     }
 }
 

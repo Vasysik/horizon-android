@@ -11,10 +11,10 @@ Checks:
 - timer: `[anticheat]` on, with the timer's thresholds once trusted (it logs only by default): a bot ticking 1.5 times as fast as vanilla's client is flagged, sent back,
          reported to the console and kicked; the legit bots (walking and exploring at 20 Hz) are never
          flagged.
-- ground: `[anticheat]` on, survival (allow-flight on, so vanilla's floating kick stays out of it): a bot
-         hovering 24 blocks up that claims the ground in every move (no-fall) and one standing on water
-         that does (jesus) are flagged, their claim dropped, and kicked; bots walking on the ground and
-         standing still are never flagged.
+- ground: the default thresholds, survival, allow-flight off: a bot walking 24 blocks up that claims the
+         ground in every move (no-fall) and one walking on water that does (jesus) are flagged, their claim
+         dropped (never sent back), and kicked by the anticheat, warned of the ban the next kick brings, never
+         by vanilla's floating kick; bots walking on the ground and standing still are never flagged.
 - prediction: `[anticheat]` on, survival: a real Horizon client, through a relay that holds every packet
          20-120 ms, walks, sprint-jumps, strafes and sneaks, with effects given and cleared, over ice and
          soul sand, swims, walks into cows, has blocks changed around it, flies in creative, glides with an
@@ -77,10 +77,6 @@ enabled = true
 setback = 2
 alert = 5
 kick = 20
-[anticheat.ground]
-setback = 5
-alert = 15
-kick = 60
 [anticheat.prediction]
 enabled = false
 '''
@@ -168,21 +164,24 @@ def check_timer(bins, scratch, out, seconds):
 
 def check_ground(bins, scratch, out, seconds):
     folder = scratch / 'ground'
-    server, port = start(bins, folder, ON, out, 'ground', **{'gamemode': 'survival', 'allow-flight': 'true'})
+    # allow-flight off: a dropped claim must never feed vanilla's floating kick.
+    server, port = start(bins, folder, ON, out, 'ground', **{'gamemode': 'survival', 'allow-flight': 'false'})
     try:
         with ThreadPoolExecutor(4) as pool:
             runs = {
                 'Walk': pool.submit(bots, bins, port, out, 'Walk', 3, 'walk', seconds, '--height', '0', '--ground'),
                 'Stand': pool.submit(bots, bins, port, out, 'Stand', 2, 'stand', seconds),
-                'NoFall': pool.submit(bots, bins, port, out, 'NoFall', 1, 'idle', seconds, '--ground'),
-                'Jesus': pool.submit(bots, bins, port, out, 'Jesus', 1, 'idle', seconds, '--height', '0',
+                # They move, as the no-fall and jesus players of the official server did: a claim
+                # standing still isn't judged (no fall to skip).
+                'NoFall': pool.submit(bots, bins, port, out, 'NoFall', 1, 'walk', seconds, '--ground'),
+                'Jesus': pool.submit(bots, bins, port, out, 'Jesus', 1, 'walk', seconds, '--height', '0',
                                      '--ground'),
             }
             # The jesus bot goes far from the others, then the ground under it turns to water.
             server.wait_for('Jesus0 joined the game', 120)
             server.console('tp Jesus0 200.5 -60 200.5')
             time.sleep(4)
-            server.console('fill 196 -61 196 204 -61 204 minecraft:water')
+            server.console('fill 176 -61 176 224 -61 224 minecraft:water')
             runs = {k: v.result() for k, v in runs.items()}
     finally:
         server.stop()
@@ -201,8 +200,20 @@ def check_ground(bins, scratch, out, seconds):
             raise Failed(f'ground: {cheater["name"]} was flagged {flags} times ({where}):\n{log}')
         if 'disconnected' not in (cheater['error'] or ''):
             raise Failed(f'ground: {cheater["name"]} was not kicked ({cheater["error"]})')
+        # The defaults act: the first kick warns of the ban the second brings.
+        if f'{cheater["name"]} failed ground' not in log or 'kicked (1 of 2 before a ban)' not in log:
+            raise Failed(f'ground: {cheater["name"]}: no kick with its ban count in the log:\n{log}')
+    if 'sent back' in log:
+        raise Failed(f'ground: a player was sent back (ground only drops the claim):\n{log}')
+    if 'claim dropped' not in log:
+        raise Failed(f'ground: no claim dropped in the log:\n{log}')
+    console = (out / 'ground-server.log').read_text()
+    if 'floating too long' in console:
+        raise Failed('ground: vanilla\'s floating kick ended a dropped claim (only the anticheat kicks):\n'
+                     + '\n'.join(l for l in console.splitlines() if 'floating' in l))
     walkers = runs['Walk']['joined'] + runs['Stand']['joined']
-    print(f'ground: the no-fall and jesus bots are flagged and kicked; {walkers} bots on the ground never flagged')
+    print(f'ground: the no-fall and jesus bots are flagged, their claims dropped (never sent back), and kicked by the '
+          f'anticheat (1 of 2 before a ban), never by the floating kick; {walkers} bots on the ground never flagged')
 
 
 class Jitter:
@@ -338,13 +349,82 @@ def honest_play(game, console):
     game.wait(40)
 
 
-def check_prediction(bins, scratch, out, seconds):
-    folder = scratch / 'prediction'
+def water_play(game, console):
+    """In water as players are on the official server: sprint-swimming down and up a deep pool, held at
+    the surface by jump, sinking, sneaking down, climbing out onto a ledge; standing in, against and with
+    a current; carried up a bubble column."""
+    def tp(x, y, z, yaw=0, pitch=0):
+        console(f'tp Walker {x} {y} {z} {yaw} {pitch}')
+        game.wait(20)
+    # Above the flat ground (its top is at -61): a pool 10 deep, with a ledge one block above the water at its far end.
+    console('fill 40 -60 0 50 -50 31 minecraft:stone')
+    console('fill 41 -59 1 49 -50 29 minecraft:water')
+    console('fill 41 -49 30 49 -49 31 minecraft:stone')
+    # A current: a source at one end of a channel one block deep.
+    console('fill 59 -50 -1 63 -49 13 minecraft:stone')
+    console('fill 61 -49 0 61 -49 12 minecraft:air')
+    console('setblock 61 -49 0 minecraft:water')
+    # A bubble column over soul sand.
+    console('fill 70 -60 0 72 -50 2 minecraft:stone')
+    console('fill 71 -59 1 71 -50 1 minecraft:water')
+    console('setblock 71 -60 1 minecraft:soul_sand')
+    game.wait(40)
+    tp(45.5, -51, 3.5)
+    game.raw('look', 0, 40)
+    game.raw('move', 'forward', 2, '--sprint')
+    game.raw('look', 0, -40)
+    game.raw('move', 'forward', 2, '--sprint')
+    game.raw('look', 0, 0)
+    game.script(['key space down', 'wait 60', 'key space up', 'wait 40', 'key shift down', 'wait 30',
+                 'key shift up', 'wait 20'])
+    tp(45.5, -50.5, 25.5)
+    game.raw('move', 'forward', 3, '--jump')
+    game.raw('move', 'forward', 1)
+    tp(61.5, -49, 6.5)
+    game.wait(60)
+    game.raw('look', 180, 0)
+    game.raw('move', 'forward', 2)
+    game.raw('look', 0, 0)
+    game.raw('move', 'forward', 2, '--sprint')
+    tp(71.5, -58, 1.5)
+    game.wait(80)
+    tp(45.5, -48, 33.5)
+    game.wait(20)
+
+
+def items_play(game, console):
+    """Items used on the move, as on the official server: a shield raised from the off hand while
+    walking, trying to sprint, switching hotbar slots and swinging at a cow; raised and lowered in
+    quick taps; a golden apple eaten and a bow drawn while walking."""
+    for slot, item in (('weapon.offhand', 'shield'), ('hotbar.0', 'diamond_sword'),
+                       ('hotbar.1', 'golden_apple 8'), ('hotbar.2', 'bow'), ('hotbar.3', 'dirt 32'),
+                       ('hotbar.4', 'arrow 32')):
+        console(f'item replace entity Walker {slot} with minecraft:{item}')
+    game.wait(20)
+    game.script(['key 1 tap', 'mouse right down', 'key w down', 'wait 40', 'key ctrl down', 'wait 20',
+                 'key ctrl up', 'key 4 tap', 'wait 20', 'key 1 tap', 'wait 20', 'key a down', 'wait 20',
+                 'key a up', 'key space down', 'wait 20', 'key space up', 'key w up', 'mouse right up',
+                 'wait 20'])
+    console('execute as Walker at Walker run summon minecraft:cow ^ ^ ^2')
+    game.wait(10)
+    game.script(['mouse right down', 'wait 10', 'mouse left click', 'wait 10', 'mouse left click',
+                 'wait 10', 'mouse right up', 'wait 10'])
+    console('kill @e[type=minecraft:cow]')
+    game.script(['key w down'] + ['mouse right down', 'wait 3', 'mouse right up', 'wait 3'] * 6
+                + ['key w up', 'wait 10'])
+    game.script(['wait 20'])
+    game.script(['key 2 tap', 'wait 10', 'key w down', 'mouse right down', 'wait 45', 'mouse right up',
+                 'wait 10', 'key 3 tap', 'wait 10', 'mouse right down', 'wait 30', 'mouse right up',
+                 'wait 10', 'key w up', 'wait 20'])
+
+
+def check_prediction(bins, scratch, out, seconds, name='prediction', play=None):
+    folder = scratch / name
     # The other checks stay out of it: this one is about the prediction alone, with the thresholds it gets
     # once trusted (it logs only by default).
     toml = ('[anticheat]\nenabled = true\n[anticheat.timer]\nenabled = false\n[anticheat.ground]\nenabled = false\n'
             '[anticheat.prediction]\nsetback = 5\nalert = 15\nkick = 60\n')
-    server, port = start(bins, folder, toml, out, 'prediction', gamemode='survival', difficulty='peaceful')
+    server, port = start(bins, folder, toml, out, name, gamemode='survival', difficulty='peaceful')
     from lan_e2e import Game  # noqa: E402 (only this check drives a client)
     game = Game('client', bins / f'horizon-ctl{EXE}', lab.RESOURCES.resolve())
     for key in ('XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'HORIZON_LAUNCHER_HOME'):
@@ -357,18 +437,21 @@ def check_prediction(bins, scratch, out, seconds):
             game.raw('connect', f'127.0.0.1:{relay.port}', 'Walker')
             game.raw('wait-for', 'loaded', '--timeout', 300)
             game.wait(60)
-            honest_play(game, server.console)
+            (play or honest_play)(game, server.console)
         except Exception as e:
-            raise Failed(f'prediction: the honest client could not play: {e}') from e
+            raise Failed(f'{name}: the honest client could not play: {e}') from e
         finally:
-            (out / 'prediction-client.log').write_text(game.close())
+            (out / f'{name}-client.log').write_text(game.close())
             relay.close()
             shutil.rmtree(game.work, ignore_errors=True)
             log = folder / 'logs/anticheat.log'
             if log.exists():
-                shutil.copy(log, out / 'prediction-anticheat.log')
+                shutil.copy(log, out / f'{name}-anticheat.log')
         if log.exists() and 'Walker' in log.read_text():
-            raise Failed(f'prediction: the honest client was flagged:\n{log.read_text()}')
+            raise Failed(f'{name}: the honest client was flagged:\n{log.read_text()}')
+        if play:
+            print(f'{name}: the honest client (20-120 ms jitter) was never flagged')
+            return
         cheat = bots(bins, port, out, 'Cheat', 1, 'walk', seconds)
     finally:
         server.stop()
@@ -542,9 +625,20 @@ def check_combat(bins, scratch, out, seconds):
                                     '--attack', 'Target1,Target2'),
             }
             runs = {k: v.result() for k, v in runs.items()}
+            # Kicked once, the cheaters come back and cheat again: that kick bans (ban_after = 2), and
+            # then the server refuses them.
+            again = {
+                'NoSwing': pool.submit(bots, bins, port, out, 'NoSwing', 1, 'stand', seconds,
+                                       '--attack', 'Target1', '--no-swing'),
+                'Aura': pool.submit(bots, bins, port, out, 'Aura', 1, 'stand', seconds,
+                                    '--attack', 'Target1,Target2'),
+            }
+            again = {k: v.result() for k, v in again.items()}
+            refused = bots(bins, port, out, 'NoSwing', 1, 'stand', 5)
             runs['Target'] = targets.result()
     finally:
         server.stop()
+    bans = json.loads((folder / 'banned-players.json').read_text())
     log = folder / 'logs/anticheat.log'
     # The other checks only log by default, and the bots move by their own rules.
     log = '\n'.join(l for l in (log.read_text() if log.exists() else '').splitlines() if 'failed combat' in l)
@@ -567,14 +661,41 @@ def check_combat(bins, scratch, out, seconds):
             raise Failed(f'combat: {cheater["name"]}\'s attacks were never dropped:\n{log}')
         if 'disconnected' not in (cheater['error'] or ''):
             raise Failed(f'combat: {cheater["name"]} was not kicked ({cheater["error"]})')
-    print(f'combat: the no-swing and two-target bots are flagged, their attacks dropped, and kicked; the fair '
-          f'bot attacked {fair["attacks"]} times, never flagged; health left: {health}')
+    banned = {b['name']: b for b in bans}
+    for name in ('NoSwing', 'Aura'):
+        cheater = again[name]['per_bot'][0]
+        ban = banned.get(cheater['name'])
+        if not ban or ban.get('reason') != 'Horizon anticheat: combat' or ban.get('source') != 'Horizon anticheat':
+            raise Failed(f'combat: {cheater["name"]} came back, cheated again and was not banned: {bans}')
+        if 'disconnected' not in (cheater['error'] or ''):
+            raise Failed(f'combat: banned {cheater["name"]} was not sent away ({cheater["error"]})')
+    if len(banned) != 2:
+        raise Failed(f'combat: only the two cheaters are banned: {bans}')
+    if 'banned' not in (refused['per_bot'][0]['error'] or '').lower():
+        raise Failed(f'combat: banned NoSwing logged in again ({refused["per_bot"][0]["error"]})')
+    lines = (folder / 'logs/anticheat.log').read_text()
+    if not all(f'{n}0 failed combat' in lines and 'kicked (1 of 2 before a ban)' in lines and ', banned' in lines
+               for n in ('NoSwing', 'Aura')):
+        raise Failed(f'combat: the log doesn\'t show the kick before the ban:\n{lines}')
+    print(f'combat: the no-swing and two-target bots are flagged, their attacks dropped, and kicked; back, they '
+          f'cheat again and are banned, then refused; the fair bot attacked {fair["attacks"]} times, never '
+          f'flagged; health left: {health}')
+
+
+def check_prediction_water(bins, scratch, out, seconds):
+    check_prediction(bins, scratch, out, seconds, 'prediction-water', water_play)
+
+
+def check_prediction_items(bins, scratch, out, seconds):
+    check_prediction(bins, scratch, out, seconds, 'prediction-items', items_play)
 
 
 CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground, 'prediction': check_prediction,
-          'prediction-vanilla': check_prediction_vanilla, 'combat': check_combat}
+          'prediction-water': check_prediction_water, 'prediction-items': check_prediction_items,
+          'prediction-vanilla': check_prediction_vanilla,
+          'combat': check_combat}
 # Run when no --check is given: the vanilla client needs a screen session, so it runs only when asked.
-DEFAULT = ['combat', 'ground', 'off', 'prediction', 'timer']
+DEFAULT = ['combat', 'ground', 'off', 'prediction', 'prediction-items', 'prediction-water', 'timer']
 
 
 def main():

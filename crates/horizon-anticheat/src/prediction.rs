@@ -33,9 +33,16 @@ pub enum Change {
     Velocity([f64; 3]),
     /// ClientboundExplodePacket's player knockback, added to the velocity.
     Knockback([f64; 3]),
-    /// ClientboundUpdateAttributesPacket or a mob effect for the player itself: the server's
-    /// attributes and effects, as they are when the replay reaches it.
-    State,
+    /// ClientboundUpdateAttributesPacket for the player itself: the server's attributes as they
+    /// are when the replay reaches it, but for the movement speed's sprint modifier, which the
+    /// client's sprinting decides: `sprint` is whether the packet had it when it carried the
+    /// movement speed (the client takes the modifiers as sent, so a sprint modifier the packet
+    /// lacks is gone while the client sprints), None when it didn't (the client keeps its own).
+    Attributes { sprint: Option<bool> },
+    /// ClientboundUpdateMobEffectPacket or ClientboundRemoveMobEffectPacket for the player itself:
+    /// the server's effects, as they are when the replay reaches it. (Their attribute modifiers
+    /// are the server's: they reach the client as attributes.)
+    Effects,
     /// ClientboundPlayerAbilitiesPacket (a game mode, flight given or taken), or the player's chest
     /// slot (a glider put on or taken off): the replay takes these from the server every tick, so a
     /// tick played before the client had them may be off.
@@ -386,16 +393,16 @@ mod tests {
     fn changes_keep_the_server_tick_that_sent_them() {
         let mut r = Record::default();
         r.changed(3, Change::Velocity([0.0, 0.4, 0.0]));
-        r.changed(5, Change::State);
+        r.changed(5, Change::Effects);
         let all: Vec<_> = r.changes_since(0).unwrap().copied().collect();
         assert_eq!(
             all,
-            [(3, Change::Velocity([0.0, 0.4, 0.0])), (5, Change::State)]
+            [(3, Change::Velocity([0.0, 0.4, 0.0])), (5, Change::Effects)]
         );
         assert_eq!(r.changes_since(1).unwrap().count(), 1);
         assert!(r.changes_since(3).is_none());
         for i in 0..CHANGES_KEPT as u64 {
-            r.changed(6 + i, Change::State);
+            r.changed(6 + i, Change::Effects);
         }
         // The first two are gone.
         assert!(r.changes_since(1).is_none());

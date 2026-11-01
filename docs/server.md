@@ -469,10 +469,33 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   `set_config`, `start`, `restart` and `stop` (needs `confirm: true`). Tools that send someone away or can't be
   undone carry MCP's `destructiveHint`. It's the same idea as the game's `horizon-ctl`
   (docs/agent-control.md): an AI can run and diagnose a server, and every action it takes shows in the log.
+- **RCON.** `enable-rcon`, `rcon.port` and `rcon.password` turn on vanilla's remote console, for the hosting panels,
+  Discord bridges and scripts written for it. The supervisor serves it (`rcon.rs`, std only like `http.rs`), so it
+  answers while the game restarts (a command then says the game isn't running), and it reads its settings as
+  `RconThread.create` does: no password or a port outside 1 to 65535 leaves it off with vanilla's warning. The
+  packets are `RconClient`'s: login (3), command (2), the output in packets of 4096 characters, `-1` for a refused
+  login, `Unknown request <hex>` for another type, `Error executing: <command> (<reason>)` for a command that failed.
+  A command goes to the game as `horizon-server cmd` sends it (`console <line>` on the control endpoint), so the
+  output is what the console prints, its messages joined as `RconConsoleSource` joins them. Differences, each one
+  named in `rcon.rs`: the packets are read from the stream, the password is compared in constant time, a
+  connection that hasn't logged in within 30 seconds is closed and at most 16 are open. Not yet: the sender
+  `Rcon` and `broadcast-rcon-to-ops` (a command shows as the console's).
 - **Vanilla's own management protocol.** Vanilla 26.3 has a server management protocol: JSON-RPC over a
-  WebSocket, set up by the `management-server-*` keys in server.properties. Horizon's engine already parses
-  those keys but doesn't serve the protocol. Serving it later, on the engine or the supervisor, would let tools
-  written for vanilla manage a Horizon server too. That is not part of the MVP.
+  WebSocket, set up by the `management-server-*` keys in server.properties, so tools written for vanilla can
+  manage a Horizon server too. The supervisor serves it (`management.rs`, the WebSocket in `websocket.rs`, std
+  only like `http.rs`; TLS, on by default as in vanilla, through rustls in `management_tls.rs`, from a PKCS12
+  keystore, or a self-signed one Horizon makes when none is set), so it answers while the game restarts
+  (`server/status` says `started: false` then); calls that change the game go through its console.
+  Authentication, errors and replies follow vanilla's `net.minecraft.server.jsonrpc` (`AuthenticationHandler`,
+  `Connection`, `methods/*Service`), and `rpc.discover` gives vanilla's OpenRPC document (`management_schema.rs`).
+  `tools/test_management_protocol_parity.py` sends vanilla's server and Horizon's the same messages over TLS
+  (one keystore for both) and compares the answers, and the document with the data generator's
+  `json-rpc-api-schema.json`.
+  - built: the WebSocket and its authentication, TLS, `rpc.discover`, `players`, `players/kick`,
+    `server/{status,save,stop,system_message}`, and the four lists (`allowlist/*`, `bans/*`, `ip_bans/*`,
+    `operators/*`), whose changes the game applies itself (its control endpoint's `management` request, in
+    `game/dedicated/management.rs`), so the source, expiry, log lines and kicks are vanilla's;
+  - planned: `serversettings/*` and `gamerules`, the notifications and heartbeat (from the event stream).
 
 ## 9. Benchmark plan (bots against vanilla and Paper)
 
@@ -502,6 +525,9 @@ reproducible by anyone, and show the same gameplay on both sides.
   - `walk`: flies to random points within 48 blocks of spawn at sprint speed (5.6 blocks/s);
   - `explore`: flies straight outwards at creative flying speed (22 blocks/s), which forces chunk generation;
   - `mixed`: 60 % walk, 20 % explore, 20 % idle.
+  - `fight`: survival bots (`gamemode=survival`, `force-gamemode=true`, `allow-flight=true`) that track the entities the server
+    sends, walk to the nearest living one and attack it every 5 ticks, vanilla's bare-hand cooldown; with `--pvp true` (the
+    default) they attack each other too, which needs `pvp=true` on the server. The report counts `attacks`.
 
   A `build` behaviour (breaking and placing blocks) needs the bots to read terrain and comes later. Runs use
   1, 10, 25, 50 and 100 bots, joining 1 per second. Bots are needed because 100 real vanilla clients can't run

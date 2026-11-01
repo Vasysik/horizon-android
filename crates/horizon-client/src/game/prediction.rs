@@ -20,6 +20,25 @@ impl Game<'_> {
             .anticheat
             .as_deref()
             .map_or(f64::INFINITY, |ac| ac.config.prediction.tolerance);
+        // The item the guest is using (eating, a bow, a shield): its client moves at the item's
+        // `use_effects` speed (ItemUseModifier, 0.2 for most), and may not sprint. The server's copy
+        // of a guest doesn't follow it (Game.sync_player_body is the window's player's), so the
+        // replay walked a guest eating at full speed: 0.173 blocks a tick off, the live log's most
+        // common flag.
+        let item_use = host
+            .play
+            .get(&conn)
+            .and_then(|play| play.using())
+            .and_then(|(slot, _)| {
+                let g = host.hub.guest(conn)?;
+                let stack = if slot == super::shield::OFFHAND_SLOT {
+                    g.offhand.as_ref()
+                } else {
+                    g.inventory.get(slot)?.as_ref()
+                }?;
+                self.res.items().get(&stack.item)
+            })
+            .map(|item| (item.use_speed, !item.can_sprint));
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
         };
@@ -39,6 +58,8 @@ impl Game<'_> {
         });
         if let Some(motion) = g.motion.as_deref_mut() {
             motion.glider = glider;
+            motion.item_use_speed = item_use.map(|(speed, _)| speed);
+            motion.item_use_slows_sprint = item_use.is_some_and(|(_, slows)| slows);
         }
         let (Some(record), Some(server)) = (g.anticheat.record.as_deref_mut(), g.motion.as_deref())
         else {
@@ -94,7 +115,11 @@ impl Game<'_> {
             return;
         }
         let g = host.hub.guest(conn).expect("found above");
-        if excused(g, &self.world, host.states.as_slice(), &host.hub.guests) {
+        // A client that hasn't said it loaded the level is still on its loading screen, where it
+        // doesn't move (the server stopped waiting for it after 60 ticks): the replay falls or drifts
+        // where it stands. Its first move counts as any other.
+        let loading = g.loading && !over.moved;
+        if loading || excused(g, &self.world, host.states.as_slice(), &host.hub.guests) {
             if let Some(replay) = host
                 .hub
                 .guest_mut(conn)

@@ -123,6 +123,35 @@ class PerfBenchStatsTests(unittest.TestCase):
         self.assertEqual(OPTIONS["renderDistance"].format(distance=16), "16")
         self.assertEqual(OPTIONS["graphicsPreset"], '"custom"')
 
+    def test_table_distinguishes_missing_scene_load_from_zero(self):
+        import contextlib
+        import io
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        import tools.perf_bench as pb
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "benchmarks" / "perf"
+            reports.mkdir(parents=True)
+            # Comparable runs: table() refuses reports whose conditions differ or are missing.
+            conditions = {"scenario": "flight", "seed": "1234", "render_distance": 8, "simulation_distance": 12,
+                          "window": [1920, 1080], "vsync": False, "offscreen": False}
+            for label, metrics in (
+                ("missing", {}),
+                ("zero", {"chunks.village.load_ms": {"mean": 0}}),
+                ("measured", {"chunks.village.load_ms": {"mean": 1000},
+                              "chunks.forest.load_ms": {"mean": 3000}}),
+            ):
+                (reports / f"{label}-rd8.json").write_text(
+                    json.dumps({"conditions": conditions, "metrics": metrics}), encoding="utf-8")
+            output = io.StringIO()
+            with mock.patch.object(pb, "ROOT", root), contextlib.redirect_stdout(output):
+                pb.table(["missing", "zero", "measured"])
+        row = next(line for line in output.getvalue().splitlines() if line.startswith("| 8 |"))
+        self.assertEqual([cell.strip().split(", ")[1] for cell in row.split("|")[2:-1]], ["–", "0.0", "2.0"])
+
 
 
 

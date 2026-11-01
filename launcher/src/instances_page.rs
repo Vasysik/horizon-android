@@ -436,7 +436,7 @@ impl Launcher {
         }
         body = body.child(row(
             "Name",
-            self.field(Field::InstanceName, "My instance", 400., cx)
+            self.field(Field::InstanceName, tr("My instance"), 400., cx)
                 .into_any_element(),
         ));
         if !editing && !java {
@@ -460,14 +460,17 @@ impl Launcher {
                 .into_any_element(),
             ));
             body = body.child(text(theme::CAPTION).text_color(t.muted).child(if copy {
-                format!("{from}'s worlds, options and packs are copied; {from} stays as it is.")
+                trf(
+                    "{from}'s worlds, options and packs are copied; {from} stays as it is.",
+                    &[("from", &from)],
+                )
             } else {
-                "Its own worlds and packs; your options and player name come along.".to_string()
+                tr("Its own worlds and packs; your options and player name come along.").to_string()
             }));
         }
         body = body.child(row(
             "Group",
-            self.field(Field::InstanceGroup, "No group", 400., cx)
+            self.field(Field::InstanceGroup, tr("No group"), 400., cx)
                 .into_any_element(),
         ));
         let mut tiles: Vec<AnyElement> = Vec::new();
@@ -508,7 +511,7 @@ impl Launcher {
                     Some(mark) => instance_icons::centred(mark, 28., self.scale).into_any_element(),
                     None => text(theme::MICRO)
                         .text_color(t.muted)
-                        .child("NONE")
+                        .child(tr("NONE"))
                         .into_any_element(),
                 })
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -580,7 +583,7 @@ impl Launcher {
             body = body.child(
                 text(theme::CAPTION)
                     .text_color(t.muted)
-                    .child("Block and item icons come from your prepared game files: prepare a version to see them."),
+                    .child(tr("Block and item icons come from your prepared game files: prepare a version to see them.")),
             );
         }
         if let Some(e) = error {
@@ -660,7 +663,7 @@ impl Launcher {
                 // A Java kind's list can make it taller than the window.
                 .overflow_y_scroll()
                 .bg(plate::alpha(n.page, 0.8))
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .on_scroll(|_, _, cx| cx.stop_propagation())
                 .occlude()
                 .child(card),
         )

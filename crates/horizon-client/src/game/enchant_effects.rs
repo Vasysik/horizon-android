@@ -175,6 +175,7 @@ impl Game<'_> {
         };
         let Some(m) = self.mobs.get(mob) else { return };
         let kind = m.kind.id.clone();
+        let victim = m.id;
         let ctx = EffectContext {
             this: Some(&kind),
             attacker: Some("minecraft:player"),
@@ -187,6 +188,7 @@ impl Game<'_> {
         // ignite (fire aspect) and apply_mob_effect (bane of arthropods).
         let mut ignite = 0.0f32;
         let mut mob_effects = Vec::new();
+        let mut hook_calls: Vec<(String, String, Value, u32)> = Vec::new();
         for (id, level) in held.enchantments() {
             let Some(def) = world_stations!(self).enchantments.get(id) else {
                 continue;
@@ -197,14 +199,17 @@ impl Game<'_> {
                 .flatten()
             {
                 let e = &effect["effect"];
-                let kind_of = e["type"].as_str();
-                if effect["enchanted"] != "attacker"
-                    || effect["affected"] != "victim"
-                    || !matches!(
-                        kind_of,
-                        Some("minecraft:ignite" | "minecraft:apply_mob_effect")
-                    )
-                {
+                if effect["enchanted"] != "attacker" || effect["affected"] != "victim" {
+                    continue;
+                }
+                // A bare type name is minecraft's own, as a bare item id is.
+                let kind_of = match e["type"].as_str() {
+                    Some(k) if k.contains(':') => k.to_owned(),
+                    Some(k) => format!("minecraft:{k}"),
+                    None => continue,
+                };
+                let own = !kind_of.starts_with("minecraft:");
+                if !own && !matches!(&*kind_of, "minecraft:ignite" | "minecraft:apply_mob_effect") {
                     continue;
                 }
                 let mut random = self.world.random.clone();
@@ -218,7 +223,11 @@ impl Game<'_> {
                 if !ok {
                     continue;
                 }
-                if kind_of == Some("minecraft:ignite") {
+                // A mod's own kind: its hook answers, after this loop (the
+                // stations borrow is held here).
+                if own {
+                    hook_calls.push((id.to_string(), kind_of, e.clone(), *level));
+                } else if kind_of == "minecraft:ignite" {
                     ignite =
                         ignite.max(horizon_client::enchant::level_value(&e["duration"], *level));
                 } else {
@@ -234,6 +243,9 @@ impl Game<'_> {
         }
         for (effect, level) in mob_effects {
             self.apply_mob_effect(mob, &effect, level);
+        }
+        for (id, kind_of, data, level) in hook_calls {
+            self.native_enchant_effect(&id, &kind_of, &data, level, victim);
         }
         self.post_attack_bursts(&held, &kind);
     }
@@ -364,7 +376,9 @@ impl Game<'_> {
         let ticks = (between("min_duration", "max_duration") * 20.0).round() as i32;
         let amplifier = (between("min_amplifier", "max_amplifier").round() as i32).max(0);
         if let Some(id) = super::potions::mob_effect_id(ids[pick]) {
+            let (new, entity) = (!m.has_effect(id), m.id as i32);
             m.add_effect(id, ticks, amplifier);
+            self.mod_effect_added(id, Some(entity), amplifier, new);
         }
     }
     /// `minecraft:post_attack` explode effects on the attacker (wind burst):
@@ -488,14 +502,7 @@ impl Game<'_> {
                     .is_some_and(|i| s.damage >= i.max_damage)
                 {
                     self.armor[slot] = None;
-                    if let Some(eye) = self.eye_position() {
-                        self.audio.play(
-                            "minecraft:entity.item.break",
-                            Some(eye),
-                            0.8,
-                            0.8 + self.world.random.next_float() * 0.4,
-                        );
-                    }
+                    self.player_equipment_broke(super::armor_slot(slot), &stack);
                     self.apply_equipment();
                 }
             }
@@ -760,16 +767,11 @@ impl Game<'_> {
         boots.damage += loss;
         if boots.damage >= max {
             self.armor[3] = None;
-            if let Some(eye) = self.eye_position() {
-                self.audio.play(
-                    "minecraft:entity.item.break",
-                    Some(eye),
-                    0.8,
-                    0.8 + self.world.random.next_float() * 0.4,
-                );
-            }
-            // LivingEntity.breakItem: the broken boots' five crumbs.
-            self.eat_particles(&stack, 5);
+            // LivingEntity.onEquippedItemBroken: the broken boots.
+            self.player_equipment_broke(
+                horizon_world::player_inventory::EquipmentSlot::Feet,
+                &stack,
+            );
             self.apply_equipment();
         }
     }

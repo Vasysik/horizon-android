@@ -30,7 +30,7 @@ impl StationData {
             enchantments: std::sync::Arc::clone(&items.enchantments),
             recipes: StationRecipes::load(root, items, overlay),
             brewing: crate::brewing::Brewing::load(root, items, overlay),
-            trades: crate::merchant::Trades::load(root),
+            trades: crate::merchant::Trades::load(root, overlay),
             banners: crate::banner::Banners::load(root),
             recipe_index: crate::recipe_book::RecipeIndex::load(root, overlay),
         }
@@ -489,6 +489,18 @@ impl StationRecipes {
         let mut files = Vec::new();
         let namespaces =
             std::iter::once("minecraft".to_owned()).chain(crate::mod_content::namespaces(root));
+        // NeoForge's load conditions: a file whose don't hold is silently
+        // absent (`mod_loaded` asks which mods' data is in this root).
+        let mods: Vec<String> = {
+            let mut mods = horizon_items::content_namespaces::mod_ids(root);
+            if !mods.iter().any(|m| m == "minecraft") {
+                mods.push("minecraft".to_owned());
+            }
+            mods
+        };
+        let conditions_hold = |v: &Value| {
+            horizon_world::conditions::conditions_hold(v, &|id: &str| mods.iter().any(|m| m == id))
+        };
         for namespace in namespaces {
             let dir = root.join(format!("data/{namespace}/recipe"));
             let more = crate::crafting::recipe_files(&dir).unwrap_or_default();
@@ -507,6 +519,8 @@ impl StationRecipes {
             .collect();
         // The world's packs' recipes over the game's own: the top pack's
         // file for each id replaces it (`SimpleJsonResourceReloadListener`).
+        // The gate answers the merged file, as the crafting loader's does:
+        // a false-conditioned pack file leaves the lower one gone too.
         for (id, files) in overlay.kind("recipe") {
             let Ok(v) = serde_json::from_slice::<Value>(PackOverlay::top(files)) else {
                 continue;
@@ -516,6 +530,7 @@ impl StationRecipes {
                 None => sources.push((id.to_owned(), v)),
             }
         }
+        sources.retain(|(_, v)| conditions_hold(v));
         let mut smithing = Vec::new();
         let mut stonecutting = Vec::new();
         for (id, v) in sources {

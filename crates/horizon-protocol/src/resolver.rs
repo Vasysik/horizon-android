@@ -54,6 +54,13 @@ fn resolve_with(
     })
 }
 
+/// Where a server address leads (`ServerRedirectHandler`): its `_minecraft._tcp` SRV target when
+/// the port is 25565 and the host a name, else the host and port as given. No address lookup.
+pub fn server_redirect(host: &str, port: u16) -> (String, u16) {
+    resolve_with(host, port, srv_redirect, |_, _| Ok(Vec::new()))
+        .map_or_else(|_| (host.to_owned(), port), |r| (r.host, r.port))
+}
+
 fn srv_redirect(name: &str) -> Option<(String, u16)> {
     dns::query_srv(name, &dns::system_name_servers(), dns::SERVER_TIMEOUT)
 }

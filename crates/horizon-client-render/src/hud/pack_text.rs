@@ -216,8 +216,9 @@ impl PackText {
         encoder: &mut wgpu::CommandEncoder,
         batch: &HudBatch,
         size: [u32; 2],
+        scale: f32,
     ) {
-        uploads.buffer(encoder, &self.uniform, 0, &uniforms(batch, size));
+        uploads.buffer(encoder, &self.uniform, 0, &uniforms(batch, size, scale));
     }
 
     /// Draw `range` (whole glyph quads) with the pack's shader; the caller sets its own
@@ -233,7 +234,8 @@ impl PackText {
 /// `GlintAlpha`, `GameTime`, `ScreenSize`), `Projection` (`GuiRenderer`'s orthographic GUI
 /// projection, 1000 to 11000 deep, in GL's depth range), `DynamicTransforms` (the GUI's model view
 /// moving 11000 back, colour modulator white) and an empty `Fog`.
-fn uniforms(batch: &HudBatch, size: [u32; 2]) -> Vec<u8> {
+/// `scale`: target pixels per GUI pixel (`batch.scale`, times `HudRenderer::zoom`).
+fn uniforms(batch: &HudBatch, size: [u32; 2], scale: f32) -> Vec<u8> {
     let mut data = vec![0f32; 256];
     let globals = 0;
     data[globals + 3] = batch.glint_alpha;
@@ -241,7 +243,7 @@ fn uniforms(batch: &HudBatch, size: [u32; 2]) -> Vec<u8> {
     data[globals + 8] = size[0] as f32;
     data[globals + 9] = size[1] as f32;
     // Matrix4f.setOrtho(0, width, height, 0, near, far) with the GUI's scale, columns.
-    let (w, h) = (size[0] as f32 / batch.scale, size[1] as f32 / batch.scale);
+    let (w, h) = (size[0] as f32 / scale, size[1] as f32 / scale);
     let (near, far) = (1000.0f32, 11000.0f32);
     let projection = 64;
     data[projection] = 2.0 / w;
@@ -287,7 +289,8 @@ mod tests {
     fn the_gui_projection_maps_gui_pixels_to_the_screen() {
         let mut batch = HudBatch::new([1920, 1080]);
         batch.scale = 4.0;
-        let data: Vec<f32> = bytemuck::cast_slice(&uniforms(&batch, [1920, 1080])).to_vec();
+        let data: Vec<f32> =
+            bytemuck::cast_slice(&uniforms(&batch, [1920, 1080], batch.scale)).to_vec();
         let column = |matrix: usize, c: usize| &data[matrix + 4 * c..matrix + 4 * c + 4];
         let apply = |matrix: usize, v: [f32; 4]| -> [f32; 4] {
             std::array::from_fn(|r| (0..4).map(|c| column(matrix, c)[r] * v[c]).sum())

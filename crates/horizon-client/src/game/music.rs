@@ -10,6 +10,10 @@ use horizon_client::{
 impl Game<'_> {
     /// `Minecraft.tick` -> `MusicManager.tick`, once per client tick.
     pub(super) fn tick_music(&mut self) {
+        // Splitscreen: one music, P1's.
+        if self.options.split_guest {
+            return;
+        }
         let (music, volume) = self.situational_music();
         // Options.musicFrequency's listener: MusicManager.setMinutesBetweenSongs.
         let frequency = MusicFrequency::parse(&self.settings.file.name("musicFrequency"));
@@ -223,7 +227,7 @@ impl Game<'_> {
             .chunks
             .get(&(x >> 4, z >> 4))
             .map_or("minecraft:plains", |c| {
-                self.res.biomes().list[c.biome(x, y, z) as usize]
+                world_biomes!(self).list[c.biome(x, y, z) as usize]
                     .name
                     .as_str()
             })

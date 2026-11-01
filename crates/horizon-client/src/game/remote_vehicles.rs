@@ -12,7 +12,7 @@
 //! and tells the server of a riding jump (`START_RIDING_JUMP`). A minecart
 //! moves on the server with the rider's input, and the rider sits in it.
 use super::{Game, Keys, ray_box};
-use horizon_client::mobs::{Mob, equine};
+use horizon_client::mobs::{Mob, equine, happy_ghast};
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::packets::play::{self, Serverbound as S};
 
@@ -221,16 +221,20 @@ impl Game<'_> {
             self.boats[i] = b;
             // In front of a mob that shares the boat.
             Some(self.player_boat_seat(i))
-        } else if let Some(c) = self.carts.iter().find(|c| c.id == id) {
-            // A minecart: the server moves it, the rider sits in it.
-            Some(
-                c.position
-                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0)),
-            )
-        } else if let Some(seat_pos) = self.remote_stand_seat(id) {
-            Some(seat_pos)
         } else {
-            None
+            // A minecart: the server moves it, the rider sits in it.
+            let cart = self.carts.iter().find(|c| c.id == id).map(|c| {
+                c.position
+                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0))
+            });
+            if cart.is_none() {
+                // Entity.baseTick: a passenger whose vehicle is gone stops
+                // riding it. Nothing with the id is in the level any more (it
+                // died, or the world it rode in was left), so the seat goes.
+                self.riding = None;
+                return false;
+            }
+            cart
         };
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
@@ -241,50 +245,6 @@ impl Game<'_> {
             p.fall_distance = 0.0;
         }
         true
-    }
-
-    /// Seat position for an armor stand (including GSit seats riding another player or entity).
-    fn remote_stand_seat(&mut self, id: u32) -> Option<Vec3> {
-        let i = self.armor_stands.iter().position(|a| a.id == id)?;
-        let vehicle = self.armor_stands[i].vehicle;
-        let marker = self.armor_stands[i].marker;
-        let small = self.armor_stands[i].small;
-        let mut pos = self.armor_stands[i].position;
-        // If the armor stand is a passenger of another entity (e.g. GSit player sit: Player B -> ArmorStand -> Me),
-        // resolve the host vehicle's attachment point so the seat tracks the host entity smoothly every tick.
-        if let Some(vehicle_id) = vehicle {
-            if let Some(m) = self.mobs.iter().find(|m| m.id == vehicle_id) {
-                pos = horizon_client::mobs::riders::seat(
-                    horizon_client::mobs::riders::passenger_attachment(m),
-                    0.0,
-                    m.position,
-                    m.yaw,
-                );
-                self.armor_stands[i].position = pos;
-            } else if let Some(b) = self.boats.iter().find(|b| b.id == vehicle_id) {
-                pos = b.seat(0, 1, false, 0.0, false);
-                self.armor_stands[i].position = pos;
-            } else if let Some(c) = self.carts.iter().find(|c| c.id == vehicle_id) {
-                pos = c
-                    .position
-                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
-                self.armor_stands[i].position = pos;
-            } else if let Some((_, tracked_pos)) =
-                self.remote.as_ref().and_then(|r| r.tracked(vehicle_id as i32))
-            {
-                pos = Vec3::new(tracked_pos[0], tracked_pos[1], tracked_pos[2]);
-                self.armor_stands[i].position = pos;
-            }
-        }
-        let height = if marker {
-            0.0
-        } else if small {
-            0.9875
-        } else {
-            1.975
-        };
-        // The local player's vehicle attachment is 0.6 (Avatar.DEFAULT_VEHICLE_ATTACHMENT).
-        Some(Vec3::new(pos.x, pos.y + height - 0.6, pos.z))
     }
 
     /// `LocalPlayer.tick` for a passenger: the boat it controls goes to the
@@ -338,6 +298,46 @@ impl Game<'_> {
         b.yaw = yaw;
         b.previous_yaw = yaw;
         b.velocity = Vec3::ZERO;
+    }
+
+    /// `AbstractBoat.handleEntityEvent`: 71 and 72, a bubble column dragging
+    /// the boat down or throwing it up (`handleBubbleColumnEffect`, which the
+    /// client applies to the boat it drives).
+    pub(super) fn remote_boat_event(&mut self, id: i32, event: i8) {
+        let drag_down = event == super::boats::BUBBLE_DOWN_EVENT;
+        if !drag_down && event != super::boats::BUBBLE_UP_EVENT {
+            return;
+        }
+        if let Some(i) = self.boats.iter().position(|b| b.id == id as u32) {
+            self.handle_bubble_column_effect(i, drag_down);
+        }
+    }
+
+    /// `AbstractBoat.tick`: the part that reaches bubble columns, for every
+    /// boat on a client: `status`, the two `applyEffectsFromBlocks` (a boat
+    /// above a column may splash; the boat the player drives is lifted or
+    /// dragged by a column it is inside) and `tickBubbleColumn`'s wobble from
+    /// the synched bubble time.
+    pub(super) fn tick_remote_boat_bubbles(&mut self) {
+        for i in 0..self.boats.len() {
+            let driven = self.riding == Some(self.boats[i].id);
+            if !driven {
+                self.refresh_boat_status(i);
+            }
+            let touches = self.boat_bubble_columns(i);
+            for _ in 0..2 {
+                for &column in &touches {
+                    if column.surface {
+                        if self.boat_splash_roll(i) {
+                            self.boat_bubble_splash(i);
+                        }
+                    } else if driven {
+                        self.boat_inside_bubble_column(i, column);
+                    }
+                }
+            }
+            self.boats[i].tick_bubble_wobble();
+        }
     }
 
     /// Whether this client moves `m`, the mount the player rides: as its
@@ -403,9 +403,21 @@ impl Game<'_> {
 
 /// Whether a player's client moves `m`, the mount it rides
 /// (`isLocalInstanceAuthoritative`): a saddled horse, donkey, mule or camel
-/// it is the first passenger of (`AbstractHorse.getControllingPassenger`).
+/// it is the first passenger of (`AbstractHorse.getControllingPassenger`),
+/// or a harnessed adult Happy Ghast it is the first passenger of
+/// (`HappyGhast.getControllingPassenger`: wearing body armor, player on
+/// top, not on a still timeout — the rider steers it with `travelRidden`
+/// on their own client, and the mount goes to the server as `MoveVehicle`).
 fn client_moves(m: &Mob, first_passenger: bool) -> bool {
-    first_passenger && equine::moved_by_rider(m.species()) && m.extra.saddled && m.alive()
+    if !first_passenger || !m.alive() {
+        return false;
+    }
+    if equine::moved_by_rider(m.species()) && m.extra.saddled {
+        return true;
+    }
+    m.species() == horizon_client::mobs::Species::HappyGhast
+        && happy_ghast::harnessed_adult(m)
+        && !happy_ghast::on_still_timeout(m)
 }
 
 /// `LocalPlayer.sendRidingJump`: START_RIDING_JUMP with
@@ -462,6 +474,22 @@ mod tests {
             assert_eq!(client_moves(&m, true), horse, "{kind}");
             assert!(!client_moves(&m, false), "{kind} behind another rider");
         }
+    }
+
+    /// #4107: on a vanilla server the rider's client moves a harnessed adult
+    /// Happy Ghast (`getControllingPassenger`); an unharnessed one, a baby
+    /// or a second passenger's ride is the server's.
+    #[test]
+    fn the_rider_moves_a_harnessed_ghast_on_its_client() {
+        let Some(mut m) = mob("minecraft:happy_ghast") else {
+            return;
+        };
+        assert!(!client_moves(&m, true), "ghast without a harness");
+        m.extra.head = Some("minecraft:white_happy_ghast_harness".into());
+        assert!(client_moves(&m, true), "harnessed adult");
+        assert!(!client_moves(&m, false), "behind another rider");
+        m.extra.age = -1;
+        assert!(!client_moves(&m, true), "baby ghast");
     }
 
     /// #2920: the client reports where it moved the mount, and a released

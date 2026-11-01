@@ -91,6 +91,19 @@ pub const TIERS: [Tier; 4] = [
         full: 0.38,
     },
 ];
+/// Which pixels of a light source's sprite may shine (`hdr_stats.wgsl`), as a fraction of
+/// the way from its darkest to its brightest opaque pixel: `parts` for one whose bright parts
+/// shine (a torch's flame, not its handle), `whole` for one that shines all over
+/// (`mesher::WHOLE`). The tier windows still decide how much.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Masks {
+    pub parts: f32,
+    pub whole: f32,
+}
+pub const MASKS: Masks = Masks {
+    parts: 0.32,
+    whole: 0.0,
+};
 /// A step of HDR calibration (`crate::hdr_calibration`): its test picture is drawn in nits
 /// above the controls instead of the frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -133,6 +146,8 @@ pub struct Hdr {
     pub tiers: [Tier; 4],
     /// The HUD and menus' brightness, as a share of paper white (0.25..=1).
     pub ui: f32,
+    /// Which pixels of a light source shine (`Masks`).
+    pub masks: Masks,
     /// Calibration's test picture while it runs.
     pub calibration: Option<Calibration>,
 }
@@ -276,6 +291,7 @@ impl Hdr {
             black: 0.0,
             tiers: TIERS,
             ui: 1.0,
+            masks: MASKS,
             calibration: None,
         }
     }
@@ -604,6 +620,7 @@ mod tests {
         for source in [
             include_str!("../hdr.wgsl"),
             include_str!("../terrain.wgsl"),
+            include_str!("../hdr_stats.wgsl"),
             &entity,
         ] {
             let module = naga::front::wgsl::parse_str(source).unwrap();

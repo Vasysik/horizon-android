@@ -392,6 +392,7 @@ fn notch() -> Account {
 fn secrets(token: &str, owns: bool) -> Secrets {
     Secrets {
         refresh_token: "ms-refresh-1".into(),
+        sign_in_required: false,
         minecraft_token: token.into(),
         minecraft_expires_at: now() + 7200,
         xuid: None,
@@ -457,6 +458,17 @@ fn signed_in(store: &MemoryStore, secrets: &Secrets) -> Accounts {
     accounts
 }
 
+/// An accounts.json that is never there: a refresh in these tests saves no profile, and never
+/// touches the developer's own launcher data.
+fn nowhere() -> PathBuf {
+    std::env::temp_dir()
+        .join(format!(
+            "horizon-launcher-no-accounts-{}",
+            std::process::id()
+        ))
+        .join("accounts.json")
+}
+
 fn kept(store: &MemoryStore) -> Secrets {
     secrets_in(store, UUID).unwrap()
 }
@@ -491,6 +503,9 @@ impl SecretStore for Refusing {
     }
     fn persistent(&self) -> bool {
         true
+    }
+    fn operations(&self) -> &Mutex<()> {
+        self.0.operations()
     }
 }
 
@@ -727,6 +742,7 @@ fn accounts_keep_secrets_in_the_store_only() {
     };
     let secrets = Secrets {
         refresh_token: "r".into(),
+        sign_in_required: false,
         minecraft_token: "mc-secret".into(),
         minecraft_expires_at: 1,
         xuid: None,
@@ -941,6 +957,9 @@ impl SecretStore for Reading<'_> {
     fn persistent(&self) -> bool {
         false
     }
+    fn operations(&self) -> &Mutex<()> {
+        self.0.operations()
+    }
 }
 
 #[test]
@@ -979,6 +998,42 @@ fn credential_manager_error_8_says_the_store_is_full() {
 }
 
 #[test]
+fn macos_removed_executable_error_requests_a_restart_and_new_sign_in() {
+    let said = macos_keychain_says(100002).unwrap();
+    assert_eq!(said, MACOS_LAUNCHER_RESTART);
+    assert!(said.contains("Restart the launcher"));
+    assert!(said.contains("sign in with Microsoft again"));
+    for code in [0, 2, -25300, -25293, -25291, 100001, 100003] {
+        assert_eq!(macos_keychain_says(code), None, "OSStatus {code}");
+    }
+}
+
+/// Constructs native errors, without creating or reading any Keychain entry.
+#[cfg(target_os = "macos")]
+#[test]
+fn only_the_typed_macos_removed_executable_failure_gets_the_restart_message() {
+    let failure = |code| {
+        keyring::Error::PlatformFailure(Box::new(security_framework::base::Error::from_code(code)))
+    };
+    assert_eq!(write_error(failure(100002)), MACOS_LAUNCHER_RESTART);
+    for code in [-25300, -25293, -25291, 100003] {
+        let error = failure(code);
+        let original = error.to_string();
+        assert_ne!(original, MACOS_LAUNCHER_RESTART);
+        assert_eq!(write_error(error), original);
+    }
+    let unrelated = keyring::Error::PlatformFailure(Box::new(std::io::Error::other(
+        "OSStatus 100002: unrelated provider",
+    )));
+    let original = unrelated.to_string();
+    assert_eq!(write_error(unrelated), original, "not a string match");
+    assert_eq!(
+        write_error(keyring::Error::NoEntry),
+        keyring::Error::NoEntry.to_string()
+    );
+}
+
+#[test]
 fn session_files_are_private_and_complete() {
     let dir = std::env::temp_dir().join(format!("horizon-launcher-session-{}", std::process::id()));
     let account = Account {
@@ -989,6 +1044,7 @@ fn session_files_are_private_and_complete() {
     };
     let secrets = Secrets {
         refresh_token: "r".into(),
+        sign_in_required: false,
         minecraft_token: "mc-token".into(),
         minecraft_expires_at: 1,
         xuid: Some("25".into()),
@@ -1120,6 +1176,433 @@ fn the_java_edition_plays_as_an_owner_even_offline() {
         java_player_with(&offline(), Some("test-client"), &store, &mut accounts).unwrap_err(),
         NoOwner.to_string()
     );
+}
+
+#[test]
+fn manual_refresh_renews_a_fresh_token_without_selecting_another_account() {
+    let store = MemoryStore::default();
+    let accounts = signed_in(&store, &secrets("original-minecraft", true));
+    let (m, ep) = mock(|_| {});
+    let status = session::refresh_with(&ep, Some("test-client"), &store, &notch(), &nowhere());
+    assert_eq!(status.state, session::State::Ready);
+    let saved = kept(&store);
+    assert_eq!(saved.refresh_token, "ms-refresh-2");
+    assert_eq!(saved.minecraft_token, "mc-token");
+    assert_eq!(accounts.selected.as_deref(), Some(UUID));
+    assert_eq!(
+        m.lock()
+            .unwrap()
+            .log
+            .iter()
+            .filter(|(_, path, _)| path == "/ms/token")
+            .count(),
+        1
+    );
+    let public = serde_json::to_string(&status).unwrap();
+    for secret in ["ms-refresh-2", "mc-token", "original-minecraft"] {
+        assert!(!public.contains(secret));
+    }
+}
+
+#[test]
+fn a_refresh_saves_a_renewed_profile_and_leaves_an_unchanged_one() {
+    let store = MemoryStore::default();
+    let accounts = signed_in(&store, &secrets("original-minecraft", true));
+    let (_, ep) = mock(|_| {});
+    let dir = std::env::temp_dir().join(format!("horizon-launcher-refresh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let file = dir.join("accounts.json");
+    accounts.save_to(&file).unwrap();
+    // The services' profile has a skin and a cape now; the saved one has neither.
+    let status = session::refresh_with(&ep, Some("test-client"), &store, &notch(), &file);
+    assert_eq!(status.state, session::State::Ready);
+    let saved = Accounts::load_from(&file);
+    let account = saved.find(UUID).unwrap();
+    assert!(account.skin.is_some() && account.cape.is_some());
+    assert_eq!(saved.selected.as_deref(), Some(UUID));
+    // Already the services' profile: the file is not written again.
+    let text = serde_json::to_string(&saved).unwrap();
+    std::fs::write(&file, &text).unwrap();
+    let renewed = saved.find(UUID).unwrap().clone();
+    session::refresh_with(&ep, Some("test-client"), &store, &renewed, &file);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_running_game_gets_a_renewed_session_only_when_ready() {
+    let store = MemoryStore::default();
+    signed_in(&store, &secrets("old-minecraft", true));
+    let (_, ep) = mock(|_| {});
+    let dir = std::env::temp_dir().join(format!("horizon-launcher-renew-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let file =
+        session::renew_for_game_with(&ep, Some("test-client"), &store, &notch(), &nowhere(), &dir)
+            .unwrap();
+    let handed: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(handed["uuid"], UUID);
+    assert_eq!(handed["access_token"], "mc-token");
+    // A refused refresh hands over nothing and says to sign in again.
+    signed_in(
+        &store,
+        &Secrets {
+            refresh_token: "revoked".into(),
+            ..secrets("old-minecraft", true)
+        },
+    );
+    let refused =
+        session::renew_for_game_with(&ep, Some("test-client"), &store, &notch(), &nowhere(), &dir)
+            .unwrap_err();
+    assert_eq!(refused.state, session::State::SignInRequired);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn revoked_refresh_is_remembered_until_a_successful_sign_in() {
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(
+        &store,
+        &Secrets {
+            refresh_token: "revoked".into(),
+            ..secrets("old-minecraft", true)
+        },
+    );
+    let (m, ep) = mock(|_| {});
+    let status = session::refresh_with(&ep, Some("test-client"), &store, &notch(), &nowhere());
+    assert_eq!(status.state, session::State::SignInRequired);
+    let requests = m.lock().unwrap().log.len();
+    let _ = session::refresh_with(&ep, Some("test-client"), &store, &notch(), &nowhere());
+    let pass = launch(&ep, Some("test-client"), &store, &mut accounts).unwrap();
+    assert!(pass.session.is_none());
+    assert_eq!(pass.offline.as_deref(), Some(SIGN_IN_AGAIN));
+    assert_eq!(m.lock().unwrap().log.len(), requests);
+    assert_eq!(
+        session::status(&store, UUID).state,
+        session::State::SignInRequired
+    );
+    accounts
+        .add(&store, notch(), &secrets("new-minecraft", true))
+        .unwrap();
+    assert_eq!(session::status(&store, UUID).state, session::State::Ready);
+}
+
+#[test]
+fn a_connection_failure_is_retryable_and_keeps_the_saved_sign_in() {
+    let store = MemoryStore::default();
+    let _accounts = signed_in(&store, &secrets("still-usable", true));
+    let before = store.get(UUID).unwrap();
+    let status = session::refresh_with(
+        &offline(),
+        Some("test-client"),
+        &store,
+        &notch(),
+        &nowhere(),
+    );
+    assert_eq!(status.state, session::State::Retry);
+    assert_eq!(store.get(UUID).unwrap(), before);
+    assert!(!kept(&store).sign_in_required);
+}
+
+#[test]
+fn a_rotated_microsoft_credential_survives_a_later_service_failure() {
+    let store = MemoryStore::default();
+    let _accounts = signed_in(&store, &secrets("old-minecraft", true));
+    let (_, ep) = mock(|m| m.xerr = Some(2148916238));
+    let status = session::refresh_with(&ep, Some("test-client"), &store, &notch(), &nowhere());
+    assert_eq!(status.state, session::State::Retry);
+    assert_eq!(kept(&store).refresh_token, "ms-refresh-2");
+    assert_eq!(kept(&store).minecraft_token, "old-minecraft");
+}
+
+#[test]
+fn expiry_is_refreshable_and_a_missing_credential_needs_sign_in() {
+    let store = MemoryStore::default();
+    assert_eq!(
+        session::status(&store, UUID).state,
+        session::State::SignInRequired
+    );
+    let mut accounts = signed_in(
+        &store,
+        &Secrets {
+            minecraft_expires_at: 0,
+            ..secrets("expired", true)
+        },
+    );
+    assert_eq!(
+        session::status(&store, UUID).state,
+        session::State::NeedsRefresh
+    );
+    let (_, ep) = mock(|_| {});
+    assert!(launch(&ep, Some("test-client"), &store, &mut accounts)
+        .unwrap()
+        .session
+        .is_some());
+    assert_eq!(session::status(&store, UUID).state, session::State::Ready);
+}
+
+#[test]
+fn refresh_serializes_with_sign_out_and_cannot_restore_a_deleted_credential() {
+    let store = Arc::new(MemoryStore::default());
+    let mut accounts = signed_in(&store, &secrets("old-minecraft", true));
+    let (_, ep) = mock(|_| {});
+    let refresh_store = store.clone();
+    let refresh = std::thread::spawn(move || {
+        session::refresh_with(
+            &ep,
+            Some("test-client"),
+            &*refresh_store,
+            &notch(),
+            &nowhere(),
+        )
+    });
+    accounts.remove(&*store, UUID).unwrap();
+    let _ = refresh.join().unwrap();
+    assert!(store.get(UUID).unwrap().is_none());
+}
+
+#[test]
+fn a_damaged_saved_sign_in_is_not_overwritten_or_exposed() {
+    let store = MemoryStore::default();
+    store.set(UUID, "damaged-secret-contents").unwrap();
+    let status = session::refresh_with(
+        &offline(),
+        Some("test-client"),
+        &store,
+        &notch(),
+        &nowhere(),
+    );
+    assert_eq!(status.state, session::State::SignInRequired);
+    assert_eq!(
+        store.get(UUID).unwrap().as_deref(),
+        Some("damaged-secret-contents")
+    );
+    assert!(!serde_json::to_string(&status)
+        .unwrap()
+        .contains("damaged-secret-contents"));
+}
+
+#[test]
+fn an_unreadable_keychain_is_retryable_without_any_write() {
+    struct Locked;
+    impl SecretStore for Locked {
+        fn get(&self, _: &str) -> Result<Option<String>, String> {
+            Err("locked-keychain-details".into())
+        }
+        fn set(&self, _: &str, _: &str) -> Result<(), String> {
+            panic!("must not overwrite an unreadable credential")
+        }
+        fn delete(&self, _: &str) -> Result<(), String> {
+            panic!("must not delete an unreadable credential")
+        }
+        fn persistent(&self) -> bool {
+            false
+        }
+    }
+    let status = session::refresh_with(
+        &offline(),
+        Some("test-client"),
+        &Locked,
+        &notch(),
+        &nowhere(),
+    );
+    assert_eq!(status.state, session::State::Retry);
+    assert!(!status.message.contains("locked-keychain-details"));
+}
+
+#[test]
+fn targeted_sign_in_rejects_another_identity_without_writing_or_selecting_it() {
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("original", true));
+    let before = store.get(UUID).unwrap();
+    let mut wrong = notch();
+    wrong.uuid = "11111111111111111111111111111111".into();
+    wrong.name = "OtherPlayer".into();
+    let err = accept_sign_in(
+        &mut accounts,
+        &store,
+        Some(&notch()),
+        wrong.clone(),
+        &secrets("wrong", true),
+        &|| false,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(err.contains("OtherPlayer") && err.contains("Notch"));
+    assert_eq!(store.get(UUID).unwrap(), before);
+    assert!(store.get(&wrong.uuid).unwrap().is_none());
+    assert_eq!(accounts.accounts, vec![notch()]);
+    assert_eq!(accounts.selected.as_deref(), Some(UUID));
+}
+
+#[test]
+fn targeted_sign_in_preserves_the_selected_account_or_offline_name() {
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("old", true));
+    let mut other = notch();
+    other.uuid = "11111111111111111111111111111111".into();
+    accounts
+        .add(&store, other.clone(), &secrets("other", true))
+        .unwrap();
+    accept_sign_in(
+        &mut accounts,
+        &store,
+        Some(&notch()),
+        notch(),
+        &secrets("renewed", true),
+        &|| false,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(accounts.selected.as_deref(), Some(other.uuid.as_str()));
+    assert_eq!(kept(&store).minecraft_token, "renewed");
+    accounts.selected = None;
+    accounts.offline_selected = Some("Builder".into());
+    accept_sign_in(
+        &mut accounts,
+        &store,
+        Some(&notch()),
+        notch(),
+        &secrets("renewed-again", true),
+        &|| false,
+        &|_| {},
+    )
+    .unwrap();
+    assert!(accounts.selected.is_none());
+    assert_eq!(accounts.offline_selected.as_deref(), Some("Builder"));
+}
+
+#[test]
+fn cancelled_or_removed_targeted_sign_in_keeps_credentials_unchanged() {
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("original", true));
+    let before = store.get(UUID).unwrap();
+    assert!(accept_sign_in(
+        &mut accounts,
+        &store,
+        Some(&notch()),
+        notch(),
+        &secrets("new", true),
+        &|| true,
+        &|_| {}
+    )
+    .is_err());
+    assert_eq!(store.get(UUID).unwrap(), before);
+    accounts.accounts.clear();
+    assert!(accept_sign_in(
+        &mut accounts,
+        &store,
+        Some(&notch()),
+        notch(),
+        &secrets("new", true),
+        &|| false,
+        &|_| {}
+    )
+    .is_err());
+    assert_eq!(store.get(UUID).unwrap(), before);
+}
+
+#[test]
+fn refresh_reports_real_service_steps_in_order() {
+    use session::Phase::*;
+    let store = MemoryStore::default();
+    let _accounts = signed_in(&store, &secrets("old", true));
+    let (_, ep) = mock(|_| {});
+    let phases = std::cell::RefCell::new(Vec::new());
+    let status = session::refresh_account(
+        &ep,
+        Some("test-client"),
+        &store,
+        &notch(),
+        &nowhere(),
+        &|phase| phases.borrow_mut().push(phase),
+    );
+    assert_eq!(status.state, session::State::Ready);
+    assert_eq!(
+        *phases.borrow(),
+        [Queued, Keychain, Microsoft, Xbox, Minecraft, Ownership, Profile, Saving]
+    );
+    let mut accounts = signed_in(&store, &secrets("old", true));
+    let (account, secrets) = finish_sign_in_with_progress(
+        &ep,
+        MsTokens {
+            legacy: false,
+            access: "ms-access-1".into(),
+            refresh: "fresh".into(),
+        },
+        &|phase| phases.borrow_mut().push(phase),
+    )
+    .unwrap();
+    accept_sign_in(
+        &mut accounts,
+        &store,
+        Some(&notch()),
+        account,
+        &secrets,
+        &|| false,
+        &|phase| phases.borrow_mut().push(phase),
+    )
+    .unwrap();
+    assert_eq!(
+        &phases.borrow()[8..],
+        &[Xbox, Minecraft, Ownership, Profile, Saving]
+    );
+}
+
+#[test]
+fn a_status_read_gives_up_behind_a_long_operation() {
+    let store = MemoryStore::default();
+    let held = session::lock(&store).unwrap();
+    let start = std::time::Instant::now();
+    let busy = session::lock_within(&store, Some(std::time::Duration::from_millis(150)));
+    assert!(busy.is_err(), "a held lock must not be taken twice");
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    // Another memory store (another test running beside this one) has its own lock.
+    let other = MemoryStore::default();
+    assert!(session::lock_within(&other, Some(std::time::Duration::ZERO)).is_ok());
+    drop(held);
+    assert!(session::lock_within(&store, Some(std::time::Duration::from_secs(5))).is_ok());
+}
+
+#[test]
+fn a_launch_as_another_account_leaves_the_selected_one() {
+    let store = MemoryStore::default();
+    // Notch is signed in, owns the game and is selected; Alex is listed but no longer has
+    // tokens in the keychain.
+    let mut accounts = signed_in(&store, &secrets("mc-token", true));
+    let alex = "0f22b7ed5e3d4a2c9bfe2f6f8f1f6a01";
+    accounts.accounts.push(Account {
+        uuid: alex.into(),
+        name: "Alex".into(),
+        skin: None,
+        cape: None,
+    });
+    // This launch plays as Alex: Notch's ownership opens the gate, and it is Alex who is told
+    // to sign in again, so Alex played. Notch is still the one `account select` picked.
+    let pass = launch_as(
+        &offline(),
+        Some("test-client"),
+        &store,
+        &mut accounts,
+        &Player::Microsoft(alex.into()),
+    )
+    .unwrap();
+    assert!(pass.session.is_none());
+    assert!(pass
+        .offline
+        .unwrap()
+        .starts_with("Alex is no longer signed in"));
+    assert_eq!(accounts.player(), Player::Microsoft(UUID.into()));
+    // An account that isn't in the launcher is refused, and changes nothing either.
+    let gone = launch_as(
+        &offline(),
+        Some("test-client"),
+        &store,
+        &mut accounts,
+        &Player::Microsoft("not-signed-in".into()),
+    );
+    assert_eq!(gone.unwrap_err(), "That account isn't signed in.");
+    assert_eq!(accounts.player(), Player::Microsoft(UUID.into()));
 }
 
 #[test]

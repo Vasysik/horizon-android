@@ -463,6 +463,7 @@ pub(crate) fn with_built_test_world(
         sea_level: 63,
         items: Some(&items),
         lid_openers: &lid_openers,
+        mod_effects: None,
     };
     f(&w, &types);
     true

@@ -380,7 +380,7 @@ impl Game<'_> {
                 (&mut *normal, TEXT_POLYGON_OFFSET_OVERLAY)
             };
             for quad in batch.vertices.as_chunks::<6>().0 {
-                for i in [0, 1, 2, 5] {
+                for i in text_display::CORNERS {
                     let v = quad[i];
                     let point =
                         matrix.transform_point3(glam::Vec3::new(v.pos[0], v.pos[1], v.depth));

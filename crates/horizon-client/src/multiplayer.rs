@@ -311,27 +311,75 @@ pub const OFFICIAL_SERVER: (&str, &str) = (
     horizon_telemetry::server_status::OFFICIAL_ADDRESS,
 );
 /// Beside servers.dat once the official server was offered, so a player who
-/// deletes it never gets it back. The launcher writes the same file.
+/// deletes it never gets it back: the address offered, so a new one moves the
+/// list once. The launcher writes the same file.
 const OFFICIAL_MARKER: &str = "horizon_official_server.txt";
+
+/// An address as the game connects to it: any case, 25565 when no port is given.
+fn address_key(ip: &str) -> Option<(String, u16)> {
+    servers::parse_address(ip).map(|(h, p)| (h.to_ascii_lowercase(), p))
+}
 
 /// Puts the official server at the top of the list in `game_dir`, once: not
 /// again after the player deletes it, and not when the list has its address.
+/// When it moved (the marker names another address), the entries for its
+/// earlier addresses move to the new one, once (`move_official`).
 pub fn add_official_server(game_dir: &Path) -> std::io::Result<()> {
+    let (name, address) = OFFICIAL_SERVER;
     let marker = game_dir.join(OFFICIAL_MARKER);
-    if marker.exists() {
+    // A marker that is there but can't be read: offered already, at an address not known.
+    let offered = match std::fs::read_to_string(&marker) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => Some(String::new()),
+    };
+    if offered
+        .as_deref()
+        .is_some_and(|a| address_key(a) == address_key(address))
+    {
         return Ok(());
     }
-    let (name, address) = OFFICIAL_SERVER;
     let file = game_dir.join("servers.dat");
-    let key = |ip: &str| servers::parse_address(ip).map(|(h, p)| (h.to_ascii_lowercase(), p));
     let _guard = SAVING.lock();
-    if !servers::load(&file)
-        .iter()
-        .any(|s| key(&s.ip) == key(address))
+    let mut list = servers::load(&file);
+    let previous = horizon_telemetry::server_status::OFFICIAL_PREVIOUS;
+    if move_official(&mut list, address, previous) {
+        servers::save(&file, &list)?;
+    }
+    if offered.is_none()
+        && !list
+            .iter()
+            .any(|s| address_key(&s.ip) == address_key(address))
     {
         servers::prepend(&file, &ServerEntry::new(name, address))?;
     }
     std::fs::write(marker, format!("{address}\n"))
+}
+
+/// Points the entries for an earlier official address at `address`, each
+/// keeping the player's name and fields. One entry for the server at most: an
+/// old one goes when the list already has `address`. Whether anything changed.
+fn move_official(list: &mut Vec<ServerEntry>, address: &str, previous: &[&str]) -> bool {
+    let new = address_key(address);
+    let old = |ip: &str| {
+        let ip = address_key(ip);
+        ip.is_some() && ip != new && previous.iter().any(|p| address_key(p) == ip)
+    };
+    let mut present = list.iter().any(|s| address_key(&s.ip) == new);
+    let mut changed = false;
+    list.retain_mut(|s| {
+        if !old(&s.ip) {
+            return true;
+        }
+        changed = true;
+        if present {
+            return false;
+        }
+        present = true;
+        s.ip = address.to_owned();
+        true
+    });
+    changed
 }
 
 /// The address and kind of list row `index`: saved servers, then discovered LAN games.
@@ -379,6 +427,13 @@ fn list_area(w: f32, h: f32) -> (f32, f32, f32) {
         h - FOOTER,
         (w / 2.0).floor() - (ROW_WIDTH / 2.0).floor(),
     )
+}
+/// `NetworkServerEntry.getServerNarration`: "LAN World" and the MOTD.
+fn lan_narration(motd: &str) -> Text {
+    Text::empty()
+        .append(Text::translate("lanServer.title", &[]))
+        .append(Text::literal(" "))
+        .append(Text::literal(motd))
 }
 fn rows(servers: usize, lan: usize) -> impl Iterator<Item = Row> {
     (0..servers)
@@ -784,6 +839,111 @@ impl Screen {
             focused,
             focused_at,
         );
+        // The box's message is its label.
+        crate::widgets::name_last_edit_box(|| label.to_owned());
+    }
+    /// The screen as the narrator reads it: its id and `getNarrationMessage`.
+    fn narration(&self) -> crate::widgets::ScreenInfo {
+        use crate::widgets::{ScreenInfo, join_for_narration as join};
+        let get = crate::lang::get_or;
+        match self {
+            Self::List { .. } => {
+                ScreenInfo::new("multiplayer", get("multiplayer.title", "Play Multiplayer"))
+            }
+            Self::Edit { index, .. } => ScreenInfo::new(
+                "multiplayer/edit",
+                if index.is_some() {
+                    get("manageServer.edit.title", "Edit Server Info")
+                } else {
+                    get("manageServer.add.title", "Add Server")
+                },
+            ),
+            Self::Direct { .. } => ScreenInfo::new(
+                "multiplayer/direct",
+                get("selectServer.direct", "Direct Connection"),
+            ),
+            // ConfirmScreen: its title and its message.
+            Self::ConfirmDelete { name, .. } => {
+                let warning = format_translation(
+                    &get(
+                        "selectServer.deleteWarning",
+                        "'%s' will be lost forever! (A long time!)",
+                    ),
+                    &[Text::literal(name.clone())],
+                );
+                ScreenInfo::new(
+                    "multiplayer/delete",
+                    join(&[
+                        &get(
+                            "selectServer.deleteQuestion",
+                            "Are you sure you want to remove this server?",
+                        ),
+                        &warning.plain(),
+                    ]),
+                )
+            }
+            Self::Friend { .. } => ScreenInfo::new(
+                "multiplayer/friend",
+                get("horizon.multiplayer.join_friend", "Join a Friend"),
+            ),
+            // DisconnectedScreen: its title and the reason.
+            Self::Disconnected { reason, .. } => ScreenInfo::new(
+                "multiplayer/disconnected",
+                join(&[&get("disconnect.lost", "Connection Lost"), reason]),
+            ),
+        }
+    }
+    /// What button `id` narrates: Server Resource Packs is a CycleButton,
+    /// the others say their label.
+    pub fn button_narration(
+        &self,
+        id: u8,
+        rect: [f32; 4],
+        label: &str,
+        enabled: bool,
+    ) -> crate::widgets::Narratable {
+        use crate::widgets::Narratable;
+        match self {
+            Self::Edit { packs, .. } if id == 60 => {
+                let (key, fallback) = match packs {
+                    Some(true) => ("manageServer.resourcePack.disabled", "Disabled"),
+                    Some(false) => ("manageServer.resourcePack.prompt", "Prompt"),
+                    None => ("manageServer.resourcePack.enabled", "Enabled"),
+                };
+                Narratable::cycle(label, crate::lang::get_or(key, fallback), rect, enabled)
+            }
+            _ => Narratable::button(label, rect, enabled),
+        }
+    }
+    /// `OnlineServerEntry.getNarration`: the name, then its status.
+    fn server_narration(server: &ServerEntry, ping: Option<&Ping>) -> String {
+        let t = |key: &str, args: &[&str]| crate::screen_narrator::translate(key, args);
+        let mut parts = vec![t("narrator.select", &[&server.name])];
+        match ping {
+            Some(Ping::Ok {
+                motd,
+                players,
+                player_list,
+                ms,
+                ..
+            }) => {
+                parts.push(t("multiplayer.status.online", &[]));
+                parts.push(t("multiplayer.status.ping.narration", &[&ms.to_string()]));
+                parts.push(t("multiplayer.status.motd.narration", &[&motd.plain()]));
+                if let Some((online, max)) = players {
+                    parts.push(t(
+                        "multiplayer.status.player_count.narration",
+                        &[&online.to_string(), &max.to_string()],
+                    ));
+                    let names: Vec<String> = player_list.iter().map(Text::plain).collect();
+                    parts.push(names.join(", "));
+                }
+            }
+            Some(Ping::Failed(_)) => parts.push(t("multiplayer.status.no_connection", &[])),
+            _ => parts.push(t("multiplayer.status.pinging", &[])),
+        }
+        let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
+        crate::widgets::join_for_narration(&parts)
     }
     pub fn draw(
         &self,
@@ -795,6 +955,7 @@ impl Screen {
     ) {
         let (w, h) = (batch.width, batch.height);
         let max = self.max_length();
+        crate::widgets::begin_screen(|| self.narration());
         crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
         // GuiGraphicsExtractor.centeredText at width / 2: x - width(text) / 2.
         let centered = |batch: &mut HudBatch, text: &str, y: f32, color: u32| {
@@ -836,6 +997,46 @@ impl Screen {
                 let icons = icons.lock().unwrap();
                 // The row under the pointer (`isHovered`).
                 let hovered = row_at(servers.len(), games.len(), cursor, (w, h), scroll.amount);
+                // ServerSelectionList: the saved servers, the LAN header, the
+                // LAN games; the row under the mouse, else the selected one.
+                crate::widgets::narratable(|| {
+                    use crate::widgets::{ListKind, Narratable, Row as Narrated};
+                    let all: Vec<Row> = rows(servers.len(), games.len()).collect();
+                    let narrate = |i: usize| {
+                        let text = match all[i] {
+                            Row::Server(k) => {
+                                Self::server_narration(&servers[k], pings.get(&servers[k].ip))
+                            }
+                            Row::LanHeader => crate::lang::get_or(
+                                "lanServer.scanning",
+                                "Scanning for games on your local network",
+                            ),
+                            Row::Lan(k) => crate::screen_narrator::translate(
+                                "narrator.select",
+                                &[&lan_narration(&games[k].motd).plain()],
+                            ),
+                        };
+                        Narrated::new(i, text)
+                    };
+                    let selected = selected.and_then(|s| {
+                        let row = if s < servers.len() {
+                            Row::Server(s)
+                        } else {
+                            Row::Lan(s - servers.len())
+                        };
+                        all.iter().position(|r| *r == row)
+                    });
+                    Narratable::list(
+                        ListKind::Object,
+                        all.len(),
+                        hovered
+                            .and_then(|h| all.iter().position(|r| *r == h))
+                            .map(narrate),
+                        selected.map(narrate),
+                        [0.0, top, w, bottom - top],
+                    )
+                    .key(crate::widgets::key_of(&"multiplayer/servers"))
+                });
                 let millis = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis());
@@ -1507,6 +1708,44 @@ impl Screen {
         }
         retry.take()
     }
+    /// `ServerSelectionList.updateNetworkServers`' narration: for each LAN
+    /// world found since the last call whose row is in the list's view,
+    /// `multiplayer.lan.server_found` with its `getServerNarration`.
+    pub fn lan_found_narrations(&self, (w, h): (f32, f32)) -> Vec<Text> {
+        let Self::List {
+            servers,
+            lan,
+            scroll,
+            ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        let found = lan.take_found();
+        if found.is_empty() {
+            return Vec::new();
+        }
+        let (top, bottom, _) = list_area(w.ceil(), h.ceil());
+        let mut scroll = *scroll;
+        scroll.clamp(
+            top,
+            bottom,
+            content_height(servers.len(), lan.games().len()),
+        );
+        found
+            .into_iter()
+            .filter(|(k, _)| {
+                // getRowTop / getRowBottom of the entry after the servers and
+                // the LAN header.
+                let row = (servers.len() + 1 + k) as f32;
+                let row_top = top + 2.0 - scroll.amount.trunc() + row * ROW_HEIGHT;
+                row_top + ROW_HEIGHT >= top && row_top <= bottom
+            })
+            .map(|(_, game)| {
+                Text::translate("multiplayer.lan.server_found", &[lan_narration(&game.motd)])
+            })
+            .collect()
+    }
     /// The focused text field, its id and maximum length (copy and paste).
     pub fn focused_text(&mut self) -> Option<(crate::clipboard::FieldId, &mut String, usize)> {
         let id = match self {
@@ -1904,17 +2143,63 @@ mod tests {
         assert_eq!(ips(), [address, "127.0.0.1:2", "example.org"]);
         // Already there under the player's own name and spelling: not duplicated.
         fresh(&[
-            ServerEntry::new("SMP", "Horizon.Bunchy7s.dev:25565"),
+            ServerEntry::new("SMP", "Play.PlayHorizon.dev:25565"),
             mine[0].clone(),
         ]);
         add_official_server(&dir).unwrap();
-        assert_eq!(ips(), ["Horizon.Bunchy7s.dev:25565", "127.0.0.1:2"]);
+        assert_eq!(ips(), ["Play.PlayHorizon.dev:25565", "127.0.0.1:2"]);
         // Deleted by the player: never back.
         fresh(&mine);
         add_official_server(&dir).unwrap();
         servers::save(&file, &mine).unwrap();
         add_official_server(&dir).unwrap();
         assert_eq!(ips(), ["127.0.0.1:2", "example.org"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_moved_official_server_moves_the_old_entry_once() {
+        let dir = std::env::temp_dir().join(format!("horizon-mp-moved-{}", std::process::id()));
+        let address = OFFICIAL_SERVER.1;
+        let file = dir.join("servers.dat");
+        let marker = dir.join(OFFICIAL_MARKER);
+        let ips = || -> Vec<String> { servers::load(&file).into_iter().map(|s| s.ip).collect() };
+        let offered_before = |list: &[ServerEntry]| {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            servers::save(&file, list).unwrap();
+            std::fs::write(&marker, "horizon.bunchy7s.dev\n").unwrap();
+        };
+        // The old address under the player's own name and spelling: moved, name and place kept.
+        let mut old = ServerEntry::new("Our SMP", "Horizon.Bunchy7s.dev:25565");
+        old.icon = Some("AAAA".into());
+        offered_before(&[ServerEntry::new("Mine", "127.0.0.1:2"), old]);
+        add_official_server(&dir).unwrap();
+        let list = servers::load(&file);
+        assert_eq!(ips(), ["127.0.0.1:2", address]);
+        assert_eq!(
+            (list[1].name.as_str(), list[1].icon.as_deref()),
+            ("Our SMP", Some("AAAA"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            format!("{address}\n")
+        );
+        // Once: the old address added back afterwards is the player's.
+        servers::prepend(&file, &ServerEntry::new("Old", "horizon.bunchy7s.dev")).unwrap();
+        add_official_server(&dir).unwrap();
+        assert_eq!(ips(), ["horizon.bunchy7s.dev", "127.0.0.1:2", address]);
+        // The new address already listed: no second entry.
+        offered_before(&[
+            ServerEntry::new("Old", "horizon.bunchy7s.dev"),
+            ServerEntry::new("New", address),
+        ]);
+        add_official_server(&dir).unwrap();
+        assert_eq!(ips(), [address]);
+        // Deleted by the player before the move: not offered again; another port is left alone.
+        offered_before(&[ServerEntry::new("Test", "horizon.bunchy7s.dev:25570")]);
+        add_official_server(&dir).unwrap();
+        assert_eq!(ips(), ["horizon.bunchy7s.dev:25570"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

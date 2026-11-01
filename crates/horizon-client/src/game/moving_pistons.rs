@@ -142,7 +142,7 @@ impl Game<'_> {
             state,
             [seed.x, seed.y, seed.z],
             &region,
-            self.res.biomes(),
+            world_biomes!(self),
             self.streaming.biome_zoom,
             self.streaming.biome_blend,
         );

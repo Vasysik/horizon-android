@@ -9,6 +9,9 @@ path = "../horizon-client/src/android_main.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+horizon-client-render = { path = "../horizon-client-render" }
+horizon-chat-filter = { path = "../horizon-chat-filter" }
+horizon-narrator = { path = "../horizon-narrator" }
 horizon-client-input = { path = "../horizon-client-input" }
 horizon-anticheat = { path = "../horizon-anticheat" }
 horizon-client = { path = "../horizon-client", default-features = false }

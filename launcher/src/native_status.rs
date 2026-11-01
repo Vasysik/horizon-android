@@ -119,6 +119,41 @@ pub fn enabled(home: &Path) -> Vec<Mod> {
     out
 }
 
+/// A native file not tracked by the registry/browser, including GitHub installs.
+#[derive(Clone)]
+pub struct Installed {
+    pub file: String,
+    pub id: String,
+    pub version: String,
+    pub origin: Option<crate::github_mods::Origin>,
+}
+
+/// Discover the actual files, not just GitHub sidecars. Registry files already have a row.
+pub fn untracked(home: &Path) -> Vec<Installed> {
+    let tracked = crate::browser::installed::Installed::load(home);
+    hnmods(home)
+        .into_iter()
+        .filter_map(|path| {
+            let file = format!("{}/{}", native_mods::INSTALLED, path.file_name()?.to_str()?);
+            if !path.is_file() || tracked.entries.iter().any(|e| e.file == file) {
+                return None;
+            }
+            let (id, version) = horizon_mods::index::native::Bundle::read(&path)
+                .map(|b| (b.manifest.id, b.manifest.version))
+                .unwrap_or_else(|_| (stem(&path), String::new()));
+            let origin = (path.file_stem()?.to_str()? == id)
+                .then(|| crate::github_mods::origin(home, &id))
+                .flatten();
+            Some(Installed {
+                file,
+                id,
+                version,
+                origin,
+            })
+        })
+        .collect()
+}
+
 /// The mods installed version `version` was built with, or None when it isn't a native build
 /// (or its `native-mods.json` can't be read: the Mods page then offers Build).
 pub fn built(version: &str) -> Option<Vec<Mod>> {
@@ -149,7 +184,11 @@ pub fn fingerprint(home: &Path, version: Option<&str>) -> String {
     let mut out = format!("{}\n{version:?}\n", home.display());
     // The on/off list (`browser::java::is_enabled`).
     out += &fs::read_to_string(home.join("horizon-mods.txt")).unwrap_or_default();
-    for path in hnmods(home) {
+    for path in hnmods(home)
+        .into_iter()
+        .flat_map(|p| [p.clone(), p.with_extension("origin.json")])
+        .chain([home.join("mod-browser.json")])
+    {
         let meta = fs::metadata(&path).ok();
         let time = meta.as_ref().and_then(|m| m.modified().ok());
         out += &format!("\n{} {:?} {time:?}", path.display(), meta.map(|m| m.len()));
@@ -182,6 +221,110 @@ mod tests {
 
     fn d(id: &str, version: &str, digest: &str) -> Mod {
         (id.into(), version.into(), Some(digest.into()))
+    }
+
+    #[test]
+    fn github_and_local_files_are_listed_once_and_drive_build_state() {
+        use crate::browser::{installed, Kind, SourceId};
+        use std::io::Write;
+        let home = std::env::temp_dir().join(format!("native-list-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(native_mods::INSTALLED)).unwrap();
+        let pin = "a".repeat(40);
+        for (file, id) in [
+            ("registry", "registry"),
+            ("github", "github"),
+            ("renamed", "local"),
+        ] {
+            let path = home
+                .join(native_mods::INSTALLED)
+                .join(format!("{file}.hnmod"));
+            let mut zip = zip::ZipWriter::new(fs::File::create(path).unwrap());
+            let manifest = serde_json::json!({"schema":1,"id":id,"version":"1.2","game":"26.3","horizon":pin,"mixins":pin});
+            let source = format!("[mod]\nid = \"{id}\"\nversion = \"1.2\"\n[compatibility]\nhorizon_revision = \"{pin}\"\n");
+            for (name, bytes) in [
+                ("horizon-native.json".into(), manifest.to_string()),
+                (format!("mixins/{id}/horizon-mixin.toml"), source),
+            ] {
+                zip.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                zip.write_all(bytes.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let record = crate::github_mods::Origin {
+            id: "github".into(),
+            version: "1.2".into(),
+            owner: "example".into(),
+            repo: "mods".into(),
+            tag: None,
+            commit: pin,
+            asset: None,
+            sha256: "ab".repeat(32),
+        };
+        fs::write(
+            home.join(native_mods::INSTALLED).join("github.origin.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        installed::Installed {
+            entries: vec![installed::Entry {
+                source: SourceId::Horizon,
+                project: "registry".into(),
+                slug: "registry".into(),
+                title: "Registry mod".into(),
+                kind: Kind::Mod,
+                version: "1.2".into(),
+                number: "1.2".into(),
+                file: format!("{}/registry.hnmod", native_mods::INSTALLED),
+                checksum: String::new(),
+                page: String::new(),
+                dependency: false,
+                verdict: None,
+                skipped: vec![],
+                namespaces: vec![],
+            }],
+        }
+        .save(&home)
+        .unwrap();
+        let files = untracked(&home);
+        let seen: Vec<_> = files
+            .iter()
+            .map(|m| (m.id.as_str(), m.version.as_str(), m.origin.is_some()))
+            .collect();
+        assert_eq!(seen, [("github", "1.2", true), ("local", "1.2", false)]);
+        for id in ["registry", "github", "local"] {
+            java::set_enabled(&home, id, true).unwrap();
+        }
+        assert_eq!(state(&enabled(&home), None), State::NotBuilt);
+        for id in ["registry", "github", "local"] {
+            java::set_enabled(&home, id, false).unwrap();
+        }
+        assert_eq!(state(&enabled(&home), None), State::NoMods);
+        assert_eq!(
+            untracked(&home).len(),
+            2,
+            "disabled mods remain in the list"
+        );
+        let before = fingerprint(&home, None);
+        fs::remove_file(home.join(&files[0].file)).unwrap();
+        assert_ne!(before, fingerprint(&home, None));
+        assert_eq!(
+            untracked(&home).len(),
+            1,
+            "a stale origin is not an installed mod"
+        );
+        fs::write(
+            home.join(native_mods::INSTALLED).join("broken.hnmod"),
+            b"broken",
+        )
+        .unwrap();
+        assert_eq!(
+            untracked(&home)[0].id,
+            "broken",
+            "unreadable files can still be removed"
+        );
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

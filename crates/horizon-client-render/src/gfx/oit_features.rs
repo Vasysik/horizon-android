@@ -176,7 +176,7 @@ impl Features {
                 &entity_module,
                 entities,
                 &entity_buffers,
-                kind("text", "entity", None, offset),
+                kind("text", "entity", Some(wgpu::Face::Back), offset),
             ),
             crumbling: set(
                 &entity_module,

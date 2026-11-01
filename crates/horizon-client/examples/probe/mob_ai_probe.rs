@@ -179,7 +179,7 @@ fn state(registry: &BlockRegistry, text: &str) -> BlockStateId {
     registry
         .resolve(&BlockState {
             name: name.to_owned(),
-            properties,
+            properties: properties.into(),
         })
         .unwrap_or_else(|e| panic!("{text}: {e}"))
 }
@@ -1194,6 +1194,7 @@ pub fn main() -> horizon_client::Result<()> {
                     sea_level: -63,
                     items: Some(&items),
                     lid_openers: &lid_openers,
+                    mod_effects: None,
                 }
             };
         }
@@ -1314,7 +1315,7 @@ pub fn main() -> horizon_client::Result<()> {
                     continue;
                 }
                 if let Some(Some((name, volume, pitch))) =
-                    horizon_client::mobs::ai::feed_animal(&mut mobs[i], &mut level_random)
+                    horizon_client::mobs::ai::feed_animal(&mut mobs[i], &mut level_random, None)
                 {
                     events.push(MobEvent::Sound(name, [0.0; 3], volume, pitch));
                 }

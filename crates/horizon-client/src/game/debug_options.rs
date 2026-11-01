@@ -317,6 +317,19 @@ impl Game<'_> {
         };
         let (w, h) = self.gui_size();
         let (top, bottom) = (HEADER, h - FOOTER);
+        let rows = rows(&s.search.value);
+        let left = row_left(w);
+        // A press on the scrollbar holds it and clicks nothing else.
+        if s.scroll.press(
+            self.cursor,
+            left + ROW_WIDTH + 8.0,
+            top,
+            bottom,
+            content_height(rows.len()),
+        ) {
+            self.debug_options = Some(s);
+            return;
+        }
         let shift =
             self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
         s.search.focused = ui::hovered(
@@ -330,8 +343,6 @@ impl Game<'_> {
             s.search.click(&self.gui.atlas, self.cursor.0, shift, false);
         }
         let inside = self.cursor.1 >= top && self.cursor.1 < bottom;
-        let rows = rows(&s.search.value);
-        let left = row_left(w);
         let mut clicked = None;
         if inside {
             for (i, row) in rows.iter().enumerate() {
@@ -388,6 +399,23 @@ impl Game<'_> {
             let content = content_height(rows(&s.search.value).len());
             s.scroll
                 .wheel(delta, ITEM / 2.0, HEADER, h - FOOTER, content);
+        }
+    }
+    /// The pointer moved while the list's scrollbar is held.
+    pub(super) fn debug_options_drag(&mut self) {
+        let (_, h) = self.gui_size();
+        let y = self.cursor.1;
+        if let Some(s) = &mut self.debug_options
+            && s.scroll.held()
+        {
+            let content = content_height(rows(&s.search.value).len());
+            s.scroll.drag(y, HEADER, h - FOOTER, content);
+        }
+    }
+    /// The button came up: the scrollbar lets go.
+    pub(super) fn debug_options_release(&mut self) {
+        if let Some(s) = &mut self.debug_options {
+            s.scroll.release();
         }
     }
     /// A key the debug keys left: Escape closes, the rest edits the search.

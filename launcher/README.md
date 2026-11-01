@@ -1,8 +1,9 @@
 # Horizon launcher
 
 A small desktop app that installs Horizon builds, prepares them from your own copy of
-Minecraft, and starts the client or a dedicated server. Built with [GPUI](https://www.gpui.rs),
-Zed's UI framework; it has its own Cargo workspace and is not part of the game's builds.
+Minecraft, and starts the client or a dedicated server. Built with [GPUI Fast](https://github.com/longbridge/gpui-fast),
+a fork of Zed's UI framework [GPUI](https://www.gpui.rs) that draws unchanged views from the last frame;
+it has its own Cargo workspace and is not part of the game's builds.
 
 ![Play](docs/play.png)
 
@@ -268,6 +269,15 @@ every 0.2 tag counts as newer than all of those (docs/versioning.md). It downloa
 own binary, and offers "Restart" in the footer. Development builds and
 `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` never replace themselves.
 
+On Linux the release also comes as an AppImage, `horizon-launcher-linux-x86_64.AppImage`: one file
+to download, make executable and run, with no installation and no `libfuse2` (its runtime mounts
+the image where FUSE 2 is there and unpacks it where it is not). It is the same binary as the
+`.tar.gz`, with the libraries GPUI needs beside it; glibc, the graphics drivers and the session's
+D-Bus stay the machine's, so it needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 and
+newer). A launcher running from one replaces the AppImage itself when it updates
+(`$APPIMAGE`), and the menu entry it writes starts the AppImage rather than the copy inside the
+image, which is gone when the launcher exits.
+
 On Linux a release build that starts writes its applications-menu entry only when there is
 none, or when the program the entry starts (its `TryExec`, else its `Exec`) no longer exists.
 An entry pointing at another launcher that works is left alone, so a test or development build
@@ -281,7 +291,8 @@ set `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` to keep launcher updates with the packag
 Launcher releases are automatic (docs/release-flow.md in the repository): when main changes the
 launcher, `horizon-prepare` or `horizon-theme`, the `launcher` workflow builds Linux, macOS and
 Windows and publishes `launcher-vX.Y.Z` (the next patch, or the next minor after a pull request
-labelled `feature`) with `horizon-launcher-linux-x86_64.tar.gz`, `horizon-launcher-macos-arm64.zip`,
+labelled `feature`) with `horizon-launcher-linux-x86_64.tar.gz`,
+`horizon-launcher-linux-x86_64.AppImage`, `horizon-launcher-macos-arm64.zip`,
 `horizon-launcher-macos-x64.zip` (Intel Macs) and `horizon-launcher-windows-x64.zip`, never marked latest. The version is built in from the tag
 (`HORIZON_LAUNCHER_VERSION`); `Cargo.toml`'s version is only what local builds report.
 

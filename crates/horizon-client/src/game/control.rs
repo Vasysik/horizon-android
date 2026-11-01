@@ -1,4 +1,5 @@
 //! Commands from the control socket (`horizon-ctl`), run on the game thread.
+use super::event_loop::EventLoopCtl;
 use super::{Game, Screen};
 use horizon_client::{Result, items::ItemStack};
 use horizon_core::geometry::Vec3;
@@ -7,7 +8,7 @@ use std::{
     sync::mpsc::Sender,
     time::{Duration, Instant},
 };
-use winit::{event::MouseButton, event_loop::ActiveEventLoop, keyboard::KeyCode};
+use winit::{event::MouseButton, keyboard::KeyCode};
 
 const HELP: &[&str] = &[
     "status                         game, player, streaming and renderer state",
@@ -36,6 +37,7 @@ const HELP: &[&str] = &[
     "chat-log [N]                   the newest N chat messages (default 10)",
     "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs mods graphics graphics-advanced graphics-hdr)",
     "stats [reset]                  frame-time summary since the last reset",
+    "narration                      the narrator's status and the last messages it was asked to say",
     "bench SECONDS                  reset stats, wait, then reply with the summary",
     "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]  fly the camera along a line at constant speed, then reply with the frame summary (raw: every frame time too)",
     "open WORLD [SEED] [creative]   open or create a world from the title screen",
@@ -107,7 +109,7 @@ impl Game<'_> {
             let _ = flight.reply.send(summary.to_string());
         }
     }
-    pub(super) fn poll_control(&mut self, event_loop: &ActiveEventLoop) {
+    pub(super) fn poll_control(&mut self, event_loop: &dyn EventLoopCtl) {
         if let Some((deadline, reply)) = self.pending_bench.take() {
             if Instant::now() >= deadline {
                 let _ = reply.send(self.frame_stats.summary().to_string());
@@ -116,6 +118,7 @@ impl Game<'_> {
             }
         }
         horizon_client::widgets::end_frame(self.frames);
+        self.narrate_screen();
         self.advance_agent();
         for request in self.ui_wait.ready() {
             self.answer(request, event_loop);
@@ -137,7 +140,7 @@ impl Game<'_> {
         }
     }
 
-    fn answer(&mut self, request: horizon_client::control::Request, event_loop: &ActiveEventLoop) {
+    fn answer(&mut self, request: horizon_client::control::Request, event_loop: &dyn EventLoopCtl) {
         let reply = match self.control_command(&request.line, &request.reply, event_loop) {
             Ok(Some(value)) => value,
             // Deferred: the command keeps its own reply channel.
@@ -147,11 +150,91 @@ impl Game<'_> {
         let _ = request.reply.send(reply.to_string());
     }
 
+    /// Text typed at the open screen's text box by the control socket's
+    /// `type`: its `\b` is a backspace sentinel for the boxes that have always
+    /// taken one, not the characters `\` and `b`. `Err` when no text box of
+    /// the screen takes it.
+    pub(super) fn type_into_screen(&mut self, text: &str) -> Result<()> {
+        if text == "\\b" {
+            match self.screen {
+                Screen::WorldOptions => {
+                    self.world_options_text(None);
+                    return Ok(());
+                }
+                Screen::Inventory if self.mod_browser_typing() => {
+                    self.mod_browser_text(None, true);
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        self.type_chars_into_screen(text)
+    }
+
+    /// Characters the open screen's focused text box takes: the control
+    /// socket's `type` and a key press's surviving characters (`charTyped`).
+    /// Nothing here is a key — the caller drops control characters. `Err` when
+    /// no text box of the screen takes them.
+    pub(super) fn type_chars_into_screen(&mut self, text: &str) -> Result<()> {
+        if self.book.is_some() {
+            self.book_type(text);
+            return Ok(());
+        }
+        if self.sign_edit.is_some() {
+            self.sign_input(None, Some(text));
+            return Ok(());
+        }
+        match self.screen {
+            Screen::Chat => self.chat_type(text),
+            Screen::CommandBlock => self.command_block_type(text),
+            Screen::BlockEditor => self.block_editor_type(text),
+            Screen::DebugOptions => self.debug_options_type(text),
+            Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
+            // The port, or the game rules' search and number boxes.
+            Screen::WorldOptions => self.world_options_text(Some(text)),
+            Screen::Inventory if self.mod_browser_typing() => {
+                self.mod_browser_text(Some(text), false)
+            }
+            Screen::Inventory if self.recipe_search_focused() => {
+                self.recipe_text(Some(text), false)
+            }
+            // The anvil's rename box, while it has an input to name.
+            Screen::Inventory if self.station_typing() => self.station_text(Some(text), false),
+            Screen::Creative if self.creative_screen.tab().search => {
+                // As typed: replaces a selected query, keeps the length limit.
+                self.creative_search_edit(Some(text))
+            }
+            _ => {
+                return Err(
+                    "type needs the chat screen (key t tap), a sign or book, the language search, the creative search, the anvil or World Options".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn control_command(
         &mut self,
         line: &str,
         reply: &Sender<String>,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
+    ) -> Result<Option<Value>> {
+        // A tap's or an up's release must run even when a dialog, the sign
+        // editor or a screen consumes the key, there is no world, or a
+        // command handler returns an error: a lost release keeps Shift down.
+        let released = released_modifier(line);
+        let result = self.control_command_inner(line, reply, event_loop);
+        if let Some(key) = released {
+            self.press_modifier_key(key, false);
+        }
+        result
+    }
+
+    fn control_command_inner(
+        &mut self,
+        line: &str,
+        reply: &Sender<String>,
+        event_loop: &dyn EventLoopCtl,
     ) -> Result<Option<Value>> {
         let words: Vec<&str> = line.split_whitespace().collect();
         if self.pending_save.is_some() && words.first() != Some(&"quit") {
@@ -285,6 +368,13 @@ impl Game<'_> {
             "pad" => Ok(Some(self.pad_command(&words)?)),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
+                let action = arg(2)?;
+                if !matches!(action, "down" | "up" | "tap" | "repeat") {
+                    return Err(format!(
+                        "key action must be down, up, tap or repeat, not {action}"
+                    )
+                    .into());
+                }
                 // A server's dialog takes the keys, in configuration too.
                 if self.dialog_open() {
                     if arg(2)? != "up" {
@@ -293,6 +383,8 @@ impl Game<'_> {
                     return ok();
                 }
                 self.require_world()?;
+                // KeyboardHandler.keyPress: the open screen's narration hears it.
+                super::narrator::narrate_key(&mut self.narration, key, arg(2)? != "up");
                 // The sign editor takes raw presses (Enter, arrows, Backspace, Escape).
                 if self.sign_edit.is_some() {
                     if arg(2)? != "up" {
@@ -324,6 +416,7 @@ impl Game<'_> {
                 {
                     use horizon_client::debug_keys::KeyAction;
                     let action = arg(2)?;
+                    self.press_modifier_key(key, action != "up");
                     if action != "up" {
                         self.physical_keys.insert(key);
                         if self.debug_key(key, KeyAction::Press) {
@@ -343,6 +436,17 @@ impl Game<'_> {
                 // hook does.
                 let action = arg(2)?;
                 self.mod_key(physical, action != "up", action == "repeat");
+                // ScreenEvent.KeyPressed.Pre: the open screen hears of the
+                // press before it acts on it, as the window's key event hands
+                // it over. A cancelled press goes no further — not to the
+                // screens, not to `native_key` — and its release still comes.
+                if action != "up" && self.screen_key_pressed(physical, action == "repeat") {
+                    if action == "tap" {
+                        self.physical_keys.remove(&physical);
+                        self.native_key_event(physical, false, false);
+                    }
+                    return ok();
+                }
                 self.native_key_event(physical, action != "up", action == "repeat");
                 if action == "tap" {
                     self.mod_key(physical, false, false);
@@ -399,18 +503,30 @@ impl Game<'_> {
                         self.physical_keys.remove(&physical);
                         self.debug_key(physical, horizon_client::debug_keys::KeyAction::Release);
                     }
-                    other => {
-                        return Err(format!(
-                            "key action must be down, up, tap or repeat, not {other}"
-                        )
-                        .into());
-                    }
+                    _ => unreachable!("checked above"),
                 }
                 ok()
             }
             "release" => {
                 self.keys.clear();
                 self.physical_keys.clear();
+                self.modifiers = winit::keyboard::ModifiersState::empty();
+                // Sneak and sprint pressed through `key` live in the toggle
+                // mappings: release them as their key's release would (a
+                // toggled one stays on), or the next sync puts them back. A
+                // controller still holding one keeps it.
+                let options = [self.settings.toggle_crouch, self.settings.toggle_sprint];
+                for (slot, name) in [(0, "key.sneak"), (1, "key.sprint")] {
+                    if !self.pad.holds_action(&self.settings.controller, name) {
+                        self.toggles.key(
+                            slot,
+                            horizon_client::keymapping::KeyAction::Release,
+                            false,
+                            options[slot],
+                        );
+                    }
+                    self.sync_toggle(slot);
+                }
                 self.left = false;
                 self.right = false;
                 ok()
@@ -609,6 +725,7 @@ impl Game<'_> {
                 renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
                     path: path.trim().into(),
                     size: None,
+                    scaled: false,
                 });
                 self.pending_screenshot = Some(reply.clone());
                 Ok(None)
@@ -637,48 +754,22 @@ impl Game<'_> {
                     return ok();
                 }
                 self.require_world()?;
-                if self.book.is_some() {
-                    self.book_type(text);
-                    return ok();
-                }
-                if self.sign_edit.is_some() {
-                    self.sign_input(None, Some(text));
-                    return ok();
-                }
-                match self.screen {
-                    Screen::Chat => self.chat_type(text),
-                    Screen::CommandBlock => self.command_block_type(text),
-                    Screen::BlockEditor => self.block_editor_type(text),
-                    Screen::DebugOptions => self.debug_options_type(text),
-                    Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
-                    // The port, or the game rules' search and number boxes.
-                    Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
-                    Screen::WorldOptions => self.world_options_text(Some(text)),
-                    Screen::Inventory if self.mod_browser_typing() => {
-                        self.mod_browser_text((text != "\\b").then_some(text), text == "\\b")
-                    }
-                    Screen::Inventory if self.recipe_search_focused() => {
-                        self.recipe_text(Some(text), false)
-                    }
-                    // The anvil's rename box.
-                    Screen::Inventory
-                        if self
-                            .station
-                            .as_ref()
-                            .is_some_and(|s| s.kind == super::stations::Kind::Anvil) =>
-                    {
-                        self.station_text(Some(text), false)
-                    }
-                    Screen::Creative if self.creative_screen.tab().search => {
-                        // As typed: replaces a selected query, keeps the length limit.
-                        self.creative_search_edit(Some(text))
-                    }
-                    _ => {
-                        return Err(
-                            "type needs the chat screen (key t tap), a sign or book, the language search, the creative search, the anvil or World Options".into(),
-                        );
-                    }
-                }
+                // Typed keys: the open screen's narration hears them.
+                self.narration.keyboard_action();
+                // ScreenEvent.CharacterTyped.Pre: the open screen hears of
+                // each character before a text box takes it, as the window's
+                // key event fires it. A cancelled character is dropped, so
+                // `type` types the survivors only.
+                // `\b` is the socket's backspace sentinel, not two characters.
+                let typed = if text == "\\b" {
+                    text.to_owned()
+                } else {
+                    let Some(typed) = self.screen_text_typed(text) else {
+                        return ok();
+                    };
+                    typed
+                };
+                self.type_into_screen(&typed)?;
                 ok()
             }
             "options" => {
@@ -725,6 +816,15 @@ impl Game<'_> {
                     .remote_chat(n)
                     .unwrap_or_else(|| self.ui.chat.recent_lines(n));
                 Ok(Some(json!({ "chat": lines })))
+            }
+            "narration" => {
+                // NarratorStatus's options.txt names: off, all, chat, system.
+                let status = horizon_narrator::status().key().rsplit('.').next();
+                Ok(Some(json!({
+                    "status": status,
+                    "active": horizon_narrator::is_active(),
+                    "recent": horizon_narrator::recent(),
+                })))
             }
             "stats" => {
                 let summary = self.frame_stats.summary();
@@ -847,6 +947,15 @@ impl Game<'_> {
                     horizon_client::mobs::DamageKind::PlayerAttack,
                     None,
                 );
+                ok()
+            }
+            // A splitscreen player leaves splitscreen; only P1's game ends the process.
+            "quit" if self.options.split_guest => {
+                if self.remote.is_some() {
+                    self.leave_server(None)?;
+                } else if let Some(title) = self.title.as_mut() {
+                    title.escape();
+                }
                 ok()
             }
             "quit" => {
@@ -1167,6 +1276,15 @@ fn vendor_name(id: u32) -> String {
     }
 }
 
+/// The key a `key <name> tap|up` command releases, whatever its handler does.
+fn released_modifier(line: &str) -> Option<KeyCode> {
+    let mut words = line.split_whitespace();
+    match (words.next(), words.next(), words.next()) {
+        (Some("key"), Some(key), Some("tap" | "up")) => key_code(key),
+        _ => None,
+    }
+}
+
 fn key_code(name: &str) -> Option<KeyCode> {
     let name = name.to_ascii_lowercase();
     let letters = [
@@ -1242,4 +1360,25 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "down" => KeyCode::ArrowDown,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn taps_and_ups_always_release_their_key() {
+        for line in ["key shift tap", "key shift up", "key  Shift  up"] {
+            assert_eq!(released_modifier(line), Some(KeyCode::ShiftLeft), "{line}");
+        }
+        for line in [
+            "key shift down",
+            "key shift repeat",
+            "key shift",
+            "keys shift up",
+            "key nope up",
+        ] {
+            assert_eq!(released_modifier(line), None, "{line}");
+        }
+    }
 }

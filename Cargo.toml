@@ -1,9 +1,10 @@
 [workspace]
-exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/winit"]
+exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/winit", "third_party/naga"]
 members = [
     "crates/horizon-android",
     "crates/horizon-core",
     "crates/horizon-dualsense",
+    "crates/horizon-narrator",
     "crates/horizon-threads",
     "crates/horizon-hdr",
     "crates/horizon-world",
@@ -15,6 +16,7 @@ members = [
     "crates/horizon-items",
     "crates/horizon-server-files",
     "crates/horizon-anticheat",
+    "crates/horizon-chat-filter",
     "crates/horizon-server",
     "crates/horizon-bots",
     "crates/horizon-assets",
@@ -32,6 +34,7 @@ members = [
     "crates/cargo-horizon-mod",
     "crates/horizon-port-pack",
     "crates/horizon-shaders",
+    "crates/horizon-optifine",
     "crates/horizon-shader-api",
     "crates/horizon-release-sign",
     "crates/horizon-mod-sdk/examples/coords-hud",
@@ -74,6 +77,8 @@ large_enum_variant = "allow"
 [patch.crates-io]
 winit = { path = "third_party/winit" }
 wgpu-hal = { path = "third_party/wgpu-hal" }
+# naga 30.0.1, with the fixes to its GLSL frontend that shader packs need (THIRD_PARTY_NOTICES.md).
+naga = { path = "third_party/naga" }
 
 # Line tables keep file:line in backtraces; full debug info made every
 # example and test binary hundreds of megabytes and slow to link.
