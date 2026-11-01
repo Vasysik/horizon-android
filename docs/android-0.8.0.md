@@ -25,7 +25,18 @@
 - `compileSdk` is 36. Material 3 `1.5.0-alpha18` is the newest release with the
   Expressive APIs that builds with Android Gradle Plugin 8.11; newer ones need
   compile SDK 37 and a newer plugin.
-- The release workflow installs `platforms;android-36`.
+- Builds need `platforms;android-36` installed in the SDK.
+
+## Launcher polish
+
+- Compact type scale and component sizes for phones; Horizon's mark on the home
+  header; settings behind a gear as a full-screen layer, with sliders for
+  resolution and refresh rate and Save / Cancel in every settings dialog.
+- Profile manager: named profiles with a summary of their worlds and add-ons,
+  created, renamed and deleted from the launcher (`profiles`, `profile_create`,
+  `profile_rename`, `profile_delete` in `bridge.rs`).
+- Catalog pages scroll as one list; settings, dialogs, the account sheet and the
+  profile manager use two columns when the phone is held sideways.
 
 ## Validation
 
@@ -34,3 +45,5 @@
 - The Compose screens were rendered with Robolectric at 891 × 411 dp and
   411 × 891 dp to check layout. Not yet run on a phone: the game process
   hand-off and return need a device check.
+- The launcher screens were used on a POCO X6 Pro (Android 17), portrait and
+  landscape. The game itself was not played from this build.
