@@ -140,6 +140,44 @@ pub extern "system" fn document_result(
     if request != 4101 {
         return;
     }
+    let uri = if uri.is_null() {
+        None
+    } else {
+        match env.get_string(&uri) {
+            Ok(text) => Some(String::from(text)),
+            Err(_) => {
+                let _ = env.exception_clear();
+                None
+            }
+        }
+    };
+    accept(&mut env, &activity, result, uri);
+}
+/// The Compose launcher's picker result: the same staging, checks and conflicts.
+pub fn import_external(
+    env: &mut JNIEnv<'_>,
+    activity: &JObject<'_>,
+    kind: Kind,
+    home: PathBuf,
+    uri: Option<String>,
+) {
+    if busy() {
+        notice("Finish or cancel the current import first", false);
+        return;
+    }
+    CANCEL.store(false, Ordering::Relaxed);
+    let Some(cache) = crate::platform::cache_dir() else {
+        notice("Could not access the Android import cache", false);
+        return;
+    };
+    STATE.lock().unwrap_or_else(|e| e.into_inner()).request = Some(Request {
+        kind,
+        home,
+        cache: cache.join("content-imports"),
+    });
+    accept(env, activity, if uri.is_some() { -1 } else { 0 }, uri);
+}
+fn accept(env: &mut JNIEnv<'_>, activity: &JObject<'_>, result: i32, uri: Option<String>) {
     let pending = STATE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -149,12 +187,11 @@ pub extern "system" fn document_result(
         notice("Import interrupted. Choose the file again.", false);
         return;
     };
-    if result != -1 || uri.is_null() {
+    let Some(text) = uri.filter(|_| result == -1) else {
         notice("Import cancelled", false);
         return;
-    }
+    };
     let setup = (|| -> jni::errors::Result<_> {
-        let text: String = env.get_string(&uri)?.into();
         let activity = env.new_global_ref(activity)?;
         Ok((env.get_java_vm()?, activity, text))
     })();
@@ -529,4 +566,19 @@ pub fn handle_event(event: &winit::event::WindowEvent) -> bool {
         }
         _ => false,
     }
+}
+/// What the Compose launcher shows for imports: progress text, or a name collision.
+pub fn overlay() -> serde_json::Value {
+    let s = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let conflict = s.conflict.as_ref().map(|c| {
+        serde_json::json!({
+            "name": c.target.file_name().unwrap_or_default().to_string_lossy(),
+            "keep_both": c.kind != Kind::Mods,
+        })
+    });
+    serde_json::json!({
+        "working": s.working || s.request.is_some(),
+        "text": s.toast.as_ref().map(|t| t.0.clone()),
+        "conflict": conflict,
+    })
 }

@@ -3,7 +3,7 @@ use super::pages::{Action, button, m3};
 use crate::account::{self, Account, Accounts, Secrets, SignIn, SignInState};
 use horizon_client::ui_theme::{Face, Ui};
 
-pub(super) struct Login {
+pub(crate) struct Login {
     pub visible: bool,
     pub signed_in: bool,
     pub profile: Option<String>,
@@ -26,7 +26,7 @@ impl Login {
         login.refresh_status();
         login
     }
-    pub(super) fn refresh_status(&mut self) {
+    pub(crate) fn refresh_status(&mut self) {
         let account = Accounts::load().selected().cloned();
         self.profile = account.as_ref().map(|a| a.name.clone());
         self.signed_in = account.is_some_and(|a| {
@@ -47,6 +47,12 @@ impl Login {
         }
     }
 
+    pub fn state(&self) -> Option<&SignInState> {
+        self.state.as_ref()
+    }
+    pub fn message(&self) -> &str {
+        &self.message
+    }
     pub fn pending(&self) -> bool {
         self.task.is_some()
     }
@@ -163,7 +169,7 @@ impl Login {
         accounts.save()?;
         Ok(Some((a, secrets)))
     }
-    pub fn draw(
+    pub(super) fn draw(
         &self,
         ui: &mut Ui,
         targets: &mut Vec<([f32; 4], Action)>,

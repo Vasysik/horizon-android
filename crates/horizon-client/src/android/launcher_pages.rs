@@ -447,6 +447,28 @@ impl Launcher {
         let (surface_w, surface_h) = (ui.batch.width, ui.batch.height);
         ui.batch
             .fill(&gui.atlas, 0.0, 0.0, surface_w, surface_h, m3::SURFACE);
+        if self.direct {
+            // Started from the Compose launcher: a splash while the session and world load.
+            let text = self
+                .error
+                .clone()
+                .unwrap_or_else(|| "Starting Horizon...".to_owned());
+            let text = ui.fit_text(Face::Medium, 18.0, &text, w - 48.0);
+            centered(
+                &mut ui,
+                Face::Medium,
+                18.0,
+                w / 2.0,
+                h / 2.0 - 13.0,
+                m3::ON_SURFACE,
+                &text,
+            );
+            ui.finish();
+            if !renderer.render(&game::loading_frame(&batch))? && !batch.patches.is_empty() {
+                horizon_client::ui_theme::reset_atlas();
+            }
+            return Ok(());
+        }
         let wide = w >= 700.0;
         let page = self.catalog.page;
         // Where the value of the field being edited starts: x, line top, room, text size.

@@ -1,14 +1,18 @@
-plugins { id 'com.android.application' version '8.11.1' }
+plugins {
+    id 'com.android.application' version '8.11.1'
+    id 'org.jetbrains.kotlin.android' version '2.2.21'
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.2.21'
+}
 
 android {
     namespace 'dev.horizon.android'
-    compileSdk 35
+    compileSdk 36
     defaultConfig {
         applicationId providers.gradleProperty('appId').getOrElse('dev.horizon.android')
         minSdk providers.gradleProperty('minSdk').getOrElse('28').toInteger()
         targetSdk 35
-        versionCode 29
-        versionName '0.7.7'
+        versionCode 30
+        versionName '0.8.0'
         ndk { abiFilters providers.gradleProperty('abi').get() }
     }
     signingConfigs {
@@ -28,14 +32,21 @@ android {
         release {
             debuggable false
             jniDebuggable false
-            minifyEnabled false
+            // R8 keeps only the Compose code and icons the launcher uses.
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             // Retain the existing installation's signing identity for upgrades.
             // Only the public certificate enters the APK; the key stays in .local/.
             signingConfig signingConfigs.development
         }
     }
+    buildFeatures { compose true }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
     sourceSets.main {
-        java.srcDirs = ['java']
+        java.srcDirs = ['java', 'kotlin']
         manifest.srcFile 'AndroidManifest.xml'
         jniLibs.srcDirs = ['../../.local/android/gradle-jni']
         assets.srcDirs = ['../../.local/android/gradle-assets']
@@ -43,4 +54,17 @@ android {
     }
     packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += '**/*.so' } }
 }
+
+kotlin {
+    compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 }
+}
+
+dependencies {
+    implementation platform('androidx.compose:compose-bom:2026.06.01')
+    implementation 'androidx.compose.material3:material3:1.5.0-alpha18'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.activity:activity-compose:1.12.4'
+}
+
 layout.buildDirectory = file('../../.local/android/gradle-build')

@@ -13,12 +13,13 @@
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
         </provider>
-        <activity android:name="dev.horizon.android.HorizonActivity" android:exported="false" android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|keyboardHidden|keyboard|density|screenLayout" android:windowSoftInputMode="adjustResize" android:theme="@style/HorizonGameTheme">
+        <!-- The Compose launcher. The game runs in its own process, which exits when the game closes. -->
+        <activity android:name="dev.horizon.android.launcher.LauncherActivity" android:exported="false" android:theme="@style/HorizonLauncherTheme" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|density" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="dev.horizon.android.HorizonActivity" android:process=":game" android:exported="false" android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|keyboardHidden|keyboard|density|screenLayout" android:windowSoftInputMode="adjustResize" android:theme="@style/HorizonGameTheme">
             <meta-data android:name="android.app.lib_name" android:value="horizon_android" />
         </activity>
         <!-- Keep installed launcher shortcuts targeting the previous component. -->
-        <activity-alias android:name="com.google.androidgamesdk.GameActivity" android:targetActivity="dev.horizon.android.HorizonActivity" android:exported="true">
-            <meta-data android:name="android.app.lib_name" android:value="horizon_android" />
+        <activity-alias android:name="com.google.androidgamesdk.GameActivity" android:targetActivity="dev.horizon.android.launcher.LauncherActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
