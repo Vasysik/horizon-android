@@ -21,14 +21,18 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
             .offset as usize;
         bytes[offset..offset + values.len() * 4].copy_from_slice(bytemuck::cast_slice(values));
     };
-    let z = if variant == 0 { 0.0 } else { 32.0 };
+    let z = if variant == 0 || variant >= 4 {
+        0.0
+    } else {
+        32.0
+    };
     let mut matrix = glam::Mat4::IDENTITY.to_cols_array();
     matrix[14] = -z;
     write("view_proj", &matrix);
     write("fog_color", &[0.3, 0.5, 0.7, 0.8]);
     write(
         "fog",
-        if variant == 0 {
+        if variant == 0 || variant >= 4 {
             &[1e6, 2e6, 1e6, 2e6]
         } else {
             &[20.0, 50.0, 25.0, 60.0]
@@ -47,6 +51,26 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
             .unwrap();
         bytes[member.offset as usize..member.offset as usize + 4]
             .copy_from_slice(&1u32.to_le_bytes());
+    }
+    if variant >= 4 {
+        let offset = |name: &str| {
+            members
+                .iter()
+                .find(|m| m.name.as_deref() == Some(name))
+                .unwrap()
+                .offset as usize
+        };
+        let table = offset("emissive_layers");
+        for entry in 0..32usize {
+            let key = if entry == usize::from(variant - 4) {
+                0u32
+            } else {
+                99u32
+            };
+            bytes[table + entry * 16..table + entry * 16 + 4].copy_from_slice(&key.to_le_bytes());
+        }
+        let count = offset("emissive_count");
+        bytes[count..count + 4].copy_from_slice(&32u32.to_le_bytes());
     }
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
@@ -277,10 +301,21 @@ fn packed_interface_preserves_rgb_fog_fade_and_all_hdr_tiers_on_gpu() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-    for variant in 0..4 {
+    for variant in 0..36 {
         let original = render(&device, &queue, &super::terrain_shader(false), variant);
         let packed = render(&device, &queue, &super::terrain_shader(true), variant);
         assert_eq!(original, packed, "RGB/alpha differs for scene {variant}");
+        if variant >= 4 {
+            assert_eq!(
+                &packed[4..7],
+                &[255, 255, 255],
+                "emissive slot {} was not selected",
+                variant - 4
+            );
+            // 0.1 sits between UNORM8 codes 25 and 26; GPU rounding may choose either.
+            // The original/lowered full image equality above remains exact.
+            assert!((25..=26).contains(&packed[7]));
+        }
         if variant < 2 {
             for emission in 0..16usize {
                 let p = 4 * (2 * emission + 1);

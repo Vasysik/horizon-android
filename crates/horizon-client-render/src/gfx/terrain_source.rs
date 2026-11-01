@@ -27,6 +27,7 @@ pub(super) fn gles_uniforms(source: &str) -> String {
 
 fn gles_source(source: &str) -> String {
     let source = gles_uniforms(source).replace("\r\n", "\n");
+    let source = unroll_emissive_lookup(source);
     let start = source
         .find("fn sprite_grad(")
         .expect("terrain sprite function");
@@ -79,6 +80,35 @@ fn gles_source(source: &str) -> String {
     }
     output.replace_range(start..end, &(PACKED_INTERFACE.to_owned() + &body));
     output
+}
+
+// Adreno 710's compiler fails to link this dynamic uniform-array search in a
+// robust EGL context. Preserve the first match, every entry and the no-match
+// sentinel; constant-index branches also keep robust access enabled.
+fn unroll_emissive_lookup(mut source: String) -> String {
+    let start = source
+        .find("    for (var i = 0u; i < min(globals.emissive_count.x, 32u); i++) {")
+        .expect("terrain emissive lookup");
+    let body = source[start..].find('{').unwrap() + start;
+    let mut depth = 1;
+    let mut end = body + 1;
+    while depth != 0 {
+        match source.as_bytes()[end] {
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
+            _ => {}
+        }
+        end += 1;
+    }
+    let mut branches = String::new();
+    for i in 0..32 {
+        let branch = if i == 0 { "if" } else { "else if" };
+        branches.push_str(&format!(
+            "    {branch} globals.emissive_count.x > {i}u && globals.emissive_layers[{i}].x == (layer & 0x7fffu) {{\n        out.emissive_layer = globals.emissive_layers[{i}].y;\n    }}\n"
+        ));
+    }
+    source.replace_range(start..end, &branches);
+    source
 }
 
 const PACKED_INTERFACE: &str = "struct TerrainOut {
