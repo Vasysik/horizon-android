@@ -6,7 +6,8 @@
 use super::{Game, Screen};
 use horizon_client::voice::ui::VoiceHudStatus;
 use horizon_client::voice::udp_worker::UdpConnectionState;
-use horizon_client_render::hud::HudBatch;
+use horizon_client::hud::HudBatch;
+use horizon_client::ui;
 use horizon_protocol::packets::configuration::CustomPayload;
 use horizon_protocol::packets::play::Serverbound as S;
 
@@ -151,7 +152,7 @@ impl<'a> Game<'a> {
         ];
 
         for (by, text, warn) in &buttons {
-            let hovered = horizon_client_render::ui::hovered(self.cursor, btn_x, *by, btn_w, btn_h);
+            let hovered = ui::hovered(self.cursor, btn_x, *by, btn_w, btn_h);
             let bg_color = if hovered {
                 0xFF444444
             } else if *warn {
@@ -180,25 +181,25 @@ impl<'a> Game<'a> {
         let btn_x = x + 15.0;
 
         // Button 1: Toggle Mute
-        if horizon_client_render::ui::hovered(self.cursor, btn_x, y + 60.0, btn_w, btn_h) {
+        if ui::hovered(self.cursor, btn_x, y + 60.0, btn_w, btn_h) {
             self.voice_toggle_mute();
         }
         // Button 2: Toggle Disable
-        else if horizon_client_render::ui::hovered(self.cursor, btn_x, y + 85.0, btn_w, btn_h) {
+        else if ui::hovered(self.cursor, btn_x, y + 85.0, btn_w, btn_h) {
             self.voice_toggle_disable();
         }
         // Button 3: Toggle Activation (PTT vs Voice Activity)
-        else if horizon_client_render::ui::hovered(self.cursor, btn_x, y + 110.0, btn_w, btn_h) {
+        else if ui::hovered(self.cursor, btn_x, y + 110.0, btn_w, btn_h) {
             self.voice.config.voice_activation = !self.voice.config.voice_activation;
             let _ = self.voice.config.save_to_dir(&self.voice.config_dir);
         }
         // Button 4: Toggle RNNoise
-        else if horizon_client_render::ui::hovered(self.cursor, btn_x, y + 135.0, btn_w, btn_h) {
+        else if ui::hovered(self.cursor, btn_x, y + 135.0, btn_w, btn_h) {
             self.voice.config.rnnoise_enabled = !self.voice.config.rnnoise_enabled;
             let _ = self.voice.config.save_to_dir(&self.voice.config_dir);
         }
         // Button 5: Cycle Fallback Version
-        else if horizon_client_render::ui::hovered(self.cursor, btn_x, y + 160.0, btn_w, btn_h) {
+        else if ui::hovered(self.cursor, btn_x, y + 160.0, btn_w, btn_h) {
             let next = self.voice.config.next_fallback_version();
             let _ = self.voice.config.save_to_dir(&self.voice.config_dir);
             log::info!("SVC: Manually cycled compatibility version to {next}");
@@ -207,7 +208,7 @@ impl<'a> Game<'a> {
             }
         }
         // Button 6: Done
-        else if horizon_client_render::ui::hovered(self.cursor, btn_x, y + 185.0, btn_w, btn_h) {
+        else if ui::hovered(self.cursor, btn_x, y + 185.0, btn_w, btn_h) {
             self.screen = Screen::Playing;
             self.capture(true);
         }
