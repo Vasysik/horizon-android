@@ -228,9 +228,9 @@ conditional texture selection. Both Vulkan sources remain unchanged. These
 are format/control-flow adaptations, not removal of transparency or lighting.
 
 The isolated tablet passed a Vulkan Compatibility gameplay/lifecycle smoke test.
-The final F-03L nightly build has not passed device startup, despite progressing
-beyond the corrected shader compilation failures; do not infer ARMv7 readiness
-from its successful Rust build. This is suitable for further ARM64 candidate
+The F-03L build now passes device startup and renders opaque terrain after the
+GLES fixes described below. Its runtime performance remains very low, so this
+does not establish ARMv7 performance parity or readiness on every legacy GPU. This is suitable for further ARM64 candidate
 validation, not a completed multi-device release sign-off.
 
 ## Adreno 304 cloud-program driver exit
