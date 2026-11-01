@@ -6416,9 +6416,9 @@ impl Renderer {
             let first = debug_depth + debug_top;
             pass.draw(0..4, first..first + crosshair);
         }
-        let menu_blur = frame
-            .menu_blur
-            .filter(|_| self.config.usage.contains(wgpu::TextureUsages::COPY_SRC));
+        let menu_blur = frame.menu_blur.filter(|radius| {
+            *radius > 0.0 && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+        });
         let blur_at = menu_blur.map_or(0, |_| frame.hud.blur_at);
         self.hud.draw_range(
             &mut encoder,

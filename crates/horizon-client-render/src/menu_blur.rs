@@ -30,6 +30,7 @@ pub struct MenuBlur {
     uniforms: Vec<wgpu::Buffer>,
     /// The copied frame (`minecraft:main`) and `swap`.
     targets: Vec<(wgpu::Texture, wgpu::TextureView)>,
+    groups: Vec<wgpu::BindGroup>,
     size: [u32; 2],
     format: wgpu::TextureFormat,
 }
@@ -128,6 +129,7 @@ impl MenuBlur {
             sampler,
             uniforms,
             targets: Vec::new(),
+            groups: Vec::new(),
             size: [0, 0],
             format,
         }
@@ -157,6 +159,29 @@ impl MenuBlur {
                 });
                 let view = texture.create_view(&Default::default());
                 (texture, view)
+            })
+            .collect();
+        self.groups = (0..PASSES.len())
+            .map(|i| {
+                let source = &self.targets[i % 2].1;
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Menu blur pass"),
+                    layout: &self.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(source),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self.uniforms[i].as_entire_binding(),
+                        },
+                    ],
+                })
             })
             .collect();
     }
@@ -189,30 +214,11 @@ impl MenuBlur {
                 radius: [radius, 0.0, 0.0, 0.0],
             };
             queue.write_buffer(&self.uniforms[i], 0, bytemuck::bytes_of(&data));
-            let source = &self.targets[i % 2].1;
             let output = if i + 1 == PASSES.len() {
                 target
             } else {
                 &self.targets[(i + 1) % 2].1
             };
-            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Menu blur pass"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(source),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: self.uniforms[i].as_entire_binding(),
-                    },
-                ],
-            });
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: output,
                 resolve_target: None,
@@ -228,7 +234,7 @@ impl MenuBlur {
                 ..Default::default()
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &group, &[]);
+            pass.set_bind_group(0, &self.groups[i], &[]);
             pass.draw(0..3, 0..1);
         }
     }
