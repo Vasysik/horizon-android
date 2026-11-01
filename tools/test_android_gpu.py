@@ -28,7 +28,7 @@ glam = "0.30"
 ''', encoding='utf-8')
     modules = '\n'.join(
         f'#[path = "{(ROOT / "crates/horizon-client-render/src/gfx" / (name + ".rs")).as_posix()}"] pub mod {name};'
-        for name in ('arena', 'upload', 'timing', 'frame_timing', 'opaque_output')
+        for name in ('arena', 'upload', 'timing', 'frame_timing', 'opaque_output', 'terrain_source')
     )
     (work / 'src/lib.rs').write_text('''#![allow(dead_code)]
 mod spans {

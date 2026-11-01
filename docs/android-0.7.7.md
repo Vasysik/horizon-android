@@ -38,8 +38,8 @@ and completing a prepared session does not override an open chooser.
 
 Validation: ARM64 Android check and Clippy passed; host launch/preference
 tests passed. The isolated tablet build completed launcher → game → launcher
-and displayed the compact Cancel/Exit confirmation. ARMv7 compiled, but its
-terrain rendering remains under investigation.
+and displayed the compact Cancel/Exit confirmation. ARMv7 terrain validation
+is described below.
 
 Tablet menu measurements still show roughly 31 ms GPU time with radius 5 blur
 versus 12 ms at radius 0. Bind-group reuse alone does not resolve this GPU cost.
@@ -88,3 +88,18 @@ On the isolated Fujitsu build, Android input reached the command field,
 structure name and jigsaw pool; Backspace and Done worked, and the edited
 jigsaw pool remained after closing and reopening. ARM64 check/Clippy and the
 optimized ARMv7 build passed.
+
+## Legacy GLES terrain
+
+The GLES terrain shader packs scalars with matching interpolation qualifiers
+into five varying locations instead of nine. On the Fujitsu F-03L's Adreno 304,
+the compiled source now renders the previously transparent terrain: stone,
+sand, foliage and the jigsaw block were visible in the isolated test world.
+This is a driver workaround, not a general FPS improvement.
+
+Vertex buffers, texture sampling, lighting, fog, fade and HDR emission markers
+retain their existing calculations. Vulkan receives the original shader source;
+sky and outline shader bodies remain unchanged. GPU readback tests compare
+original and packed shaders byte for byte for RGB, fog, fade and emission tiers.
+All 23 isolated GPU tests passed on the host GPU; ARM64 Clippy and the optimized
+ARMv7 build passed. Other GLES devices still require testing.
