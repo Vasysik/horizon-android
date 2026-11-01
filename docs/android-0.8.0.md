@@ -46,4 +46,4 @@
   411 × 891 dp to check layout. Not yet run on a phone: the game process
   hand-off and return need a device check.
 - The launcher screens were used on a POCO X6 Pro (Android 17), portrait and
-  landscape. The game itself was not played from this build.
+  landscape. Launching the game from this build still needs a device check.
