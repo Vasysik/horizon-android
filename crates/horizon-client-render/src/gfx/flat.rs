@@ -135,7 +135,9 @@ pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
     let info = adapter.get_info();
     (info.backend == wgpu::Backend::Metal
         || is_broken_intel_vulkan(&info)
-        || cfg!(target_os = "android") && info.backend == wgpu::Backend::Vulkan)
+        || cfg!(target_os = "android")
+            && info.backend == wgpu::Backend::Vulkan
+            && !crate::android_runtime::compatibility())
         && supported(adapter, device)
 }
 

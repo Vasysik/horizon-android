@@ -79,13 +79,13 @@ pub fn is_capable_high_end_gpu(gpu_name: &str, max_texture_dimension_2d: u32) ->
 
     let name = gpu_name.to_ascii_lowercase();
 
-    // Qualcomm Adreno flagship series: 7xx (Snapdragon 8 Gen 1/2/3), 8xx (8 Elite),
+    // Qualcomm Adreno flagship series: 7xx (Snapdragon 8 Gen 1/2/3), X1-85 (Snapdragon 8 Elite),
     // and Snapdragon 865/870/888 (650, 660).
     if name.contains("adreno") {
         if name.contains("730")
             || name.contains("740")
             || name.contains("750")
-            || name.contains("830")
+            || name.contains("x1")
             || name.contains("650")
             || name.contains("660")
         {
