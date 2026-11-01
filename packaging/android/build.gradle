@@ -7,7 +7,7 @@ android {
         applicationId providers.gradleProperty('appId').getOrElse('dev.horizon.android')
         minSdk providers.gradleProperty('minSdk').getOrElse('28').toInteger()
         targetSdk 35
-        versionCode 28
+        versionCode 29
         versionName '0.7.6'
         ndk { abiFilters providers.gradleProperty('abi').get() }
     }
