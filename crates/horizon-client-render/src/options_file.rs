@@ -90,7 +90,7 @@ const GRAPHICS_PRESET: &[&str] = &["fast", "fancy", "fabulous", "custom"];
 /// Horizon's render distance cap (vanilla stops at 32): the server protocol's
 /// view distance tops out at 127 anyway.
 #[cfg(target_os = "android")]
-pub const MAX_RENDER_DISTANCE: i32 = 16;
+pub const MAX_RENDER_DISTANCE: i32 = 64;
 #[cfg(not(target_os = "android"))]
 pub const MAX_RENDER_DISTANCE: i32 = 128;
 const INACTIVITY: &[&str] = &["minimized", "afk"];
