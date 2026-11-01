@@ -46,6 +46,10 @@ pub struct Config {
     /// shows one status note about it. Never serialized.
     #[serde(skip)]
     pub low_end_tuned: bool,
+    /// The device ships no Vulkan driver, so the built-in OpenGL ES renderer
+    /// is used regardless of the saved mode. Never serialized.
+    #[serde(skip)]
+    pub no_vulkan: bool,
     pub renderer: RendererMode,
     pub render_scale: crate::display::RenderScale,
     pub orientation: Orientation,
@@ -110,15 +114,20 @@ impl Config {
         if cfg!(target_pointer_width = "32") && value.get("renderer").is_none() {
             config.renderer = RendererMode::OpenGl;
         }
-        // PowerVR GE-series boards (Helio A22 class): their Vulkan driver
-        // renders but glitches, so a fresh install starts on the stable
-        // OpenGL ES backend at a resolution the tiny fill rate can sustain.
+        // Devices with no Vulkan driver at all rely on Oxide's built-in
+        // OpenGL ES renderer; PowerVR GE-series boards (Helio A22 class)
+        // have a Vulkan driver that renders but glitches, so they get the
+        // same stable default. Fresh installs only; saved choices win.
+        let no_vulkan = !crate::device_runtime::vulkan_available();
+        config.no_vulkan = no_vulkan;
         let mut low_end = false;
-        if value.get("renderer").is_none() && crate::device_runtime::low_end_gpu() {
+        if value.get("renderer").is_none() && (no_vulkan || crate::device_runtime::low_end_gpu())
+        {
             config.renderer = RendererMode::OpenGl;
             low_end = true;
         }
-        if low_end && value.get("render_scale").is_none() {
+        let tuned = low_end || no_vulkan;
+        if tuned && value.get("render_scale").is_none() {
             config.render_scale = crate::display::RenderScale::new(67);
         }
         // Ignore saved app registrations while this dev build uses the fixed ID.
@@ -133,6 +142,20 @@ impl Config {
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
             .unwrap_or_default();
         config.device.migrate_missing(&value, &legacy);
+        // Weak-GPU defaults: cap the panel refresh request at 60 Hz (a 90 or
+        // 120 Hz panel otherwise doubles the frame budget of a GE8300) and
+        // let ADPF performance hints boost the game thread. Applied only
+        // while the player has saved neither choice.
+        if tuned {
+            if value.get("display_hz").is_none() && legacy.get("display_hz").is_none() {
+                config.device.display_hz = 60;
+            }
+            if value.get("performance_hints").is_none()
+                && legacy.get("performance_hints").is_none()
+            {
+                config.device.performance_hints = true;
+            }
+        }
         config
     }
     pub fn save(&self, home: &Path) -> Result<(), String> {

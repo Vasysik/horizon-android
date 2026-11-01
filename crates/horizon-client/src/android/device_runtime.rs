@@ -234,6 +234,14 @@ fn system_property(name: &str) -> String {
     String::from_utf8_lossy(&value[..length]).into_owned()
 }
 
+/// True when the system ships a Vulkan driver at all. Some Android devices
+/// have none; Oxide's built-in OpenGL ES renderer (wgpu on GLES, entirely
+/// in-app Rust) is the guaranteed rendering path there, so the launcher and
+/// the game never touch the missing system Vulkan loader.
+pub fn vulkan_available() -> bool {
+    !system_property("ro.hardware.vulkan").is_empty()
+}
+
 /// True on boards whose Vulkan driver renders but glitches: PowerVR
 /// GE-series GPUs (Helio A22/A25/P22/P35 class, GE8300/GE8320) and the
 /// entry MediaTek platforms that carry them. The OpenGL ES backend is the

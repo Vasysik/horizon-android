@@ -90,6 +90,16 @@ impl Launcher {
         if catalog.status.is_empty() && catalog.config.low_end_tuned {
             catalog.status = "Low-power GPU detected: starting on OpenGL ES at 67% resolution for stability. Rendering and Client resolution in Settings can change both.".into();
         }
+        if catalog.status.is_empty() && catalog.config.no_vulkan {
+            catalog.status = "This device has no Vulkan driver: using Oxide's built-in OpenGL ES renderer.".into();
+        }
+        // Devices without a Vulkan driver (or with a saved OpenGL ES choice)
+        // never touch the system Vulkan loader: the built-in GLES renderer
+        // is configured before any window or game exists.
+        horizon_client::android_runtime::configure_graphics(
+            catalog.config.renderer == crate::catalog::RendererMode::OpenGl
+                || catalog.config.no_vulkan,
+        );
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
         Self {
@@ -195,7 +205,7 @@ impl Launcher {
             return Ok(());
         }
         let window = Arc::new(
-            events.create_window(Window::default_attributes().with_title("Horizon Android"))?,
+            events.create_window(Window::default_attributes().with_title("Oxide"))?,
         );
         crate::display::prepare(&window)?;
         let gui = game::UiResources {
@@ -210,7 +220,9 @@ impl Launcher {
             false,
             Some(&gui),
             None,
-            if self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl {
+            if self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl
+                || self.catalog.config.no_vulkan
+            {
                 horizon_client::graphics::GraphicsApi::OpenGl
             } else {
                 horizon_client::graphics::GraphicsApi::Auto
@@ -245,7 +257,8 @@ impl Launcher {
             crate::platform::hide();
             self.catalog.config.save(&self.home)?;
             horizon_client::android_runtime::configure_graphics(
-                self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl,
+                self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl
+                    || self.catalog.config.no_vulkan,
             );
             horizon_client::android_runtime::configure_gpu(
                 self.catalog.config.renderer == crate::catalog::RendererMode::Vulkan,
