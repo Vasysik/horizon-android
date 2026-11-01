@@ -62,3 +62,9 @@ Four cache-recovery regression tests and the Android content harness passed
 The report for Android #55 records RC1 source `2a6dd4d80861`; the same vulnerable
 cache lifetime assumptions remained in the final 0.7.6 installer. Its generic
 error alone does not establish which particular input was evicted.
+
+An isolated Adreno 710 tablet completed the official 5,148-file installation
+with deliberate removal of one verified sound object after download, during
+extraction. The missing object was restored, the installed file matched its
+official SHA-1, the launcher offered Play and successful cleanup removed the
+download cache. This verifies that eviction case, not every possible ENOENT.
