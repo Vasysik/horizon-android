@@ -33,6 +33,7 @@ data class Config(
     val name: String,
     val server: String,
     val profile: Int,
+    val profileName: String,
     val renderer: String,
     val renderScale: Int,
     val input: String,
@@ -132,6 +133,7 @@ data class Snapshot(
                     name = config.optString("name"),
                     server = config.optString("server"),
                     profile = config.optInt("profile"),
+                    profileName = config.optString("profile_name"),
                     renderer = config.optString("renderer"),
                     renderScale = config.optInt("render_scale"),
                     input = config.optString("input"),
@@ -215,5 +217,30 @@ data class Reply(val ok: Any?, val error: String?) {
                 Choice(it.optString("label"), it.optString("detail"), it.optString("value"), it.optBoolean("selected"))
             },
         )
+    }
+}
+
+/** One entry of the profile manager: a folder with its own worlds, settings and add-ons. */
+data class Profile(
+    val id: Int,
+    val name: String,
+    val active: Boolean,
+    val worlds: Int,
+    val mods: Int,
+    val packs: Int,
+    val shaders: Int,
+) {
+    companion object {
+        fun load(): List<Profile> = (act("profiles").ok as? JSONArray).list {
+            Profile(
+                it.optInt("id"),
+                it.optString("name"),
+                it.optBoolean("active"),
+                it.optInt("worlds"),
+                it.optInt("mods"),
+                it.optInt("packs"),
+                it.optInt("shaders"),
+            )
+        }
     }
 }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -81,108 +82,111 @@ fun CatalogScreen(page: Destination, state: Snapshot, wide: Boolean, actions: La
         act("search", query)
     }
     val kind = kindOf(page)
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        TextField(
-            value = query,
-            onValueChange = { query = it },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = {
-                Text(if (page == Destination.Mods) "Search mods or paste an .hmod link" else "Search")
-            },
-            leadingIcon = { Icon(Icons.Rounded.Search, null) },
-            trailingIcon = {
-                if (query.isNotEmpty()) {
-                    IconButton(onClick = { query = ""; act("search", "") }) { Icon(Icons.Rounded.Clear, "Clear") }
-                }
-            },
-            singleLine = true,
-            shape = CircleShape,
-            colors = TextFieldDefaults.colors(
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-                disabledIndicatorColor = Color.Transparent,
-            ),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { search() }),
-        )
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (page == Destination.Mods || page == Destination.Shaders) {
-                val selected = if (page == Destination.Mods) state.config.modSource else state.config.shaderSource
-                SingleChoiceSegmentedButtonRow(Modifier.weight(1f)) {
-                    listOf("horizon" to "Horizon", "modrinth" to "Modrinth").forEachIndexed { i, (id, label) ->
-                        SegmentedButton(
-                            selected = selected == id,
-                            onClick = { act("source", id) },
-                            shape = SegmentedButtonDefaults.itemShape(i, 2),
-                            label = { Text(label, maxLines = 1) },
-                        )
+    val hint = when {
+        page == Destination.Mods && state.config.modSource == "modrinth" ->
+            "Modrinth Java mods are browse-only: Fabric, Forge and NeoForge cannot run here."
+        page == Destination.Mods -> "Horizon content mods (.hmod). Paste an HTTPS .hmod link to import it."
+        page == Destination.Shaders && state.config.shaderSource == "modrinth" ->
+            "Modrinth shader ZIPs are experimental; some packs may not work."
+        page == Destination.Shaders -> "Horizon native .hshader packs."
+        else -> "Verified downloads. Enable them in Installed."
+    }
+    // One list for controls and results: on a phone held sideways the search field and buttons scroll
+    // away instead of squeezing the results to nothing.
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(bottom = 8.dp),
+    ) {
+        item(key = "controls") {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(bottom = 4.dp)) {
+                TextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = {
+                        Text(if (page == Destination.Mods) "Search mods or paste an .hmod link" else "Search")
+                    },
+                    leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = ""; act("search", "") }) { Icon(Icons.Rounded.Clear, "Clear") }
+                        }
+                    },
+                    singleLine = true,
+                    shape = CircleShape,
+                    colors = TextFieldDefaults.colors(
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { search() }),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = { act("open_folder", kind) }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Rounded.FolderOpen, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Folder", maxLines = 1)
+                    }
+                    FilledTonalButton(onClick = { actions.import(kind) }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Import", maxLines = 1)
                     }
                 }
-            } else {
-                Spacer(Modifier.weight(1f))
-            }
-            FilledTonalButton(onClick = { act("open_folder", kind) }) {
-                Icon(Icons.Rounded.FolderOpen, null, Modifier.size(18.dp))
-                if (wide) {
-                    Spacer(Modifier.width(8.dp))
-                    Text("Folder")
-                }
-            }
-            FilledTonalButton(onClick = { actions.import(kind) }) {
-                Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Import")
-            }
-        }
-        val hint = when {
-            page == Destination.Mods && state.config.modSource == "modrinth" ->
-                "Modrinth Java mods are browse-only: Fabric, Forge and NeoForge cannot run here."
-            page == Destination.Mods -> "Horizon content mods (.hmod). Paste an HTTPS .hmod link to import it."
-            page == Destination.Shaders && state.config.shaderSource == "modrinth" ->
-                "Modrinth shader ZIPs are experimental; some packs may not work."
-            page == Destination.Shaders -> "Horizon native .hshader packs."
-            else -> "Verified downloads. Enable them in Installed."
-        }
-        Text(hint, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                catalog.busy && catalog.results.isEmpty() ->
-                    LoadingIndicator(Modifier.align(Alignment.Center))
-                catalog.results.isEmpty() -> Text(
-                    "Nothing here yet. Search, or change the source.",
-                    modifier = Modifier.align(Alignment.Center),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                else -> LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(bottom = 8.dp),
-                ) {
-                    items(catalog.results, key = { it.index }) { ProjectCard(page, it) }
-                    item {
-                        Row(
-                            Modifier.fillMaxWidth().padding(top = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            OutlinedButton(onClick = { act("previous") }, enabled = catalog.offset > 0) {
-                                Icon(Icons.AutoMirrored.Rounded.NavigateBefore, null)
-                                Text("Previous")
-                            }
-                            OutlinedButton(onClick = { act("next") }) {
-                                Text("Next")
-                                Icon(Icons.AutoMirrored.Rounded.NavigateNext, null)
-                            }
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                "Page ${catalog.offset / 12 + 1}",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                if (page == Destination.Mods || page == Destination.Shaders) {
+                    // The source picker gets its own full-width row so both labels always fit.
+                    val selected = if (page == Destination.Mods) state.config.modSource else state.config.shaderSource
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        listOf("horizon" to "Horizon", "modrinth" to "Modrinth").forEachIndexed { i, (id, label) ->
+                            SegmentedButton(
+                                selected = selected == id,
+                                onClick = { act("source", id) },
+                                shape = SegmentedButtonDefaults.itemShape(i, 2),
+                                modifier = Modifier.heightIn(min = 48.dp),
+                                label = { Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1) },
                             )
                         }
+                    }
+                }
+                Text(hint, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        when {
+            catalog.busy && catalog.results.isEmpty() -> item(key = "loading") {
+                Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) { LoadingIndicator() }
+            }
+            catalog.results.isEmpty() -> item(key = "empty") {
+                Text(
+                    "Nothing here yet. Search, or change the source.",
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            else -> {
+                items(catalog.results, key = { it.index }) { ProjectCard(page, it) }
+                item(key = "pager") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedButton(onClick = { act("previous") }, enabled = catalog.offset > 0) {
+                            Icon(Icons.AutoMirrored.Rounded.NavigateBefore, null)
+                            Text("Previous")
+                        }
+                        OutlinedButton(onClick = { act("next") }) {
+                            Text("Next")
+                            Icon(Icons.AutoMirrored.Rounded.NavigateNext, null)
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "Page ${catalog.offset / 12 + 1}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -202,7 +206,7 @@ private fun ProjectCard(page: Destination, project: Project) {
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(52.dp),
+                    modifier = Modifier.size(44.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(page.icon, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
@@ -311,7 +315,7 @@ fun InstalledScreen(state: Snapshot, actions: LauncherActions) {
                             trailingContent = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     if (item.toggle) {
-                                        Switch(
+                                        HorizonSwitch(
                                             checked = item.enabled,
                                             onCheckedChange = { act("toggle_local", item.index.toString()) },
                                         )

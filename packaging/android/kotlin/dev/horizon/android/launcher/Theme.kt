@@ -5,6 +5,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -12,6 +13,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 
 /** Horizon's violet, used where Android has no wallpaper colours (before Android 12). */
 private val HorizonDark = darkColorScheme(
@@ -53,6 +55,33 @@ private val HorizonLight = lightColorScheme(
     onTertiaryContainer = Color(0xFF31101D),
 )
 
+/**
+ * Material's default scale is sized for roomy screens; phones at high display density ran out of
+ * room, so large styles step down further than body and label text.
+ */
+private val CompactTypography = Typography().run {
+    // Letter spacing keeps its sp unit: text fields animate their label between styles, and Compose
+    // cannot interpolate em against sp.
+    fun TextStyle.scaled(factor: Float) = copy(fontSize = fontSize * factor, lineHeight = lineHeight * factor)
+    Typography(
+        displayLarge = displayLarge.scaled(0.75f),
+        displayMedium = displayMedium.scaled(0.75f),
+        displaySmall = displaySmall.scaled(0.75f),
+        headlineLarge = headlineLarge.scaled(0.8f),
+        headlineMedium = headlineMedium.scaled(0.8f),
+        headlineSmall = headlineSmall.scaled(0.85f),
+        titleLarge = titleLarge.scaled(0.85f),
+        titleMedium = titleMedium.scaled(0.9f),
+        titleSmall = titleSmall.scaled(0.92f),
+        bodyLarge = bodyLarge.scaled(0.9f),
+        bodyMedium = bodyMedium.scaled(0.92f),
+        bodySmall = bodySmall,
+        labelLarge = labelLarge.scaled(0.92f),
+        labelMedium = labelMedium,
+        labelSmall = labelSmall,
+    )
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun HorizonTheme(content: @Composable () -> Unit) {
@@ -67,6 +96,7 @@ fun HorizonTheme(content: @Composable () -> Unit) {
     MaterialExpressiveTheme(
         colorScheme = colors,
         motionScheme = MotionScheme.expressive(),
+        typography = CompactTypography,
         content = content,
     )
 }

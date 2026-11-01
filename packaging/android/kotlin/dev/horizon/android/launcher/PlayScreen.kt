@@ -52,29 +52,32 @@ import androidx.compose.ui.unit.dp
 fun PlayScreen(state: Snapshot, wide: Boolean, short: Boolean, actions: LauncherActions) {
     if (wide) {
         Row(
-            Modifier.fillMaxSize().padding(bottom = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            Modifier.fillMaxSize().padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Hero(state, short, Modifier.weight(1f).fillMaxHeight(), scroll = true)
             Column(
-                Modifier.width(340.dp).fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                Modifier.width(300.dp).fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                AccountCard(state.account, state.config, actions.openAccount)
-                VersionCard(state, onClick = { actions.choose("profile") })
-                Spacer(Modifier.weight(1f))
-                LaunchButton(state, actions.play, Modifier.fillMaxWidth().height(if (short) 88.dp else 104.dp))
+                // The card scrolls on short landscape screens; Play stays pinned at the bottom.
+                Column(
+                    Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    VersionCard(state, onClick = { actions.choose("profile") })
+                }
+                LaunchButton(state, actions.play, Modifier.fillMaxWidth().height(if (short) 64.dp else 72.dp))
             }
         }
     } else {
         Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Hero(state, short, Modifier.fillMaxWidth(), scroll = false)
-            AccountCard(state.account, state.config, actions.openAccount)
             VersionCard(state, onClick = { actions.choose("profile") })
-            LaunchButton(state, actions.play, Modifier.fillMaxWidth().height(88.dp))
+            LaunchButton(state, actions.play, Modifier.fillMaxWidth().height(64.dp))
         }
     }
 }
@@ -85,37 +88,34 @@ private fun Hero(state: Snapshot, short: Boolean, modifier: Modifier, scroll: Bo
     val install = state.install
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(32.dp),
+        shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Column(
-            (if (scroll) Modifier.verticalScroll(rememberScrollState()) else Modifier).padding(if (short) 24.dp else 28.dp).fillMaxWidth(),
+            (if (scroll) Modifier.verticalScroll(rememberScrollState()) else Modifier).padding(if (short) 16.dp else 20.dp).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(verticalAlignment = Alignment.Top) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        "HORIZON ANDROID ${state.version}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         when {
                             install.installing -> "Getting your game ready"
                             install.installed -> "Ready to play"
-                            else -> "Your Java worlds, on Android"
+                            else -> "Not installed yet"
                         },
-                        style = if (short) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displaySmall,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "Minecraft 26.3  ·  ${state.config.renderer}",
-                        style = MaterialTheme.typography.bodyLarge,
+                        "${state.version}  ·  Minecraft 26.3  ·  ${state.config.renderer}",
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Surface(
-                    modifier = Modifier.padding(start = 16.dp).size(if (short) 88.dp else 112.dp),
+                    modifier = Modifier.padding(start = 12.dp).size(if (short) 52.dp else 60.dp),
                     shape = MaterialShapes.Cookie12Sided.toShape(),
                     color = MaterialTheme.colorScheme.primaryContainer,
                 ) {
@@ -127,13 +127,13 @@ private fun Hero(state: Snapshot, short: Boolean, modifier: Modifier, scroll: Bo
                                 else -> Icons.Rounded.Download
                             },
                             contentDescription = null,
-                            modifier = Modifier.size(if (short) 40.dp else 52.dp),
+                            modifier = Modifier.size(if (short) 26.dp else 30.dp),
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
                     }
                 }
             }
-            Spacer(Modifier.height(if (short) 4.dp else 12.dp))
+            Spacer(Modifier.height(if (short) 2.dp else 6.dp))
             state.error?.let { ErrorCard(it) }
             if (install.installing) {
                 install.stages.forEachIndexed { i, stage ->
@@ -200,11 +200,11 @@ private fun StageRow(label: String, done: Boolean, current: Boolean) {
             if (done) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
             contentDescription = null,
             tint = if (done || current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-            modifier = Modifier.size(22.dp),
+            modifier = Modifier.size(18.dp),
         )
         Text(
             label,
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
             color = if (current) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -213,47 +213,17 @@ private fun StageRow(label: String, done: Boolean, current: Boolean) {
 
 @Composable
 private fun NumberedStep(number: Int, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(36.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(26.dp)) {
             Box(contentAlignment = Alignment.Center) {
                 Text(
                     number.toString(),
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
             }
         }
-        Text(text, style = MaterialTheme.typography.bodyLarge)
-    }
-}
-
-@Composable
-private fun AccountCard(account: Account, config: Config, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Avatar(account, 56.dp)
-            Column(Modifier.padding(start = 16.dp).weight(1f)) {
-                Text(
-                    account.profile ?: config.name.ifBlank { "Player" },
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    account.status,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
+        Text(text, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -262,13 +232,13 @@ private fun AccountCard(account: Account, config: Config, onClick: () -> Unit) {
 private fun VersionCard(state: Snapshot, onClick: () -> Unit) {
     Card(
         onClick = onClick,
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Surface(
-                modifier = Modifier.size(56.dp),
+                modifier = Modifier.size(40.dp),
                 shape = MaterialShapes.Pill.toShape(),
                 color = MaterialTheme.colorScheme.tertiaryContainer,
             ) {
@@ -276,10 +246,10 @@ private fun VersionCard(state: Snapshot, onClick: () -> Unit) {
                     Icon(Icons.Rounded.Layers, null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
                 }
             }
-            Column(Modifier.padding(start = 16.dp).weight(1f)) {
-                Text("Minecraft 26.3", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                Text("Minecraft 26.3", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "Profile ${state.config.profile}  ·  ${state.config.renderScale}%  ·  ${state.config.input}",
+                    "${state.config.profileName}  ·  ${state.config.renderScale}%  ·  ${state.config.input}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -295,14 +265,14 @@ private fun VersionCard(state: Snapshot, onClick: () -> Unit) {
 private fun LaunchButton(state: Snapshot, onPlay: () -> Unit, modifier: Modifier) {
     val install = state.install
     if (install.installing) {
-        Surface(modifier = modifier, shape = RoundedCornerShape(32.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-            Row(Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-                LoadingIndicator(Modifier.size(48.dp))
-                Column(Modifier.padding(start = 16.dp).weight(1f)) {
-                    Text(install.stage, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+        Surface(modifier = modifier, shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+            Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                LoadingIndicator(Modifier.size(40.dp))
+                Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                    Text(install.stage, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
                         "${(install.overall * 100).toInt()}%",
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold,
                     )
@@ -324,18 +294,19 @@ private fun LaunchButton(state: Snapshot, onPlay: () -> Unit, modifier: Modifier
                 else -> Icons.Rounded.Download
             },
             contentDescription = null,
-            modifier = Modifier.size(36.dp),
+            modifier = Modifier.size(28.dp),
         )
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(8.dp))
         Text(
             when {
                 install.installed -> "Play"
                 state.error != null -> "Retry installation"
                 else -> "Download Minecraft 26.3"
             },
-            style = if (install.installed) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleLarge,
+            style = if (install.installed) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

@@ -58,6 +58,45 @@ fn page_name(page: Page) -> &'static str {
     }
 }
 
+fn profile_dir(home: &std::path::Path, id: u32) -> PathBuf {
+    if id == 0 {
+        home.into()
+    } else {
+        home.join("profiles").join(format!("profile-{id}"))
+    }
+}
+
+/// Player-chosen profile names live beside the profile's saves.
+const PROFILE_NAME_FILE: &str = "android-profile-name.txt";
+
+fn profile_name(dir: &std::path::Path, id: u32) -> String {
+    std::fs::read_to_string(dir.join(PROFILE_NAME_FILE))
+        .ok()
+        .map(|n| n.trim().to_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| {
+            if id == 0 {
+                "Default".into()
+            } else {
+                format!("Profile {id}")
+            }
+        })
+}
+
+fn write_profile_name(dir: &std::path::Path, name: &str) -> Result<(), String> {
+    let name: String = name
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(32)
+        .collect();
+    if name.is_empty() {
+        let _ = std::fs::remove_file(dir.join(PROFILE_NAME_FILE));
+        return Ok(());
+    }
+    std::fs::write(dir.join(PROFILE_NAME_FILE), name).map_err(|e| e.to_string())
+}
+
 fn choice(
     label: impl Into<String>,
     detail: impl Into<String>,
@@ -173,7 +212,7 @@ impl Controller {
                 switch("cutout", "Avoid camera cutout", if c.screen.avoid_cutout { "On" } else { "Off" }, c.screen.avoid_cutout),
             ]},
             {"group": "Game", "rows": [
-                row("profile", "Profile", format!("Profile {}", c.profile), "choice"),
+                row("profile", "Profile", profile_name(&profile_dir(&self.home, c.profile), c.profile), "choice"),
                 row("input_host", "Input", c.input_host.label().into(), "choice"),
                 row("name", "Offline player name", if c.name.is_empty() { "Not set".into() } else { c.name.clone() }, "text"),
                 row("server", "Server", if c.server.is_empty() { "Singleplayer".into() } else { c.server.clone() }, "text"),
@@ -441,6 +480,7 @@ impl Controller {
                 "name": c.name,
                 "server": c.server,
                 "profile": c.profile,
+                "profile_name": profile_name(&profile_dir(&self.home, c.profile), c.profile),
                 "renderer": c.renderer.label(),
                 "render_scale": c.render_scale.percent(),
                 "input": c.input_host.label(),
@@ -463,6 +503,57 @@ impl Controller {
 
     fn save(&mut self) -> Result<(), String> {
         self.catalog.config.save(&self.home)
+    }
+
+    /// Profile 0 plus every `profiles/profile-N` folder, sorted.
+    fn profile_ids(&self) -> Vec<u32> {
+        let mut ids = vec![0, self.catalog.config.profile];
+        ids.extend(
+            std::fs::read_dir(self.home.join("profiles"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| {
+                    e.file_name()
+                        .to_str()?
+                        .strip_prefix("profile-")?
+                        .parse::<u32>()
+                        .ok()
+                }),
+        );
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    /// What the profile manager shows: names and what each profile holds.
+    fn profiles(&self) -> Value {
+        let count = |dir: PathBuf| {
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                .count()
+        };
+        Value::Array(
+            self.profile_ids()
+                .into_iter()
+                .map(|id| {
+                    let dir = profile_dir(&self.home, id);
+                    json!({
+                        "id": id,
+                        "name": profile_name(&dir, id),
+                        "active": id == self.catalog.config.profile,
+                        "worlds": count(dir.join("saves")),
+                        "mods": count(dir.join("horizon-mods")),
+                        "packs": count(dir.join("resourcepacks")),
+                        "shaders": count(dir.join("shaderpacks")),
+                    })
+                })
+                .collect(),
+        )
     }
 
     fn call(&mut self, method: &str, arg: &str) -> Result<Value, String> {
@@ -619,6 +710,35 @@ impl Controller {
             }
             "play" => return self.play(),
             "options" => return Ok(self.options(arg)),
+            "profiles" => return Ok(self.profiles()),
+            "profile_create" => {
+                let id = self
+                    .profile_ids()
+                    .last()
+                    .copied()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or("Too many profiles")?;
+                let dir = profile_dir(&home, id);
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                write_profile_name(&dir, arg)?;
+                self.choose("profile", &id.to_string())?;
+            }
+            "profile_rename" => {
+                let (id, name) = arg.split_once('=').ok_or("Expected id=name")?;
+                let id = id.parse::<u32>().map_err(|e| e.to_string())?;
+                write_profile_name(&profile_dir(&home, id), name)?;
+            }
+            "profile_delete" => {
+                let id = arg.parse::<u32>().map_err(|e| e.to_string())?;
+                if id == 0 {
+                    return Err("The default profile cannot be deleted".into());
+                }
+                if id == self.catalog.config.profile {
+                    return Err("Switch to another profile before deleting this one".into());
+                }
+                std::fs::remove_dir_all(profile_dir(&home, id)).map_err(|e| e.to_string())?;
+            }
             _ => return Err(format!("Unknown launcher action {method}")),
         }
         Ok(Value::Null)
