@@ -70,6 +70,10 @@ pub(super) struct StartupMenu {
 }
 
 impl StartupMenu {
+    pub(super) fn needs_world_renderer(&self) -> bool {
+        self.pending.is_some() || self.title.as_ref().is_some_and(Title::preparing)
+    }
+
     pub fn new(options: &Options, pack_error: Option<&str>) -> Result<Self> {
         let pending = if let Some(address) = &options.server {
             Some(PendingWorldEntry::Server {

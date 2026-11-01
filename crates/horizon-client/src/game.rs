@@ -20158,8 +20158,8 @@ impl Loading {
         if let Some(renderer) = &mut self.renderer {
             match renderer.render(&frame) {
                 Ok(true) => {
-                    self.menu.entry_presented = self.menu.pending.is_some();
-                    if self.gui.is_some() && self.menu.pending.is_none() {
+                    self.menu.entry_presented = self.menu.needs_world_renderer();
+                    if self.gui.is_some() && !self.menu.needs_world_renderer() {
                         self.menu.perf.title_shown();
                     }
                 }
@@ -20365,7 +20365,7 @@ impl ApplicationHandler for App {
                         .renderer
                         .as_ref()
                         .is_some_and(|r| r.info.backend == wgpu::Backend::Gl)
-                    && (loading.menu.pending.is_none() || !loading.menu.entry_presented);
+                    && (!loading.menu.needs_world_renderer() || !loading.menu.entry_presented);
                 match if loading.menu.reload_packs
                     || loading.renderer_job.is_some()
                     || defer_gles_world
