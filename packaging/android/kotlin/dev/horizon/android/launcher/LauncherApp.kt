@@ -59,6 +59,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.horizon.android.NativeBridge
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 
 enum class Destination(val id: String, val label: String, val icon: ImageVector) {
@@ -85,10 +88,14 @@ sealed interface Overlay {
 @Composable
 fun LauncherApp(onPlay: () -> Unit, onImport: (String, String?) -> Unit) {
     var snapshot by remember { mutableStateOf<Snapshot?>(null) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            NativeBridge.snapshot()?.let { text -> Snapshot.parse(text)?.let { snapshot = it } }
-            delay(200)
+    // Poll only while the launcher is on screen: never while the game runs.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                NativeBridge.snapshot()?.let { text -> Snapshot.parse(text)?.let { snapshot = it } }
+                delay(200)
+            }
         }
     }
     var destination by rememberSaveable { mutableStateOf(Destination.Play) }
