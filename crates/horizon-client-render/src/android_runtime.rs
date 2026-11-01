@@ -96,6 +96,31 @@ pub fn configure_atlas_limit(limit: u32) {
 pub fn atlas_limit() -> u32 {
     ATLAS_LIMIT.load(Ordering::Relaxed)
 }
+// Zero preserves the engine's automatic/manual worker selection.
+static WORKER_LIMIT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub fn configure_worker_limit(limit: u32) {
+    WORKER_LIMIT.store(limit.min(64), Ordering::Relaxed);
+}
+pub fn limit_workers(requested: usize) -> usize {
+    worker_limit(requested, WORKER_LIMIT.load(Ordering::Relaxed))
+}
+fn worker_limit(requested: usize, limit: u32) -> usize {
+    if limit == 0 {
+        requested.max(1)
+    } else {
+        requested.max(1).min(limit as usize)
+    }
+}
+#[cfg(test)]
+mod worker_limit_tests {
+    #[test]
+    fn ceiling_never_increases_the_existing_pool() {
+        assert_eq!(super::worker_limit(6, 0), 6);
+        assert_eq!(super::worker_limit(6, 2), 2);
+        assert_eq!(super::worker_limit(2, 6), 2);
+        assert_eq!(super::worker_limit(0, 0), 1);
+    }
+}
 static GPU_BATCHING: AtomicBool = AtomicBool::new(false);
 static KEYPAD_ENABLED: AtomicBool = AtomicBool::new(false);
 static KEYPAD: std::sync::LazyLock<std::sync::Mutex<crate::keypad::Keypad>> =
@@ -189,5 +214,35 @@ mod input_tests {
         assert_eq!(gamepad_state(), crate::gamepad::PadState::default());
         clear_gamepads();
         configure_input(InputMode::Auto);
+    }
+}
+
+// Disposable decoded-audio and empty mesh buffers only, not total RAM/VRAM.
+static CACHE_BUDGET_MIB: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub fn configure_cache_budget(mib: u32) {
+    CACHE_BUDGET_MIB.store(mib.min(1024), Ordering::Relaxed);
+}
+pub fn cache_budget_overridden() -> bool {
+    CACHE_BUDGET_MIB.load(Ordering::Relaxed) != 0
+}
+pub fn mesh_cache_budget() -> usize {
+    cache_budgets(CACHE_BUDGET_MIB.load(Ordering::Relaxed)).0
+}
+pub fn sound_cache_budget() -> usize {
+    cache_budgets(CACHE_BUDGET_MIB.load(Ordering::Relaxed)).1
+}
+fn cache_budgets(mib: u32) -> (usize, usize) {
+    let bytes = if mib == 0 { 80 } else { mib.min(1024) } as usize * (1 << 20);
+    (bytes / 5, bytes - bytes / 5)
+}
+#[cfg(test)]
+mod cache_budget_tests {
+    #[test]
+    fn default_preserves_existing_sizes_and_custom_total_is_bounded() {
+        assert_eq!(super::cache_budgets(0), (16 << 20, 64 << 20));
+        for mib in [1, 16, 32, 64, 128, 1024] {
+            let (mesh, sound) = super::cache_budgets(mib);
+            assert_eq!(mesh + sound, mib as usize * (1 << 20));
+        }
     }
 }

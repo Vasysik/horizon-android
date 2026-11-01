@@ -141,9 +141,36 @@ pub fn last_targets() -> Vec<Target> {
     TARGETS.with_borrow(|(_, last, _)| last.clone())
 }
 
+/// Enabled labelled buttons plus explicit fields, sliders and list targets.
+pub fn navigation_targets() -> Vec<Target> {
+    let mut targets: Vec<_> = last()
+        .into_iter()
+        .filter(|w| w.enabled)
+        .map(|w| Target {
+            rect: [w.x, w.y, w.w, w.h],
+            kind: Kind::Button,
+        })
+        .collect();
+    for t in last_targets() {
+        if let Some(same) = targets.iter_mut().find(|o| o.rect == t.rect) {
+            same.kind = t.kind;
+        } else {
+            targets.push(t);
+        }
+    }
+    targets
+}
+
 /// Counts drawn frames: focus waits for a new one after scrolling a list.
 pub fn generation() -> u64 {
     TARGETS.with_borrow(|(_, _, generation)| *generation)
+}
+
+/// Publish a frame from a standalone screen without a Game frame counter.
+/// Early startup menus must expose their focus targets before core loading ends.
+pub fn publish_frame() {
+    let next = WIDGETS.with_borrow(|(_, _, seen)| seen.wrapping_add(1));
+    end_frame(next);
 }
 
 /// Called by the button drawers.
@@ -463,5 +490,23 @@ mod tests {
             2,
             "the clipped row is gone, earlier ones stay"
         );
+    }
+}
+
+#[cfg(test)]
+mod startup_target_tests {
+    #[test]
+    fn standalone_frames_publish_and_replace_focus_targets() {
+        super::publish_frame();
+        super::target([10.0, 20.0, 30.0, 40.0]);
+        super::record("Singleplayer", [1.0, 2.0, 3.0, 4.0], true);
+        super::record("Unavailable", [5.0, 6.0, 7.0, 8.0], false);
+        super::publish_frame();
+        assert_eq!(super::navigation_targets().len(), 2);
+        assert_eq!(super::navigation_targets()[0].rect, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(super::last_targets().len(), 1);
+        assert_eq!(super::last_targets()[0].rect, [10.0, 20.0, 30.0, 40.0]);
+        super::publish_frame();
+        assert!(super::last_targets().is_empty());
     }
 }

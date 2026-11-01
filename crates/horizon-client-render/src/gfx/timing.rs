@@ -30,6 +30,7 @@ const DONE: u8 = 2;
 /// Resolved and on its way back.
 const PENDING: u8 = 3;
 const MAPPED: u8 = 4;
+const FAILED: u8 = 5;
 
 struct Slot {
     buffer: wgpu::Buffer,
@@ -48,6 +49,7 @@ pub struct GpuTimer {
     markers: Option<Markers>,
     /// Slots resolved in this frame's commands, read back once it is submitted.
     resolved: Vec<usize>,
+    failed: bool,
 }
 
 /// The marker passes: the start's compute pipeline, and the end's shader and
@@ -128,9 +130,21 @@ impl GpuTimer {
                 }
             }),
             resolved: Vec::new(),
+            failed: false,
         })
     }
     pub fn begin(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if self.failed
+            || self
+                .slots
+                .iter()
+                .any(|s| s.state.load(Ordering::Acquire) == FAILED)
+        {
+            self.failed = true;
+            self.current = None;
+            self.resolved.clear();
+            return;
+        }
         if self.markers.is_some() {
             for slot in 0..SLOTS {
                 if self.slots[slot].state.load(Ordering::Acquire) == DONE {
@@ -216,7 +230,7 @@ impl GpuTimer {
                 .slice(..)
                 .map_async(wgpu::MapMode::Read, move |result| {
                     state.store(
-                        if result.is_ok() { MAPPED } else { FREE },
+                        if result.is_ok() { MAPPED } else { FAILED },
                         Ordering::Release,
                     );
                 });
@@ -250,8 +264,16 @@ impl GpuTimer {
                 if let Some(ticks) = stamps[1].checked_sub(stamps[0]) {
                     out.push((ticks as f64 * f64::from(self.period_ns) / 1e6) as f32);
                 }
+                // Device loss can destroy a readback after its map callback.
+                // A failed get_mapped_range is not permission to unmap it:
+                // wgpu reports another validation error for destroyed buffers.
+                drop(data);
+                slot.buffer.unmap();
+            } else {
+                // A dead readback slot must not be submitted again next frame.
+                self.failed = true;
+                log::warn!("Horizon: GPU timestamp readback unavailable; disabling this timer");
             }
-            slot.buffer.unmap();
             slot.state.store(FREE, Ordering::Release);
         }
     }
@@ -288,4 +310,41 @@ pub(super) fn end_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+#[cfg(test)]
+mod readback_lifetime_tests {
+    use super::*;
+    #[test]
+    fn destroyed_readback_after_map_callback_is_discarded_without_unmap() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let features = GpuTimer::features(&adapter);
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: features,
+            ..Default::default()
+        }))
+        .unwrap();
+        let Some(mut timer) = GpuTimer::new(&device, &queue) else {
+            return;
+        };
+        let slot = &timer.slots[0];
+        slot.buffer.slice(..).map_async(wgpu::MapMode::Read, {
+            let state = slot.state.clone();
+            move |r| state.store(if r.is_ok() { MAPPED } else { FREE }, Ordering::Release)
+        });
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(slot.state.load(Ordering::Acquire), MAPPED);
+        slot.buffer.destroy();
+        let mut samples = Vec::new();
+        timer.collect_ready(&mut samples);
+        assert!(samples.is_empty());
+        assert_eq!(timer.slots[0].state.load(Ordering::Acquire), FREE);
+        assert!(timer.failed);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        timer.begin(&mut encoder);
+        assert!(timer.current.is_none());
+        queue.submit([encoder.finish()]);
+        timer.submitted(&queue);
+    }
 }

@@ -9,6 +9,8 @@ use horizon_client::ui_theme::{Face, Ui, color};
 pub(super) enum Kind {
     Aspect,
     DisplayHz,
+    CacheBudget,
+    WorkerLimit,
     Renderer,
     RenderScale,
     Profile,
@@ -57,6 +59,43 @@ impl Launcher {
                     )
                 })
                 .collect(),
+            ),
+            Kind::CacheBudget => (
+                "Reusable RAM cache",
+                "Decoded sounds (80%) and empty mesh buffers (20%). Recreated at the same quality. Smaller budgets can increase CPU work. Not total RAM/VRAM. Applies on next Play.",
+                [0, 16, 32, 64, 128, 256]
+                    .into_iter()
+                    .map(|mib| {
+                        (
+                            if mib == 0 {
+                                "Engine default (80 MiB)".into()
+                            } else {
+                                format!("{mib} MiB")
+                            },
+                            String::new(),
+                            Action::ChooseCacheBudget(mib),
+                            c.cache_budget_mib == mib,
+                        )
+                    })
+                    .collect(),
+            ),
+            Kind::WorkerLimit => (
+                "Chunk worker limit",
+                "Ceiling for generation and meshing workers, not all app threads. Lower values can reduce CPU contention but slow loading. Applies on next Play.",
+                (0..=64u32)
+                    .map(|limit| {
+                        (
+                            if limit == 0 {
+                                "No additional limit".into()
+                            } else {
+                                format!("{limit} worker(s)")
+                            },
+                            String::new(),
+                            Action::ChooseWorkerLimit(limit),
+                            c.worker_limit == limit,
+                        )
+                    })
+                    .collect(),
             ),
             Kind::DisplayHz => (
                 "Display refresh rate",

@@ -28,30 +28,8 @@ const CRUMBLING_BLEND: wgpu::BlendState = wgpu::BlendState {
 const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
     wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
 
-/// Terrain sprite selection for Vulkan and legacy GLES compilers.
-fn terrain_shader(gl: bool) -> std::borrow::Cow<'static, str> {
-    let source = include_str!("terrain.wgsl");
-    if !gl {
-        return std::borrow::Cow::Borrowed(source);
-    }
-    let start = source
-        .find("fn sprite_grad(")
-        .expect("terrain sprite function");
-    let level = source
-        .find("fn sprite_level(")
-        .expect("terrain level function");
-    let end = level + source[level..].find("\n}\n").expect("terrain level end") + 3;
-    let rgss = source
-        .find("fn sample_rgss(")
-        .expect("terrain RGSS function");
-    let rgss_end = rgss + source[rgss..].find("\n}\n").expect("terrain RGSS end") + 3;
-    let mut output = String::with_capacity(source.len() + 200);
-    output.push_str(&source[..start]);
-    output.push_str(include_str!("gfx/terrain_gles.wgsl.inc"));
-    output.push_str(&source[end..rgss]);
-    output.push_str(&source[rgss_end..]);
-    std::borrow::Cow::Owned(output)
-}
+mod terrain_source;
+use terrain_source::terrain_shader;
 
 /// entity.wgsl after the OverlayTexture constants it reads.
 fn entity_shader() -> String {
@@ -6905,28 +6883,6 @@ mod tests {
             instance_buffer_usage(&wgpu::Limits::default()).contains(wgpu::BufferUsages::STORAGE)
         );
     }
-    #[test]
-    fn legacy_gles_sprite_selection_keeps_vulkan_source_and_validates_all_entrypoints() {
-        assert!(matches!(
-            super::terrain_shader(false),
-            std::borrow::Cow::Borrowed(_)
-        ));
-        assert_eq!(super::terrain_shader(false), include_str!("terrain.wgsl"));
-        let source = super::terrain_shader(true);
-        assert!(!source.contains("switch layer / SPRITE_SPLIT"));
-        assert!(!source.contains("uv + offsets[i] * pixel"));
-        for index in 0..7 {
-            assert!(source.contains(&format!("array_index == {index}u")));
-        }
-        let module = naga::front::wgsl::parse_str(&source).unwrap();
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap();
-    }
-
     #[test]
     fn drawable_size_skips_minimized_and_oversized_windows() {
         use super::drawable_size;

@@ -250,6 +250,10 @@ impl Launcher {
             "play_requested",
             || serde_json::json!({"renderer":self.catalog.config.renderer.label(),"resolution_percent":self.catalog.config.render_scale.percent()}),
         );
+        horizon_client::android_runtime::configure_worker_limit(self.catalog.config.worker_limit);
+        horizon_client::android_runtime::configure_cache_budget(
+            self.catalog.config.cache_budget_mib,
+        );
         crate::configure_input_mode(self.catalog.config.input_host);
         crate::device_runtime::configure(self.catalog.config.device);
         if horizon_client::official_install::ready(&self.home) {
