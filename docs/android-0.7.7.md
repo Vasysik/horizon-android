@@ -67,3 +67,12 @@ with deliberate removal of one verified sound object after download, during
 extraction. The missing object was restored, the installed file matched its
 official SHA-1, the launcher offered Play and successful cleanup removed the
 download cache. This verifies that eviction case, not every possible ENOENT.
+
+## Block behaviour cache
+
+Adapted the cache portion of Android PR #58: the resolved-behaviour cache has
+a new schema and fingerprints the exact block-class variant order. This avoids
+reusing serialized class ordinals after an engine update on Android, where
+`current_exe` identifies the system's app_process rather than the game library.
+Crate version 0.1.0 is not treated as the Android application version. This
+change rebuilds derived tables; it does not rewrite world saves.
