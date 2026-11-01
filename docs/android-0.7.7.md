@@ -76,3 +76,15 @@ reusing serialized class ordinals after an engine update on Android, where
 `current_exe` identifies the system's app_process rather than the game library.
 Crate version 0.1.0 is not treated as the Android application version. This
 change rebuilds derived tables; it does not rewrite world saves.
+
+## Native text input in block editors
+
+The shared Structure/Jigsaw/Test block editor now participates in IME focus,
+initial text synchronization and committed text/key routing. Command-block OSK
+input is dispatched before inventory searches. Existing per-field character
+validation and confirmation rules remain in the editors.
+
+On the isolated Fujitsu build, Android input reached the command field,
+structure name and jigsaw pool; Backspace and Done worked, and the edited
+jigsaw pool remained after closing and reopening. ARM64 check/Clippy and the
+optimized ARMv7 build passed.

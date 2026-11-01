@@ -583,6 +583,33 @@ impl Game<'_> {
         self.block_editor = Some(screen);
         self.block_editor_after_input();
     }
+
+    pub(super) fn block_editor_typing(&self) -> bool {
+        self.screen == Screen::BlockEditor
+            && self
+                .block_editor
+                .as_ref()
+                .is_some_and(|s| s.focus.is_some())
+    }
+
+    #[cfg(target_os = "android")]
+    pub(super) fn block_editor_edit_value(&mut self) -> Option<String> {
+        let screen = self.block_editor.as_mut()?;
+        let focus = screen.focus?;
+        let edit = screen.editor.edits().get_mut(focus)?;
+        edit.move_cursor_to_end(false);
+        Some(edit.value.clone())
+    }
+
+    /// Committed OSK text bypasses physical-key shortcuts; key actions retain
+    /// the editor's own validation and Enter/confirmation rules.
+    pub(super) fn block_editor_ime(&mut self, key: Option<KeyCode>, text: Option<&str>) {
+        if let Some(text) = text {
+            self.block_editor_type(text);
+        } else if let Some(key) = key {
+            self.block_editor_key_code(key, None, None);
+        }
+    }
 }
 
 /// `Screen.isValidCharacterForName`: the characters an identifier takes,

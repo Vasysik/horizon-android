@@ -22,6 +22,7 @@ impl Game<'_> {
         }
         match self.screen {
             Screen::Chat | Screen::CommandBlock => true,
+            Screen::BlockEditor => self.block_editor_typing(),
             Screen::DebugOptions => self
                 .debug_options
                 .as_ref()
@@ -116,6 +117,7 @@ impl Game<'_> {
             match self.screen {
                 Screen::Chat => self.chat_type(&text),
                 Screen::CommandBlock => self.command_block_type(&text),
+                Screen::BlockEditor => self.block_editor_type(&text),
                 Screen::DebugOptions => self.debug_options_type(&text),
                 Screen::WorldOptions => self.world_options_text(Some(&text)),
                 Screen::Creative => self.creative_search_edit(Some(&text)),
