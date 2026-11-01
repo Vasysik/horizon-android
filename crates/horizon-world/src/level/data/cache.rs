@@ -19,9 +19,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-const MAGIC: &[u8; 8] = b"HZBEHAV\0";
-const VERSION: u32 = 2;
-const FILE_NAME: &str = "behaviours-v2.bin";
+const MAGIC: &[u8; 8] = b"HZBEHAV3";
+const VERSION: u32 = 3;
+const FILE_NAME: &str = "behaviours-v3.bin";
 const MAX_FILE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DECODED_BYTES: usize = 256 * 1024 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
@@ -137,7 +137,16 @@ struct Item {
 
 fn fingerprint(registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
     let mut hasher = Sha256::new();
-    hasher.update(b"horizon resolved behaviours 2");
+    hasher.update(b"horizon resolved behaviours 3");
+    // Include package version so APK updates on Android invalidate the cache even though
+    // /proc/self/exe points to /system/bin/app_process64 whose mtime is frozen in the OS ROM.
+    hash_str(&mut hasher, env!("CARGO_PKG_VERSION"));
+    // Hash all recognised block class names and their exact sequence so any enum addition,
+    // deletion, or reordering automatically invalidates stale caches.
+    hasher.update((Class::ALL.len() as u32).to_le_bytes());
+    for class in Class::ALL {
+        hash_str(&mut hasher, class.as_str());
+    }
     // The build that resolved the tables: the version constant alone misses
     // loader changes that keep the snapshot layout.
     let exe = std::env::current_exe()?;

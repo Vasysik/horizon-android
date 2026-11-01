@@ -221,12 +221,16 @@ impl Game<'_> {
             self.boats[i] = b;
             // In front of a mob that shares the boat.
             Some(self.player_boat_seat(i))
-        } else {
+        } else if let Some(c) = self.carts.iter().find(|c| c.id == id) {
             // A minecart: the server moves it, the rider sits in it.
-            self.carts.iter().find(|c| c.id == id).map(|c| {
+            Some(
                 c.position
-                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0))
-            })
+                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0)),
+            )
+        } else if let Some(seat_pos) = self.remote_stand_seat(id) {
+            Some(seat_pos)
+        } else {
+            None
         };
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
@@ -237,6 +241,48 @@ impl Game<'_> {
             p.fall_distance = 0.0;
         }
         true
+    }
+
+    /// Seat position for an armor stand (including GSit seats riding another player or entity).
+    fn remote_stand_seat(&mut self, id: u32) -> Option<Vec3> {
+        let i = self.armor_stands.iter().position(|a| a.id == id)?;
+        let a = &self.armor_stands[i];
+        let mut pos = a.position;
+        // If the armor stand is a passenger of another entity (e.g. GSit player sit: Player B -> ArmorStand -> Me),
+        // resolve the host vehicle's attachment point so the seat tracks the host entity smoothly every tick.
+        if let Some(vehicle_id) = a.vehicle {
+            if let Some(m) = self.mobs.iter().find(|m| m.id == vehicle_id) {
+                pos = horizon_client::mobs::riders::seat(
+                    horizon_client::mobs::riders::passenger_attachment(m),
+                    0.0,
+                    m.position,
+                    m.yaw,
+                );
+                self.armor_stands[i].position = pos;
+            } else if let Some(b) = self.boats.iter().find(|b| b.id == vehicle_id) {
+                pos = b.seat(0, 1, false, 0.0, false);
+                self.armor_stands[i].position = pos;
+            } else if let Some(c) = self.carts.iter().find(|c| c.id == vehicle_id) {
+                pos = c
+                    .position
+                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
+                self.armor_stands[i].position = pos;
+            } else if let Some((_, tracked_pos)) =
+                self.remote.as_ref().and_then(|r| r.tracked(vehicle_id as i32))
+            {
+                pos = Vec3::new(tracked_pos[0], tracked_pos[1], tracked_pos[2]);
+                self.armor_stands[i].position = pos;
+            }
+        }
+        let height = if a.marker {
+            0.0
+        } else if a.small {
+            0.9875
+        } else {
+            1.975
+        };
+        // The local player's vehicle attachment is 0.6 (Avatar.DEFAULT_VEHICLE_ATTACHMENT).
+        Some(Vec3::new(pos.x, pos.y + height - 0.6, pos.z))
     }
 
     /// `LocalPlayer.tick` for a passenger: the boat it controls goes to the

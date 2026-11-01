@@ -12,6 +12,11 @@ macro_rules! classes {
         pub enum Class { $($name,)* }
         impl Class {
             pub const ALL: &'static [Class] = &[$(Class::$name,)*];
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Class::$name => stringify!($name),)*
+                }
+            }
             pub fn from_java(name: &str) -> Option<Self> {
                 match name { $($java => Some(Class::$name),)* _ => None }
             }
