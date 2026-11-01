@@ -108,12 +108,14 @@ Transport audio berjalan di atas socket UDP terpisah non-blocking melalui backgr
 
 ## 5. Verifikasi & Pengujian Mandiri (Self-Testing & Verification)
 
-1. **Unit Testing:**
-   - `protocol::tests::varint_roundtrip`: Memverifikasi LEB128 VarInt encoding/decoding.
-   - `protocol::tests::secret_packet_roundtrip`: Memverifikasi parsing dan serialisasi SecretPacket.
-   - `protocol::tests::player_state_packet_roundtrip`: Memverifikasi CustomPayload player states.
-   - `protocol::tests::udp_crypto_roundtrip`: Memverifikasi enkripsi/dekripsi AES-128-GCM 12-byte IV + Auth Tag roundtrip wire packet.
-   - `crates/horizon-client-input`: 59 unit tests passed cleanly.
+1. **Unit Testing (7 Passed Cleanly):**
+   - `protocol::tests::test_varint_roundtrip`: Memverifikasi LEB128 VarInt encoding/decoding.
+   - `protocol::tests::test_secret_packet_serialization`: Memverifikasi parsing dan serialisasi SecretPacket.
+   - `protocol::tests::test_player_state_packet_serialization`: Memverifikasi CustomPayload player states.
+   - `protocol::tests::test_aes_128_gcm_and_udp_framing_roundtrip`: Memverifikasi enkripsi/dekripsi AES-128-GCM 12-byte IV + Auth Tag roundtrip wire packet.
+   - `audio_pipeline::tests::test_pcm_codec_roundtrip`: Memverifikasi encoding/decoding PCM sample buffer.
+   - `audio_pipeline::tests::test_spatial_gain_calculation`: Memverifikasi jarak dan panning stereo 3D spatial gain.
+   - `audio_pipeline::tests::test_voice_capture_dual_subframe_vad`: Memverifikasi pemrosesan dual 480-sample RNNoise suppression dan deteksi VAD.
 2. **Compiler & Linter Verification:**
    - `cargo check -p horizon-client --no-default-features`: **CLEAN** (0 error, 0 clippy warning pada modul voice).
 
