@@ -26,10 +26,9 @@ initial boundary, not an independently embeddable game or a Java frontend.
 Back dismisses editing/dialogs first, then asks before exiting the launcher.
 The confirmation defaults keyboard focus to Cancel.
 
-Experimental smaller GPU allocations are now opt-in in launcher Setup. Missing
-settings default to Standard, including upgrades from 0.7.6. The choice applies
-at the next game start; restart the app to change the launcher's own GPU device.
-Both the wgpu MemoryUsage hint and 8 MiB soft page-growth cap follow this choice.
+GPU allocation policy remains the same as 0.7.6: the Android wgpu MemoryUsage
+hint and 8 MiB soft page-growth cap remain active. No extra memory-policy toggle
+is exposed; the briefly tested Standard/Small switch was removed before release.
 
 The launch entrypoint receives its argument vector directly. Game startup no
 longer reads launcher config, a launcher-owned session getter or a thread-local
@@ -37,7 +36,7 @@ argument queue. Prepared sessions remain state of the current Launcher instance;
 sign-in/out invalidates them. Exit/Cancel remain available during preparation,
 and completing a prepared session does not override an open chooser.
 
-Validation: ARM64 Android check and Clippy passed; five host launch/preference
+Validation: ARM64 Android check and Clippy passed; host launch/preference
 tests passed. The isolated tablet build completed launcher → game → launcher
 and displayed the compact Cancel/Exit confirmation. ARMv7 compiled, but its
 terrain rendering remains under investigation.

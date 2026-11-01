@@ -204,8 +204,7 @@ pub fn configure(mut settings: crate::device_preferences::Settings) {
     settings.sanitize();
     let bits = u32::from(settings.display_hz)
         | (u32::from(settings.performance_hints) << 16)
-        | (u32::from(settings.gpu_profile) << 17)
-        | (u32::from(settings.small_gpu_allocations) << 18);
+        | (u32::from(settings.gpu_profile) << 17);
     PREFERENCES.store(bits, std::sync::atomic::Ordering::Relaxed);
 }
 pub fn preferences() -> crate::device_preferences::Settings {
@@ -214,6 +213,5 @@ pub fn preferences() -> crate::device_preferences::Settings {
         display_hz: bits as u16,
         performance_hints: bits & (1 << 16) != 0,
         gpu_profile: bits & (1 << 17) != 0,
-        small_gpu_allocations: bits & (1 << 18) != 0,
     }
 }

@@ -57,7 +57,6 @@ pub(super) enum Action {
     ChooseDisplayHz(u16),
     PerformanceHints,
     GpuProfile,
-    GpuMemory,
 }
 
 pub(super) fn button(
@@ -834,16 +833,6 @@ impl Launcher {
                     Action::PerformanceHints,
                 ),
                 (
-                    "GPU memory",
-                    if c.device.small_gpu_allocations {
-                        "Small (experimental)"
-                    } else {
-                        "Standard"
-                    }
-                    .into(),
-                    Action::GpuMemory,
-                ),
-                (
                     "GPU profiling",
                     if c.device.gpu_profile {
                         "On / included in report"
@@ -1247,12 +1236,6 @@ impl Launcher {
                 self.catalog.status="ADPF gives Android CPU frame-work hints on supported devices. It does not cap FPS or guarantee a speedup.".into();
                 self.catalog.config.save(&self.home)?;
                 crate::device_runtime::configure(self.catalog.config.device);
-            }
-            Some(Action::GpuMemory) => {
-                self.catalog.config.device.small_gpu_allocations ^= true;
-                self.catalog.config.save(&self.home)?;
-                crate::device_runtime::configure(self.catalog.config.device);
-                self.catalog.status = "Experimental smaller GPU allocations. Applies to the next game launch; restart the app to apply to the launcher. Standard restores the previous policy. No image-quality change.".into();
             }
             Some(Action::GpuProfile) => {
                 self.catalog.config.device.gpu_profile ^= true;

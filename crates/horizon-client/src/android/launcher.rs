@@ -177,9 +177,6 @@ impl Launcher {
         self.configure_screen();
         crate::display::set_scale(self.catalog.config.render_scale);
         horizon_client::android_runtime::configure_gpu(false);
-        horizon_client::android_runtime::configure_gpu_memory(
-            self.catalog.config.device.small_gpu_allocations,
-        );
         if let Some(renderer) = &mut self.renderer {
             if let Some(size) = crate::display::prepare(self.window.as_ref().unwrap())? {
                 renderer.resize(size[0], size[1]);
@@ -329,7 +326,6 @@ impl Launcher {
                         "source_dirty": option_env!("HORIZON_ANDROID_BUILD_DIRTY"),
                         "performance_recording": self.catalog.config.record_performance,
                         "gpu_profiling": self.catalog.config.device.gpu_profile,
-                        "small_gpu_allocations": self.catalog.config.device.small_gpu_allocations,
                     }),
                 )?;
             }
@@ -350,7 +346,6 @@ impl Launcher {
                 extra_arguments,
                 open_gl: self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl,
                 gpu_batching: self.catalog.config.renderer == crate::catalog::RendererMode::Vulkan,
-                small_gpu_allocations: self.catalog.config.device.small_gpu_allocations,
             };
             let game = match crate::game_launch::start(request) {
                 Ok(game) => game,

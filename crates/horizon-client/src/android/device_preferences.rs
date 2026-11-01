@@ -10,7 +10,6 @@ pub struct Settings {
     pub display_hz: u16,
     pub performance_hints: bool,
     pub gpu_profile: bool,
-    pub small_gpu_allocations: bool,
 }
 
 impl Settings {
@@ -51,21 +50,6 @@ impl Settings {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn gpu_memory_experiment_is_opt_in_and_persists() {
-        let old: Settings = serde_json::from_value(json!({"gpu_profile":true})).unwrap();
-        assert!(!old.small_gpu_allocations);
-        let selected: Settings =
-            serde_json::from_value(json!({"small_gpu_allocations":true})).unwrap();
-        let saved = serde_json::to_value(selected).unwrap();
-        assert_eq!(saved["small_gpu_allocations"], true);
-        assert!(
-            serde_json::from_value::<Settings>(saved)
-                .unwrap()
-                .small_gpu_allocations
-        );
-    }
 
     #[test]
     fn old_touch_preferences_migrate_without_overriding_explicit_off() {

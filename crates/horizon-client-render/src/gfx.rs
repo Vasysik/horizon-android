@@ -1304,7 +1304,7 @@ async fn open_backend(
         // Mobile drivers can spend hundreds of milliseconds reserving a new
         // 128-256 MiB pool block. This changes allocation granularity, not
         // resource limits, shader features, texture quality or geometry.
-        memory_hints: if crate::android_runtime::small_gpu_allocations() {
+        memory_hints: if cfg!(target_os = "android") {
             wgpu::MemoryHints::MemoryUsage
         } else {
             wgpu::MemoryHints::Performance
