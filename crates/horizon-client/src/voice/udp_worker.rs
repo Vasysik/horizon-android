@@ -66,10 +66,10 @@ impl UdpWorker {
         let (sound_tx, sound_rx) = std::sync::mpsc::channel::<IncomingSound>();
         let stop_signal = Arc::new(AtomicBool::new(false));
 
-        let host = if secret.voice_host.is_empty() {
-            fallback_host.to_string()
+        let host = if secret.voice_host.trim().is_empty() {
+            fallback_host.trim().to_string()
         } else {
-            secret.voice_host.clone()
+            secret.voice_host.trim().to_string()
         };
         let port = secret.server_port as u16;
 
@@ -171,7 +171,9 @@ impl UdpWorker {
 
         let mut handshake_success = false;
         let handshake_start = Instant::now();
-        let mut last_auth_sent = Instant::now() - Duration::from_secs(10);
+        let mut last_send = Instant::now() - Duration::from_secs(10);
+        let mut saved_nonce: Option<[u8; 16]> = None;
+        let mut check_pkt: Option<Vec<u8>> = None;
         let mut recv_buf = [0u8; 2048];
 
         while handshake_start.elapsed() < Duration::from_secs(6) {
@@ -179,31 +181,72 @@ impl UdpWorker {
                 return;
             }
 
-            // Retry Authenticate every 500ms if waiting for Ack
-            if last_auth_sent.elapsed() > Duration::from_millis(500) {
-                let _ = socket.send(&auth_pkt);
-                last_auth_sent = Instant::now();
+            // Retry every 500ms
+            if last_send.elapsed() >= Duration::from_millis(500) {
+                if let Some(ref nonce) = saved_nonce {
+                    // Nonce is known, retry ConnectionCheck (Step 3) with saved nonce
+                    if let Some(ref pkt) = check_pkt {
+                        let _ = socket.send(pkt);
+                    } else if let Ok(pkt) = build_client_udp_packet(
+                        conn_id,
+                        &cipher,
+                        PACKET_ID_CONNECTION_CHECK,
+                        nonce,
+                    ) {
+                        let _ = socket.send(&pkt);
+                        check_pkt = Some(pkt);
+                    }
+                } else {
+                    // Nonce not yet received, retry Authenticate (Step 1)
+                    let _ = socket.send(&auth_pkt);
+                }
+                last_send = Instant::now();
             }
 
-            if let Ok(len) = socket.recv(&mut recv_buf) {
-                if let Ok((pkt_id, body)) = parse_server_udp_packet(&recv_buf[..len], &cipher) {
-                    if pkt_id == PACKET_ID_AUTHENTICATE_ACK {
-                        if let Ok(ack) = AuthenticateAckPacket::from_body(&body) {
-                            let nonce = ack.nonce;
-                            // Step 3: Send ConnectionCheck (0x09) with nonce
-                            if let Ok(check_pkt) = build_client_udp_packet(
-                                conn_id,
-                                &cipher,
-                                PACKET_ID_CONNECTION_CHECK,
-                                &nonce,
-                            ) {
-                                let _ = socket.send(&check_pkt);
+            match socket.recv(&mut recv_buf) {
+                Ok(len) => {
+                    if let Ok((pkt_id, body)) = parse_server_udp_packet(&recv_buf[..len], &cipher) {
+                        match pkt_id {
+                            PACKET_ID_AUTHENTICATE_ACK => {
+                                if let Ok(ack) = AuthenticateAckPacket::from_body(&body) {
+                                    // Step 2: Extract and save 16-byte nonce
+                                    saved_nonce = Some(ack.nonce);
+                                    // Step 3: Send ConnectionCheck (0x09) with nonce
+                                    match build_client_udp_packet(
+                                        conn_id,
+                                        &cipher,
+                                        PACKET_ID_CONNECTION_CHECK,
+                                        &ack.nonce,
+                                    ) {
+                                        Ok(pkt) => {
+                                            let _ = socket.send(&pkt);
+                                            check_pkt = Some(pkt);
+                                            last_send = Instant::now();
+                                        }
+                                        Err(e) => {
+                                            log::warn!("SVC: Failed to build ConnectionCheck packet: {e}");
+                                        }
+                                    }
+                                }
                             }
+                            PACKET_ID_CONNECTION_CHECK_ACK => {
+                                // Step 4: ConnectionCheckAck received
+                                log::info!("SVC: UDP 4-step handshake completed successfully");
+                                handshake_success = true;
+                                break;
+                            }
+                            _ => {}
                         }
-                    } else if pkt_id == PACKET_ID_CONNECTION_CHECK_ACK {
-                        handshake_success = true;
-                        break;
                     }
+                }
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    // Non-blocking / short read timeout, continue loop
+                }
+                Err(_) => {
+                    // Socket error, continue until retry or timeout
                 }
             }
         }

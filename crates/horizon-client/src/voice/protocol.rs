@@ -337,10 +337,14 @@ impl SecretPacket {
         let voice_chat_distance = r.read_f64()?;
         let keep_alive = r.read_i32()?;
         let groups_enabled = r.read_bool()?;
-        let voice_host = r.read_string()?;
-        let allow_recording = r.read_bool()?;
+        let voice_host = r.read_string().unwrap_or_default();
+        let allow_recording = if r.remaining() > 0 {
+            r.read_bool().unwrap_or(false)
+        } else {
+            false
+        };
 
-        Ok(Self {
+        let packet = Self {
             secret,
             connection_id,
             server_port,
@@ -352,7 +356,16 @@ impl SecretPacket {
             groups_enabled,
             voice_host,
             allow_recording,
-        })
+        };
+
+        log::info!(
+            "SVC: Handshake secret parsed successfully. UDP Port: {}, Host: '{}', MTU: {}",
+            packet.server_port,
+            packet.voice_host,
+            packet.mtu_size
+        );
+
+        Ok(packet)
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -1024,6 +1037,97 @@ mod tests {
         let bytes = secret.to_bytes();
         let decoded = SecretPacket::from_bytes(&bytes).expect("Valid decode");
         assert_eq!(decoded, secret);
+    }
+
+    #[test]
+    fn test_secret_packet_full_recording_true_and_false() {
+        for allow_recording in [true, false] {
+            let secret = SecretPacket {
+                secret: [7u8; 16],
+                connection_id: 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210,
+                server_port: 24454,
+                player_uuid: 0x1111_2222_3333_4444_5555_6666_7777_8888,
+                codec: 1,
+                mtu_size: 1024,
+                voice_chat_distance: 32.0,
+                keep_alive: 1000,
+                groups_enabled: true,
+                voice_host: "mc.example.com".to_string(),
+                allow_recording,
+            };
+
+            let bytes = secret.to_bytes();
+            let decoded = SecretPacket::from_bytes(&bytes).expect("Full packet decode should succeed");
+            assert_eq!(decoded, secret);
+            assert_eq!(decoded.allow_recording, allow_recording);
+        }
+    }
+
+    #[test]
+    fn test_secret_packet_legacy_truncated_without_allow_recording() {
+        let mut w = ByteBufWriter::new();
+        let secret_bytes = [42u8; 16];
+        w.write_raw_bytes(&secret_bytes);
+        w.write_uuid(0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210);
+        w.write_i32(24454);
+        w.write_uuid(0x1111_2222_3333_4444_5555_6666_7777_8888);
+        w.write_u8(0);
+        w.write_i32(1024);
+        w.write_f64(48.0);
+        w.write_i32(1000);
+        w.write_bool(true);
+        w.write_string("voice.legacy.lan");
+        // Payload ends here, truncated without allow_recording
+
+        let bytes = w.into_bytes();
+        let decoded = SecretPacket::from_bytes(&bytes).expect("Legacy packet without allow_recording should decode");
+        assert_eq!(decoded.secret, secret_bytes);
+        assert_eq!(decoded.server_port, 24454);
+        assert_eq!(decoded.voice_host, "voice.legacy.lan");
+        assert_eq!(decoded.allow_recording, false);
+    }
+
+    #[test]
+    fn test_secret_packet_without_voice_host_and_allow_recording() {
+        // Case A: Payload ends right after groups_enabled (truncated before voice_host)
+        let mut w1 = ByteBufWriter::new();
+        let secret_bytes = [99u8; 16];
+        w1.write_raw_bytes(&secret_bytes);
+        w1.write_uuid(0x1234_5678);
+        w1.write_i32(25565);
+        w1.write_uuid(0x5678_1234);
+        w1.write_u8(0);
+        w1.write_i32(512);
+        w1.write_f64(16.0);
+        w1.write_i32(500);
+        w1.write_bool(false);
+        // Truncated here: no voice_host and no allow_recording
+
+        let bytes1 = w1.into_bytes();
+        let decoded1 = SecretPacket::from_bytes(&bytes1).expect("Packet without voice_host and allow_recording should decode");
+        assert_eq!(decoded1.secret, secret_bytes);
+        assert_eq!(decoded1.server_port, 25565);
+        assert_eq!(decoded1.voice_host, "");
+        assert_eq!(decoded1.allow_recording, false);
+
+        // Case B: Payload with empty host string "" and no allow_recording
+        let mut w2 = ByteBufWriter::new();
+        w2.write_raw_bytes(&secret_bytes);
+        w2.write_uuid(0x1234_5678);
+        w2.write_i32(25565);
+        w2.write_uuid(0x5678_1234);
+        w2.write_u8(0);
+        w2.write_i32(512);
+        w2.write_f64(16.0);
+        w2.write_i32(500);
+        w2.write_bool(false);
+        w2.write_string("");
+        // No allow_recording
+
+        let bytes2 = w2.into_bytes();
+        let decoded2 = SecretPacket::from_bytes(&bytes2).expect("Packet with empty host and no allow_recording should decode");
+        assert_eq!(decoded2.voice_host, "");
+        assert_eq!(decoded2.allow_recording, false);
     }
 
     #[test]

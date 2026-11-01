@@ -102,6 +102,9 @@ impl VoiceChatClient {
                     secret.mtu_size
                 );
 
+                // Stop compatibility retry timer immediately upon receiving valid secret
+                self.fallback_timer = None;
+
                 // Stop previous UDP worker if any
                 if let Some(handle) = self.udp_handle.take() {
                     handle.stop();
@@ -110,7 +113,6 @@ impl VoiceChatClient {
                 let handle = UdpWorker::spawn(secret.clone(), &self.current_server_host)?;
                 self.udp_handle = Some(handle);
                 self.secret = Some(secret);
-                self.fallback_timer = None;
 
                 // Send back initial client state
                 let state_pkt = UpdateStatePacket {
