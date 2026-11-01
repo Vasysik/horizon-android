@@ -152,3 +152,22 @@ On the isolated F-03L build, D-pad Down followed by Enter opened the title's
 Credits screen before world-renderer creation. Selecting the test world then
 showed a loading overlay while GLES initialized. These checks do not cover an
 Android TV controller's analog-stick navigation or vibration.
+
+## Touch crouch and connection diagnostics
+
+Android PR #75 ends a touch/controller crouch toggle when touch gameplay
+transitions into water, vertical flight or riding. In those states the control
+uses a hold instead. Clearing the pad toggle also prevents a screen from
+restoring it later; ordinary held-key and vanilla toggle behavior retain their
+existing paths. The keymapping tests cover cancellation, screen transitions,
+subsequent held Shift and the independent vanilla toggle option.
+
+Android PR #79 logs LAN/local connection failures and player departure reasons
+without requiring HORIZON_NET_DEBUG. It changes logging, not packet decoding,
+authentication or connection behavior. Diagnostic reports can therefore contain
+additional player names, peer addresses and disconnect/error text; review them
+before sharing. No frame-by-frame network logging was added.
+
+Both original contributor commits were retained. Android ARM64 Clippy and the
+keymapping tests passed after integration. Physical touch transitions and a
+final release APK still require device smoke testing.
