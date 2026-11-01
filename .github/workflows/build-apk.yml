@@ -1,0 +1,142 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      abi:
+        description: 'Target Android ABI'
+        type: choice
+        required: true
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
+          - x86
+          - all
+        default: 'arm64-v8a'
+      build_type:
+        description: 'Build type (--public is clean distribution APK with generated tables only)'
+        type: choice
+        required: true
+        options:
+          - public
+          - dev
+        default: 'public'
+  push:
+    branches:
+      - 'build-apk*'
+      - 'feat/build-apk*'
+      - 'feat/experimental-svc*'
+    paths:
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-apk-${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.abi || 'default' }}
+  cancel-in-progress: true
+
+jobs:
+  configure:
+    name: Select Target ABIs
+    # Guard: only run on fork, never in upstream repository (Vasysik/horizon-android)
+    if: github.repository != 'Vasysik/horizon-android'
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.select.outputs.targets }}
+    steps:
+      - id: select
+        run: |
+          ABI="${{ github.event.inputs.abi || 'arm64-v8a' }}"
+          echo "Selected ABI: $ABI"
+          if [ "$ABI" = "all" ]; then
+            echo 'targets=[{"abi":"arm64-v8a","target":"aarch64-linux-android"},{"abi":"armeabi-v7a","target":"armv7-linux-androideabi"},{"abi":"x86_64","target":"x86_64-linux-android"},{"abi":"x86","target":"i686-linux-android"}]' >> "$GITHUB_OUTPUT"
+          elif [ "$ABI" = "armeabi-v7a" ]; then
+            echo 'targets=[{"abi":"armeabi-v7a","target":"armv7-linux-androideabi"}]' >> "$GITHUB_OUTPUT"
+          elif [ "$ABI" = "x86_64" ]; then
+            echo 'targets=[{"abi":"x86_64","target":"x86_64-linux-android"}]' >> "$GITHUB_OUTPUT"
+          elif [ "$ABI" = "x86" ]; then
+            echo 'targets=[{"abi":"x86","target":"i686-linux-android"}]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'targets=[{"abi":"arm64-v8a","target":"aarch64-linux-android"}]' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build APK (${{ matrix.abi }})
+    needs: configure
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.configure.outputs.targets) }}
+    env:
+      CARGO_BUILD_JOBS: "2"
+      HORIZON_TELEMETRY_URL: "off"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle 8.14
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+
+      - name: Install Android SDK platform and NDK
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(which sdkmanager)"
+          fi
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-35"
+
+      - name: Add Rust target
+        run: |
+          rustup target add "${{ matrix.target }}"
+
+      - name: Prepare engine data tables
+        run: |
+          python3 tools/android_prepare.py
+
+      - name: Build Android APK
+        run: |
+          BUILD_FLAG="--public"
+          if [ "${{ github.event.inputs.build_type }}" = "dev" ]; then
+            BUILD_FLAG="--profile dev"
+          fi
+          python3 tools/android_build.py \
+            --abi "${{ matrix.abi }}" \
+            $BUILD_FLAG \
+            --sdk "$ANDROID_HOME" \
+            --java-home "$JAVA_HOME" \
+            --gradle "$(which gradle)"
+
+      - name: Generate Checksums
+        run: |
+          cd .local/android/apk/${{ matrix.abi }}
+          sha256sum *.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: horizon-android-${{ matrix.abi }}-${{ github.event.inputs.build_type || 'public' }}
+          path: |
+            .local/android/apk/${{ matrix.abi }}/*.apk
+            .local/android/apk/${{ matrix.abi }}/SHA256SUMS.txt
+          if-no-files-found: error
