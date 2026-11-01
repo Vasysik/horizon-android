@@ -20,6 +20,7 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 | | LOD distance, cave culling, chunk updates per frame | `horizon-graphics.txt` |
 | Quality | smooth lighting, mipmap levels, biome blend, clouds, cloud distance, weather radius, particles, entity shadows, cutout leaves | `options.txt` |
 | | sky, fog, weather, animated textures | `horizon-graphics.txt` |
+| | distant plant dither (`ditherCutoutMips`, off by default: cutouts from 64 texels up) | `horizon-graphics.txt` |
 | Display | FOV, max framerate, VSync, fullscreen, GUI scale | `options.txt` |
 | | resolution scale, anti-aliasing (FXAA or TAA), TAA upscaling, present mode, frame pacing | `horizon-graphics.txt` |
 | HDR (its own screen, from Display) | HDR, black level, peak brightness, paper white, UI brightness, a shortcut key to the screen | `horizon-graphics.txt` |

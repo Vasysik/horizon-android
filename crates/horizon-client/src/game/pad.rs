@@ -3,6 +3,7 @@
 //! the vanilla key mappings they are bound to, the left stick as an analog
 //! move vector and the right stick turning the view. `horizon-ctl pad`
 //! injects a virtual pad on top of the real one.
+use super::event_loop::EventLoopCtl;
 use super::{Game, Screen};
 use horizon_client::{
     Result,
@@ -12,7 +13,7 @@ use horizon_client::{
 };
 use serde_json::{Value, json};
 use std::time::Instant;
-use winit::{event_loop::ActiveEventLoop, keyboard::KeyCode};
+use winit::keyboard::KeyCode;
 
 pub(super) const HELP: &[&str] = &[
     "pad BUTTON down|up|tap         a virtual controller button (south east west north lb rb lt rt select start ls rs up down left right)",
@@ -40,6 +41,8 @@ pub(super) struct Pads {
     pub(super) touch_aim: Option<[f32; 2]>,
     #[cfg(target_os = "android")]
     pub(super) touch_ui: horizon_client::touch_ui::TouchUi,
+    /// Splitscreen: this player's pad, read by `PadRouter` for every game, instead of the pads.
+    pub(super) feed: Option<PadState>,
     /// The real controllers and the DualSense's output.
     #[cfg(all(feature = "controllers", not(target_os = "android")))]
     devices: hardware::Devices,
@@ -70,6 +73,19 @@ pub(super) struct Pads {
 
 #[cfg(all(feature = "controllers", not(target_os = "android")))]
 mod hardware;
+pub(super) use hardware::{PadId, PadRouter};
+
+/// What a controller did since the last frame.
+#[cfg_attr(not(feature = "controllers"), allow(dead_code))]
+pub(in crate::game) enum PadEvent {
+    Press(PadId, Button),
+    /// Disconnected (out of battery, unplugged, out of range).
+    Gone(PadId),
+    /// Connected again under the same id (Windows keeps it; macOS gives a new one). On Linux
+    /// gilrs gives a new device the slot of a disconnected one of the same model, so there this
+    /// can be another controller of that model.
+    Back(PadId),
+}
 
 /// A build without the `controllers` feature (the server build, which must not need libudev): no
 /// hardware pads, only `horizon-ctl pad`'s virtual one.
@@ -86,6 +102,33 @@ mod hardware {
                 .merge(&horizon_client::android_runtime::gamepad_state());
             #[cfg(not(target_os = "android"))]
             PadState::default()
+        }
+        pub(in crate::game) fn release_hardware(&mut self) {}
+    }
+
+    pub(in crate::game) type PadId = usize;
+    #[derive(Default)]
+    pub(in crate::game) struct PadRouter {}
+    impl PadRouter {
+        pub(in crate::game) fn events(&mut self) -> Vec<super::PadEvent> {
+            Vec::new()
+        }
+        pub(in crate::game) fn lend_output(&mut self, _: &mut Pads, _: PadId) {}
+        pub(in crate::game) fn reclaim_output(&mut self, _: &mut Pads) {}
+        pub(in crate::game) fn connected(&self, _: PadId) -> bool {
+            false
+        }
+        pub(in crate::game) fn uuid(&self, _: PadId) -> [u8; 16] {
+            [0; 16]
+        }
+        pub(in crate::game) fn state(&self, _: PadId) -> PadState {
+            PadState::default()
+        }
+        pub(in crate::game) fn name(&self, _: PadId) -> String {
+            String::new()
+        }
+        pub(in crate::game) fn style(&self, _: PadId) -> horizon_client::gamepad::GlyphStyle {
+            horizon_client::gamepad::GlyphStyle::Auto
         }
     }
 
@@ -116,6 +159,13 @@ mod hardware {
 }
 
 impl Pads {
+    /// Include releases delayed until the next simulation tick.
+    pub(super) fn holds_action(&self, settings: &gamepad::PadSettings, action: &str) -> bool {
+        settings.binding(action).is_some_and(|button| {
+            self.edges.is_held(button) || self.late_releases.contains(&button)
+        })
+    }
+
     /// A new player entity took over (spawn, respawn, a server joined, a
     /// dimension change): its health is not compared with the old one's.
     pub(super) fn player_replaced(&mut self) {
@@ -137,7 +187,7 @@ impl Game<'_> {
             && matches!(self.screen, Screen::Inventory | Screen::Creative)
     }
     /// Once per loop iteration: read the pads and act on button changes.
-    pub(super) fn poll_pads(&mut self, event_loop: &ActiveEventLoop) {
+    pub(super) fn poll_pads(&mut self, event_loop: &dyn EventLoopCtl) {
         #[cfg(target_os = "android")]
         if !matches!(self.screen, Screen::Playing | Screen::Options)
             && self.pad.touch.editor.is_some()
@@ -183,6 +233,8 @@ impl Game<'_> {
                     self.pad_edge(event_loop, button, down);
                 }
             }
+            // The keyboard's menu focus follows its widget all the same.
+            self.pad_menu_frame(event_loop);
             return;
         }
         #[cfg(target_os = "android")]
@@ -194,7 +246,10 @@ impl Game<'_> {
             self.pad.touch.force_crosshair =
                 !crate::touch_visible() || self.settings.keypad.enabled;
         }
-        let hardware = self.pad.read();
+        let hardware = match self.pad.feed {
+            Some(state) => state,
+            None => self.pad.read(),
+        };
         self.ui.options.pad_style = self.settings.controller.glyphs.resolve(self.pad.style);
         let state = hardware.merge(&self.pad.injected);
         #[cfg(target_os = "android")]
@@ -291,7 +346,7 @@ impl Game<'_> {
         }
     }
 
-    fn pad_edge(&mut self, event_loop: &ActiveEventLoop, button: Button, down: bool) {
+    fn pad_edge(&mut self, event_loop: &dyn EventLoopCtl, button: Button, down: bool) {
         let ticking = self.title.is_none() && self.screen == Screen::Playing && !self.pause;
         if down {
             // Pressed again before its held-back release went out.
@@ -307,7 +362,7 @@ impl Game<'_> {
         self.pad_button_logged(event_loop, button, down);
     }
 
-    fn pad_button_logged(&mut self, event_loop: &ActiveEventLoop, button: Button, down: bool) {
+    fn pad_button_logged(&mut self, event_loop: &dyn EventLoopCtl, button: Button, down: bool) {
         if let Err(e) = self.pad_button(event_loop, button, down) {
             log::warn!("Horizon: controller {}: {e}", button.name());
         }
@@ -321,7 +376,7 @@ impl Game<'_> {
 
     fn pad_button(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         button: Button,
         down: bool,
     ) -> Result<()> {

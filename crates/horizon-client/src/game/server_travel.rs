@@ -126,6 +126,13 @@ impl Trip {
 }
 
 impl Game<'_> {
+    pub(super) fn gateway_source_chunks(&self) -> Vec<(i32, i32)> {
+        self.server_trips
+            .iter()
+            .filter(|t| t.dim == self.dim)
+            .filter_map(|t| t.gateway.and_then(GatewayJob::source_chunk))
+            .collect()
+    }
     /// Whether `conn` is between two levels: the server leaves its body
     /// alone until it arrives.
     pub(super) fn on_server_trip(&self, conn: u32) -> bool {
@@ -537,6 +544,10 @@ impl Game<'_> {
             );
             if trip.dim != self.dim
                 || !(-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz)))
+                || trip
+                    .gateway
+                    .and_then(GatewayJob::source_chunk)
+                    .is_some_and(|c| !self.world.chunks.contains_key(&c))
             {
                 k += 1;
                 continue;

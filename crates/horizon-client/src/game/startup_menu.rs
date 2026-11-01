@@ -1,9 +1,12 @@
 //! The interactive title before world resources exist. Uses only the menu
 //! atlas/panorama; transfers the actual screen and queued entry to Game.
+use super::event_loop::EventLoopCtl;
+use super::key_focus::{self, Act};
 use super::*;
 use horizon_client::{
     clipboard::{self, AppendSelection, SystemClipboard},
     options_ui::{Event, OptionsUi, Page},
+    widgets::{Kind, Target},
 };
 use winit::{event::KeyEvent, keyboard::ModifiersState};
 
@@ -40,6 +43,26 @@ pub(super) struct StartupMenu {
     dragging: bool,
     clipboard: SystemClipboard,
     selection: AppendSelection,
+    /// The narrator's `NARRATOR_TOGGLE` toast, handed to the game with the title.
+    narrator_toast: Option<horizon_client::toasts::SystemToast>,
+    /// The screens' narration, handed to the game with the title (which
+    /// stays the screen already opened).
+    narration: horizon_client::screen_narrator::ScreenNarrator,
+    /// Frames drawn, for `widgets::end_frame`.
+    frames: u64,
+    /// The keyboard's focus (`key_focus`: Tab, the arrows, Enter); the
+    /// pointer sits on it, as in the game.
+    key_focus: Option<Target>,
+    /// The focused slider's arrows change its value (`canChangeValue`).
+    key_slider_edit: bool,
+    /// What the last click landed on, for the next Tab or arrow.
+    key_origin: Option<[f32; 4]>,
+    /// The focused slider being nudged and where the keyboard put its handle.
+    key_nudge: Option<([f32; 4], f32)>,
+    /// A click the keyboard sends is being handled.
+    key_synthetic: bool,
+    /// The screen the keyboard's focus is on (`key_screen`).
+    key_screen: u64,
     pub pending: Option<PendingWorldEntry>,
     pub(super) entry_presented: bool,
     pub reload_packs: bool,
@@ -136,6 +159,8 @@ impl StartupMenu {
         game.clipboard = std::mem::take(&mut self.clipboard);
         game.text_selection = std::mem::take(&mut self.selection);
         game.perf = std::mem::take(&mut self.perf);
+        game.narrator_toast = self.narrator_toast.take();
+        game.narration = std::mem::take(&mut self.narration);
         // Preserve an existing resource-error screen opened by start_game.
         if self.options_open {
             let resource_error = game.ui.options.resource_error.take();
@@ -146,6 +171,62 @@ impl StartupMenu {
             game.options_from_title = true;
             game.dragging = self.dragging;
         }
+        if let Some(focus) = self.key_focus.take() {
+            game.key_focus_adopt(focus, self.key_slider_edit);
+        }
+    }
+
+    /// After a frame is drawn: its widgets become the last frame's, and the
+    /// open screen's narration reads them (`Gui.update`'s
+    /// `handleDelayedNarration`). `gui` is the GUI size.
+    pub(super) fn frame_drawn(&mut self, gui: (f32, f32)) {
+        self.frames += 1;
+        horizon_client::widgets::end_frame(self.frames);
+        // The keyboard's focus follows its widget, or starts again on a new
+        // screen.
+        if let Some(focus) = self.key_focus {
+            let targets = key_focus::keyboard_targets(
+                key_focus::on_screen(key_focus::drawn_targets(), gui),
+                false,
+            );
+            let screen = self.key_screen();
+            self.key_focus = if screen == self.key_screen {
+                key_focus::follow(focus, &targets)
+            } else {
+                // Screen.setInitialFocus: a forward Tab from nothing.
+                self.key_screen = screen;
+                key_focus::tab_step(&targets, None, true).map(|i| targets[i])
+            };
+            if let Some(now) = self.key_focus
+                && now.rect != focus.rect
+            {
+                self.cursor = now.center();
+                self.key_nudge = None;
+            }
+        }
+        self.narration
+            .frame(gui, self.cursor, self.key_focus.map(|t| t.rect));
+    }
+
+    /// Which screen is open, as far as the keyboard's focus cares.
+    fn key_screen(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (self.options_open, self.win.is_some()).hash(&mut hasher);
+        std::mem::discriminant(&self.options.page()).hash(&mut hasher);
+        self.title.as_ref().map(Title::screen_key).hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// The keyboard lets go of the focus (the real mouse is used): it stays
+    /// where the next Tab or arrow goes on from. Whether it had it.
+    fn key_focus_release(&mut self) -> bool {
+        let Some(focus) = self.key_focus.take() else {
+            return false;
+        };
+        self.key_origin = Some(focus.rect);
+        self.key_nudge = None;
+        true
     }
 
     #[cfg(target_os = "android")]
@@ -209,7 +290,7 @@ impl StartupMenu {
     }
 
     /// `Screen.keyPressed` on the title screens: the action a key starts (Enter confirms, see `confirm_key` in title.rs).
-    fn title_key(&mut self, event: &KeyEvent) -> Action {
+    fn title_key(&mut self, event: &KeyEvent, viewport: (f32, f32)) -> Action {
         let shortcut = self.shortcut(event);
         let Some(title) = &mut self.title else {
             return Action::None;
@@ -231,10 +312,16 @@ impl StartupMenu {
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Escape) => title.escape(),
             PhysicalKey::Code(KeyCode::F5) => title.refresh_servers(),
-            PhysicalKey::Code(KeyCode::Tab) => title.tab(),
-            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => return title.confirm_key(),
-            PhysicalKey::Code(KeyCode::Space) if title.list_focused() => {
-                return title.confirm_key();
+            PhysicalKey::Code(KeyCode::Tab) => {
+                title.tab_dir(self.modifiers.shift_key(), viewport);
+            }
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                return title.confirm_key_size(viewport).0;
+            }
+            PhysicalKey::Code(KeyCode::Space)
+                if title.list_focused() || title.focused_button.is_some() =>
+            {
+                return title.confirm_key_size(viewport).0;
             }
             PhysicalKey::Code(
                 key @ (KeyCode::Backspace
@@ -249,6 +336,14 @@ impl StartupMenu {
                     self.modifiers.control_key(),
                     self.modifiers.shift_key(),
                 );
+            }
+            PhysicalKey::Code(
+                key @ (KeyCode::ArrowLeft
+                | KeyCode::ArrowRight
+                | KeyCode::ArrowUp
+                | KeyCode::ArrowDown),
+            ) => {
+                title.arrow_key(key, viewport);
             }
             _ => {
                 let cleared = !title.has_caret_field()
@@ -368,16 +463,21 @@ impl Loading {
             renderer.set_present_mode(self.settings.vsync, self.settings.horizon.present_mode);
         }
         horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);
+        super::narrator::sync(&self.settings);
         if let Some(gui) = &mut self.gui {
             gui.atlas.font.uniform = self.settings.force_unicode;
             gui.atlas.font.japanese = self.settings.japanese_glyphs;
         }
         if let Some(window) = self.window.clone() {
-            let modes = window
+            let monitor = window
                 .current_monitor()
-                .or_else(|| window.primary_monitor())
-                .map(|m| horizon_client::window::monitor_video_modes(&m))
-                .unwrap_or_default();
+                .or_else(|| window.primary_monitor());
+            if let Some(modes) = self
+                .video_modes
+                .refresh(monitor, horizon_client::window::monitor_video_modes)
+            {
+                self.settings.video_modes = modes;
+            }
             let preferred = self
                 .settings
                 .file
@@ -391,7 +491,6 @@ impl Loading {
                 preferred,
                 false,
             );
-            self.settings.video_modes = modes;
         }
         self.update_menu_cursor();
     }
@@ -437,7 +536,7 @@ impl Loading {
     fn open_menu_options(&mut self, page: Page) {
         self.menu.options.open_at(false, page);
         self.menu.options.languages = horizon_client::lang::available(&[&self.menu.root]);
-        self.menu.options.pack_infos = packs::pack_infos(&self.vanilla_root);
+        self.menu.options.pack_infos = packs::pack_infos(&self.vanilla_root, &[]);
         self.menu.options.pack_selection = self.settings.resource_packs.clone();
         self.menu.options.pack_screen = None;
         self.menu.options_open = true;
@@ -482,8 +581,9 @@ impl Loading {
                     packs::open_folder(&dir);
                 }
                 Event::DataPacks(ids) => {
+                    let resources = self.vanilla_root.clone();
                     if let Some(title) = &mut self.menu.title {
-                        title.set_data_packs(ids);
+                        title.offer_data_packs(&resources, ids);
                     }
                 }
                 Event::OpenDataPackFolder(dir) => {
@@ -500,6 +600,23 @@ impl Loading {
                         horizon_client::shader_pack_list::scan(&Game::shader_packs_dir());
                 }
                 Event::ShaderPack => self.save_menu_settings(),
+                Event::OpenShaderOptions => {
+                    self.settings.shader_options = super::shader_packs::read_shader_options(
+                        &self.settings.horizon.shader_pack,
+                        &self.settings.language,
+                        &horizon_shaders::Macros::standard(),
+                    );
+                }
+                Event::ShaderOptions => {
+                    if let Some(options) = self.settings.shader_options.take() {
+                        super::shader_packs::write_shader_options(&options);
+                    }
+                }
+                Event::NativePackOptions(i) => {
+                    if let Some(pack) = self.settings.shader_packs.get(i) {
+                        pack.save_values(&Game::shader_packs_dir());
+                    }
+                }
                 Event::OpenShaderPackFolder => {
                     let dir = Game::shader_packs_dir();
                     let _ = std::fs::create_dir_all(&dir);
@@ -520,6 +637,10 @@ impl Loading {
                         self.menu.win = Some((screen, Instant::now()));
                     }
                 }
+                Event::Narrator => super::narrator::update_status(
+                    self.settings.narrator(),
+                    &mut self.menu.narrator_toast,
+                ),
                 // Mods' settings pages open only in a running game.
                 Event::ModSettings(_) | Event::NativeSettings(_) | Event::NativeButton(..) => {}
                 // The startup menu runs before the game opens a control socket.
@@ -532,10 +653,51 @@ impl Loading {
         }
     }
 
+    /// `Game::narrator_hotkey` on the startup menu's screens.
+    fn menu_narrator_hotkey(&mut self, event: &KeyEvent) {
+        let letter = clipboard::shortcut_letter(&event.logical_key, event.physical_key);
+        if letter != Some('b') {
+            return;
+        }
+        let menu = &mut self.menu;
+        let control_with_quirk = if cfg!(target_os = "macos") {
+            menu.modifiers.super_key()
+        } else {
+            menu.modifiers.control_key()
+        };
+        let edit_box_focused = if menu.options_open {
+            menu.options.typing()
+        } else if menu.win.is_some() || menu.pending.is_some() {
+            false
+        } else {
+            menu.title
+                .as_mut()
+                .is_some_and(|t| t.has_caret_field() || t.focused_field().is_some())
+        };
+        let hotkey = super::narrator::is_hotkey(
+            event.state == ElementState::Pressed,
+            control_with_quirk,
+            letter,
+            edit_box_focused,
+            horizon_narrator::is_active(),
+            self.settings.file.bool("narratorHotkey"),
+        );
+        if !hotkey {
+            return;
+        }
+        let was_disabled = super::narrator::cycle_status(&mut self.settings);
+        super::narrator::update_status(self.settings.narrator(), &mut self.menu.narrator_toast);
+        self.save_menu_settings();
+        self.menu
+            .narration
+            .status_changed(was_disabled, horizon_narrator::screen::Trigger::Keyboard);
+    }
+
     fn menu_options_click(&mut self, drag: bool, right: bool) {
         let size = self.menu_size();
         let batch = HudBatch::new(size);
         let Some(gui) = &self.gui else { return };
+        self.menu.options.shift = self.menu.modifiers.shift_key();
         let events = self.menu.options.click(
             &mut self.settings,
             &gui.atlas,
@@ -549,7 +711,7 @@ impl Loading {
         self.menu_option_events(events);
     }
 
-    fn menu_action(&mut self, event_loop: &ActiveEventLoop, action: Action) {
+    fn menu_action(&mut self, event_loop: &dyn EventLoopCtl, action: Action) {
         #[cfg(target_os = "android")]
         if !matches!(action, Action::None) {
             self.menu.click_sound(self.settings.volumes);
@@ -588,7 +750,7 @@ impl Loading {
         if let Some(notice) = crate::documents::poll() {
             if notice.changed {
                 self.menu.options.pack_infos =
-                    packs::pack_infos(&self.options.as_ref().unwrap().resources);
+                    packs::pack_infos(&self.options.as_ref().unwrap().resources, &[]);
                 self.menu.options.pack_screen = None;
                 self.settings.shader_packs =
                     horizon_client::shader_pack_list::scan(&Game::shader_packs_dir());
@@ -630,7 +792,7 @@ impl Loading {
         }
     }
     #[cfg(target_os = "android")]
-    fn startup_navigation(&mut self, events: &ActiveEventLoop, event: &KeyEvent) -> Result<bool> {
+    fn startup_navigation(&mut self, events: &dyn EventLoopCtl, event: &KeyEvent) -> Result<bool> {
         let Some(key) = horizon_client::keypad::resolve_key(event.physical_key, &event.logical_key)
         else {
             return Ok(false);
@@ -638,7 +800,7 @@ impl Loading {
         self.startup_navigation_key(events, key)
     }
     #[cfg(target_os = "android")]
-    fn startup_navigation_key(&mut self, events: &ActiveEventLoop, key: KeyCode) -> Result<bool> {
+    fn startup_navigation_key(&mut self, events: &dyn EventLoopCtl, key: KeyCode) -> Result<bool> {
         use horizon_client::{
             gamepad::{self, Button},
             widgets,
@@ -703,7 +865,7 @@ impl Loading {
     }
 
     #[cfg(target_os = "android")]
-    pub(super) fn menu_gamepad_frame(&mut self, events: &ActiveEventLoop) -> Result<()> {
+    pub(super) fn menu_gamepad_frame(&mut self, events: &dyn EventLoopCtl) -> Result<()> {
         use horizon_client::gamepad::Button;
         crate::platform::poll_gamepad_connections();
         let state = if self.settings.controller.enabled {
@@ -735,7 +897,7 @@ impl Loading {
     #[cfg(target_os = "android")]
     fn startup_mouse_button(
         &mut self,
-        events: &ActiveEventLoop,
+        events: &dyn EventLoopCtl,
         right: bool,
         down: bool,
     ) -> Result<()> {
@@ -757,9 +919,206 @@ impl Loading {
         )
     }
 
+    /// The real mouse before the screen takes it: a move, a press or a
+    /// scroll hands the pointer back from the keyboard (a press or a scroll
+    /// where the mouse left it), and a left press focuses what it lands on.
+    fn menu_key_focus_mouse(&mut self, event: &WindowEvent) {
+        match event {
+            WindowEvent::CursorMoved { .. } => {
+                self.menu.key_focus_release();
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if self.menu.key_focus_release() {
+                    self.update_menu_cursor();
+                }
+                if *state == ElementState::Pressed && *button == MouseButton::Left {
+                    let (cx, cy) = self.menu.cursor;
+                    self.menu.key_origin = self
+                        .menu_key_targets()
+                        .into_iter()
+                        .find(|t| {
+                            let [x, y, w, h] = t.rect;
+                            cx >= x && cy >= y && cx < x + w && cy < y + h
+                        })
+                        .map(|t| t.rect);
+                }
+            }
+            WindowEvent::MouseWheel { .. } if self.menu.key_focus_release() => {
+                self.update_menu_cursor();
+            }
+            _ => {}
+        }
+    }
+
+    /// What the keyboard can focus on the screen last drawn.
+    fn menu_key_targets(&self) -> Vec<Target> {
+        let batch = HudBatch::new(self.menu_size());
+        key_focus::keyboard_targets(
+            key_focus::on_screen(key_focus::drawn_targets(), (batch.width, batch.height)),
+            false,
+        )
+    }
+
+    /// `Screen.keyPressed`'s focus navigation on the title shown while
+    /// resources load, as `Game::key_focus_key` does it in the game (the
+    /// pointer sits on the focus; a step past a list's visible rows doesn't
+    /// scroll it here). Whether the key was used.
+    fn menu_key_focus(&mut self, event_loop: &dyn EventLoopCtl, key: KeyCode) -> bool {
+        let Some(nav) = key_focus::nav_of(key, self.menu.modifiers.shift_key()) else {
+            return false;
+        };
+        let options = &self.menu.options;
+        if self.gui.is_none()
+            || self.menu.pending.is_some()
+            || self.menu.win.is_some()
+            || (self.menu.options_open
+                && (options.selected_key.is_some() || options.selected_pad_action.is_some()))
+        {
+            return false;
+        }
+        let targets = self.menu_key_targets();
+        if targets.is_empty() {
+            return false;
+        }
+        let find = |rect: [f32; 4]| {
+            targets
+                .iter()
+                .find(|t| t.rect.iter().zip(rect).all(|(a, b)| (a - b).abs() < 0.5))
+                .copied()
+        };
+        let mut slider_edit = self.menu.key_slider_edit;
+        let mut focus = self.menu.key_focus.and_then(|f| find(f.rect));
+        if focus.is_none()
+            && let Some(clicked) = self.menu.key_origin.and_then(find)
+        {
+            focus = Some(clicked);
+            slider_edit = true;
+        }
+        let (typing, rows_take_enter) = if self.menu.options_open {
+            (self.menu.options.typing(), false)
+        } else if let Some(title) = &mut self.menu.title {
+            (
+                title.has_caret_field() || title.focused_field().is_some(),
+                title.list_focused(),
+            )
+        } else {
+            (false, false)
+        };
+        let batch = HudBatch::new(self.menu_size());
+        let ctx = key_focus::Context {
+            slider_edit,
+            typing,
+            rows_take_enter,
+            gui: (batch.width, batch.height),
+        };
+        let act = key_focus::act(nav, focus, &targets, ctx);
+        if act == Act::Pass {
+            return false;
+        }
+        if self.menu.key_focus.is_none() {
+            self.menu.key_screen = self.menu.key_screen();
+        }
+        self.menu.key_origin = None;
+        self.menu.key_focus = focus;
+        self.menu.key_slider_edit = slider_edit;
+        match (act, focus) {
+            (Act::Focus(i), _) => {
+                self.menu_key_focus_on(event_loop, targets[i]);
+                self.menu.key_slider_edit = key_focus::slider_edit_on_focus(nav);
+            }
+            (Act::Step(button), Some(focus)) => {
+                let rects: Vec<[f32; 4]> = targets.iter().map(|t| t.rect).collect();
+                if let Some(i) =
+                    horizon_client::gamepad::focus_step_rect(focus.rect, button, &rects)
+                {
+                    self.menu_key_focus_on(event_loop, targets[i]);
+                }
+            }
+            (Act::Press, Some(focus)) => self.menu_key_click(event_loop, focus.center()),
+            (Act::ToggleSlider, _) => self.menu.key_slider_edit = !slider_edit,
+            (
+                Act::Nudge(sign),
+                Some(
+                    focus @ Target {
+                        kind: Kind::Slider { value, track },
+                        ..
+                    },
+                ),
+            ) => {
+                let from = match self.menu.key_nudge {
+                    Some((rect, x)) if rect == focus.rect => x,
+                    _ => horizon_client::gamepad::slider_x(track, value),
+                };
+                let x = (from + sign).clamp(track[0], track[0] + track[1]);
+                self.menu.key_nudge = Some((focus.rect, x));
+                self.menu_key_click(event_loop, (x, focus.center().1));
+            }
+            _ => {}
+        }
+        if let Some(Target {
+            kind: Kind::Slider { .. },
+            ..
+        }) = self.menu.key_focus
+        {
+            use horizon_client::screen_narrator::InputType;
+            self.menu.narration.set_input(if self.menu.key_slider_edit {
+                InputType::KeyboardTab
+            } else {
+                InputType::KeyboardArrow
+            });
+        }
+        true
+    }
+
+    /// The keyboard's focus lands on `target`, the pointer with it (see
+    /// `Game::key_focus_landed`).
+    fn menu_key_focus_on(&mut self, event_loop: &dyn EventLoopCtl, target: Target) {
+        let left = self.menu.key_focus.replace(target);
+        self.menu.key_nudge = None;
+        self.menu.key_slider_edit = false;
+        self.menu.cursor = target.center();
+        if left.is_some_and(|l| l.rect == target.rect) {
+            return;
+        }
+        if left.is_some_and(|l| l.kind == Kind::Field)
+            && target.kind != Kind::Field
+            && !self.menu.options_open
+            && let Some(title) = &mut self.menu.title
+        {
+            title.blur_field();
+        }
+        match target.kind {
+            Kind::Field => self.menu_key_click(event_loop, key_focus::field_click(target.rect)),
+            Kind::Row if !self.menu.options_open => {
+                let batch = HudBatch::new(self.menu_size());
+                if let Some(title) = &mut self.menu.title {
+                    title.focus_world_row(target.center(), (batch.width, batch.height));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A left click at `at` (GUI pixels), the pointer staying there.
+    fn menu_key_click(&mut self, event_loop: &dyn EventLoopCtl, at: (f32, f32)) {
+        self.menu.cursor = at;
+        let was = std::mem::replace(&mut self.menu.key_synthetic, true);
+        for state in [ElementState::Pressed, ElementState::Released] {
+            let click = WindowEvent::MouseInput {
+                device_id: DeviceId::dummy(),
+                state,
+                button: MouseButton::Left,
+            };
+            if let Err(e) = self.menu_event(event_loop, click) {
+                log::warn!("Horizon: keyboard focus click: {e}");
+            }
+        }
+        self.menu.key_synthetic = was;
+    }
+
     pub(super) fn menu_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         event: WindowEvent,
     ) -> Result<()> {
         #[cfg(target_os = "android")]
@@ -1014,6 +1373,32 @@ impl Loading {
                 self.menu.physical_keys.remove(&key);
             }
         }
+        if let WindowEvent::KeyboardInput { event, .. } = &event {
+            self.menu_narrator_hotkey(event);
+        }
+        // The real mouse takes the pointer back from the keyboard's focus.
+        let synthetic = self.menu.key_synthetic;
+        if !synthetic {
+            self.menu_key_focus_mouse(&event);
+        }
+        // Fullscreen (F11) is the window's: not the screen's input; the
+        // keyboard's own clicks aren't the mouse.
+        let f11 = matches!(&event, WindowEvent::KeyboardInput { event, .. }
+            if event.physical_key == PhysicalKey::Code(KeyCode::F11));
+        if !f11 && !synthetic {
+            super::narrator::narrate_input(&mut self.menu.narration, &event, self.menu.cursor);
+        }
+        // Screen.keyPressed: Tab, the arrows and Enter move and press the
+        // focus, unless the focused widget or the screen keeps them.
+        if let WindowEvent::KeyboardInput {
+            event: key_event, ..
+        } = &event
+            && key_event.state == ElementState::Pressed
+            && let PhysicalKey::Code(key) = key_event.physical_key
+            && self.menu_key_focus(event_loop, key)
+        {
+            return Ok(());
+        }
         match event {
             WindowEvent::CloseRequested => {
                 if !self.settings.quit_shortcuts
@@ -1035,6 +1420,13 @@ impl Loading {
             }
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::ModifiersChanged(modifiers) => self.menu.modifiers = modifiers.state(),
+            // `PackSelectionScreen.onFilesDrop`: a pack dropped on the window
+            // joins the Create New World screen's data packs.
+            WindowEvent::DroppedFile(path) => {
+                if let Some(title) = &mut self.menu.title {
+                    title.drop_file(path);
+                }
+            }
             WindowEvent::Focused(false) => {
                 self.menu.modifiers = ModifiersState::empty();
                 self.menu.physical_keys.clear();
@@ -1178,7 +1570,8 @@ impl Loading {
                         self.menu_option_events(events);
                     }
                 } else {
-                    let action = self.menu.title_key(&event);
+                    let batch = HudBatch::new(self.menu_size());
+                    let action = self.menu.title_key(&event, (batch.width, batch.height));
                     self.menu_action(event_loop, action);
                 }
             }
@@ -1233,6 +1626,7 @@ impl Loading {
             // 20 ticks a second: the startup menu runs no tick rate.
             let delta_ticks = now.duration_since(*frame).as_secs_f32() * 20.0;
             *frame = now;
+            horizon_client::widgets::begin_screen(|| win.screen_info());
             win.draw(batch, &gui.atlas, delta_ticks, Default::default());
             if win.finished(batch.height) {
                 self.menu.win = None;
@@ -1252,6 +1646,9 @@ impl Loading {
                 self.settings.save(&Game::options_path());
             }
             let _ = title.update_toast(self.settings.notification_display_time);
+            for found in title.lan_found_narrations((batch.width, batch.height)) {
+                horizon_narrator::say_system_queued(&found.plain());
+            }
             let items = match &self.loaded {
                 Some(Ok(loaded)) => Some(&*loaded.pack.item_renderer),
                 _ => None,
@@ -1264,6 +1661,22 @@ impl Loading {
                 self.settings.file.bool("hideSplashTexts"),
             );
         }
+        if let Some(focus) = self.menu.key_focus
+            && self.menu.pending.is_none()
+            && self.menu.win.is_none()
+        {
+            key_focus::draw_outline(&gui.atlas, batch, focus);
+        }
+        // Over every screen, as the game's; no sound before the sound engine.
+        let title_toast = self.menu.title.as_ref().is_some_and(|t| t.has_toast());
+        super::narrator::draw_toast(
+            &mut self.menu.narrator_toast,
+            u32::from(title_toast),
+            f64::from(self.settings.notification_display_time),
+            &gui.atlas,
+            batch,
+            false,
+        );
         #[cfg(target_os = "android")]
         {
             self.menu.touch.draw(batch, &gui.atlas, true);
@@ -1377,6 +1790,7 @@ mod tests {
             gui: None,
             settings: Settings::default(),
             fullscreen: horizon_client::window::FullscreenState::new(false),
+            video_modes: Default::default(),
             options: None,
             vanilla_root: PathBuf::new(),
             pack_error: None,

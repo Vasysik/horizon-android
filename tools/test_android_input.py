@@ -13,12 +13,15 @@ edition = "2024"
 [workspace]
 [dependencies]
 horizon-client-input = { path = "../../../crates/horizon-client-input" }
+horizon-client-core = { path = "../../../crates/horizon-client-core" }
+horizon-narrator = { path = "../../../crates/horizon-narrator" }
 winit = "0.30.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ''', encoding='utf-8')
     (harness / 'src/lib.rs').write_text('''#![allow(dead_code, unused_imports)]
 pub use horizon_client_input::{gamepad, keybinds, clipboard};
+pub use horizon_client_core::text;
 #[path = "../../../../crates/horizon-client-render/src/android_gamepad.rs"] mod android_gamepad;
 #[path = "../../../../crates/horizon-client-render/src/android_runtime.rs"] mod android_runtime;
 #[path = "../../../../crates/horizon-client-render/src/keypad.rs"] mod keypad;

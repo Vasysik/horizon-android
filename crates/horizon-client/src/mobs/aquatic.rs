@@ -7,7 +7,7 @@ use super::{
     control::MoveKind,
     goals::{
         Avoid, AvoidEntity, BreathAir, Cx, Goal, HurtByTarget, LookAtPlayer, MeleeAttack, Panic,
-        RandomLookAround, Stroll, Tempt, TryFindWater, goal_clone, reduced,
+        RandomLookAround, Stroll, TryFindWater, goal_clone, reduced,
     },
     nav::NavKind,
 };
@@ -114,22 +114,34 @@ pub fn register(m: &mut Mob) {
                 gravity: false,
             };
             m.ai.look.kind = super::control::LookKind::SmoothSwimming(20.0);
-            m.ai.nav.kind = NavKind::Amphibious;
+            m.ai.nav.kind = NavKind::Amphibious {
+                prefers_shallow: false,
+            };
             // `Axolotl()`: water costs nothing, so swim targets in water pass
             // DefaultRandomPos's malus check.
             m.set_malus(super::path::PathType::Water, 0.0);
             super::animal_brain::init(m, i64::from(m.id));
         }
         S::Tadpole => {
-            // `TadpoleAi.initIdleActivity`: panic 2.0, follow a player holding
-            // frog food at 1.25 and swim around at 0.5 (not 1.0).
-            let food = m.kind.food.clone();
-            let g = &mut m.ai.goals;
-            g.add(0, Panic::new(2.0));
-            g.add(1, Tempt::new(1.25, food, false));
-            g.add(4, Stroll::swimming(0.5, 40));
-            m.ai.mov.kind = MoveKind::Custom;
+            // `Tadpole()`: `SmoothSwimmingMoveControl(this, 85, 10, 0.02, 0.1, true)`,
+            // `SmoothSwimmingLookControl(this, 10)` and a water-bound navigation.
+            m.ai.mov.kind = MoveKind::SmoothSwimming {
+                max_turn_x: 85.0,
+                max_turn_y: 10.0,
+                in_water: 0.02,
+                outside: 0.1,
+                gravity: true,
+            };
+            m.ai.look.kind = super::control::LookKind::SmoothSwimming(10.0);
             m.ai.nav.kind = NavKind::Water { breach: false };
+            // A tadpole is an `AbstractFish`: its goals (panic 1.25, avoid the player, the fish
+            // swim goal) run beside `TadpoleAi`'s brain (panic 2.0, looking at players, frog
+            // food, swimming about).
+            let g = &mut m.ai.goals;
+            g.add(0, Panic::new(1.25));
+            g.add(2, AvoidEntity::new(Avoid::Player, 8.0, 1.6, 1.4));
+            g.add(4, FishSwim(Stroll::swimming(1.0, 40)));
+            super::animal_brain::init(m, i64::from(m.id));
         }
         S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish => {
             let puffer = m.species() == S::Pufferfish;
@@ -503,7 +515,9 @@ pub fn travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>
             true
         }
         // AbstractFish.travelInWater / Dolphin.travelInWater.
-        S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish | S::Dolphin if m.fluids.in_water => {
+        S::Cod | S::Salmon | S::TropicalFish | S::Pufferfish | S::Tadpole | S::Dolphin
+            if m.fluids.in_water =>
+        {
             let speed = if m.species() == S::Dolphin {
                 m.ai.speed
             } else {
@@ -513,7 +527,9 @@ pub fn travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>
             m.do_move(w, events);
             m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
             if m.ai.target.is_none() {
-                m.velocity.y -= 0.005;
+                // `Vec3.add(0.0, -0.005, 0.0)`: adding 0.0 turns a -0.0 into 0.0.
+                m.velocity =
+                    Vec3::new(m.velocity.x + 0.0, m.velocity.y - 0.005, m.velocity.z + 0.0);
             }
             true
         }

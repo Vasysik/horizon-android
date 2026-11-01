@@ -692,6 +692,45 @@ impl Behaviours {
         );
         true
     }
+    /// `FenceGateBlock.onExplosionHit` for a blast that can trigger blocks (a
+    /// wind charge): an unpowered gate at `pos` toggles (`setBlockAndUpdate`),
+    /// with the open or close sound at a random pitch and the matching game
+    /// event, which has no source entity. Unlike a click, the gate keeps its
+    /// facing. False when the block is no fence gate or is powered.
+    pub fn fence_gate_exploded<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) -> bool {
+        let state = level.block_state(pos);
+        let data = self.data(state);
+        if !data.is(Class::FenceGate) || self.table.bool(state, self.props.powered) {
+            return false;
+        }
+        let open = self.table.bool(state, self.props.open);
+        let sound = if open {
+            data.gate_close.clone()
+        } else {
+            data.gate_open.clone()
+        };
+        let mut sim = self.sim(level, ticks);
+        sim.set_block_and_update(pos, self.table.set_bool(state, self.props.open, !open));
+        let pitch = sim.random().next_float() * 0.1 + 0.9;
+        if let Some(sound) = sound {
+            sim.sound(pos, &sound, 1.0, pitch);
+        }
+        sim.game_event_state(
+            pos,
+            if open {
+                "minecraft:block_close"
+            } else {
+                "minecraft:block_open"
+            },
+            state,
+        );
+        true
+    }
     /// `AbstractCandleBlock.isLit` (a lit block of `#candles` or `#candle_cakes`) then
     /// `AbstractCandleBlock.extinguish(null, ...)`:
     /// a lit candle or candle cake at `pos` goes out (`setBlock` with flags 11), with

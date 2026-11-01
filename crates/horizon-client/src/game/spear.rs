@@ -32,8 +32,7 @@ impl Game<'_> {
         let Some(kinetic) = Kinetic::of(&stack.item) else {
             return false;
         };
-        if self.using.is_none() {
-            self.using = Some((self.held_slot(), 0));
+        if self.start_using_item() {
             let actor = self.lan_acting;
             self.stabbed.retain(|(who, _), _| *who != actor);
             if let Some(p) = &self.player {

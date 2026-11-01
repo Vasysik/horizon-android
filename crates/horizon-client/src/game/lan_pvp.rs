@@ -16,12 +16,16 @@ use horizon_client::{
 use horizon_core::geometry::{Aabb, Vec3};
 
 /// The player projectiles that meet other players: arrows (their hurt), and
-/// snowballs and eggs, which break on them (`Player.hurtServer` takes no 0
-/// damage). Pearls, potions and wind charges fly past players as before.
+/// snowballs, eggs and mods' thrown types, which break on them
+/// (`Player.hurtServer` takes no 0 damage). Pearls, potions and wind charges
+/// fly past players as before.
 pub(super) fn meets_players(kind: &ProjectileKind) -> bool {
     matches!(
         kind,
-        ProjectileKind::Arrow { .. } | ProjectileKind::Snowball | ProjectileKind::Egg
+        ProjectileKind::Arrow { .. }
+            | ProjectileKind::Snowball
+            | ProjectileKind::Egg
+            | ProjectileKind::Thrown(_)
     )
 }
 
@@ -60,6 +64,9 @@ pub(super) struct Strike {
     knockback_attack: bool,
     /// The attacker's team, for the victim's `Player.canHarmPlayer`.
     team: Option<horizon_client::scoreboard::Team>,
+    /// The attacker's main-hand item with a custom name, for the death
+    /// message's `.item` form.
+    item: Option<horizon_client::text::Text>,
 }
 
 /// A sweep attack's reach to the other players (`Player.doSweepAttack`),
@@ -197,6 +204,7 @@ impl Game<'_> {
             knockback: (strength, xd, zd),
             knockback_attack,
             team: self.player_team().cloned(),
+            item: self.main_hand_custom_name(),
         })
     }
 
@@ -341,7 +349,7 @@ impl Game<'_> {
         let land = |g: &mut Self| {
             g.combat.player_attacker = Some((s.from, s.disable_blocking));
             if let Some((id, name)) = attacker_note.clone() {
-                g.note_named_attacker("minecraft:player_attack", id as u32, name);
+                g.note_player_attacker("minecraft:player_attack", id as u32, name, s.item.clone());
             }
             let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
             g.combat.player_attacker = None;
@@ -540,11 +548,10 @@ impl Game<'_> {
         let (xd, zd) = sweep.knockback;
         let attacker = self.player_attacker(host, sweep.attacker);
         let land = |g: &mut Self| {
-            let hurt = g.mob_hits_player(sweep.damage, sweep.from, "minecraft:player_attack");
-            if hurt {
-                if let Some((id, name)) = &attacker {
-                    g.note_named_attacker("minecraft:player_attack", *id, name.clone());
-                }
+            if let Some((id, name)) = &attacker {
+                g.note_named_attacker("minecraft:player_attack", *id, name.clone());
+            }
+            if g.mob_hits_player(sweep.damage, sweep.from, "minecraft:player_attack") {
                 g.knock_back_player(0.4, xd, zd);
             }
         };

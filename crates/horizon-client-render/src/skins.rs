@@ -158,6 +158,12 @@ pub fn profile_skin_url_nbt(profile: &horizon_world::nbt::Tag) -> Option<String>
     unpack(&value, Signature::Unsigned, &TEXTURE_URIS).skin
 }
 
+/// `ResolvableProfile.skinPatch().body()` of a skull's `profile` NBT: the
+/// `texture` id that replaces its skin.
+pub fn profile_texture_nbt(profile: &horizon_world::nbt::Tag) -> Option<String> {
+    nbt_text(profile.get("texture"))
+}
+
 /// The profile's uuid as u128: `id` as an int array (block entity NBT) or a
 /// uuid string (older and component forms). Used for `DefaultPlayerSkin.get`
 /// when a head's skin is not downloaded yet.
@@ -467,6 +473,11 @@ pub fn head_skin(
     downloads: &mut Downloader,
     atlas: impl Fn(&str) -> bool,
 ) -> String {
+    if let Some(texture) = profile.get("texture").and_then(|t| t.as_str())
+        && let Some(sprite) = patch_skin(texture, downloads, &atlas)
+    {
+        return sprite;
+    }
     let p = parse_profile(profile);
     let property = p.textures.or_else(|| {
         let key = p.dynamic.as_ref()?;
@@ -493,6 +504,68 @@ pub fn head_skin(
         }
     }
     crate::tab_list::default_skin(p.id).to_owned()
+}
+
+/// `PlayerSkin.Patch.apply` for a head: the sprite of a profile's `texture`
+/// override (`ClientAsset.ResourceTexture`, a resource pack's
+/// `<namespace>:textures/<path>.png`), which replaces the downloaded or
+/// default skin. Vanilla textures are in the atlas already; another
+/// namespace's loads into a skin slot, and `None` answers until it is there
+/// (or when the packs lack it).
+pub fn patch_skin(
+    texture: &str,
+    downloads: &mut Downloader,
+    atlas: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let (namespace, path) = texture.split_once(':').unwrap_or(("minecraft", texture));
+    if !valid_texture_id(namespace, path) {
+        return None;
+    }
+    if namespace == "minecraft" && atlas(path) {
+        return Some(path.to_owned());
+    }
+    let location = format!("patch/{namespace}/{path}");
+    if atlas(&location) {
+        downloads.drawn(&location);
+        return Some(location);
+    }
+    downloads.resource(&location, namespace, path);
+    None
+}
+
+/// `Identifier`'s characters (`isValidNamespace`, `isValidPath`), and no
+/// `.`, `..` or empty segment (`FileUtil.decomposePath`, as the packs read
+/// it): a server's `texture` never names a file outside the packs.
+fn valid_texture_id(namespace: &str, path: &str) -> bool {
+    let segment = |s: &str| !s.is_empty() && s != "." && s != "..";
+    !namespace.is_empty()
+        && namespace
+            .chars()
+            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '-' | '.'))
+        && path
+            .chars()
+            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '-' | '.' | '/'))
+        && segment(namespace)
+        && path.split('/').all(segment)
+}
+
+/// A `width`x`height` RGBA image as the 64x64 skin it maps onto: each texel
+/// the nearest of the image's at the same normalised UV.
+fn resample_64(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 || rgba.len() < w * h * 4 {
+        return None;
+    }
+    let mut out = vec![0u8; 64 * 64 * 4];
+    for y in 0..64 {
+        for x in 0..64 {
+            let (sx, sy) = (x * w / 64, y * h / 64);
+            let s = (sy * w + sx) * 4;
+            let d = (y * 64 + x) * 4;
+            out[d..d + 4].copy_from_slice(&rgba[s..s + 4]);
+        }
+    }
+    Some(out)
 }
 
 /// `MinecraftProfileTexture.getHash`: the base name of the URL's path.
@@ -732,6 +805,10 @@ pub struct Downloader {
     image_order: std::collections::VecDeque<String>,
     /// Skins and capes drawn from the atlas since `take_drawn`.
     drawn: std::collections::HashSet<String>,
+    /// The resource packs' root, where a profile's `texture` patch is read.
+    resource_root: std::path::PathBuf,
+    /// How each `patch/` texture of the resource packs loaded, by location.
+    resources: std::collections::HashMap<String, Download>,
 }
 /// `images` is bounded only so a long session on a busy server does not grow
 /// without end; the disk cache holds everything it drops.
@@ -749,7 +826,47 @@ impl Downloader {
             images: Default::default(),
             image_order: Default::default(),
             drawn: Default::default(),
+            resource_root: Default::default(),
+            resources: Default::default(),
         }
+    }
+    /// The resource packs changed (or were first loaded) at `root`: patch
+    /// textures load again from there.
+    pub fn set_resource_root(&mut self, root: std::path::PathBuf) {
+        for location in std::mem::take(&mut self.resources).into_keys() {
+            self.images.remove(&location);
+            self.image_order.retain(|l| *l != location);
+        }
+        self.resource_root = root;
+    }
+    /// `ClientAsset.ResourceTexture`: loads `<namespace>:textures/<path>.png`
+    /// from the resource packs into a skin slot as `location`, once. A
+    /// texture of another size is sampled as the model's normalised UVs would
+    /// sample it (nearest texel) into the 64x64 slot.
+    fn resource(&mut self, location: &str, namespace: &str, path: &str) {
+        match self.resources.get(location) {
+            Some(Download::Failed) => return,
+            Some(_) => {
+                self.again(location);
+                return;
+            }
+            None => {}
+        }
+        let file = self
+            .resource_root
+            .join(format!("assets/{namespace}/textures/{path}.png"));
+        let image = std::fs::read(file)
+            .ok()
+            .and_then(|b| crate::hud::decode_bytes(&b).ok())
+            .and_then(|(w, h, rgba)| resample_64(w, h, &rgba));
+        let state = match image {
+            Some(rgba) => {
+                self.queue(location.to_owned(), rgba);
+                Download::Ready
+            }
+            None => Download::Failed,
+        };
+        self.resources.insert(location.to_owned(), state);
     }
     /// How the download of `url` stands, starting it the first time.
     pub fn state(&mut self, kind: Kind, url: &str) -> Download {
@@ -822,6 +939,15 @@ impl Downloader {
     /// its image for upload again, from memory or the disk cache.
     pub fn again(&mut self, location: &str) -> bool {
         if self.queued.contains(location) {
+            return true;
+        }
+        if location.starts_with("patch/") {
+            let Some(image) = self.images.get(location).cloned() else {
+                // Dropped from memory: read from the packs again.
+                self.resources.remove(location);
+                return false;
+            };
+            self.queue(location.to_owned(), image);
             return true;
         }
         let (digest, process): (_, fn(u32, u32, &[u8]) -> Option<Vec<u8>>) =
@@ -960,6 +1086,21 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
+    /// A profile's `texture` names a pack texture, never a file outside the
+    /// packs: bad characters and `..` segments draw nothing.
+    #[test]
+    fn a_texture_patch_stays_inside_the_packs() {
+        use super::valid_texture_id;
+        assert!(valid_texture_id("ethereal", "entity/plush_blank"));
+        assert!(valid_texture_id("minecraft", "entity/player/wide/steve"));
+        assert!(!valid_texture_id("ethereal", "../../../secret"));
+        assert!(!valid_texture_id("..", "entity/x"));
+        assert!(!valid_texture_id("ethereal", "entity//x"));
+        assert!(!valid_texture_id("Ethereal", "entity/x"));
+        assert!(!valid_texture_id("ethereal", "entity\\x"));
+        assert!(!valid_texture_id("", "entity/x"));
+    }
+
     /// A pack reload swaps the atlas: its skin slots are blank, so a forgotten
     /// table holds nothing and hands out slots from the start again, even for
     /// skins drawn in the last frame.

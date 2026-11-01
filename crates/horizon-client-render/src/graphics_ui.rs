@@ -33,6 +33,7 @@ pub enum H {
     Fog,
     Weather,
     AnimatedTextures,
+    DitherCutoutMips,
     PresentMode,
     Pacing,
     Workers,
@@ -40,6 +41,7 @@ pub enum H {
     ResolutionScale,
     Antialiasing,
     Upscaling,
+    ScreenshotQuality,
     Hdr,
     /// Opens `Level::Hdr`.
     HdrSettings,
@@ -52,6 +54,7 @@ pub enum H {
     HdrPaperWhite,
     HdrUiBrightness,
     BatteryMode,
+    ShadowCache,
     GraphicsApi,
 }
 
@@ -259,6 +262,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 Low,
                 "Animates water, lava, fire and other moving textures.",
             ),
+            h(
+                H::DitherCutoutMips,
+                Low,
+                "Keeps fine plants in high-res packs from fading far away.",
+            ),
             Row::Header("Display"),
             fov,
             fps,
@@ -277,6 +285,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 H::Upscaling,
                 High,
                 "Renders the world smaller and rebuilds it with TAA. Faster, softer.",
+            ),
+            h(
+                H::ScreenshotQuality,
+                None,
+                "F2 screenshots at this many times the game's resolution. Higher takes longer.",
             ),
             h(
                 H::HdrSettings,
@@ -312,6 +325,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 H::BatteryMode,
                 None,
                 "60 FPS cap (30 in menus or unfocused), half the workers: less power.",
+            ),
+            h(
+                H::ShadowCache,
+                Saves,
+                "Reuses the pack shadow map when sun, view and world match. Off by default.",
             ),
             h(
                 H::Workers,
@@ -474,6 +492,19 @@ impl H {
             _ => None,
         }
     }
+    pub fn slider_steps(self) -> Option<u32> {
+        match self {
+            H::ChunkUpdates => Some(64),
+            H::UploadBudget => Some((UPLOAD_STEPS.len() - 1) as u32),
+            H::Workers => Some(max_workers()),
+            H::ResolutionScale => Some(30),
+            H::HdrPaperWhite => Some(41),
+            H::HdrPeak => Some(37),
+            H::HdrBlackLevel => Some(100),
+            H::HdrUiBrightness => Some(15),
+            _ => None,
+        }
+    }
     fn label(self, s: &Settings) -> Text {
         let g = &s.horizon;
         match self {
@@ -500,6 +531,7 @@ impl H {
             H::Fog => labelled("Fog", on_off(g.fog)),
             H::Weather => labelled("Weather", on_off(g.weather)),
             H::AnimatedTextures => labelled("Animated Textures", on_off(g.animated_textures)),
+            H::DitherCutoutMips => labelled("Distant Plant Dither", on_off(g.dither_cutout_mips)),
             H::PresentMode => labelled("Present Mode", g.present_mode.label()),
             H::Pacing => labelled(
                 "Frame Pacing",
@@ -525,6 +557,9 @@ impl H {
                 },
             ),
             H::Upscaling => labelled("Upscaling", g.upscaling.label()),
+            H::ScreenshotQuality => {
+                labelled("Screenshot Quality", format!("{}x", g.screenshot_quality))
+            }
             H::Hdr => labelled("HDR", on_off(g.hdr)),
             H::HdrSettings => Text::literal(lang::get("HDR Settings...")),
             H::HdrCalibrate => Text::literal(lang::get(match setup(s) {
@@ -558,6 +593,7 @@ impl H {
                 Text::literal("Shortcut: ").append(crate::keybinds::display_name(&g.hdr_key))
             }
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
+            H::ShadowCache => labelled("Shadow Cache", on_off(g.shadow_cache)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::Overlay => labelled(
                 "Performance Overlay",
@@ -617,6 +653,7 @@ impl H {
             H::Fog => g.fog = !g.fog,
             H::Weather => g.weather = !g.weather,
             H::AnimatedTextures => g.animated_textures = !g.animated_textures,
+            H::DitherCutoutMips => g.dither_cutout_mips = !g.dither_cutout_mips,
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
             // Off, FXAA, TAA.
             H::Antialiasing => {
@@ -634,8 +671,16 @@ impl H {
                     (g.fxaa, g.taa) = (false, true);
                 }
             }
+            H::ScreenshotQuality => {
+                g.screenshot_quality = step(
+                    &crate::graphics::SCREENSHOT_QUALITIES,
+                    g.screenshot_quality,
+                    back,
+                )
+            }
             H::Hdr => g.hdr = !g.hdr,
             H::BatteryMode => g.battery = !g.battery,
+            H::ShadowCache => g.shadow_cache = !g.shadow_cache,
             H::GraphicsApi => {
                 // Android selects the backend before creating the renderer in
                 // launcher Settings. Stale/programmatic menu actions must not
@@ -703,8 +748,10 @@ impl Item {
             Item::Horizon(H::Fog) => g.fog,
             Item::Horizon(H::Weather) => g.weather,
             Item::Horizon(H::AnimatedTextures) => g.animated_textures,
+            Item::Horizon(H::DitherCutoutMips) => g.dither_cutout_mips,
             Item::Horizon(H::Hdr) => g.hdr,
             Item::Horizon(H::BatteryMode) => g.battery,
+            Item::Horizon(H::ShadowCache) => g.shadow_cache,
             Item::Vanilla(Opt::ViewBobbing) => s.view_bobbing,
             Item::Vanilla(Opt::Vsync) => s.vsync,
             Item::Vanilla(Opt::Fullscreen) => s.fullscreen,
@@ -760,10 +807,12 @@ impl Item {
             Item::Horizon(
                 H::Preset
                     | H::Overlay
+                    | H::ScreenshotQuality
                     | H::Pacing
                     | H::PresentMode
                     | H::Workers
                     | H::BatteryMode
+                    | H::ShadowCache
                     | H::GraphicsApi
             ) | Item::Vanilla(
                 Opt::GuiScale
@@ -784,6 +833,39 @@ impl Item {
             s.horizon.preset = Preset::Custom;
         }
     }
+    pub fn slider_steps(self) -> Option<u32> {
+        match self {
+            Item::Vanilla(o) => o.slider_steps(),
+            Item::Horizon(h) => h.slider_steps(),
+        }
+    }
+    pub fn step_slider(self, s: &mut Settings, forward: bool, width: f32) {
+        if !self.available() || self.blocked(s).is_some() {
+            return;
+        }
+        let Some(pos) = self.slider(s) else {
+            return;
+        };
+        let next_pos = if let Some(steps) = self.slider_steps() {
+            let steps = steps as f32;
+            let current = (pos * steps).round();
+            let next = if forward {
+                current + 1.0
+            } else {
+                current - 1.0
+            };
+            (next / steps).clamp(0.0, 1.0)
+        } else {
+            let delta = 1.0 / (width - 8.0).max(1.0);
+            if forward {
+                (pos + delta).min(1.0)
+            } else {
+                (pos - delta).max(0.0)
+            }
+        };
+        self.set_slider(s, next_pos);
+        self.touched(s);
+    }
 }
 
 /// What the options screens must do after an interaction here.
@@ -802,8 +884,8 @@ pub enum Action {
     Done,
 }
 
-#[derive(Clone, Copy)]
-enum Target {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
     Item(Item),
     Button(Action),
 }
@@ -821,6 +903,8 @@ pub struct GraphicsUi {
     /// The list's scroll amount and its held scrollbar (`AbstractScrollArea`).
     scroll: ui::Scroll,
     dragging: Option<Item>,
+    pub focus: Option<Target>,
+    pub can_change_value: bool,
     /// The key binding the options screen is waiting on (`Action::BindKey`).
     pub binding: Option<&'static str>,
 }
@@ -829,6 +913,8 @@ impl GraphicsUi {
     pub fn reset(&mut self) {
         self.scroll = ui::Scroll::default();
         self.dragging = None;
+        self.focus = None;
+        self.can_change_value = false;
     }
     /// The scrollbar's column: right of the descriptions.
     fn scrollbar_x(w: f32) -> f32 {
@@ -946,8 +1032,10 @@ impl GraphicsUi {
         let mut index = 0;
         let mut tooltip = None;
         for wd in &widgets {
-            let hover = ui::hovered(cursor, wd.x, wd.y, wd.w, 20.0)
-                && (!wd.list || (cursor.1 >= top && cursor.1 < bottom));
+            let is_focused = self.focus == Some(wd.target);
+            let hover = (ui::hovered(cursor, wd.x, wd.y, wd.w, 20.0)
+                && (!wd.list || (cursor.1 >= top && cursor.1 < bottom)))
+                || is_focused;
             match wd.target {
                 Target::Item(item) => {
                     let (cost, text) = descriptions[index];
@@ -968,13 +1056,15 @@ impl GraphicsUi {
                         tooltip = Some(atlas.font.split(&Text::literal(lang::get(why)), 170.0));
                     }
                     match item.slider(s) {
-                        Some(value) => STYLE.slider(
+                        Some(value) => STYLE.slider_ext(
                             batch,
                             atlas,
                             (wd.x, wd.y, wd.w),
                             &label,
                             value,
                             hover || self.dragging == Some(item),
+                            is_focused,
+                            self.can_change_value && is_focused,
                             live,
                             self.dragging == Some(item),
                         ),
@@ -1079,11 +1169,16 @@ impl GraphicsUi {
             if wd.list && (y < top || y >= bottom || wd.y < top || wd.y + 20.0 > bottom) {
                 continue;
             }
+            self.focus = Some(wd.target);
             return match wd.target {
-                Target::Button(action) => vec![Action::ButtonClick, action],
+                Target::Button(action) => {
+                    self.can_change_value = false;
+                    vec![Action::ButtonClick, action]
+                }
                 // A disabled control does nothing: no sound, no preset change.
                 Target::Item(item) if item.blocked(s).is_some() => Vec::new(),
                 Target::Item(Item::Horizon(H::HdrSettings)) => {
+                    self.can_change_value = false;
                     vec![Action::ButtonClick, Action::OpenHdr]
                 }
                 Target::Item(Item::Horizon(H::HdrCalibrate)) if setup(s) == Setup::Changed => {
@@ -1102,10 +1197,12 @@ impl GraphicsUi {
                 }
                 Target::Item(item) => {
                     if item.slider(s).is_some() {
+                        self.can_change_value = true;
                         self.dragging = Some(item);
                         item.set_slider(s, ui::slider_value(wd.x, wd.w, x));
                         vec![Action::SliderDrag]
                     } else {
+                        self.can_change_value = false;
                         item.cycle(s, right, framebuffer);
                         vec![Action::ButtonClick, Action::Changed]
                     }
@@ -1124,6 +1221,246 @@ impl GraphicsUi {
         let (top, bottom) = Self::bounds(h);
         self.scroll.clamp(top, bottom, content);
         self.scroll.wheel(amount, 18.0, top, bottom, content);
+    }
+
+    /// Mouse wheel over a control cycles it (cycle button). Sliders and disabled
+    /// rows fall through to scroll the page, matching Vanilla list behavior.
+    /// **Horizon improvement (diverges from Vanilla 26.3):** when a slider or
+    /// cycle item is keyboard-focused (`self.focus`), the wheel steps/cycles it
+    /// regardless of cursor position.  Vanilla 26.3 does not intercept the
+    /// wheel for sliders at all.
+    pub fn wheel(
+        &mut self,
+        level: Level,
+        s: &mut Settings,
+        cursor: (f32, f32),
+        (w, h): (f32, f32),
+        framebuffer: [i32; 2],
+        amount: f32,
+    ) -> Vec<Action> {
+        // Horizon improvement: focused slider/cycle intercepts wheel first.
+        if amount != 0.0
+            && self.can_change_value
+            && let Some(Target::Item(item)) = self.focus
+            && item.available()
+            && item.blocked(s).is_none()
+        {
+            if item.slider(s).is_some() {
+                item.step_slider(s, amount > 0.0, w);
+                return vec![Action::SliderDrag, Action::Changed];
+            } else if !matches!(item, Item::Horizon(H::HdrSettings)) {
+                item.cycle(s, amount > 0.0, framebuffer);
+                return vec![Action::ButtonClick, Action::Changed];
+            }
+        }
+        let (widgets, _, _) = self.layout(level, s, w, h);
+        let (top, bottom) = Self::bounds(h);
+        let hovered = widgets.iter().find(|wd| {
+            ui::hovered(cursor, wd.x, wd.y, wd.w, 20.0)
+                && (!wd.list
+                    || (cursor.1 >= top
+                        && cursor.1 < bottom
+                        && wd.y >= top
+                        && wd.y + 20.0 <= bottom))
+        });
+        if let Some(wd) = hovered
+            && let Target::Item(item) = wd.target
+            && item.available()
+            && item.blocked(s).is_none()
+            && item.slider(s).is_none()
+            && !matches!(item, Item::Horizon(H::HdrSettings))
+        {
+            if amount != 0.0 {
+                item.cycle(s, amount > 0.0, framebuffer);
+                return vec![Action::ButtonClick, Action::Changed];
+            }
+            return Vec::new();
+        }
+        self.scroll(level, s, h, amount);
+        Vec::new()
+    }
+
+    /// Keyboard navigation and value adjustments.
+    pub fn key_modifiers(
+        &mut self,
+        level: Level,
+        s: &mut Settings,
+        key: winit::keyboard::KeyCode,
+        shift: bool,
+        (w, h): (f32, f32),
+        framebuffer: [i32; 2],
+    ) -> (Vec<Action>, bool) {
+        use winit::keyboard::KeyCode as K;
+        let (widgets, _, content) = self.layout(level, s, w, h);
+        let (top, bottom) = Self::bounds(h);
+        let focusables: Vec<(Target, [f32; 4], bool)> = widgets
+            .iter()
+            .filter_map(|wd| match wd.target {
+                Target::Item(item) if item.available() && item.blocked(s).is_none() => {
+                    Some((wd.target, [wd.x, wd.y, wd.w, 20.0], wd.list))
+                }
+                Target::Button(_) => Some((wd.target, [wd.x, wd.y, wd.w, 20.0], wd.list)),
+                _ => None,
+            })
+            .collect();
+
+        if focusables.is_empty() {
+            return (Vec::new(), false);
+        }
+
+        // 1. Tab / Shift+Tab navigation
+        if key == K::Tab {
+            let cur = self
+                .focus
+                .and_then(|f| focusables.iter().position(|&(t, ..)| t == f));
+            let next_idx = match cur {
+                Some(i) => {
+                    if shift {
+                        if i == 0 { focusables.len() - 1 } else { i - 1 }
+                    } else {
+                        (i + 1) % focusables.len()
+                    }
+                }
+                None => {
+                    if shift {
+                        focusables.len() - 1
+                    } else {
+                        0
+                    }
+                }
+            };
+            let (target, [_, wy, _, wh], is_list) = focusables[next_idx];
+            self.focus = Some(target);
+            let is_slider = matches!(target, Target::Item(item) if item.slider(s).is_some());
+            self.can_change_value = is_slider;
+            if is_list {
+                if wy < top + 4.0 {
+                    self.scroll.amount -= top + 4.0 - wy;
+                } else if wy + wh > bottom - 4.0 {
+                    self.scroll.amount += wy + wh - (bottom - 4.0);
+                }
+                self.clamp_scroll(h, content);
+            }
+            return (Vec::new(), true);
+        }
+
+        // 2. Left / Right Arrow keys
+        if matches!(key, K::ArrowLeft | K::ArrowRight) {
+            let forward = key == K::ArrowRight;
+            if let Some(Target::Item(item)) = self.focus
+                && item.slider(s).is_some()
+                && self.can_change_value
+            {
+                let width = widgets
+                    .iter()
+                    .find(|wd| wd.target == Target::Item(item))
+                    .map_or(STYLE.control_width, |wd| wd.w);
+                item.step_slider(s, forward, width);
+                return (vec![Action::SliderDrag], true);
+            }
+            if let Some(cur_target) = self.focus
+                && let Some(cur_pos) = focusables.iter().position(|&(t, ..)| t == cur_target)
+            {
+                let from = focusables[cur_pos].1;
+                let rects: Vec<[f32; 4]> = focusables.iter().map(|f| f.1).collect();
+                let dir = if forward {
+                    crate::gamepad::Button::DPadRight
+                } else {
+                    crate::gamepad::Button::DPadLeft
+                };
+                if let Some(next_idx) = crate::gamepad::focus_step_rect(from, dir, &rects) {
+                    let (target, [_, wy, _, wh], is_list) = focusables[next_idx];
+                    self.focus = Some(target);
+                    self.can_change_value = false;
+                    if is_list {
+                        if wy < top + 4.0 {
+                            self.scroll.amount -= top + 4.0 - wy;
+                        } else if wy + wh > bottom - 4.0 {
+                            self.scroll.amount += wy + wh - (bottom - 4.0);
+                        }
+                        self.clamp_scroll(h, content);
+                    }
+                    return (Vec::new(), true);
+                }
+            }
+            return (Vec::new(), false);
+        }
+
+        // 3. Up / Down Arrow keys
+        if matches!(key, K::ArrowUp | K::ArrowDown) {
+            let down = key == K::ArrowDown;
+            if let Some(cur_target) = self.focus
+                && let Some(cur_pos) = focusables.iter().position(|&(t, ..)| t == cur_target)
+            {
+                let from = focusables[cur_pos].1;
+                let rects: Vec<[f32; 4]> = focusables.iter().map(|f| f.1).collect();
+                let dir = if down {
+                    crate::gamepad::Button::DPadDown
+                } else {
+                    crate::gamepad::Button::DPadUp
+                };
+                if let Some(next_idx) = crate::gamepad::focus_step_rect(from, dir, &rects) {
+                    let (target, [_, wy, _, wh], is_list) = focusables[next_idx];
+                    self.focus = Some(target);
+                    self.can_change_value = false;
+                    if is_list {
+                        if wy < top + 4.0 {
+                            self.scroll.amount -= top + 4.0 - wy;
+                        } else if wy + wh > bottom - 4.0 {
+                            self.scroll.amount += wy + wh - (bottom - 4.0);
+                        }
+                        self.clamp_scroll(h, content);
+                    }
+                    return (Vec::new(), true);
+                }
+            } else if !focusables.is_empty() {
+                let first = if down { 0 } else { focusables.len() - 1 };
+                let (target, [_, wy, _, wh], is_list) = focusables[first];
+                self.focus = Some(target);
+                self.can_change_value = false;
+                if is_list {
+                    if wy < top + 4.0 {
+                        self.scroll.amount -= top + 4.0 - wy;
+                    } else if wy + wh > bottom - 4.0 {
+                        self.scroll.amount += wy + wh - (bottom - 4.0);
+                    }
+                    self.clamp_scroll(h, content);
+                }
+                return (Vec::new(), true);
+            }
+            return (Vec::new(), false);
+        }
+
+        // 4. Space / Enter / NumpadEnter
+        if matches!(key, K::Space | K::Enter | K::NumpadEnter)
+            && let Some(target) = self.focus
+        {
+            match target {
+                Target::Item(item) => {
+                    if item.slider(s).is_some() {
+                        self.can_change_value = !self.can_change_value;
+                        return (Vec::new(), true);
+                    } else if item == Item::Horizon(H::HdrSettings) {
+                        return (vec![Action::ButtonClick, Action::OpenHdr], true);
+                    } else {
+                        item.cycle(s, shift, framebuffer);
+                        return (vec![Action::ButtonClick, Action::Changed], true);
+                    }
+                }
+                Target::Button(action) => {
+                    return (vec![Action::ButtonClick, action], true);
+                }
+            }
+        }
+
+        // 5. Escape: the screen closes on the first press, as `Screen.keyPressed` handles it
+        // before the focused slider.
+        if key == K::Escape {
+            self.can_change_value = false;
+            return (Vec::new(), false);
+        }
+
+        (Vec::new(), false)
     }
 }
 
@@ -1440,6 +1777,21 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_quality_cycles_1_2_4_8_and_keeps_the_preset() {
+        let mut s = Settings::default();
+        Item::Horizon(H::Preset).cycle(&mut s, false, [854, 480]);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            Item::Horizon(H::ScreenshotQuality).cycle(&mut s, false, [854, 480]);
+            seen.push(s.horizon.screenshot_quality);
+        }
+        assert_eq!(seen, [2, 4, 8, 1]);
+        Item::Horizon(H::ScreenshotQuality).cycle(&mut s, true, [854, 480]);
+        assert_eq!(s.horizon.screenshot_quality, 8);
+        assert_eq!(s.horizon.preset, Preset::Performance);
+    }
+
+    #[test]
     fn upload_budget_slider_steps() {
         let mut s = Settings::default();
         H::UploadBudget.set_slider(&mut s, 1.0);
@@ -1520,5 +1872,160 @@ mod tests {
             assert_eq!(s.horizon.preset, Preset::Custom);
         }
         assert_eq!(item.label(&s).plain(), "Entity Culling: On");
+    }
+
+    #[test]
+    fn graphics_slider_keyboard_navigation_and_selection_toggle_parity() {
+        use winit::keyboard::KeyCode as K;
+        let mut s = Settings::default();
+        let mut ui = GraphicsUi::default();
+        let size = (480.0, 600.0);
+        let fb = [854, 480];
+
+        s.horizon.chunk_updates = 10;
+        s.horizon.resolution_scale = 100;
+
+        // 1. Tab navigates down to Chunk Updates slider (in Level::Advanced)
+        let mut found_chunk_updates = false;
+        for _ in 0..15 {
+            ui.key_modifiers(Level::Advanced, &mut s, K::Tab, false, size, fb);
+            if ui.focus == Some(Target::Item(Item::Horizon(H::ChunkUpdates))) {
+                found_chunk_updates = true;
+                break;
+            }
+        }
+        assert!(found_chunk_updates);
+        assert!(
+            ui.can_change_value,
+            "Tab onto slider activates can_change_value"
+        );
+
+        // 2. Right Arrow steps chunk updates from 10 to 11
+        let (actions, handled) =
+            ui.key_modifiers(Level::Advanced, &mut s, K::ArrowRight, false, size, fb);
+        assert!(handled);
+        assert_eq!(actions, vec![Action::SliderDrag]);
+        assert_eq!(s.horizon.chunk_updates, 11);
+
+        // 3. Left Arrow steps back to 10
+        ui.key_modifiers(Level::Advanced, &mut s, K::ArrowLeft, false, size, fb);
+        assert_eq!(s.horizon.chunk_updates, 10);
+
+        // 4. Space toggles can_change_value to false
+        ui.key_modifiers(Level::Advanced, &mut s, K::Space, false, size, fb);
+        assert!(!ui.can_change_value);
+
+        // 5. Space toggles can_change_value back to true
+        ui.key_modifiers(Level::Advanced, &mut s, K::Enter, false, size, fb);
+        assert!(ui.can_change_value);
+
+        // 6. Escape is left to the screen, which closes, even while a slider changes values
+        let (actions, handled) =
+            ui.key_modifiers(Level::Advanced, &mut s, K::Escape, false, size, fb);
+        assert!(!handled);
+        assert!(actions.is_empty());
+        assert!(!ui.can_change_value);
+
+        // 8. Tab to ResolutionScale (steps by 5%)
+        let mut found_res = false;
+        for _ in 0..20 {
+            ui.key_modifiers(Level::Advanced, &mut s, K::Tab, false, size, fb);
+            if ui.focus == Some(Target::Item(Item::Horizon(H::ResolutionScale))) {
+                found_res = true;
+                break;
+            }
+        }
+        assert!(found_res);
+        assert!(ui.can_change_value);
+        ui.key_modifiers(Level::Advanced, &mut s, K::ArrowRight, false, size, fb);
+        assert_eq!(s.horizon.resolution_scale, 105);
+        ui.key_modifiers(Level::Advanced, &mut s, K::ArrowLeft, false, size, fb);
+        assert_eq!(s.horizon.resolution_scale, 100);
+    }
+
+    #[test]
+    fn graphics_cycle_wheel_cycles_and_slider_falls_through_to_scroll() {
+        let mut s = Settings::default();
+        let mut ui = GraphicsUi::default();
+        let size = (480.0, 300.0);
+        let fb = [854, 480];
+
+        // 1. Wheel on a Cycle button: Far Detail cycles mode
+        let (widgets, _, _) = ui.layout(Level::Advanced, &s, size.0, size.1);
+        let far = widgets
+            .iter()
+            .find(|w| matches!(w.target, Target::Item(Item::Horizon(H::FarDetail))))
+            .unwrap();
+        let cursor = (far.x + 5.0, far.y + 5.0);
+        s.horizon.far_detail = FarDetail::Full;
+        let actions = ui.wheel(Level::Advanced, &mut s, cursor, size, fb, 1.0);
+        assert_eq!(actions, vec![Action::ButtonClick, Action::Changed]);
+        assert_eq!(s.horizon.far_detail, FarDetail::Reduced);
+
+        // 2. Wheel over a slider: Chunk Updates scrolls the page, doesn't change slider value
+        s.horizon.chunk_updates = 16;
+        let (widgets, _, _) = ui.layout(Level::Advanced, &s, size.0, size.1);
+        let cu = widgets
+            .iter()
+            .find(|w| matches!(w.target, Target::Item(Item::Horizon(H::ChunkUpdates))))
+            .unwrap();
+        let cursor = (cu.x + 5.0, cu.y + 5.0);
+        let scroll_before = ui.scroll.amount;
+        let actions = ui.wheel(Level::Advanced, &mut s, cursor, size, fb, -1.0);
+        assert!(actions.is_empty());
+        assert_eq!(s.horizon.chunk_updates, 16);
+        assert!(ui.scroll.amount > scroll_before);
+    }
+
+    #[test]
+    fn graphics_step_slider_matches_set_slider_for_all_options() {
+        let options = [
+            H::ChunkUpdates,
+            H::UploadBudget,
+            H::Workers,
+            H::ResolutionScale,
+            H::HdrPaperWhite,
+            H::HdrPeak,
+            H::HdrBlackLevel,
+            H::HdrUiBrightness,
+        ];
+        for h in options {
+            let item = Item::Horizon(h);
+            let steps = h.slider_steps().expect("steps defined");
+            for i in 0..steps {
+                let pos = i as f32 / steps as f32;
+                let mut s1 = Settings::default();
+                let mut s2 = Settings::default();
+                s1.horizon.hdr = true;
+                s2.horizon.hdr = true;
+                h.set_slider(&mut s1, pos);
+
+                item.step_slider(&mut s1, true, 200.0);
+                let next_pos = (i + 1) as f32 / steps as f32;
+                h.set_slider(&mut s2, next_pos);
+                assert_eq!(
+                    item.slider(&s1),
+                    item.slider(&s2),
+                    "{h:?} step forward from {i}"
+                );
+            }
+            for i in 1..=steps {
+                let pos = i as f32 / steps as f32;
+                let mut s1 = Settings::default();
+                let mut s2 = Settings::default();
+                s1.horizon.hdr = true;
+                s2.horizon.hdr = true;
+                h.set_slider(&mut s1, pos);
+
+                item.step_slider(&mut s1, false, 200.0);
+                let prev_pos = (i - 1) as f32 / steps as f32;
+                h.set_slider(&mut s2, prev_pos);
+                assert_eq!(
+                    item.slider(&s1),
+                    item.slider(&s2),
+                    "{h:?} step backward from {i}"
+                );
+            }
+        }
     }
 }

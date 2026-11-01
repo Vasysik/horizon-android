@@ -20,6 +20,9 @@ struct Entry {
     fall_distance: f32,
     /// The causing entity: its id (for comparisons) and display name.
     attacker: Option<(u32, Text)>,
+    /// The causing player's main-hand stack when it has a custom name, as
+    /// held when the hit landed (a mob's is read when the message is built).
+    item: Option<Text>,
     /// The direct entity's display name when no entity caused the damage
     /// (`DamageSource.directEntity`: a potion with no thrower, a cloud).
     direct: Option<Text>,
@@ -74,9 +77,12 @@ pub(super) struct CombatTracker {
     in_combat: bool,
     /// Attackers of damage dealt this tick, claimed by the matching
     /// `RecordedDamage` event.
-    pending: Vec<(String, (u32, Text))>,
+    pending: Vec<(String, (u32, Text), Option<Text>)>,
     /// `pending` for a direct entity with no causing entity: only its name.
     pending_direct: Vec<(String, Text)>,
+    /// The lengths of `pending` and `pending_direct` before the first
+    /// attacker noted for the hurt being dealt now (`forget_noted`).
+    noted_since: Option<(usize, usize)>,
     /// `LivingEntity.lastHurtByMob` and its timestamp (the kill credit).
     last_hurt_by: Option<((u32, Text), i64)>,
     /// The mob the player last hurt (`getLastHurtMob`) and when.
@@ -92,6 +98,9 @@ pub(super) struct CombatTracker {
     /// The projectile hitting the player now is another player's that
     /// `ServerPlayer.canHarmPlayer` refuses (the `pvp` rule, an ally).
     pub(super) refuse_player_hit: bool,
+    /// The hit on the player now runs its post-attack effects (thorns) only
+    /// if the player lives through it (`WitherSkull.onHitEntity`).
+    pub(super) post_attack_if_alive: bool,
     /// A firework rocket's burst is hurting the player now: the rocket is
     /// the direct entity (`rocket_hurt_player`).
     pub(super) rocket_hit: bool,
@@ -112,6 +121,10 @@ pub(super) struct CombatTracker {
     /// blast leaves it out (`getEntities(source, box)`). A source guessed
     /// from the mobs near the centre is still hurt: it may be a bystander.
     pub(super) explosion_source_named: bool,
+    /// The blast's direct source is in water (`Explosion.getDirectSourceEntity`
+    /// `.isInWater`): paintings, item frames and cushions ignore it
+    /// (`BlockAttachedEntity.ignoreExplosion`).
+    pub(super) explosion_in_water: bool,
     /// The blast now going off comes from a primed TNT, creeper, wither
     /// skull, wither or TNT minecart, the sources that empty a hive they
     /// destroy (`BeehiveBlock.getDrops`).
@@ -134,6 +147,23 @@ pub(super) struct CombatTracker {
     /// The player's fall distance before this tick's movement (as of the
     /// end of the last one).
     fall_before: f64,
+}
+impl CombatTracker {
+    fn mark(&mut self) {
+        let marks = (self.pending.len(), self.pending_direct.len());
+        self.noted_since.get_or_insert(marks);
+    }
+    /// The player's hurt is over: when a native mod canceled it, the
+    /// attackers noted for it go, as no combat entry takes them and the next
+    /// hit of the same damage type must not be credited to them.
+    pub(super) fn forget_noted(&mut self, canceled: bool) {
+        if let Some((attackers, directs)) = self.noted_since.take()
+            && canceled
+        {
+            self.pending.truncate(attackers);
+            self.pending_direct.truncate(directs);
+        }
+    }
 }
 impl Game<'_> {
     /// `LivingEntity.makeDrownParticles`: eight bubbles around the entity,
@@ -190,14 +220,27 @@ impl Game<'_> {
     /// `note_attacker` for an entity that is not one of `self.mobs` (the
     /// ender dragon).
     pub(super) fn note_named_attacker(&mut self, damage_type: &str, id: u32, name: Text) {
+        self.note_player_attacker(damage_type, id, name, None);
+    }
+    /// `note_named_attacker` for a player, with their custom-named main-hand
+    /// item for the death message's `.item` form.
+    pub(super) fn note_player_attacker(
+        &mut self,
+        damage_type: &str,
+        id: u32,
+        name: Text,
+        item: Option<Text>,
+    ) {
+        self.combat.mark();
         self.combat
             .pending
-            .push((damage_type.to_owned(), (id, name)));
+            .push((damage_type.to_owned(), (id, name), item));
     }
     /// The `DamageSource.directEntity` of the next `damage_type` damage when
     /// nothing caused it (a splash potion nobody threw): the death message
     /// names it instead (`getLocalizedDeathMessage`). It is no kill credit.
     pub(super) fn note_direct_entity(&mut self, damage_type: &str, name: Text) {
+        self.combat.mark();
         self.combat
             .pending_direct
             .push((damage_type.to_owned(), name));
@@ -234,12 +277,16 @@ impl Game<'_> {
                 }
                 _ => continue,
             };
-            let attacker = self
+            let (attacker, item) = self
                 .combat
                 .pending
                 .iter()
-                .position(|(t, _)| *t == name)
-                .map(|i| self.combat.pending.remove(i).1);
+                .position(|(t, _, _)| *t == name)
+                .map(|i| {
+                    let (_, attacker, item) = self.combat.pending.remove(i);
+                    (Some(attacker), item)
+                })
+                .unwrap_or_default();
             let direct = match attacker {
                 Some(_) => None,
                 None => self
@@ -266,6 +313,7 @@ impl Game<'_> {
                 fall_location,
                 fall_distance,
                 attacker,
+                item,
                 direct,
             });
             self.combat.last_damage = now;
@@ -276,6 +324,7 @@ impl Game<'_> {
         }
         self.combat.pending.clear();
         self.combat.pending_direct.clear();
+        self.combat.noted_since = None;
         self.combat.projectile_direct = None;
         self.combat.projectile_attacker = None;
         self.combat.fall_before = self.player.as_ref().map_or(0.0, |p| p.fall_distance);
@@ -408,11 +457,37 @@ impl Game<'_> {
     fn mob_main_hand_name(&self, id: u32) -> Option<Text> {
         let m = self.mobs.iter().find(|m| m.id == id)?;
         let mut stack = m.extra.main_hand_stack()?.clone();
-        stack.custom_name()?;
+        if !has_custom_name(&stack) {
+            return None;
+        }
         if let Some(g) = horizon_client::mobs::gear::gear(m) {
             stack.data_mut().enchantments = g.slots[horizon_client::mobs::gear::MAIN].clone();
         }
         Some(self.stack_display_name(&stack))
+    }
+    /// `getMainHandItem().getDisplayName()` of the player in place, when the
+    /// stack has a custom name.
+    pub(super) fn main_hand_custom_name(&self) -> Option<Text> {
+        let stack = self.inventory.get(self.selected)?.as_ref()?;
+        has_custom_name(stack).then(|| self.stack_display_name(stack))
+    }
+    /// `main_hand_custom_name` of a player who is not in place: the guest
+    /// `conn` between turns, or none for the host while a guest acts (their
+    /// hotbar slot is kept by the swap).
+    fn player_main_hand_custom_name(&self, player: Option<u32>) -> Option<Text> {
+        if player == self.lan_acting {
+            return self.main_hand_custom_name();
+        }
+        let g = self.lan.as_ref()?.hub.guest(player?)?;
+        let stack = g.inventory.get(g.selected)?.as_ref()?;
+        has_custom_name(stack).then(|| self.stack_display_name(stack))
+    }
+    /// The killer's item for `getLocalizedDeathMessage` and
+    /// `getMessageForAssistedFall`: a player's as recorded, a mob's now.
+    fn entry_item(&self, e: &Entry) -> Option<Text> {
+        e.item
+            .clone()
+            .or_else(|| self.mob_main_hand_name(e.attacker.as_ref()?.0))
     }
     /// `CombatTracker.getDeathMessage`.
     pub(super) fn combat_death_message(&mut self) -> Text {
@@ -450,13 +525,26 @@ impl Game<'_> {
                 let at = knock.fall_location.unwrap_or("generic");
                 return Text::translate(&format!("death.fell.accident.{at}"), &[me]);
             }
-            return match (&knock.attacker, &killer) {
+            // CombatTracker.getMessageForAssistedFall: the attacker's item
+            // with a custom name gets the `.item` message.
+            let (key, args) = match (&knock.attacker, &killer) {
                 (Some(a), k) if k.as_ref().is_none_or(|k| k.0 != a.0) => {
-                    Text::translate("death.fell.assist", &[me, a.1.clone()])
+                    horizon_client::scoreboard::death_message_args(
+                        "death.fell.assist",
+                        &me,
+                        &a.1,
+                        self.entry_item(knock).as_ref(),
+                    )
                 }
-                (_, Some(k)) => Text::translate("death.fell.finish", &[me, k.1.clone()]),
-                _ => Text::translate("death.fell.killer", &[me]),
+                (_, Some(k)) => horizon_client::scoreboard::death_message_args(
+                    "death.fell.finish",
+                    &me,
+                    &k.1,
+                    self.entry_item(killing).as_ref(),
+                ),
+                _ => ("death.fell.killer".into(), vec![me]),
             };
+            return Text::translate(&key, &args);
         }
         let key = format!("death.attack.{}", def.0);
         if def.1 == "intentional_game_design" {
@@ -467,14 +555,14 @@ impl Game<'_> {
         }
         // `getLocalizedDeathMessage`: the causing entity's name, or the
         // direct entity's when nothing caused the damage.
-        if let Some((id, name)) = killer {
+        if let Some((_, name)) = killer {
             // DamageSource.getLocalizedDeathMessage: the cause's item with a
             // custom name gets the `<id>.item` message.
             let (key, args) = horizon_client::scoreboard::death_message_args(
                 &key,
                 &me,
                 &name,
-                self.mob_main_hand_name(id).as_ref(),
+                self.entry_item(killing).as_ref(),
             );
             return Text::translate(&key, &args);
         }
@@ -549,6 +637,12 @@ impl Game<'_> {
             }
             None => None,
         };
+        // DamageSource.getLocalizedDeathMessage reads that player's main hand
+        // as the message is built.
+        let player_item = match killer {
+            Some(conn) => self.player_main_hand_custom_name(conn),
+            None => player.as_ref().and_then(|_| self.main_hand_custom_name()),
+        };
         // The cause's display name: a mob that is gone (a creeper that blew
         // up) is still named by its blast.
         let name = |g: &Self, who: Who| match who {
@@ -570,6 +664,9 @@ impl Game<'_> {
             .iter()
             .map(|e| {
                 let attacker = e.source.attacker.and_then(|w| name(self, w));
+                let item = (e.source.attacker == Some(Who::Player))
+                    .then(|| player_item.clone())
+                    .flatten();
                 // AbstractArrow.onHitEntity: an arrow nobody shot is its own
                 // cause; a rocket nobody fired still names itself.
                 let direct = match e.source.kind {
@@ -586,6 +683,7 @@ impl Game<'_> {
                     fall_location: e.in_water.then_some("water"),
                     fall_distance: e.fall_distance,
                     attacker,
+                    item,
                     direct,
                 }
             })
@@ -614,6 +712,14 @@ impl Game<'_> {
     }
 }
 
+/// `!stack.isEmpty() && stack.has(DataComponents.CUSTOM_NAME)`: the held
+/// item that turns a death message into its `.item` form.
+fn has_custom_name(stack: &horizon_client::items::ItemStack) -> bool {
+    &*stack.item != "minecraft:air"
+        && stack.count > 0
+        && stack.data().is_some_and(|d| d.custom_name.is_some())
+}
+
 /// `Entity.getDisplayName` of a mob: its custom name or its type's name.
 fn mob_name(m: &Mob) -> Text {
     match (&m.custom_name_text, &m.custom_name) {
@@ -623,6 +729,66 @@ fn mob_name(m: &Mob) -> Text {
     }
 }
 
+#[cfg(test)]
+mod held_item_tests {
+    use super::has_custom_name;
+    use horizon_client::items::ItemStack;
+    use horizon_world::nbt::Tag;
+
+    /// `DamageSource.getLocalizedDeathMessage`: only a non-empty stack with
+    /// a `custom_name` component names the item.
+    #[test]
+    fn only_a_renamed_stack_names_the_item() {
+        let mut sword = ItemStack::new("minecraft:diamond_sword", 1);
+        assert!(!has_custom_name(&sword));
+        // Other components (here a repair cost) are not a custom name.
+        sword.data_mut().repair_cost = 1;
+        assert!(!has_custom_name(&sword));
+        sword.data_mut().custom_name = Some(Tag::String("Peacemaker".into()));
+        assert!(has_custom_name(&sword));
+        // An empty stack never does, even with the component.
+        let mut gone = sword.clone();
+        gone.count = 0;
+        assert!(!has_custom_name(&gone));
+    }
+}
+#[cfg(test)]
+mod noted_tests {
+    use super::CombatTracker;
+    use horizon_client::text::Text;
+
+    /// A canceled hit forgets what was noted for it, also before its hurt
+    /// started (a PvP blow, `/damage`), and nothing a landed hit noted.
+    #[test]
+    fn a_canceled_hit_forgets_only_its_own_attackers() {
+        let mut c = CombatTracker::default();
+        let arrow = |c: &mut CombatTracker, id| {
+            c.mark();
+            c.pending.push((
+                "minecraft:arrow".into(),
+                (id, Text::literal("skeleton")),
+                None,
+            ));
+        };
+        arrow(&mut c, 1);
+        c.forget_noted(false);
+        arrow(&mut c, 2);
+        c.mark();
+        c.pending_direct
+            .push(("minecraft:arrow".into(), Text::literal("arrow")));
+        c.forget_noted(true);
+        assert_eq!(c.pending.iter().map(|p| p.1.0).collect::<Vec<_>>(), [1]);
+        assert!(c.pending_direct.is_empty());
+        // A hit noted and landed, then one noted and canceled: the landed
+        // one keeps its attacker.
+        c.forget_noted(false);
+        arrow(&mut c, 3);
+        c.forget_noted(false);
+        arrow(&mut c, 4);
+        c.forget_noted(true);
+        assert_eq!(c.pending.iter().map(|p| p.1.0).collect::<Vec<_>>(), [1, 3]);
+    }
+}
 #[cfg(test)]
 mod stuck_tests {
     use super::Stuck;

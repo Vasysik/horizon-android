@@ -184,6 +184,27 @@ fn vanilla_command(name: &str) -> bool {
         .any(|&c| d.nodes[c].name() == name)
 }
 
+/// Freeze native component IDs before reading content or opening a connection.
+/// With no mod registering any, nothing is installed, which every reader
+/// treats as no custom components, and `registries.json` isn't read.
+pub(super) fn register_components(root: &std::path::Path) -> horizon_client::Result<()> {
+    let mut names = Vec::new();
+    Game::native_component_types(&mut names);
+    if names.is_empty() {
+        return Ok(());
+    }
+    let path =
+        horizon_protocol::registry::Builtin::find(root).ok_or("registries.json not found")?;
+    let builtin = horizon_protocol::registry::Builtin::load(&path)?;
+    let types = builtin
+        .get("minecraft:data_component_type")
+        .ok_or("missing data component registry")?;
+    let first = i32::try_from(types.names.len())?;
+    horizon_protocol::item::custom::install(first, names)
+        .map_err(|error| format!("invalid native component registration: {error}"))?;
+    Ok(())
+}
+
 /// `root` with the content mods that are on layered over it
 /// (docs/modpacks.md): their blocks, items, data and assets. Read once at
 /// start, before the resources load; a mod whose content is refused is left
@@ -199,6 +220,7 @@ pub(super) fn content_root(
     let mut paths = horizon_mods::find(&here.join(mod_list::DIR));
     paths.retain(|p| !dev.contains(p));
     paths.extend(dev.iter().cloned());
+    let mut known = None;
     let mut mods: Vec<ContentMod> = Vec::new();
     for path in &paths {
         let Ok(package) = Package::read(path) else {
@@ -212,23 +234,30 @@ pub(super) fn content_root(
         {
             continue;
         }
-        let content = Content::read(path, m).and_then(|content| {
-            // The first of two mods owning one namespace stays on.
-            let own = (m.id.as_str(), content.namespaces.as_slice());
-            match mods
-                .iter()
-                .find_map(|c| horizon_mods::content::clash((&c.id, &c.content.namespaces), own))
-            {
-                Some(e) => Err(e),
-                None => Ok(content),
+        let content = match Content::read(path, m) {
+            Ok(content) => content,
+            Err(e) => {
+                log::warn!("Horizon: mod {} content not loaded: {e}", m.id);
+                continue;
             }
-        });
-        match content {
-            Ok(content) => mods.push(ContentMod {
-                id: m.id.clone(),
-                content,
-            }),
-            Err(e) => log::warn!("Horizon: mod {} content not loaded: {e}", m.id),
+        };
+        let known = match &mut known {
+            Some(types) => types,
+            None => match mod_content::known_components(root) {
+                Ok(types) => known.insert(types),
+                Err(e) => {
+                    log::warn!("Horizon: content mods not loaded: {e}");
+                    register_mob_effects(&[]);
+                    return root.to_owned();
+                }
+            },
+        };
+        let candidate = ContentMod {
+            id: m.id.clone(),
+            content,
+        };
+        if let Err(e) = mod_content::accept_mod(&mut mods, candidate, known) {
+            log::warn!("Horizon: mod {} content not loaded: {e}", m.id);
         }
     }
     match mod_content::resource_root(root, &mods, &here.join(".horizon-cache")) {
@@ -241,11 +270,15 @@ pub(super) fn content_root(
                 );
             }
             register_mob_effects(&mods);
+            register_entity_types(&mods);
+            register_menu_types(&mods);
             out
         }
         Err(e) => {
             log::warn!("Horizon: content mods not loaded: {e}");
             register_mob_effects(&[]);
+            register_entity_types(&[]);
+            register_menu_types(&[]);
             root.to_owned()
         }
     }
@@ -310,6 +343,47 @@ impl Game<'_> {
     }
     pub(super) fn mod_screen_scroll(&mut self, _delta: f32) {}
 }
+/// the mods' thrown entity types, as their mob effects: set once, from the
+/// startup root.
+fn register_entity_types(mods: &[horizon_client::mod_content::ContentMod]) {
+    use horizon_client::projectiles;
+    let types = horizon_client::mod_content::entity_types(mods);
+    let set = projectiles::register_thrown_types(
+        types
+            .iter()
+            .map(|t| (t.id.clone(), t.item.clone(), t.damage)),
+    );
+    if !set
+        && projectiles::thrown_types()
+            .iter()
+            .map(|t| t.id)
+            .ne(types.iter().map(|t| t.id.as_str()))
+    {
+        log::warn!("Horizon: the mods' entity types changed; restart the game to use them");
+    }
+}
+
+/// the mods' menu types, as their entity types: set once, from the startup
+/// root.
+fn register_menu_types(mods: &[horizon_client::mod_content::ContentMod]) {
+    use horizon_client::containers;
+    let menus = horizon_client::mod_content::menu_types(mods);
+    let set = containers::register_mod_menu_types(menus.iter().map(|m| {
+        let results = m.results.iter().map(|&r| usize::from(r)).collect();
+        (m.id.clone(), m.slots.into(), m.data_slots.into(), results)
+    }));
+    if !set
+        && containers::mod_menu_types()
+            .iter()
+            .map(|m| m.id)
+            .ne(menus.iter().map(|m| m.id.as_str()))
+    {
+        log::warn!("Horizon: the mods' menu types changed; restart the game to use them");
+    }
+}
+
+/// What the launcher writes beside a game it built with native mods: their ids under `mods`.
+const BUILD_INFO: &str = "native-mods.json";
 
 #[cfg(feature = "mods")]
 impl Game<'_> {
@@ -627,7 +701,7 @@ impl Game<'_> {
         if !self.mods.mods.is_running() {
             return;
         }
-        self.tick_mod_use();
+        self.tick_sandbox_mod_use();
         let snapshot = self.mod_snapshot();
         self.mods.mods.set_snapshot(snapshot);
         self.mods.mods.tick(self.ticks);

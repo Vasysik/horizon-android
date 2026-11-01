@@ -28,6 +28,7 @@
   "horizon.options.search": "Search settings...",
   "horizon.pages.mods": "Mods",
   "horizon.pages.shader_packs": "Shader Packs",
+  "horizon.pages.shader_options": "Shader Options",
   "horizon.pages.controller": "Controller Settings",
   "horizon.pages.controller_binds": "Controller Binds",
   "horizon.pages.extras": "Horizon Extras",
@@ -61,6 +62,9 @@
   "horizon.mods.open_folder": "Open Mod Folder",
   "horizon.shader_packs.empty": "No shader packs: put them in the shaderpacks folder",
   "horizon.shader_packs.kind_horizon": " (Horizon)",
+  "horizon.shader_options.open": "Shader Options...",
+  "horizon.shader_options.profile": "Profile",
+  "horizon.shader_options.loading": "Reading the shader pack's options...",
   "horizon.agent.copy_details": "Copy Connection Details",
   "horizon.multiplayer.join": "Join",
   "horizon.multiplayer.cancel_reconnecting": "Cancel Reconnecting",
@@ -201,5 +205,9 @@
   "Frame rate and frame times over the game, with a graph.": "Frame rate and frame times over the game, with a graph.",
   "horizon.multiplayer.finding_friend": "Finding your friend's world...",
   "horizon.loading.opening_world": "Opening world",
-  "horizon.loading.cancelling_world": "Cancelling world"
+  "horizon.loading.cancelling_world": "Cancelling world",
+  "horizon.multiplayer.not_signed_in": "This server is in online mode. Sign in with your Microsoft account in the Horizon launcher to join it.",
+  "horizon.multiplayer.invalid_address": "Invalid server address: %s",
+  "horizon.multiplayer.connected_friend_direct": "Connected straight to your friend...",
+  "horizon.multiplayer.connected_friend_relay": "Connected to your friend through the relay..."
 }

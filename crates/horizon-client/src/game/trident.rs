@@ -186,9 +186,7 @@ impl Game<'_> {
         if stack.damage + 1 >= max || (riptide && !self.in_water_or_rain()) {
             return true;
         }
-        if self.using.is_none() {
-            self.using = Some((self.held_slot(), 0));
-        }
+        self.start_using_item();
         true
     }
     fn in_water_or_rain(&mut self) -> bool {

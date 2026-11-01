@@ -46,6 +46,8 @@ pub(super) struct Parked {
     tickets: ChunkTickets,
     random_tick_sections: RandomTickSections,
     level_events: Vec<LevelEvent>,
+    /// Entity portal processes and cooldowns belong to this level's entities.
+    portal_states: HashMap<u32, horizon_client::nether_portal::PortalState>,
     falling: Vec<FallingBlock>,
     paintings: Vec<horizon_client::entities::Painting>,
     item_frames: Vec<horizon_client::entities::ItemFrame>,
@@ -174,6 +176,7 @@ impl Game<'_> {
             dim,
             self.level_shapes.get(dim.id()),
             self.level.seed,
+            &self.level.enabled_features,
         )?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
         world.shape = self.level_shapes.get(dim.id());
@@ -188,6 +191,7 @@ impl Game<'_> {
             tickets: Default::default(),
             random_tick_sections: Default::default(),
             level_events: Vec::new(),
+            portal_states: HashMap::new(),
             falling: Vec::new(),
             paintings: Vec::new(),
             item_frames: Vec::new(),
@@ -242,6 +246,7 @@ impl Game<'_> {
         swap(&mut self.tickets, &mut p.tickets);
         swap(&mut self.random_tick_sections, &mut p.random_tick_sections);
         swap(&mut self.level_events, &mut p.level_events);
+        swap(&mut self.portals.entities, &mut p.portal_states);
         swap(&mut self.falling, &mut p.falling);
         swap(&mut self.paintings, &mut p.paintings);
         swap(&mut self.item_frames, &mut p.item_frames);
@@ -420,26 +425,31 @@ impl Game<'_> {
             }
             self.update_dedicated_streaming();
             self.update_world();
-            // What server mods set in this level since its last tick.
             self.apply_mod_block_writes();
-            result = if paused {
-                self.tick_lan(true);
-                Ok(())
-            } else if k == 0 {
-                self.tick()
-            } else {
-                let running = running.unwrap_or_else(|| self.clock.world_runs());
-                if running {
-                    self.tick_weather_effects();
-                }
-                self.tick_world(running)
-            };
+            result = horizon_client::block_contact::in_level(
+                (self.serving.is_some() || self.options.dedicated.is_some()).then_some(dim.id()),
+                || {
+                    if paused {
+                        self.tick_lan(true);
+                        Ok(())
+                    } else if k == 0 {
+                        self.tick()
+                    } else {
+                        let running = running.unwrap_or_else(|| self.clock.world_runs());
+                        if running {
+                            self.tick_weather_effects();
+                        }
+                        self.tick_world(running)
+                    }
+                },
+            );
             if result.is_err() {
                 break;
             }
             if observe_level {
                 self.native_level_tick_post(dim.id());
             }
+            self.publish_server_debug(dim);
         }
         self.level_pass = Pass::default();
         if result.is_err() {
@@ -610,6 +620,9 @@ impl Game<'_> {
         let back = self.dim;
         for dim in closing {
             self.enter_level(None, dim)?;
+            // Its chunks leave with it: the mods hear before its last save.
+            let chunks: Vec<_> = self.world.chunks.values().cloned().collect();
+            self.native_chunks_changed(&chunks);
             self.save_level(true)?;
             self.enter_level(None, back)?;
             self.levels.parked.remove(&dim);

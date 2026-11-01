@@ -138,6 +138,8 @@ fn connect(port: u16, name: &str, known_pack: bool) -> Result<Bot, String> {
             }
             cfg::Clientbound::RegistryData(r) => {
                 registries += 1;
+                // A client that knows the core pack rebuilds the entries itself
+                // (RegistrySynchronization.packRegistry), dialogs included.
                 let has_data = r.entries.iter().any(|e| e.data.is_some());
                 assert_eq!(has_data, !known_pack, "{}", r.registry);
             }
@@ -885,6 +887,7 @@ fn guests_see_each_other_and_the_world_entities() {
                 && reminder.elapsed() >= Duration::from_secs(1)
             {
                 bot.send(S::MovePlayerPos(play::MovePlayerPos { x, y, z, flags: 1 }));
+                bot.send(S::ClientTickEnd(Empty));
                 reminder = Instant::now();
             }
             let Ok((id, payload)) = bot.c.recv() else {
@@ -947,6 +950,8 @@ fn guests_see_each_other_and_the_world_entities() {
                 z: 8.5,
                 flags: 1,
             }));
+            // A client ends each tick: a second move before it is kicked.
+            bot.send(S::ClientTickEnd(Empty));
         }
         Ok::<(), String>(())
     });
@@ -1267,6 +1272,120 @@ fn the_prediction_records_each_client_tick_and_the_server_ticks_it_had_seen() {
     s.tick(&[]);
     let record = s.hub.guests[0].anticheat.record.as_deref().unwrap();
     assert_eq!(record.seen(), Some(pinged));
+}
+
+/// A mod block entity reaches the players that see its chunk as vanilla's do
+/// (`BlockEntityInfo.create`, then `sendBlockUpdated` and
+/// `ChunkHolder.broadcastChanges`): in the chunk with its block's own type
+/// and its mod's update tag, then once per tick however often it is synced,
+/// with no `BlockEntityData` for one whose mod gives no tag.
+#[test]
+fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
+    use horizon_client::containers::{BlockEntity, ModBlockEntity};
+    use horizon_world::nbt::{Compound, JavaString, Tag};
+    let Some(resources) = resources() else {
+        return;
+    };
+    const MACHINE: u32 = 3;
+    let mut s = server(&resources);
+    let states = [
+        "minecraft:air",
+        "minecraft:stone",
+        "minecraft:chest",
+        "test:machine",
+    ]
+    .map(|n| (Arc::<str>::from(n), false));
+    let builtin = horizon_protocol::registry::Builtin::parse(
+        r#"{"minecraft:block_entity_type": {"entries": {"test:machine": {"protocol_id": 60}}}}"#,
+    )
+    .unwrap();
+    s.hub.encoder = ChunkEncoder::new(states, &builtin, &[], &[]);
+    // A machine shows whether it runs; one without `on` shows nothing.
+    s.hub.encoder.mod_update_tag = Some(|_, entity| {
+        let on = entity.nbt.get(&JavaString::from("on"))?.clone();
+        Some(Compound::from([(JavaString::from("on"), on)]))
+    });
+    let (shown, silent) = ((1, MIN_Y + 5, 1), (3, MIN_Y + 5, 3));
+    for (pos, on) in [(shown, Some(0)), (silent, None)] {
+        s.world
+            .set(pos.0, pos.1, pos.2, BlockStateId(MACHINE))
+            .unwrap();
+        let mut machine = ModBlockEntity {
+            id: "test:machine".into(),
+            ..ModBlockEntity::default()
+        };
+        if let Some(on) = on {
+            machine.nbt.insert("on".into(), Tag::Byte(on));
+        }
+        s.world
+            .block_entities
+            .insert(pos, BlockEntity::Mod(Box::new(machine)));
+    }
+    let on = |v: i8| Tag::Compound(Compound::from([(JavaString::from("on"), Tag::Byte(v))]));
+    let port = s.hub.lan.port;
+    let bot = run(&mut s, move || connect(port, "Engineer", true));
+    let (mut bot, infos) = run(&mut s, move || {
+        let mut bot = bot;
+        let mut infos = None;
+        loop {
+            match bot.recv_play()? {
+                C::PlayerPosition(p) => {
+                    bot.send(S::AcceptTeleportation(play::AcceptTeleportation {
+                        id: p.teleport,
+                        x: p.position[0],
+                        y: p.position[1],
+                        z: p.position[2],
+                        yaw: 0.0,
+                        pitch: 0.0,
+                    }))
+                }
+                C::LevelChunkWithLight(l) if (l.x, l.z) == (0, 0) => {
+                    infos = Some(l.chunk.block_entities)
+                }
+                C::ChunkBatchFinished(_) => {
+                    bot.send(S::ChunkBatchReceived(play::ChunkBatchReceived {
+                        chunks_per_tick: 20.0,
+                    }));
+                    if let Some(infos) = infos.take() {
+                        return Ok((bot, infos));
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    let mut sent: Vec<_> = infos
+        .iter()
+        .map(|e| (e.packed_xz, e.kind, e.tag.clone()))
+        .collect();
+    sent.sort_by_key(|e| e.0);
+    assert_eq!(sent, [(0x11, 60, on(0)), (0x33, 60, Tag::End)]);
+    // The machine starts and is synced twice; the silent one once. A stone
+    // in the section above comes after them, in the same tick.
+    if let Some(BlockEntity::Mod(m)) = s.world.block_entities.get_mut(&shown) {
+        m.nbt.insert("on".into(), Tag::Byte(1));
+    }
+    let log = s
+        .world
+        .block_log
+        .as_mut()
+        .expect("the hub logs block changes");
+    log.extend([shown, silent, shown]);
+    let marker = [2, MIN_Y + 21, 2];
+    s.world
+        .set(marker[0], marker[1], marker[2], BlockStateId(STONE))
+        .unwrap();
+    let data = run(&mut s, move || {
+        let mut data = Vec::new();
+        loop {
+            match bot.recv_play()? {
+                C::BlockEntityData(p) => data.push((p.pos, p.tag)),
+                C::BlockUpdate(p) if p.pos == marker => return Ok(data),
+                _ => {}
+            }
+        }
+    });
+    assert_eq!(data, [([shown.0, shown.1, shown.2], on(1))]);
 }
 
 /// #4301: the damage-immunity term `ServerPlayer.isInvulnerableTo` takes from

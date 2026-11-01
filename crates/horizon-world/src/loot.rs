@@ -11,7 +11,7 @@
 use horizon_core::random::{LegacyRandom, RandomSource};
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     fs, io,
     path::Path,
     sync::{Arc, Mutex, Weak},
@@ -38,6 +38,19 @@ impl PackOverlay<'_> {
         self.files
             .iter()
             .filter_map(move |(key, files)| Some((key.strip_prefix(&prefix)?, files)))
+    }
+    /// The overlay's tag files of one registry, over every namespace: the
+    /// keys are `tags/<ns>:<registry>/<path>`, and the yielded id is the
+    /// tag id `<ns>:<path>` the game's own tags are keyed by
+    /// (`TagLoader`'s ids).
+    pub fn tag_kind(&self, registry: &str) -> impl Iterator<Item = (String, &Vec<Vec<u8>>)> {
+        let prefix = format!("{registry}/");
+        self.files.iter().filter_map(move |(key, files)| {
+            let rest = key.strip_prefix("tags/")?;
+            let (ns, path) = rest.split_once(':')?;
+            let path = path.strip_prefix(&prefix)?;
+            Some((format!("{ns}:{path}"), files))
+        })
     }
     /// The last pack's file for an id, which is the one
     /// `ResourceManager.listMatchingResources` hands out.
@@ -361,21 +374,49 @@ pub fn shared_tables(
             .for_each(|file| file.hash(&mut hasher));
         hasher.finish()
     };
-    let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
-    loaded.retain(|(_, tables)| tables.strong_count() > 0);
-    if let Some(tables) = loaded
-        .iter()
-        .find(|(k, _)| *k == key)
-        .and_then(|(_, tables)| tables.upgrade())
-    {
+    let held = |loaded: &mut Vec<(u64, Weak<HashMap<String, Value>>)>| {
+        loaded.retain(|(_, tables)| tables.strong_count() > 0);
+        loaded
+            .iter()
+            .find(|(k, _)| *k == key)
+            .and_then(|(_, tables)| tables.upgrade())
+    };
+    if let Some(tables) = held(&mut LOADED.lock().unwrap_or_else(|e| e.into_inner())) {
         return Ok(tables);
     }
     let mut tables = HashMap::new();
     load_kind(&root.join("data"), "loot_table", &mut tables)?;
     overlay_map(overlay, "loot_table", &mut tables);
+    // The mods' hooks run outside the lock.
+    let mut each: Vec<_> = tables.iter_mut().collect();
+    each.sort_by(|a, b| a.0.cmp(b.0));
+    for (id, table) in each {
+        native_loot_table_load(id, table);
+    }
+    let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
+    // Another thread may have loaded the same tables meanwhile: keep one.
+    if let Some(tables) = held(&mut loaded) {
+        return Ok(tables);
+    }
     let tables = Arc::new(tables);
     loaded.push((key, Arc::downgrade(&tables)));
     Ok(tables)
+}
+
+/// A native mod's hook point (docs/native-mods.md), listed in `native-hooks.json` with the game's:
+/// the loot table `id` (`minecraft:chests/simple_dungeon`, `minecraft:blocks/stone`,
+/// `minecraft:entities/zombie`) as it loads, its JSON after the data packs', before anything
+/// rolls it (NeoForge's `LootTableLoadEvent`, Fabric's `LootTableEvents.MODIFY`). Add pools to
+/// `table["pools"]` or entries to a pool's `entries`, change or replace it (no pools: it drops
+/// nothing; keep its `random_sequence` when replacing it, as a mob's table without one drops
+/// nothing). Called once per table and load, in id order, wherever the tables load: the server,
+/// and a client too, so make the same change each time, and don't load loot tables from here.
+/// Two loads may run at once on two threads. A `/reload` or a world opened with other packs
+/// may load them again, or keep the tables already loaded from the same files. API
+/// 75.
+#[inline(never)]
+pub fn native_loot_table_load(id: &str, table: &mut Value) {
+    let _ = (id, table);
 }
 
 fn load_kind(data: &Path, kind: &str, out: &mut HashMap<String, Value>) -> io::Result<()> {
@@ -462,8 +503,7 @@ impl LootData {
         let mut predicates = HashMap::new();
         load_kind(&all, "predicate", &mut predicates)?;
         overlay_map(overlay, "predicate", &mut predicates);
-        let raw: BTreeMap<String, Value> =
-            serde_json::from_slice(&fs::read(root.join("items.json"))?)?;
+        let raw = crate::item_defaults::read(root)?;
         let items = raw
             .iter()
             .map(|(name, c)| {
@@ -529,7 +569,7 @@ impl LootData {
             // The packs' entries join the game's own, in pack order; a
             // `replace` file drops what the lower sources put in
             // (`TagLoader.load` walks the resource stack the same way).
-            for (id, files) in overlay.kind(&format!("tags/{registry}")) {
+            for (id, files) in overlay.tag_kind(registry) {
                 let slot = tags
                     .entry((registry.to_owned(), id.to_owned()))
                     .or_default();
@@ -1798,6 +1838,59 @@ mod namespace_tests {
             seen.into_iter().collect::<Vec<_>>(),
             ["minecraft:ponder_goat_horn", "minecraft:sing_goat_horn"]
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // `content_id`'s tag key shape (`tags/<ns>:<registry>/<path>`) through
+    // `tag_kind`: the id loses the registry segment, keeps the namespace.
+    #[test]
+    fn tag_kind_yields_tag_loader_ids_for_content_id_keys() {
+        let overlay = PackOverlay {
+            files: &[
+                (
+                    "tags/minecraft:item/food".to_owned(),
+                    vec![br#"{"values": ["minecraft:bread"]}"#.to_vec()],
+                ),
+                (
+                    "tags/minecraft:enchantment/trades/desert_common".to_owned(),
+                    vec![br#"{"values": ["minecraft:infinity"]}"#.to_vec()],
+                ),
+            ],
+        };
+        let item: Vec<_> = overlay.tag_kind("item").map(|(id, _)| id).collect();
+        assert_eq!(item, ["minecraft:food"]);
+        let enchantment: Vec<_> = overlay.tag_kind("enchantment").map(|(id, _)| id).collect();
+        assert_eq!(enchantment, ["minecraft:trades/desert_common"]);
+        // Another registry's files stay out.
+        assert_eq!(overlay.tag_kind("instrument").count(), 0);
+    }
+
+    /// A pack's tag file joins the game's own in `TagLoader` order, and its
+    /// `replace` drops what the lower sources put in.
+    #[test]
+    fn pack_tags_join_and_replace_the_game_own() {
+        let root = std::env::temp_dir().join(format!("horizon-loot-tag-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/minecraft/tags/item")).unwrap();
+        fs::write(root.join("items.json"), "{}").unwrap();
+        fs::write(
+            root.join("data/minecraft/tags/item/food.json"),
+            r#"{"values": ["minecraft:bread", "minecraft:cookie"]}"#,
+        )
+        .unwrap();
+        let overlay = PackOverlay {
+            files: &[(
+                "tags/minecraft:item/food".to_owned(),
+                vec![
+                    br#"{"values": ["minecraft:kelp"]}"#.to_vec(),
+                    br#"{"replace": true, "values": ["minecraft:apple"]}"#.to_vec(),
+                ],
+            )],
+        };
+        let data = LootData::load(&root, &overlay).unwrap();
+        assert!(data.in_tag("item", "minecraft:food", "minecraft:apple"));
+        assert!(!data.in_tag("item", "minecraft:food", "minecraft:bread"));
+        assert!(!data.in_tag("item", "minecraft:food", "minecraft:kelp"));
         let _ = fs::remove_dir_all(&root);
     }
 }

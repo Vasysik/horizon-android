@@ -683,6 +683,8 @@ impl Game<'_> {
                 tr("entity.minecraft.wandering_trader", "Wandering Trader")
             }
         });
+        // The screen's title is the merchant's name; its label adds the level.
+        super::screen_info::name_container(|| name.clone());
         let title = if progress {
             tr("merchant.title", "%s - %s")
                 .replacen("%s", &name, 1)

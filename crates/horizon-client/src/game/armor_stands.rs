@@ -2,7 +2,7 @@
 //! falling, `interactAt` equipment swaps by clicked height, the two-hit break
 //! of `hurtServer` (creative breaks at once), and `ArmorStandRenderer` with
 //! the default pose, the hit wobble and humanoid armor layers.
-use super::Game;
+use super::{Game, InteractTarget};
 use horizon_client::{
     entities::ArmorStand,
     items::ItemStack,
@@ -485,12 +485,30 @@ impl Game<'_> {
             _ => 0,
         }
     }
-    /// `ArmorStand.interactAt`.
-    pub(super) fn interact_armor_stand(&mut self) -> bool {
-        let Some((i, d, point)) = self.armor_stand_hit() else {
+    /// `ArmorStand.interactAt` for the stand under the crosshair, or for the
+    /// stand a guest's interact packet named (its client's click point).
+    pub(super) fn interact_armor_stand(&mut self, target: Option<InteractTarget>) -> bool {
+        let Some((i, d, point)) = (match target {
+            // interactAt gets the packet's location, measured from the stand's
+            // position, so getClickedSlot reads the height the client clicked.
+            Some(t) => Self::named_entity(&self.armor_stands, t.id, |a| a.id).map(|i| {
+                let p = self.armor_stands[i].position;
+                (
+                    i,
+                    0.0,
+                    [
+                        p.x + t.location[0],
+                        p.y + t.location[1],
+                        p.z + t.location[2],
+                    ],
+                )
+            }),
+            None => self.armor_stand_hit(),
+        }) else {
             return false;
         };
-        if !self.before_block(d) {
+        // Only a client's own pick is stopped by a block: the range check passed.
+        if target.is_none() && !self.before_block(d) {
             return false;
         }
         let held = self.held().cloned();
@@ -504,7 +522,9 @@ impl Game<'_> {
         let slot = match &held {
             Some(h) => {
                 let slot = self.equipment_slot(h);
-                if slot < 2 && !a.show_arms {
+                // ArmorStand.interactAt: a disabled slot, or a hand without
+                // arms, is FAIL.
+                if a.is_disabled(slot) {
                     return true;
                 }
                 slot
@@ -532,6 +552,18 @@ impl Game<'_> {
                 }
             }
         };
+        // An empty hand takes from the main hand when the clicked slot is
+        // disabled (`isDisabled(clickedSlot) ? slot : clickedSlot`).
+        let slot = if held.is_none() && a.is_disabled(slot) {
+            0
+        } else {
+            slot
+        };
+        // ArmorStand.swapItem: taking from a filled slot or putting into an
+        // empty one can be disabled; the click then passes.
+        if a.swap_locked(slot) {
+            return false;
+        }
         let current = self.armor_stands[i].equipment[slot].clone();
         if held.is_none() && current.is_none() {
             return false;
@@ -704,6 +736,8 @@ impl Game<'_> {
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
         for (i, a) in self.armor_stands.iter_mut().enumerate() {
+            a.previous = a.position;
+            a.previous_yaw = a.yaw;
             if !ticking(a.position.x.floor() as i32, a.position.z.floor() as i32) {
                 continue;
             }
@@ -767,11 +801,10 @@ impl Game<'_> {
             let dragon = a.equipment[5]
                 .as_ref()
                 .is_some_and(|i| &*i.item == "minecraft:dragon_head");
-            let position = super::entity_culling::at(a.position);
             if !self.standing_entity_in_view(
                 camera,
-                position,
-                position,
+                super::entity_culling::at(a.previous),
+                super::entity_culling::at(a.position),
                 alpha,
                 width,
                 height,
@@ -780,7 +813,9 @@ impl Game<'_> {
             ) {
                 continue;
             }
-            let p = glam::DVec3::new(a.position.x, a.position.y, a.position.z) - camera;
+            // EntityRenderer: drawn between last tick's position and this one's.
+            let at = a.render_position(alpha);
+            let p = super::entity_culling::at(at) - camera;
             // setupRotations: 180 - body yaw, plus the wobble for 5 ticks after a hit.
             let wiggle = (self.world.game_time - a.last_hit) as f32 + alpha as f32;
             let wobble = if wiggle < 5.0 {
@@ -789,13 +824,15 @@ impl Game<'_> {
                 0.0
             };
             let base = glam::Mat4::from_translation(p.as_vec3())
-                * glam::Mat4::from_rotation_y((180.0 - a.yaw + wobble).to_radians())
+                * glam::Mat4::from_rotation_y(
+                    (180.0 - a.render_yaw(alpha as f32) + wobble).to_radians(),
+                )
                 * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0))
                 * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0));
             let light = self.world.light(
-                a.position.x.floor() as i32,
-                (a.position.y + 0.5).floor() as i32,
-                a.position.z.floor() as i32,
+                at.x.floor() as i32,
+                (at.y + 0.5).floor() as i32,
+                at.z.floor() as i32,
             );
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
             self.armor_stand_vertices(a, base, packed, out);
@@ -1130,7 +1167,8 @@ impl Game<'_> {
             && self.remote.is_none()
             && let Some(eye) = self.eye_position()
         {
-            self.spawn_item(rest, eye, [0.0; 3], 40);
+            // Player.drop(stack, false): thrown from the eyes, no thrower.
+            self.throw_from_eyes(rest, eye, false);
         }
         // The attribute modifiers of a worn piece come from the server's
         // ClientboundUpdateAttributesPacket on a client.
@@ -1301,6 +1339,26 @@ mod swap_tests {
     use super::*;
     fn stack(item: &str, count: u32) -> ItemStack {
         ItemStack::new(item, count)
+    }
+    #[test]
+    fn disabled_slots_lock_by_filter_flag() {
+        let mut a = ArmorStand::new(1, horizon_core::geometry::Vec3::ZERO, 0.0);
+        // Hands need arms.
+        assert!(a.is_disabled(0) && a.is_disabled(1));
+        a.show_arms = true;
+        assert!(!a.is_disabled(0) && !a.is_disabled(1));
+        // Bit 4 locks the head (equipment index 5), bit 5 the off hand (1).
+        a.disabled_slots = (1 << 4) | (1 << 5);
+        assert!(a.is_disabled(5) && a.is_disabled(1));
+        assert!(!a.is_disabled(4) && !a.is_disabled(0));
+        // Taking (+8) from a filled slot and putting (+16) into an empty one.
+        a.disabled_slots = (1 << (3 + 8)) | (1 << (1 + 16));
+        assert!(!a.swap_locked(4), "an empty chest slot is not take-locked");
+        a.equipment[4] = Some(stack("minecraft:iron_chestplate", 1));
+        assert!(a.swap_locked(4));
+        assert!(a.swap_locked(2), "an empty feet slot is put-locked");
+        a.equipment[2] = Some(stack("minecraft:iron_boots", 1));
+        assert!(!a.swap_locked(2));
     }
     #[test]
     fn creative_swap_gives_the_worn_piece_to_the_hand() {

@@ -5,7 +5,10 @@
 //! SignedMessageLink, SignedMessageBody), the window of messages a client
 //! acknowledges (LastSeenMessagesValidator) and the cache a connection packs
 //! signatures against (MessageSignatureCache).
-use crate::rsa::{RsaPublicKey, SignatureHash};
+use crate::{
+    packets::play::LastSeenUpdate,
+    rsa::{RsaPrivateKey, RsaPublicKey, SignatureHash},
+};
 use std::collections::{HashSet, VecDeque};
 
 /// MessageSignature.BYTES.
@@ -550,6 +553,128 @@ impl SignatureCache {
     }
 }
 
+/// The local player's SignedMessageChain.Encoder (LocalChatSession.
+/// createMessageEncoder): each message signed with the chat key at the next
+/// link of the chain, from link 0 of a new session.
+#[derive(Clone, Debug)]
+pub struct Encoder {
+    sender: u128,
+    session: u128,
+    /// The next link's index; None once the chain has run out.
+    next: Option<i32>,
+}
+
+impl Encoder {
+    pub fn new(sender: u128, session: u128) -> Self {
+        Self {
+            sender,
+            session,
+            next: Some(0),
+        }
+    }
+    pub fn session(&self) -> u128 {
+        self.session
+    }
+    /// Encoder.pack: SHA256withRSA over PlayerChatMessage.updateSignature
+    /// at the next link, which then advances. None (the message goes
+    /// unsigned) once the chain has run out or the key can't sign a
+    /// MessageSignature-sized signature.
+    pub fn sign(&mut self, key: &RsaPrivateKey, body: &Body) -> Option<Signature> {
+        let index = self.next?;
+        let payload = signed_payload(self.sender, self.session, index, body);
+        let signature = signature(&key.sign(SignatureHash::Sha256, &payload).ok()?)?;
+        self.next = index.checked_add(1);
+        Some(signature)
+    }
+}
+
+/// LastSeenMessagesTracker.Update: the signatures a message signs as seen,
+/// and the acknowledgement its packet carries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SeenUpdate {
+    pub last_seen: Vec<Signature>,
+    pub update: LastSeenUpdate,
+}
+
+/// LastSeenMessagesTracker: the client's ring of the last 20 signed
+/// messages it processed (None for one it hid), and how many arrived since
+/// the last acknowledgement.
+#[derive(Clone, Debug)]
+pub struct LastSeenTracker {
+    /// LastSeenTrackedEntry: the signature and whether it is still pending.
+    tracked: Vec<Option<(Signature, bool)>>,
+    tail: usize,
+    offset: i32,
+    last_tracked: Option<Signature>,
+}
+
+impl Default for LastSeenTracker {
+    fn default() -> Self {
+        Self {
+            tracked: vec![None; LAST_SEEN],
+            tail: 0,
+            offset: 0,
+            last_tracked: None,
+        }
+    }
+}
+
+impl LastSeenTracker {
+    /// addPending: false for a repeat of the last message.
+    pub fn add_pending(&mut self, signature: &Signature, shown: bool) -> bool {
+        if self.last_tracked.as_ref() == Some(signature) {
+            return false;
+        }
+        self.last_tracked = Some(*signature);
+        self.tracked[self.tail] = shown.then_some((*signature, true));
+        self.tail = (self.tail + 1) % LAST_SEEN;
+        self.offset += 1;
+        true
+    }
+    /// ignorePending: a deleted message that is still pending is dropped.
+    pub fn ignore_pending(&mut self, signature: &Signature) {
+        if let Some(entry) = self
+            .tracked
+            .iter_mut()
+            .find(|e| matches!(e, Some((s, true)) if s == signature))
+        {
+            *entry = None;
+        }
+    }
+    /// Messages added since the last acknowledgement.
+    pub fn offset(&self) -> i32 {
+        self.offset
+    }
+    /// getAndClearOffset.
+    pub fn take_offset(&mut self) -> i32 {
+        std::mem::take(&mut self.offset)
+    }
+    /// generateAndApplyUpdate: the window from oldest to newest, each entry
+    /// acknowledged, with the offset since the last update and the checksum.
+    pub fn update(&mut self) -> SeenUpdate {
+        let offset = self.take_offset();
+        let mut acknowledged = [0u8; 3];
+        let mut last_seen = Vec::with_capacity(LAST_SEEN);
+        for i in 0..LAST_SEEN {
+            let index = (self.tail + i) % LAST_SEEN;
+            if let Some((signature, pending)) = &mut self.tracked[index] {
+                acknowledged[i / 8] |= 1 << (i % 8);
+                last_seen.push(*signature);
+                *pending = false;
+            }
+        }
+        let checksum = checksum(&last_seen);
+        SeenUpdate {
+            last_seen,
+            update: LastSeenUpdate {
+                offset,
+                acknowledged,
+                checksum,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,6 +803,148 @@ mod tests {
             [c.pack(&sig(3)).0, c.pack(&sig(2)).0, c.pack(&sig(1)).0],
             [0, 1, 2]
         );
+    }
+
+    use crate::rsa::tests::{CHAT_KEY_PKCS8, TEST_D, TEST_SPKI};
+
+    /// The services' key (the 1024-bit test key) signing a player's chat
+    /// key as the certificates endpoint's publicKeySignatureV2 does.
+    fn services() -> RsaPrivateKey {
+        let n = RsaPublicKey::from_der(&crate::rsa::tests::hex(TEST_SPKI))
+            .unwrap()
+            .modulus;
+        let body = [
+            crate::rsa::der_integer(&[0]),
+            crate::rsa::der_integer(&n),
+            crate::rsa::der_integer(&[1, 0, 1]),
+            crate::rsa::der_integer(&crate::rsa::tests::hex(TEST_D)),
+        ]
+        .concat();
+        RsaPrivateKey::from_der(&crate::rsa::der_element(0x30, &body)).unwrap()
+    }
+
+    fn session(player: &RsaPrivateKey, profile: u128, id: u128) -> ChatSession {
+        let services = services();
+        let mut key = ProfileKey {
+            expires_at: 2_000_000_000_000,
+            key: player.public_der(),
+            signature: Vec::new(),
+        };
+        key.signature = services
+            .sign(SignatureHash::Sha1, &key.signed_payload(profile))
+            .unwrap();
+        ChatSession::validate(id, key, std::slice::from_ref(&services.public), profile).unwrap()
+    }
+
+    /// What the encoder signs, the server's decoder (Chain) accepts, link by
+    /// link, and refuses once a message is tampered with.
+    #[test]
+    fn encoder_signs_what_the_chain_accepts() {
+        let player = RsaPrivateKey::from_der(&crate::rsa::tests::hex(CHAT_KEY_PKCS8)).unwrap();
+        let (profile, id) = (0x1234u128, 0x9876u128);
+        let mut chain = Chain::keyed(session(&player, profile, id));
+        let mut encoder = Encoder::new(profile, id);
+        assert_eq!(encoder.session(), id);
+        let seen = [sig(4)];
+        for (i, text) in ["hello", "/msg-like text", "é"].iter().enumerate() {
+            let body = Body {
+                content: text,
+                timestamp: 1_700_000_000_000 + i as i64,
+                salt: 7 * i as i64,
+                last_seen: &seen,
+            };
+            let signature = encoder.sign(&player, &body).unwrap();
+            assert_eq!(
+                chain.unpack(profile, Some(&signature), &body, true, 0),
+                Ok(Unpacked::Signed {
+                    index: i as i32,
+                    signature
+                })
+            );
+        }
+        let body = Body {
+            content: "original",
+            timestamp: 1_700_000_001_000,
+            salt: 1,
+            last_seen: &[],
+        };
+        let signature = encoder.sign(&player, &body).unwrap();
+        let forged = Body {
+            content: "forged",
+            ..body
+        };
+        assert_eq!(
+            chain.unpack(profile, Some(&signature), &forged, true, 0),
+            Err(DecodeError::InvalidSignature)
+        );
+        // Another sender's chain doesn't take the player's signatures.
+        let mut other = Chain::keyed(session(&player, profile, id));
+        let mut encoder = Encoder::new(profile + 1, id);
+        let signature = encoder.sign(&player, &body).unwrap();
+        assert_eq!(
+            other.unpack(profile, Some(&signature), &body, true, 0),
+            Err(DecodeError::InvalidSignature)
+        );
+        // A 1024-bit key can't make a MessageSignature: unsigned, not wrong.
+        let small = services();
+        assert_eq!(Encoder::new(profile, id).sign(&small, &body), None);
+    }
+
+    /// The client's tracker and the server's validator agree on every
+    /// update: the window, the offset and the checksum.
+    #[test]
+    fn tracker_updates_satisfy_the_validator() {
+        let mut tracker = LastSeenTracker::default();
+        let mut validator = LastSeenValidator::default();
+        let first = tracker.update();
+        assert_eq!(first.last_seen, Vec::<Signature>::new());
+        assert_eq!(first.update.offset, 0);
+        assert_eq!(first.update.checksum, checksum(&[]));
+        for round in 0..4u8 {
+            for n in 0..(round * 9 + 1) {
+                let s = sig(round * 40 + n + 1);
+                validator.add_pending(&s);
+                assert!(tracker.add_pending(&s, true));
+                assert!(!tracker.add_pending(&s, true), "a repeat");
+            }
+            let u = tracker.update();
+            assert!(u.last_seen.len() <= LAST_SEEN);
+            let seen = validator
+                .apply_update(u.update.offset, u.update.acknowledged, u.update.checksum)
+                .unwrap();
+            assert_eq!(seen, u.last_seen);
+            assert_eq!(tracker.offset(), 0);
+        }
+        // The last 20, oldest first.
+        let u = tracker.update();
+        assert_eq!(u.last_seen.len(), LAST_SEEN);
+        assert_eq!(u.last_seen.last(), Some(&sig(3 * 40 + 28)));
+        assert_eq!(u.update.acknowledged, [0xff, 0xff, 0x0f]);
+    }
+
+    /// A hidden message and a deleted pending one leave a hole the
+    /// validator expects; a deleted message already acknowledged stays.
+    #[test]
+    fn tracker_holes() {
+        let mut tracker = LastSeenTracker::default();
+        let mut validator = LastSeenValidator::default();
+        for s in [sig(1), sig(2), sig(3)] {
+            validator.add_pending(&s);
+        }
+        tracker.add_pending(&sig(1), true);
+        tracker.add_pending(&sig(2), false);
+        tracker.add_pending(&sig(3), true);
+        tracker.ignore_pending(&sig(3));
+        assert_eq!(tracker.offset(), 3);
+        let u = tracker.update();
+        assert_eq!(u.last_seen, vec![sig(1)]);
+        let seen = validator
+            .apply_update(u.update.offset, u.update.acknowledged, u.update.checksum)
+            .unwrap();
+        assert_eq!(seen, vec![sig(1)]);
+        tracker.ignore_pending(&sig(1));
+        assert_eq!(tracker.update().last_seen, vec![sig(1)]);
+        assert_eq!(tracker.take_offset(), 0);
     }
 
     /// A session with a 2048-bit test key, sender 1 and session 2; the signatures are

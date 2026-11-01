@@ -17,7 +17,7 @@ pub(super) struct ModUse {
 
 #[cfg(not(feature = "mods"))]
 impl Game<'_> {
-    pub(super) fn mod_use(&mut self, _button: MouseButton, _pressed: bool) -> bool {
+    pub(super) fn sandbox_mod_use(&mut self, _button: MouseButton, _pressed: bool) -> bool {
         false
     }
     pub(super) fn mod_key(&mut self, _key: KeyCode, _pressed: bool, _repeat: bool) {}
@@ -74,7 +74,7 @@ impl Game<'_> {
     }
     /// The use button while playing: true when a mod claimed the held item,
     /// so the game does nothing else with it (no placing, eating, swing).
-    pub(super) fn mod_use(&mut self, button: MouseButton, pressed: bool) -> bool {
+    pub(super) fn sandbox_mod_use(&mut self, button: MouseButton, pressed: bool) -> bool {
         if button != MouseButton::Right || !self.mods.mods.claims_any() {
             return false;
         }
@@ -103,7 +103,7 @@ impl Game<'_> {
     }
     /// Once a tick: a claimed use stops when its item leaves the hand or a
     /// screen opens, as vanilla's `releaseUsingItem`.
-    pub(super) fn tick_mod_use(&mut self) {
+    pub(super) fn tick_sandbox_mod_use(&mut self) {
         let Some(u) = &self.mods.using else {
             return;
         };

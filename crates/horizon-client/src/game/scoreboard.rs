@@ -199,22 +199,7 @@ impl Game<'_> {
             return Some(Target::Player);
         }
         let uuid = uuid_from_text(name).filter(|_| name.len() == 36)?;
-        if Some(uuid) == self.level.player_uuid {
-            return Some(Target::Player);
-        }
-        let id = self
-            .persist
-            .uuids
-            .iter()
-            .find(|(_, u)| **u == uuid)
-            .map(|(id, _)| *id)?;
-        if self.mobs.iter().any(|m| m.id == id) {
-            Some(Target::Mob(id))
-        } else if self.dropped.iter().any(|i| i.id == id) {
-            Some(Target::Item(id))
-        } else {
-            None
-        }
+        self.target_with_uuid(uuid)
     }
     /// `Entity.getTags` (the `Tags` list of the saved entity).
     pub(super) fn tags_of(&self, t: Target) -> Vec<String> {
@@ -747,13 +732,9 @@ impl Game<'_> {
 }
 
 impl Game<'_> {
-    /// `Hud.extractTabList`: the player list while the player-list key is
-    /// held. A local world shows it with a joined LAN guest or a `list`
-    /// objective.
-    pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
-        use horizon_client::tab_list::{self, TabInputs};
-        // Player heads and the player list both draw from the same skin
-        // slots: a new frame, with what the last one drew.
+    /// Advance the skin slots to a new frame with what the last one drew, and
+    /// store any finished skin downloads into the atlas.
+    pub(super) fn flush_skin_slots(&mut self) {
         let (ready, drawn) = {
             let mut downloads = self.skin_downloads.borrow_mut();
             (downloads.take_ready(), downloads.take_drawn())
@@ -762,6 +743,15 @@ impl Game<'_> {
         for (location, rgba) in ready {
             self.store_skin(location, rgba);
         }
+    }
+    /// `Hud.extractTabList`: the player list while the player-list key is
+    /// held. A local world shows it with a joined LAN guest or a `list`
+    /// objective.
+    pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
+        use horizon_client::tab_list::{self, TabInputs};
+        // Player heads and the player list both draw from the same skin
+        // slots: a new frame, with what the last one drew.
+        self.flush_skin_slots();
         let key = self.screen == super::Screen::Playing
             && self.keys.contains(&winit::keyboard::KeyCode::Tab);
         let (mut players, online_mode, upside_down) = match self.remote_tab_players() {
@@ -792,7 +782,10 @@ impl Game<'_> {
             players.len(),
             has_objective,
         );
-        self.tab_list.set_visible(shown);
+        if self.tab_list.set_visible(shown) {
+            // PlayerTabOverlay.setVisible: the names, said as the list comes up.
+            self.say_system_now(&tab_list::narration(&players, &self.score.board));
+        }
         if !shown {
             return;
         }

@@ -68,7 +68,7 @@ Every preview and stable API has tests that run old users against the current co
 | API | The test |
 | --- | --- |
 | Content mods | the content template builds and checks with `cargo horizon-mod`, and `mod_content`'s tests load content mods; a line is served as long as they pass |
-| Native mods | hook points are only ever added, and a test keeps each one hookable (`tests::hook_points_stay_hookable`, `game/native_hooks.rs`) |
+| Native mods | hook points are only ever added, and tests keep each one hookable (`tests::hook_points_stay_hookable` and `tests::loot_table_load_stays_hookable`, `game/native_hooks.rs`) |
 | Agent control | a transcript per protocol version: commands and the reply keys each must have |
 | Server | `api::ROUTES` against `route()` (generated reference); a `server.toml` from each release line parses to the same settings; golden replies per endpoint |
 | Launcher | the generated reference; golden `--json` output per command |
@@ -87,7 +87,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 
 | Part | Level | Version |
 | --- | --- | --- |
-| Content mods (`registries`: data-driven blocks, items and mob effects) | preview | manifest `api = "0.2"` |
+| Content mods (`registries`: data-driven blocks, items, mob effects, thrown entity types and menu types) | preview | manifest `api = "0.2"` |
 | Native mods (horizon-mixins bundles, [native-mods.md](../native-mods.md)) | experimental | the pinned revisions |
 | `cargo horizon-mod` (`new`, `build`, `run`, `check`) | preview | none yet (unversioned) |
 | Shader API | not started | |

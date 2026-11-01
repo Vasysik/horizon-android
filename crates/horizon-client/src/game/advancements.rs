@@ -239,6 +239,21 @@ impl Game<'_> {
     pub(super) fn loot_item_filter(&self, predicate: &Value, s: &ItemStack) -> bool {
         adv::item(predicate, &item_view(s), &View(self))
     }
+    /// `BaseContainerBlockEntity.canOpen`: whether the `lock` of the block
+    /// entity at `key` keeps a player with this main hand out (`LockCode`).
+    pub(super) fn container_locked_for(
+        &self,
+        key: (i32, i32, i32),
+        spectator: bool,
+        hand: Option<&ItemStack>,
+    ) -> bool {
+        let Some(lock) = self.world.block_lock(key) else {
+            return false;
+        };
+        let lock = horizon_client::item_render::tag_json(lock);
+        let hand = hand.map(item_view);
+        !adv::can_unlock(&lock, spectator, hand.as_ref(), &View(self))
+    }
 }
 pub(super) fn item_view(s: &ItemStack) -> ItemView {
     ItemView {
@@ -316,6 +331,7 @@ impl Game<'_> {
             &self.world_root,
             &self.options.resources,
             self.cmds.vanilla_disabled,
+            &self.level.enabled_features,
         );
         self.adv.pending_tree = std::thread::Builder::new()
             .name("horizon-advancements".into())
@@ -370,6 +386,27 @@ impl Game<'_> {
                 .find(|m| m.id == id)
                 .map(|m| self.mob_entity(m))
                 .unwrap_or_default(),
+            // A server's player: what its last `ServerboundPlayerInputPacket`
+            // held (shift 32) and its game mode.
+            Target::Guest(conn) if self.command_guest(conn).is_some() => {
+                let g = self.command_guest(conn).expect("checked");
+                EntityView {
+                    kind: self.target_type(t),
+                    position: g.position,
+                    sneaking: g.sneaking,
+                    input_sneak: g.input & 32 != 0,
+                    gamemode: Some(
+                        match g.game_mode {
+                            1 => "creative",
+                            2 => "adventure",
+                            3 => "spectator",
+                            _ => "survival",
+                        }
+                        .to_owned(),
+                    ),
+                    ..EntityView::default()
+                }
+            }
             other => EntityView {
                 kind: self.target_type(other),
                 position: self.target_position(other).unwrap_or_default(),
@@ -420,7 +457,11 @@ impl Game<'_> {
         EntityView {
             kind: "minecraft:player".into(),
             position: [p.position.x, p.position.y, p.position.z],
+            // Entity.isOnFire on a server: remainingFireTicks (players aren't fire immune).
+            on_fire: p.fire_ticks > 0,
             sneaking: p.pose == horizon_client::pose::Pose::Crouching,
+            // Input.shift: the held key, as `BlockItem.place`'s sneaking reads it.
+            input_sneak: self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft),
             sprinting: p.sprinting,
             swimming: p.pose == horizon_client::pose::Pose::Swimming,
             flying: p.flying,
@@ -1741,7 +1782,8 @@ impl Game<'_> {
             }
         }
     }
-    /// The slots held by shown advancement, recipe and pack toasts, as bits.
+    /// The slots held by shown advancement, recipe, pack and narrator toasts,
+    /// as bits.
     pub(super) fn toast_slots_used(&self) -> u32 {
         let packs = self.server_packs.toast_slots();
         self.adv
@@ -1749,6 +1791,7 @@ impl Game<'_> {
             .iter()
             .filter_map(|t| t.slot)
             .chain(packs)
+            .chain(self.narrator_toast.as_ref().and_then(|t| t.slot))
             .fold(self.tutorial_toast_slots(), |used, slot| used | 1 << slot)
     }
     /// The `AdvancementToast` or `RecipeToast` at `index` in its slot at `y`.

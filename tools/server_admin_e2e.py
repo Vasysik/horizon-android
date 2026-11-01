@@ -12,7 +12,7 @@ not run; then reads the settings and changes the difficulty live, and backs up, 
 and runs the same moderation from the `horizon-server` CLI.
 The API listens on the address and with the token server.toml's [api] fixes, as a moderation bot's would.
 An event stream (server-sent events) opened before the bots join must see them join, Kim0's chat (sent as a raw
-chat packet), Lou0's death, the kick and the leaves, typed, with the same events polled as JSON. Last,
+chat packet) and the chat filter's refusal of the next one (`chat_filtered`, no `chat`), Lou0's death, the kick and the leaves, typed, with the same events polled as JSON. Last,
 `horizon-server mcp` bans and pardons, reads events and refuses an unconfirmed stop, and `horizon-server
 console` attaches through a pipe, runs two commands and shows what they log.
 
@@ -76,6 +76,8 @@ class Api:
 
 
 CHAT = 'hello from Kim0'
+# A slur in leetspeak, for the chat filter to refuse (docs/chat-filter.md).
+FILTERED = 'n1gg3r'
 
 
 def chat_packet(message):
@@ -140,14 +142,24 @@ def scenario(bins, folder, server, port):
     api = Api(folder)
     wait_until('the supervisor says running', lambda: api('GET', '/api/v1/status')['phase'] == 'running')
     check(api.call('GET', '/api/v1/players', token='nope')[0] == 401, 'a call without the token is refused')
-    stream = Stream(api, 'join,leave,kick,chat,death')
-    bots = [bot(bins, port, 'Kim', '--raw', f'60:9:{chat_packet(CHAT)}'), bot(bins, port, 'Lou')]
+    stream = Stream(api, 'join,leave,kick,chat,chat_filtered,death')
+    raw = f'60:9:{chat_packet(CHAT)},80:9:{chat_packet(FILTERED)}'
+    bots = [bot(bins, port, 'Kim', '--raw', raw), bot(bins, port, 'Lou')]
     try:
         wait_until('Kim0 and Lou0 online', lambda: online(api) == ['Kim0', 'Lou0'])
         wait_until('both joins streamed', lambda: stream.seen('join', 'Kim0') and stream.seen('join', 'Lou0'), 30)
         check(stream.seen('join', 'Kim0')[0]['address'] == '127.0.0.1', 'the join event has the address')
         wait_until("Kim0's chat streamed", lambda: stream.seen('chat', 'Kim0'), 30)
         check(stream.seen('chat', 'Kim0')[0]['message'] == CHAT, f'the chat event has the message ({stream.events})')
+        wait_until("Kim0's slur refused", lambda: stream.seen('chat_filtered', 'Kim0'), 30)
+        refused = stream.seen('chat_filtered', 'Kim0')[0]
+        check((refused['place'], refused['hit'], refused['action']) == ('chat', 1, 'refused')
+              and 'message' not in refused, f'the chat_filtered event, without the text ({refused})')
+        check(all(e['message'] != FILTERED for e in stream.seen('chat', 'Kim0')), 'the refused message is no chat event')
+        log = folder / 'logs' / 'chat-filter.log'
+        check(log.exists() and 'Kim0' in log.read_text() and FILTERED in log.read_text(),
+              'logs/chat-filter.log keeps the refused text')
+        server.wait_for(r"\[chat-filter\] Refused Kim0's chat \(hit 1: refused\)", 30)
         players = api('GET', '/api/v1/players')
         check(players['max_players'] == 20 and players['ops'] == [] and players['bans'] == [],
               f'players: 20 slots, no operators, no bans ({players})')

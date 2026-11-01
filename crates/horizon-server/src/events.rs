@@ -33,7 +33,7 @@ pub struct Events {
 
 impl Events {
     /// The events numbered above `since` whose type `wanted` takes, and the newest number.
-    fn after(&self, since: u64, wanted: &dyn Fn(&str) -> bool) -> (u64, Vec<Value>) {
+    pub(crate) fn after(&self, since: u64, wanted: &dyn Fn(&str) -> bool) -> (u64, Vec<Value>) {
         let skip = self
             .kept
             .len()

@@ -473,6 +473,37 @@ pub fn monitor_video_modes(monitor: &winit::monitor::MonitorHandle) -> Vec<Video
         .collect()
 }
 
+/// The video modes of the window's monitor, listed once per monitor. Listing them takes tens of
+/// milliseconds on Windows, and settings apply at every step of a dragged slider: listing them
+/// each time made the slider stutter.
+#[derive(Debug)]
+pub struct VideoModeList<M = winit::monitor::MonitorHandle> {
+    listed: Option<M>,
+}
+
+impl<M> Default for VideoModeList<M> {
+    fn default() -> Self {
+        Self { listed: None }
+    }
+}
+
+impl<M: PartialEq> VideoModeList<M> {
+    /// The modes of `monitor` when it is not the monitor listed last, else `None` (the list
+    /// stands). No monitor lists none.
+    pub fn refresh(
+        &mut self,
+        monitor: Option<M>,
+        list: impl FnOnce(&M) -> Vec<VideoMode>,
+    ) -> Option<Vec<VideoMode>> {
+        if monitor.is_some() && monitor == self.listed {
+            return None;
+        }
+        let modes = monitor.as_ref().map(list).unwrap_or_default();
+        self.listed = monitor;
+        Some(modes)
+    }
+}
+
 /// `Monitor.currentMode`: the monitor's desktop mode; winit has no such query, so the mode of
 /// the monitor's own size with the highest refresh rate and depth.
 fn monitor_current_mode(
@@ -697,5 +728,29 @@ mod tests {
             chosen_present_mode(&[Fifo, Immediate], false, Some(Mailbox)),
             Some(Immediate)
         );
+    }
+
+    #[test]
+    fn video_modes_are_listed_again_only_for_another_monitor() {
+        let mode = |width| VideoMode {
+            width,
+            height: 1080,
+            red_bits: 8,
+            green_bits: 8,
+            blue_bits: 8,
+            refresh_rate: 60.0,
+        };
+        let mut list = VideoModeList::default();
+        let mut listings = 0;
+        let mut modes = |monitor: &i32| {
+            listings += 1;
+            vec![mode(*monitor)]
+        };
+        assert_eq!(list.refresh(Some(1), &mut modes), Some(vec![mode(1)]));
+        assert_eq!(list.refresh(Some(1), &mut modes), None);
+        assert_eq!(list.refresh(Some(2), &mut modes), Some(vec![mode(2)]));
+        assert_eq!(list.refresh(None, &mut modes), Some(vec![]));
+        assert_eq!(list.refresh(Some(2), &mut modes), Some(vec![mode(2)]));
+        assert_eq!(listings, 3);
     }
 }

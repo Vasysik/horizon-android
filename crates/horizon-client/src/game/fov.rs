@@ -156,6 +156,7 @@ impl Game<'_> {
         };
         let tilt = self.settings.file.double("damageTiltStrength");
         glam::Mat4::from_cols_array(&bob_matrix(&state, tilt, self.settings.view_bobbing).m)
+            * self.native_shake_matrix(partial)
     }
     /// `AbstractClientPlayer.tick` and `aiStep` (`ClientAvatarState.tick`,
     /// `updateBob`), `rideTick`'s `resetBob` and `LocalPlayer.move`'s walked
@@ -183,8 +184,7 @@ impl Game<'_> {
     }
     /// `SpyglassItem.use`: start scoping.
     pub(super) fn use_spyglass(&mut self) {
-        if self.using.is_none() {
-            self.using = Some((self.held_slot(), 0));
+        if self.start_using_item() {
             let at = self.eye_position();
             self.audio.play("minecraft:item.spyglass.use", at, 1.0, 1.0);
         }

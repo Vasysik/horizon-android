@@ -168,6 +168,7 @@ mod tests {
             on_ground: false,
             count: 1,
             ticks: 0,
+            health: 5,
         }))
     }
 

@@ -53,7 +53,17 @@ fn item_name(builtin: &Builtin, id: i32) -> Arc<str> {
 
 /// The item's patched components as vanilla's `components` compound.
 fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag> {
-    let name = |id: i32| builtin.get("minecraft:data_component_type")?.name(id);
+    let name = |id: i32| {
+        builtin
+            .get("minecraft:data_component_type")
+            .and_then(|types| types.name(id))
+            .or_else(|| {
+                synced
+                    .custom_components
+                    .then(|| horizon_protocol::item::custom::name(id))
+                    .flatten()
+            })
+    };
     let mut entries: Vec<(&str, Tag)> = Vec::new();
     for (kind, c) in &s.added {
         let Some(key) = name(*kind) else {
@@ -259,7 +269,20 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
         };
         entries.push((key, value));
     }
-    Some(Tag::compound(entries))
+    let mut out = Tag::compound(entries);
+    if let Tag::Compound(map) = &mut out {
+        for id in &s.removed {
+            if synced.custom_components
+                && let Some(name) = horizon_protocol::item::custom::name(*id)
+            {
+                map.insert(
+                    format!("!{name}").as_str().into(),
+                    Tag::Compound(Default::default()),
+                );
+            }
+        }
+    }
+    Some(out)
 }
 
 /// An `ItemStackTemplate` as its NBT codec writes it: id, count and components.
@@ -551,6 +574,58 @@ mod tests {
         );
     }
 
+    /// An unbreakable damaged stack must keep both components through inventory
+    /// sync, including the integrated server's window (#5721).
+    #[test]
+    fn unbreakable_survives_inventory_sync() {
+        use horizon_protocol::buf::{Codec, Reader, Writer};
+        use horizon_protocol::item::Slot;
+        let mut components = vec![String::new(); component::UNBREAKABLE as usize + 1];
+        components[component::DAMAGE as usize] = "minecraft:damage".into();
+        components[component::UNBREAKABLE as usize] = "minecraft:unbreakable".into();
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".into(),
+                    Ids::from_names(vec!["minecraft:air".into(), "minecraft:diamond_hoe".into()]),
+                ),
+                (
+                    "minecraft:data_component_type".into(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        for unbreakable in [false, true] {
+            let mut hoe = ItemStack::new("minecraft:diamond_hoe", 1);
+            hoe.damage = 58;
+            let marker = Tag::Compound(Default::default());
+            if unbreakable {
+                hoe.data_mut()
+                    .set_other("minecraft:unbreakable", Some(marker.clone()));
+            }
+            let sent = crate::lan::guest::stack_to_network(|_| 1, |_, _| None, &Some(hoe));
+            let mut w = Writer::new();
+            Slot::write(&sent, &mut w);
+            let mut r = Reader::new(&w.data);
+            let received = Slot::read(&mut r).unwrap().unwrap();
+            assert_eq!(r.remaining(), 0);
+            assert_eq!(
+                received.component(component::UNBREAKABLE),
+                unbreakable.then_some(&Component::Unit)
+            );
+            let back = from_network(&received, &builtin, &Dynamic::default());
+            assert_eq!(
+                (&*back.item, back.count, back.damage),
+                ("minecraft:diamond_hoe", 1, 58)
+            );
+            assert_eq!(
+                back.data().and_then(|d| d.other("minecraft:unbreakable")),
+                unbreakable.then_some(&marker)
+            );
+        }
+    }
+
     /// An ominous bottle's `ominous_bottle_amplifier` reaches the client
     /// through the packet's bytes, so its tooltip names the Bad Omen level.
     #[test]
@@ -811,6 +886,68 @@ mod tests {
         assert_eq!(
             variant(&from_network(&wire, &builtin, &dynamic)),
             variant(&alban)
+        );
+    }
+
+    /// `minecraft:custom_data` and `minecraft:custom_model_data` are part of
+    /// vanilla's DataComponentPatch, so they must cross integrated-server/LAN
+    /// inventory sync like any other component (item models read them back:
+    /// `item_model.rs`'s `custom_data_at`).
+    #[test]
+    fn custom_data_and_custom_model_data_survive_lan_sync() {
+        use horizon_protocol::buf::{Reader, Writer};
+        use horizon_protocol::item::Slot;
+        let mut components = vec![String::new(); component::CUSTOM_MODEL_DATA as usize + 1];
+        components[component::CUSTOM_DATA as usize] = "minecraft:custom_data".into();
+        components[component::CUSTOM_MODEL_DATA as usize] = "minecraft:custom_model_data".into();
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".into(),
+                    Ids::from_names(vec!["minecraft:air".into(), "minecraft:stick".into()]),
+                ),
+                (
+                    "minecraft:data_component_type".into(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let dynamic = Dynamic::default();
+        let mut item = ItemStack::new("minecraft:stick", 1);
+        item.data_mut().set_other(
+            "minecraft:custom_data",
+            Some(Tag::compound([(
+                "mymod_material",
+                Tag::String("ruby".into()),
+            )])),
+        );
+        item.data_mut().set_other(
+            "minecraft:custom_model_data",
+            Some(Tag::compound([
+                ("colors", Tag::List(vec![Tag::Int(0x00a0_a0a0)])),
+                ("flags", Tag::List(vec![Tag::Byte(1)])),
+                ("floats", Tag::List(vec![Tag::Float(1.0f32.to_bits())])),
+                ("strings", Tag::List(vec![Tag::String("mymod:ruby".into())])),
+            ])),
+        );
+        let wire = crate::lan::guest::stack_to_network(
+            |name| builtin.get("minecraft:item").unwrap().id(name).unwrap(),
+            |_, _| None,
+            &Some(item.clone()),
+        );
+        let mut w = Writer::new();
+        Slot::write(&wire, &mut w);
+        let received = Slot::read(&mut Reader::new(&w.data)).unwrap().unwrap();
+        let back = from_network(&received, &builtin, &dynamic);
+        let other = |s: &ItemStack, id: &str| s.data().and_then(|d| d.other(id)).cloned();
+        assert_eq!(
+            other(&back, "minecraft:custom_data"),
+            other(&item, "minecraft:custom_data")
+        );
+        assert_eq!(
+            other(&back, "minecraft:custom_model_data"),
+            other(&item, "minecraft:custom_model_data")
         );
     }
 }

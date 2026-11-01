@@ -29,6 +29,7 @@ enforce_whitelist = false    # kick online players taken off the whitelist
 view_distance = 10           # chunks sent around each player
 simulation_distance = 10     # chunks around each player where mobs, crops and redstone tick
 max_view_distance = 0        # past view_distance, saved chunks only, up to this (never generated; 0: off)
+admin_feedback_to_ops = true # operators see each other's commands ([name: ...], vanilla); false: only the log
 
 [world]
 name = "world"               # the world folder
@@ -45,6 +46,7 @@ hardcore = false             # one life: a player who dies becomes a spectator
 path = ""                    # the game program; empty: the one installed beside horizon-server
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
 restart_on_crash = true      # start the game again when it crashes
+low_memory = false           # true: no transparent huge pages, ~60 MB less idle for ~1 % more tick time
 
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
@@ -62,8 +64,15 @@ bind = ""                    # the control API: "" a free port on 127.0.0.1; or 
 token = ""                   # its token (16 characters or more); "" a new random one at every start
 allow_public = false         # true lets bind be any address; the token is then all that guards the server
 
-# Horizon's anticheat (docs/anticheat.md) is on: `combat` drops and kicks attacks no vanilla client sends;
-# timer, ground and prediction only write logs/anticheat.log until they're trusted. To change it:
+# Post the chat, joins, leaves and deaths to a Discord channel, drawn like the in-game chat (docs/hosting.md)
+[discord]
+webhook = ""                 # the channel's webhook URL (a secret: anyone with it can post there); "" off
+events = ["chat", "join", "leave", "death"]   # what is posted; "kick" too if you like
+enabled = true               # false pauses it and keeps the webhook
+
+# Horizon's anticheat (docs/anticheat.md) is on: `combat` drops attacks no vanilla client sends and
+# `ground` the false ground claims of a no-fall or a walk on water; both kick, and ban at the second kick.
+# timer and prediction only write logs/anticheat.log until they're trusted. To change it:
 # [anticheat]
 # enabled = true             # false: the server checks only what vanilla's checks
 # alerts = true              # tell online operators (alert_level = 2) in their chat; the console always is
@@ -74,10 +83,19 @@ allow_public = false         # true lets bind be any address; the token is then 
 # alert = 5
 # kick = 20
 # decay = 0.02               # violation level lost each second
+# ban_after = 0              # the kick (counting this check's earlier ones) that bans instead; 0: never
+
+# The chat filter (docs/chat-filter.md) is on: a message, sign, anvil name or book title with a hate slur reaches
+# nobody, the sender is told, and logs/chat-filter.log keeps it for operators. To change it:
+# [chat_filter]
+# enabled = true             # false: players' text goes out as they wrote it
+# mute_after = 2             # the hit (within window_minutes) that mutes for mute_minutes; 0: never
+# tempban_after = 3          # the hit that bans for tempban_hours; 0: never
+# words_file = ""            # your own list, in the format of the built-in one; "": the built-in list
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
-pub(crate) const TYPED: [(&str, &str, &str); 15] = [
+pub(crate) const TYPED: [(&str, &str, &str); 16] = [
     ("server", "motd", "motd"),
     ("server", "port", "server-port"),
     ("server", "bind", "server-ip"),
@@ -88,6 +106,11 @@ pub(crate) const TYPED: [(&str, &str, &str); 15] = [
     ("server", "view_distance", "view-distance"),
     ("server", "simulation_distance", "simulation-distance"),
     ("server", "max_view_distance", "horizon-max-view-distance"),
+    (
+        "server",
+        "admin_feedback_to_ops",
+        "horizon-admin-feedback-to-ops",
+    ),
     ("world", "name", "level-name"),
     ("world", "seed", "level-seed"),
     ("world", "game_mode", "gamemode"),
@@ -114,9 +137,20 @@ pub struct Config {
     pub panel: Panel,
     #[serde(default)]
     pub api: Api,
+    /// Chat and players posted to a Discord channel (discord.rs).
+    #[serde(default)]
+    pub discord: crate::discord::Settings,
     /// The game reads this section itself (docs/anticheat.md); written only when it isn't the default.
     #[serde(default, skip_serializing_if = "anticheat_default")]
     pub anticheat: horizon_anticheat::Config,
+    /// The game reads this section itself (docs/chat-filter.md); written only when it isn't the default.
+    #[serde(default, skip_serializing_if = "chat_filter_default")]
+    pub chat_filter: horizon_chat_filter::Config,
+}
+
+/// The game reads this section itself too (docs/chat-filter.md).
+fn chat_filter_default(c: &horizon_chat_filter::Config) -> bool {
+    *c == horizon_chat_filter::Config::default()
 }
 
 fn anticheat_default(c: &horizon_anticheat::Config) -> bool {
@@ -137,6 +171,9 @@ pub struct Server {
     pub simulation_distance: u32,
     /// Horizon's far ring (docs/hosting.md): saved chunks sent past `view_distance`, up to this; 0 is off.
     pub max_view_distance: u32,
+    /// Whether operators get each other's command feedback (`[name: ...]`, vanilla's broadcastToAdmins);
+    /// false leaves it to the console's log, so nobody in game sees an operator's commands.
+    pub admin_feedback_to_ops: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -157,6 +194,8 @@ pub struct Engine {
     pub path: String,
     pub resources: String,
     pub restart_on_crash: bool,
+    /// The game without transparent huge pages (docs/hosting.md): less memory, slightly slower ticks.
+    pub low_memory: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -282,6 +321,7 @@ impl Default for Server {
             view_distance: 10,
             simulation_distance: 10,
             max_view_distance: 0,
+            admin_feedback_to_ops: true,
         }
     }
 }
@@ -302,6 +342,7 @@ impl Default for Engine {
             path: String::new(),
             resources: String::new(),
             restart_on_crash: true,
+            low_memory: false,
         }
     }
 }
@@ -367,7 +408,9 @@ impl Config {
         crate::backup::interval(&self.backups.every)?;
         self.panel.address()?;
         self.api.check()?;
+        self.discord.check()?;
         self.anticheat.check()?;
+        self.chat_filter.check()?;
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
@@ -467,6 +510,7 @@ pub fn render(config: &Config) -> String {
         ("engine", "path"),
         ("engine", "resources"),
         ("engine", "restart_on_crash"),
+        ("engine", "low_memory"),
         ("backups", "every"),
         ("backups", "keep"),
         ("updates", "keep"),
@@ -479,11 +523,13 @@ pub fn render(config: &Config) -> String {
         set(&mut doc, section, field, &table[section][field]);
     }
     let mut text = doc.to_string();
-    if let Some(anticheat) = table.get("anticheat") {
-        let mut only = toml::Table::new();
-        only.insert("anticheat".into(), anticheat.clone());
-        text.push('\n');
-        text.push_str(&toml::to_string(&only).expect("the anticheat's settings are a table"));
+    for section in ["anticheat", "chat_filter"] {
+        if let Some(settings) = table.get(section) {
+            let mut only = toml::Table::new();
+            only.insert(section.into(), settings.clone());
+            text.push('\n');
+            text.push_str(&toml::to_string(&only).expect("a section's settings are a table"));
+        }
     }
     text
 }
@@ -623,6 +669,26 @@ mod tests {
     }
 
     #[test]
+    fn the_chat_filter_is_on_unless_its_section_turns_it_off() {
+        assert!(Config::default().chat_filter.enabled);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[chat_filter]"));
+        let text =
+            format!("{TEMPLATE}\n[chat_filter]\nmute_after = 3\nwords_file = \"slurs.txt\"\n");
+        let c = Config::parse(&text).unwrap();
+        assert_eq!(c.chat_filter.mute_after, 3);
+        assert_eq!(Config::parse(&render(&c)).unwrap(), c);
+        // The game reads the same section from the same file.
+        assert_eq!(
+            horizon_chat_filter::Config::from_server_toml(&text).unwrap(),
+            c.chat_filter
+        );
+        let off = Config::parse(&format!("{TEMPLATE}\n[chat_filter]\nenabled = false\n")).unwrap();
+        assert!(!off.chat_filter.enabled);
+        assert_eq!(Config::parse(&render(&off)).unwrap(), off);
+        assert!(Config::parse("[chat_filter]\nmute = 2\n").is_err());
+    }
+
+    #[test]
     fn anticheat_is_on_unless_its_section_turns_it_off() {
         assert!(Config::default().anticheat.enabled);
         assert!(!TEMPLATE.lines().any(|l| l.trim() == "[anticheat]"));
@@ -650,9 +716,15 @@ mod tests {
         let vanilla =
             ServerProperties::new(Properties::default(), &mut SystemEntropy::default()).unwrap();
         for (key, value) in Config::default().vanilla() {
-            // Horizon's own (off by default), which vanilla doesn't have.
+            // Horizon's own, which vanilla doesn't have: their defaults behave as vanilla does
+            // (the far ring off, operators told of each other's commands).
             if key.starts_with("horizon-") {
-                assert_eq!(value, "0", "{key}");
+                let vanilla_like = if key == "horizon-admin-feedback-to-ops" {
+                    "true"
+                } else {
+                    "0"
+                };
+                assert_eq!(value, vanilla_like, "{key}");
                 continue;
             }
             assert_eq!(vanilla.raw.get(&key), Some(value.as_str()), "{key}");

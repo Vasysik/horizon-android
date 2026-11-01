@@ -40,6 +40,7 @@ mod packs_page;
 mod partner;
 mod perf;
 mod plate;
+mod profile_heads;
 mod screenshots_page;
 mod scrollbar;
 mod servers_page;
@@ -57,9 +58,9 @@ mod worlds_page;
 
 use gpui::{
     actions, div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt,
-    AnyElement, App, Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle,
-    FontWeight, Hsla, KeyBinding, KeyDownEvent, Menu, MenuItem, MouseDownEvent, PathPromptOptions,
-    Pixels, Point, SharedString, Stateful, Subscription, Window, WindowBounds, WindowOptions,
+    AnyElement, App, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Hsla,
+    KeyBinding, KeyDownEvent, Menu, MenuItem, MouseDownEvent, PathPromptOptions, Pixels, Point,
+    SharedString, Stateful, Subscription, Window, WindowBounds, WindowOptions,
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
@@ -70,7 +71,7 @@ use horizon_launcher::native_status;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
@@ -215,6 +216,11 @@ struct Launcher {
     native_mismatch: Option<String>,
     confirm_remove: Option<String>,
     picker_open: bool,
+    /// Where the accent picker's hue strip is on screen (`themes_page.rs`), to map a click to a
+    /// hue.
+    hue_area: std::rc::Rc<std::cell::Cell<Option<Bounds<gpui::Pixels>>>>,
+    /// A drag on that strip is in flight, so a release anywhere writes the accent down.
+    hue_dragging: bool,
     /// Settings > Language's dropdown (`language_page.rs`).
     language_menu: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
@@ -247,6 +253,14 @@ struct Launcher {
     root_focus: FocusHandle,
     /// Microsoft accounts (accounts.json), the sign-in under way and what it last showed.
     accounts: Accounts,
+    auth_status: HashMap<String, account::session::Status>,
+    auth_progress: HashMap<String, account::session::Phase>,
+    profile_heads: profile_heads::Heads,
+    /// When page switches last checked every account's sign-in.
+    auth_checked: Option<Instant>,
+    sign_in_target: Option<account::Account>,
+    auth_busy: HashMap<String, u64>,
+    auth_next: u64,
     sign_in: Option<SignIn>,
     sign_in_state: Option<SignInState>,
     /// What to say when the keychain doesn't keep sign-ins ([`account::no_keychain`]).
@@ -433,7 +447,7 @@ impl Launcher {
             long_list: cull::Cull::default(),
             opening: (!settings.skip_opening).then(|| {
                 let focus = cx.focus_handle();
-                window.focus(&focus);
+                window.focus(&focus, cx);
                 Opening {
                     started: None,
                     reveal: None,
@@ -464,6 +478,8 @@ impl Launcher {
             native_mismatch: None,
             confirm_remove: None,
             picker_open: false,
+            hue_area: std::rc::Rc::new(std::cell::Cell::new(None)),
+            hue_dragging: false,
             language_menu: false,
             account_menu: false,
             menu_closed_at: None,
@@ -493,6 +509,13 @@ impl Launcher {
             internet: internet::Internet::new(),
             root_focus: cx.focus_handle(),
             accounts: Accounts::load(),
+            auth_status: HashMap::new(),
+            auth_progress: HashMap::new(),
+            profile_heads: profile_heads::Heads::default(),
+            auth_checked: None,
+            sign_in_target: None,
+            auth_busy: HashMap::new(),
+            auth_next: 0,
             sign_in: None,
             sign_in_state: None,
             keychain: None,
@@ -574,6 +597,8 @@ impl Launcher {
                 let _ = tx.send(Msg::Reused(reused));
             }
         });
+        this.load_profile_heads();
+        this.load_auth_statuses(true);
         this.fetch_startup_releases();
         this.fetch_links();
         if home::getting_ready_preview() {
@@ -600,6 +625,16 @@ impl Launcher {
         // changed the accounts: read them again (small files, once a switch).
         self.offline_name = offline_name();
         self.accounts = Accounts::load();
+        // Each check reads the keychain (a prompt on macOS): page switches check every account
+        // at most once a minute, and an account added meanwhile at once.
+        if self
+            .auth_checked
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(60))
+            || (self.accounts.accounts.iter()).any(|a| !self.auth_status.contains_key(&a.uuid))
+        {
+            self.load_auth_statuses(false);
+        }
+        self.load_profile_heads();
         if page != self.page {
             self.page = page;
             self.switches += 1;
@@ -782,11 +817,58 @@ impl Launcher {
                     }
                     self.releases = r.map_or_else(Load::Failed, Load::Ready)
                 }
-                Msg::Links(links) => self.links = links,
+                Msg::Links(links) => {
+                    // The official server may have moved: its list entry and its count follow.
+                    self.multiplayer.stale();
+                    telemetry::set_official_server(&links.official_server);
+                    self.links = links;
+                }
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
                 Msg::Keychain(said) => self.keychain = said,
                 Msg::Owner(owns) => self.owner = Some(owns),
+                Msg::AccountHead(uuid, url, face, failed) => {
+                    self.profile_heads.loaded(&uuid, &url, face, failed)
+                }
+                Msg::AccountProgress(uuid, generation, phase) => {
+                    if self.auth_busy.get(&uuid) == Some(&generation) {
+                        self.auth_progress.insert(uuid, phase);
+                    }
+                }
+                Msg::AccountStatus(uuid, generation, status) => {
+                    if self.auth_busy.get(&uuid) != Some(&generation) {
+                        continue;
+                    }
+                    self.auth_busy.remove(&uuid);
+                    self.auth_progress.remove(&uuid);
+                    if self.accounts.find(&uuid).is_some() {
+                        if status.state == account::session::State::Ready {
+                            self.owner = Some(true);
+                        }
+                        self.auth_status.insert(uuid, status);
+                        // A refresh may have saved a new name or skin: show it now.
+                        let saved = Accounts::load();
+                        if saved != self.accounts {
+                            self.accounts = saved;
+                            self.load_profile_heads();
+                        }
+                    }
+                }
+                Msg::AccountRemoved(uuid, generation, result) => {
+                    if self.auth_busy.get(&uuid) != Some(&generation) {
+                        continue;
+                    }
+                    self.auth_busy.remove(&uuid);
+                    self.auth_progress.remove(&uuid);
+                    match result {
+                        Ok(owns) => {
+                            self.accounts = Accounts::load();
+                            self.auth_status.remove(&uuid);
+                            self.owner = Some(owns);
+                        }
+                        Err(e) => self.sign_in_state = Some(SignInState::Done(Err(e))),
+                    }
+                }
                 Msg::Playing(playing) => self.playing = playing,
                 Msg::OfficialPlayers(players) => self.official_players = players,
                 Msg::JavaGame(id, home, cmd) => {
@@ -813,6 +895,7 @@ impl Launcher {
                     }
                 }
                 Msg::Session(session) => {
+                    self.load_auth_statuses(false);
                     if let Some(tag) = self.starting_client.take() {
                         let mut cmd = backend::client_command(&tag);
                         let (file, offline) = match session {
@@ -1110,11 +1193,13 @@ impl Launcher {
         changed |= self.mods_tick();
         changed |= self.github_tick();
         if let Some(sign_in) = &self.sign_in {
-            let state = sign_in.state();
-            let changed_state = format!("{state:?}") != format!("{:?}", self.sign_in_state);
-            if changed_state {
-                if let SignInState::Done(Ok(_)) = state {
+            if let Some(state) = sign_in_change(&mut self.sign_in_state, sign_in.state()) {
+                if let SignInState::Done(Ok(ref account)) = state {
+                    self.auth_busy.remove(&account.uuid);
+                    self.sign_in_target = None;
                     self.accounts = Accounts::load();
+                    self.load_profile_heads();
+                    self.load_auth_statuses(false);
                     // Sign-in refuses accounts that don't own the game.
                     self.owner = Some(true);
                     self.owner_screen_open = false;
@@ -1124,7 +1209,6 @@ impl Launcher {
                         self.settings.save();
                     }
                 }
-                self.sign_in_state = Some(state);
                 changed = true;
             }
         }
@@ -1367,12 +1451,110 @@ impl Launcher {
         });
     }
 
-    /// Starts the Microsoft sign-in; Settings and the owner gate's screen show its code.
+    fn load_profile_heads(&mut self) {
+        let resources = self
+            .selected()
+            .or_else(|| self.installed.first())
+            .map(|tag| backend::resources(tag))
+            .unwrap_or_default();
+        self.profile_heads
+            .request(&self.accounts.accounts, resources, &self.tx);
+    }
+
+    fn begin_auth_job(&mut self, uuid: &str) -> Option<u64> {
+        if self.auth_busy.contains_key(uuid) {
+            return None;
+        }
+        self.auth_next += 1;
+        self.auth_busy.insert(uuid.into(), self.auth_next);
+        self.auth_progress
+            .insert(uuid.into(), account::session::Phase::Queued);
+        Some(self.auth_next)
+    }
+
+    /// Only workers read the keychain or contact authentication services. Cached public status
+    /// keeps drawing independent of keychain prompts, network timeouts and refresh operations.
+    fn load_auth_statuses(&mut self, renew_due: bool) {
+        self.auth_checked = Some(Instant::now());
+        for account in self.accounts.accounts.clone() {
+            let Some(generation) = self.begin_auth_job(&account.uuid) else {
+                continue;
+            };
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let progress = |phase| {
+                    let _ = tx.send(Msg::AccountProgress(
+                        account.uuid.clone(),
+                        generation,
+                        phase,
+                    ));
+                };
+                progress(account::session::Phase::Keychain);
+                let store = account::store();
+                let mut status =
+                    account::session::status_with_progress(store, &account.uuid, &progress);
+                if renew_due && status.state == account::session::State::NeedsRefresh {
+                    if let Ok(renewed) =
+                        account::session::refresh_with_progress(&account.uuid, &progress)
+                    {
+                        status = renewed;
+                    }
+                }
+                let _ = tx.send(Msg::AccountStatus(account.uuid, generation, status));
+            });
+        }
+    }
+
+    fn refresh_account(&mut self, uuid: String) {
+        let Some(generation) = self.begin_auth_job(&uuid) else {
+            return;
+        };
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let progress = |phase| {
+                let _ = tx.send(Msg::AccountProgress(uuid.clone(), generation, phase));
+            };
+            progress(account::session::Phase::Keychain);
+            if let Ok(status) = account::session::refresh_with_progress(&uuid, &progress) {
+                let _ = tx.send(Msg::AccountStatus(uuid, generation, status));
+            } else {
+                // It may have been removed through the CLI while this window was open.
+                let _ = tx.send(Msg::AccountRemoved(
+                    uuid,
+                    generation,
+                    Ok(Accounts::load().has_owner(account::store())),
+                ));
+            }
+        });
+    }
+
+    /// Generic Add account and targeted re-sign-in share the launcher-owned device-code flow.
     fn start_sign_in(&mut self) {
-        if let Some(old) = self.sign_in.replace(SignIn::start()) {
+        self.begin_sign_in(None);
+    }
+
+    fn re_sign_in(&mut self, uuid: &str) {
+        if let Some(account) = self.accounts.find(uuid).cloned() {
+            self.begin_sign_in(Some(account));
+        }
+    }
+
+    fn begin_sign_in(&mut self, target: Option<account::Account>) {
+        self.cancel_sign_in();
+        self.sign_in = Some(match &target {
+            Some(account) => SignIn::start_for(account.clone()),
+            None => SignIn::start(),
+        });
+        self.sign_in_target = target;
+        self.sign_in_state = Some(SignInState::Starting);
+    }
+
+    fn cancel_sign_in(&mut self) {
+        if let Some(old) = self.sign_in.take() {
             old.cancel();
         }
-        self.sign_in_state = Some(SignInState::Starting);
+        self.sign_in_state = None;
+        self.sign_in_target = None;
     }
 
     fn choose_folder(&mut self, cx: &mut Context<Self>) {
@@ -1558,6 +1740,7 @@ fn keyboard(el: Stateful<Div>, t: &Theme) -> Stateful<Div> {
         offset: gpui::point(px(0.), px(0.)),
         blur_radius: px(0.5),
         spread_radius: px(spread),
+        inset: false,
     };
     el.tab_index(0).focus(move |s| {
         if KEYBOARD.load(Ordering::Relaxed) {
@@ -1797,6 +1980,49 @@ enum PlayPress {
     Nothing,
 }
 
+/// Account state uses the same semantic colors as the launcher's other notices. Keep a
+/// distinct icon and the full label so color is never the only way to recognize a state.
+fn account_status_line(
+    status: Option<&account::session::Status>,
+    progress: Option<&str>,
+    t: &Theme,
+) -> Div {
+    use account::session::State;
+    let (icon, color, label) = if let Some(progress) = progress {
+        ("clock", t.muted, progress)
+    } else {
+        let (icon, color) = match status.map(|s| s.state) {
+            Some(State::Ready) => ("check", t.success),
+            Some(State::NeedsRefresh | State::Retry) => ("reload", t.warn),
+            Some(State::SignInRequired) => ("user", t.danger),
+            Some(State::OwnershipRequired) => ("info-box", t.danger),
+            None => ("info-box", t.muted),
+        };
+        (
+            icon,
+            color,
+            status.map_or("Sign-in not checked", |s| s.label()),
+        )
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .text_color(color)
+        .child(blocks::icon(icon, 14., color))
+        .child(tr(label).to_owned())
+}
+
+/// Polling must handle each sign-in transition once. Replaying a completed sign-in
+/// restarts every account's status worker and leaves the UI perpetually checking.
+fn sign_in_change(shown: &mut Option<SignInState>, next: SignInState) -> Option<SignInState> {
+    if shown.as_ref() == Some(&next) {
+        return None;
+    }
+    *shown = Some(next.clone());
+    Some(next)
+}
+
 /// `owner`: whether an account here owns the game, by the keychain (`Launcher::owner`).
 fn play_press(prepared: bool, owner: Option<bool>, busy: bool) -> PlayPress {
     match (prepared, owner) {
@@ -2028,14 +2254,16 @@ impl Launcher {
             );
         }
         // Only a signed-in account says "Microsoft account"; otherwise an offline name, or the
-        // one the game made up. A signed-in one shows its face (its UUID's default skin).
+        // one the game made up. A signed-in one shows its face (its skin, else its UUID's default).
         let (name, how) = self.who_plays();
         let face = match self.accounts.player() {
             account::Player::Microsoft(_) => self.accounts.selected().map(|a| a.uuid.clone()),
             _ => None,
         };
         let picture = match face {
-            Some(uuid) => self.head(&uuid, 28.).into_any_element(),
+            Some(uuid) => (self.profile_heads)
+                .draw(Some(&uuid), 28., self.scale, &t)
+                .into_any_element(),
             None => div()
                 .flex()
                 .items_center()
@@ -2077,6 +2305,7 @@ impl Launcher {
                 if this.account_menu {
                     // Who can play may have changed elsewhere since the window opened.
                     this.accounts = Accounts::load();
+                    this.load_profile_heads();
                 }
                 cx.notify();
             }));
@@ -2223,7 +2452,14 @@ impl Launcher {
         match &self.self_update {
             SelfUpdate::Downloading(version, f) => {
                 foot = foot.child(
-                    update(format!("Launcher {version}  {:.0}%", f * 100.)).child(
+                    update(trf(
+                        "Launcher {version}  {percent}%",
+                        &[
+                            ("version", version),
+                            ("percent", &format!("{:.0}", f * 100.)),
+                        ],
+                    ))
+                    .child(
                         div()
                             .relative()
                             .flex()
@@ -2232,16 +2468,20 @@ impl Launcher {
                 )
             }
             SelfUpdate::Ready(version) => {
-                foot = foot.child(update(format!("Launcher updated to {version}")).child(
-                    div().relative().flex().child(
+                foot = foot.child(
+                    update(trf(
+                        "Launcher updated to {version}",
+                        &[("version", version)],
+                    ))
+                    .child(div().relative().flex().child(
                         button("restart", "Restart", Kind::Primary, &t).on_click(cx.listener(
                             |this, _: &ClickEvent, _, cx| {
                                 this.self_update = SelfUpdate::Failed(backend::restart());
                                 cx.notify();
                             },
                         )),
-                    ),
-                ))
+                    )),
+                )
             }
             _ => {}
         }
@@ -2302,7 +2542,7 @@ impl Launcher {
                 .id("launcher-version")
                 .px(px(8.))
                 .pt(px(6.))
-                .child(format!("Launcher {}", backend::VERSION))
+                .child(trf("Launcher {version}", &[("version", backend::VERSION)]))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.version_clicked();
                     cx.notify();
@@ -2349,7 +2589,7 @@ impl Launcher {
         let t = self.theme;
         // "Nightly · ba6344a", a release's tag: the menu lists the full tags.
         let label = self.selected().map_or_else(
-            || "No version".into(),
+            || tr("No version").into(),
             |tag| horizon_launcher::nightly::label(tag).unwrap_or_else(|| tag.clone()),
         );
         // As tall as Play: "Version" over the tag, and a chevron.
@@ -2435,7 +2675,7 @@ impl Launcher {
                                 .items_center()
                                 .gap(px(8.))
                                 .when(latest, |d| {
-                                    d.child(caps("follows updates").text_color(t.muted))
+                                    d.child(caps(tr("follows updates")).text_color(t.muted))
                                 })
                                 .when(selected, |d| {
                                     d.child(div().size(px(6.)).rounded_full().bg(t.accent))
@@ -2460,7 +2700,7 @@ impl Launcher {
                     .text_color(t.muted)
                     .cursor_pointer()
                     .hover(move |s| s.bg(t.plate_soft).text_color(t.ink))
-                    .child("Manage versions")
+                    .child(tr("Manage versions"))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.go(Page::Versions);
                         this.picker_open = false;
@@ -3284,16 +3524,16 @@ impl Launcher {
                 focused,
                 false,
                 false,
-                "For example --server-thread",
+                tr("For example --server-thread"),
             ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                window.focus(&this.args_focus);
+                window.focus(&this.args_focus, cx);
                 cx.notify();
             }))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 match line_edit::handle(&mut this.args_input, ev, cx) {
                     line_edit::Key::Pass => return,
-                    line_edit::Key::Escape => window.blur(),
+                    line_edit::Key::Escape => window.blur(cx),
                     line_edit::Key::Edited => {
                         this.settings.game_args = this.args_input.text().to_string();
                         this.settings.save();
@@ -3306,10 +3546,10 @@ impl Launcher {
         let field = line_edit::mouse(field, cx, |this| &mut this.args_input);
         index_row(
             n,
-            "Game arguments",
+            tr("Game arguments"),
             Some(
                 div()
-                    .child("Extra arguments for the game, passed through as-is (quotes group a word with spaces). Applies the next time the game starts.")
+                    .child(tr("Extra arguments for the game, passed through as-is (quotes group a word with spaces). Applies the next time the game starts."))
                     .into_any_element(),
             ),
             Some(field.into_any_element()),
@@ -3343,16 +3583,16 @@ impl Launcher {
                 focused,
                 false,
                 false,
-                "For example http://127.0.0.1:7890",
+                tr("For example http://127.0.0.1:7890"),
             ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                window.focus(&this.proxy_focus);
+                window.focus(&this.proxy_focus, cx);
                 cx.notify();
             }))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 match line_edit::handle(&mut this.proxy_input, ev, cx) {
                     line_edit::Key::Pass => return,
-                    line_edit::Key::Escape => window.blur(),
+                    line_edit::Key::Escape => window.blur(cx),
                     line_edit::Key::Edited => this.save_proxy(),
                     _ => {}
                 }
@@ -3367,14 +3607,20 @@ impl Launcher {
         ) {
             (false, Some(why)) => div().text_color(t.danger).child(why).into_any_element(),
             _ => div()
-                .child(
+                .child(tr(
                     "Downloads, sign-ins and updates go through this HTTP proxy \
                      (http://host:port). Empty means none: HTTPS_PROXY is used instead when the \
                      launcher was started with one.",
-                )
+                ))
                 .into_any_element(),
         };
-        index_row(n, "Proxy", Some(detail), Some(field.into_any_element()), &t)
+        index_row(
+            n,
+            tr("Proxy"),
+            Some(detail),
+            Some(field.into_any_element()),
+            &t,
+        )
     }
 
     /// Keeps the Proxy field in `settings.json`, and tells the parts that build their own agents
@@ -3421,33 +3667,89 @@ impl Launcher {
                     ),
                 );
             }
-            actions = actions.child(
-                button(format!("sign-out-{i}"), "Sign out", Kind::Ghost, &t).on_click(cx.listener(
-                    move |this, _: &ClickEvent, _, cx| {
+            let sign_in_progress = self
+                .sign_in_target
+                .as_ref()
+                .filter(|a| a.uuid == uuid)
+                .and_then(|_| match self.sign_in_state.as_ref() {
+                    Some(SignInState::Starting) => Some("Asking Microsoft…"),
+                    Some(SignInState::Code(_)) => Some("Waiting for browser sign-in…"),
+                    Some(SignInState::Working(phase)) => Some(phase.label()),
+                    _ => None,
+                });
+            let progress = sign_in_progress
+                .or_else(|| self.auth_progress.get(&uuid).map(|phase| phase.label()));
+            let busy = self.auth_busy.contains_key(&uuid) || sign_in_progress.is_some();
+            let status = self.auth_status.get(&uuid);
+            let needs_sign_in =
+                status.is_some_and(|s| s.state == account::session::State::SignInRequired);
+            let refresh_id = uuid.clone();
+            let refresh = button(
+                format!("refresh-{i}"),
+                if busy {
+                    "Checking…"
+                } else if needs_sign_in {
+                    "Sign in again"
+                } else {
+                    "Refresh"
+                },
+                Kind::Ghost,
+                &t,
+            );
+            actions = actions.child(if busy {
+                disabled(refresh)
+            } else {
+                refresh.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if needs_sign_in {
+                        this.re_sign_in(&refresh_id);
+                    } else {
+                        this.refresh_account(refresh_id.clone());
+                    }
+                    cx.notify();
+                }))
+            });
+            let sign_out = button(format!("sign-out-{i}"), "Sign out", Kind::Ghost, &t);
+            actions = actions.child(if busy {
+                disabled(sign_out)
+            } else {
+                sign_out.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    let Some(generation) = this.begin_auth_job(&uuid) else {
+                        return;
+                    };
+                    let (tx, uuid) = (this.tx.clone(), uuid.clone());
+                    std::thread::spawn(move || {
                         let mut accounts = Accounts::load();
-                        match accounts
+                        let _ = tx.send(Msg::AccountProgress(
+                            uuid.clone(),
+                            generation,
+                            account::session::Phase::SigningOut,
+                        ));
+                        let result = accounts
                             .remove(account::store(), &uuid)
                             .and_then(|()| accounts.save())
-                        {
-                            Ok(()) => this.accounts = accounts,
-                            Err(e) => this.sign_in_state = Some(SignInState::Done(Err(e))),
-                        }
-                        this.owner = Some(this.accounts.has_owner(account::store()));
-                        cx.notify();
-                    },
-                )),
-            );
+                            .map(|()| accounts.has_owner(account::store()));
+                        let _ = tx.send(Msg::AccountRemoved(uuid, generation, result));
+                    });
+                    cx.notify();
+                }))
+            });
             n += 1;
-            rows = rows.child(index_row(
-                n,
+            rows = rows.child(slot_row(
+                Some(self.profile_heads.draw(Some(&a.uuid), 32., self.scale, &t)),
                 a.name.clone(),
                 Some(
                     div()
                         .child(tr(if plays {
                             "Microsoft account · plays"
                         } else {
-                            "Microsoft account · signed in"
+                            "Microsoft account"
                         }))
+                        .child(account_status_line(status, progress, &t))
+                        .when(!busy, |row| {
+                            row.when_some(status.filter(|s| s.message != s.label()), |row, s| {
+                                row.child(div().child(tr(&s.message).to_string()))
+                            })
+                        })
                         .into_any_element(),
                 ),
                 Some(actions.into_any_element()),
@@ -3457,11 +3759,12 @@ impl Launcher {
         let configured = account::client_id().is_some();
         let busy = matches!(
             self.sign_in_state,
-            Some(SignInState::Starting | SignInState::Code(_))
+            Some(SignInState::Starting | SignInState::Code(_) | SignInState::Working(_))
         );
         let detail = match &self.sign_in_state {
             _ if !configured => div().child(tr(account::NOT_CONFIGURED)),
             Some(SignInState::Starting) => div().child(tr("Asking Microsoft…")),
+            Some(SignInState::Working(phase)) => div().child(tr(phase.label())),
             Some(SignInState::Code(code)) => div()
                 .flex()
                 .flex_col()
@@ -3476,12 +3779,27 @@ impl Launcher {
                         .text_color(t.ink)
                         .child(code.user_code.clone()),
                 ),
-            Some(SignInState::Done(Ok(a))) => div().child(format!("Signed in as {}.", a.name)),
+            Some(SignInState::Done(Ok(a))) => {
+                div().child(trf("Signed in as {name}.", &[("name", &a.name)]))
+            }
             Some(SignInState::Done(Err(e))) => div().text_color(t.danger).child(e.clone()),
             None if self.accounts.accounts.is_empty() => div().child(tr(
                 "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers. It also plays online servers with your name and skin.",
             )),
             None => div().child(tr("Add another account.")),
+        };
+        let detail = if let Some(target) = &self.sign_in_target {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(trf(
+                    "Use the Microsoft account for {name}.",
+                    &[("name", &target.name)],
+                ))
+                .child(detail)
+        } else {
+            detail
         };
         let detail = match self.keychain.clone() {
             Some(said) if !self.accounts.accounts.is_empty() => div()
@@ -3517,10 +3835,7 @@ impl Launcher {
                     .child(
                         button("sign-in-cancel", "Cancel", Kind::Ghost, &t).on_click(cx.listener(
                             |this, _: &ClickEvent, _, cx| {
-                                if let Some(s) = this.sign_in.take() {
-                                    s.cancel();
-                                }
-                                this.sign_in_state = None;
+                                this.cancel_sign_in();
                                 cx.notify();
                             },
                         )),
@@ -3528,26 +3843,54 @@ impl Launcher {
                     .into_any_element(),
             )
         } else if busy {
-            None
-        } else {
             Some(
-                microsoft::sign_in_button("sign-in", &t)
+                button("sign-in-cancel-working", "Cancel", Kind::Ghost, &t)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.start_sign_in();
+                        this.cancel_sign_in();
                         cx.notify();
                     }))
                     .into_any_element(),
             )
+        } else {
+            let target = self.sign_in_target.as_ref().map(|a| a.uuid.clone());
+            let targeted = target.is_some();
+            // Re-signing one account names it; adding one is Microsoft's own button.
+            let sign_in = if targeted {
+                button("sign-in", "Sign in again", Kind::Secondary, &t)
+            } else {
+                microsoft::sign_in_button("sign-in", &t)
+            };
+            let mut actions = div().flex().gap(px(4.)).child(sign_in.on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    if let Some(uuid) = &target {
+                        this.re_sign_in(uuid);
+                    } else {
+                        this.start_sign_in();
+                    }
+                    cx.notify();
+                },
+            )));
+            if targeted {
+                actions = actions.child(
+                    button("sign-in-cancel-target", "Cancel", Kind::Ghost, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.cancel_sign_in();
+                            cx.notify();
+                        }),
+                    ),
+                );
+            }
+            Some(actions.into_any_element())
         };
         n += 1;
-        let title = if self.accounts.accounts.is_empty() {
-            "Microsoft account"
-        } else {
-            "Another account"
+        let title = match &self.sign_in_target {
+            Some(target) => trf("Sign in again as {name}", &[("name", &target.name)]),
+            None if self.accounts.accounts.is_empty() => tr("Microsoft account").to_owned(),
+            None => tr("Another account").to_owned(),
         };
         rows = rows.child(index_row(
             n,
-            tr(title),
+            title,
             Some(detail.into_any_element()),
             action,
             &t,
@@ -3616,18 +3959,22 @@ impl Launcher {
                 ))
             }));
         let releases = match &self.releases {
-            Load::Loading => return page.child(centered("Loading releases…", &t)),
+            Load::Loading => return page.child(centered(tr("Loading releases…"), &t)),
             Load::Failed(e) => {
-                return page.child(centered(&format!("Couldn't load releases. {e}"), &t).child(
-                    button("retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| {
-                            this.fetch_releases();
-                            cx.notify();
-                        },
-                    )),
-                ))
+                return page.child(
+                    centered(&trf("Couldn't load releases. {error}", &[("error", e)]), &t).child(
+                        button("retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                this.fetch_releases();
+                                cx.notify();
+                            },
+                        )),
+                    ),
+                )
             }
-            Load::Ready(r) if r.is_empty() => return page.child(centered("No releases yet.", &t)),
+            Load::Ready(r) if r.is_empty() => {
+                return page.child(centered(tr("No releases yet."), &t));
+            }
             Load::Ready(r) => r,
         };
         // A hundred releases: only the rows near the screen are drawn.
@@ -3734,7 +4081,7 @@ impl Launcher {
                 } else if release.asset.is_none() {
                     text(theme::CAPTION)
                         .text_color(t.muted)
-                        .child("No build for this platform")
+                        .child(tr("No build for this platform"))
                         .into_any_element()
                 } else {
                     let mut b = button(format!("install-{tag}"), "Install", Kind::Secondary, &t);
@@ -3749,9 +4096,9 @@ impl Launcher {
                     b.into_any_element()
                 };
                 let status = if selected {
-                    Some(caps("In use").text_color(t.accent))
+                    Some(caps(tr("In use")).text_color(t.accent))
                 } else if installed {
-                    Some(caps("Installed").text_color(t.ink_soft))
+                    Some(caps(tr("Installed")).text_color(t.ink_soft))
                 } else {
                     None
                 };
@@ -3839,11 +4186,11 @@ impl Launcher {
                         .child(
                             text(theme::HEADING)
                                 .text_color(t.ink)
-                                .child("Support the work below"),
+                                .child(tr("Support the work below")),
                         )
-                        .child(text(theme::UI).text_color(t.muted).child(
+                        .child(text(theme::UI).text_color(t.muted).child(tr(
                             "Horizon is built in the open. Sponsors fund the next release.",
-                        )),
+                        ))),
                 )
                 .child(
                     button("sponsor", "Sponsor on GitHub", Kind::Secondary, &t)
@@ -3865,10 +4212,14 @@ impl Launcher {
             ))
             .children(sponsor);
         let releases = match &self.releases {
-            Load::Loading => return page.child(centered("Loading patch notes…", &t)),
+            Load::Loading => return page.child(centered(tr("Loading patch notes…"), &t)),
             Load::Failed(e) => {
                 return page.child(
-                    centered(&format!("Couldn't load patch notes. {e}"), &t).child(
+                    centered(
+                        &trf("Couldn't load patch notes. {error}", &[("error", e)]),
+                        &t,
+                    )
+                    .child(
                         button("retry-notes", "Try again", Kind::Secondary, &t).on_click(
                             cx.listener(|this, _: &ClickEvent, _, cx| {
                                 this.fetch_releases();
@@ -3928,7 +4279,7 @@ impl Launcher {
                             .child(if release.body.trim().is_empty() {
                                 text(theme::UI)
                                     .text_color(t.muted)
-                                    .child("No notes for this release.")
+                                    .child(tr("No notes for this release."))
                                     .into_any_element()
                             } else {
                                 markdown::render(&release.body, &t)
@@ -3994,7 +4345,7 @@ impl Render for Launcher {
         if self.bench.as_ref().is_some_and(perf::Bench::scrolling) {
             self.bench_scroll(window);
         }
-        self.servers.note_focus(window);
+        self.servers.note_focus(window, cx);
         self.friend_focused = self.friend_focus.is_focused(window);
         self.mods.note_focus(window);
         self.github.note_focus(window);
@@ -4025,7 +4376,7 @@ impl Render for Launcher {
         let (reveal, held) = self.opening_phase(window);
         let ui = ease_out_cubic((reveal - 0.3) / 0.7);
         if self.opening.is_none() && window.focused(cx).is_none() {
-            window.focus(&self.root_focus);
+            window.focus(&self.root_focus, cx);
         }
         let (sky, next) = self.sky.render(
             &t.night,
@@ -4048,9 +4399,9 @@ impl Render for Launcher {
                     "tab" => {
                         KEYBOARD.store(true, Ordering::Relaxed);
                         if k.modifiers.shift {
-                            window.focus_prev();
+                            window.focus_prev(cx);
                         } else {
-                            window.focus_next();
+                            window.focus_next(cx);
                         }
                     }
                     "escape" if this.servers_escape() => {}
@@ -4233,7 +4584,7 @@ impl Launcher {
         let handle = &self.content_scroll.handle;
         let mut offset = handle.offset();
         offset.y -= px(24.);
-        if -offset.y > handle.max_offset().height {
+        if -offset.y > handle.max_offset().y {
             offset.y = px(0.);
         }
         handle.set_offset(offset);
@@ -4293,10 +4644,12 @@ fn menus() -> Vec<Menu> {
         Menu {
             name: "Horizon Launcher".into(),
             items: vec![MenuItem::action("Quit Horizon Launcher", Quit)],
+            disabled: false,
         },
         Menu {
             name: "Window".into(),
             items: vec![MenuItem::action("Close Window", CloseWindow)],
+            disabled: false,
         },
     ]
 }
@@ -4310,13 +4663,14 @@ fn main() {
     backend::exe_path();
     #[cfg(windows)]
     backend::remove_replaced_binaries();
+    backend::cleanup_launcher_updates();
     // What the launcher downloads goes through the player's proxy, if they set one: the parts
     // that build their own agents (`horizon-port-pack`) are told before anything starts.
     horizon_launcher::proxy::announce(horizon_launcher::backend::Settings::load().proxy);
     if let Some(code) = cli::run() {
         std::process::exit(code);
     }
-    Application::new()
+    gpui_platform::application()
         .with_assets(blocks::Assets)
         .run(|cx: &mut App| {
             cx.text_system()
@@ -4350,12 +4704,20 @@ fn main() {
                     #[cfg(target_os = "linux")]
                     window_decorations: Some(gpui::WindowDecorations::Client),
                     app_id: Some("horizon-launcher".into()),
+                    // GPUI draws a window without focus at most every 33 ms to save energy. A
+                    // benchmark's window often starts without it (KDE keeps focus from windows
+                    // a background process opens), and it measures drawing, not that limit.
+                    inactive_frame_interval: if perf::Bench::wanted() {
+                        None
+                    } else {
+                        WindowOptions::default().inactive_frame_interval
+                    },
                     ..Default::default()
                 },
                 |window, cx| cx.new(|cx| Launcher::new(window, cx)),
             )
             .expect("window");
-            cx.on_window_closed(shut_down).detach();
+            cx.on_window_closed(|cx, _| shut_down(cx)).detach();
             cx.activate(true);
         });
 }
@@ -4397,7 +4759,7 @@ mod tests {
         use super::{key_bindings, CloseWindow, Quit};
         use gpui::{Keymap, Keystroke};
         let keymap = Keymap::new(key_bindings());
-        let key = |s: &str| [Keystroke::parse(s).unwrap()];
+        let key = |s: &'static str| [Keystroke::parse(s).unwrap()];
         let (hit, _) = keymap.bindings_for_input(&key("cmd-q"), &[]);
         assert!(hit.iter().any(|b| b.action().partial_eq(&Quit)));
         let (hit, _) = keymap.bindings_for_input(&key("cmd-w"), &[]);
@@ -4464,6 +4826,36 @@ mod tests {
         assert!(!starts_now(true, true, false), "prepared again under way");
         assert!(!starts_now(false, false, false), "not prepared");
         assert!(!starts_now(true, false, true), "already running");
+    }
+
+    #[test]
+    fn a_completed_sign_in_is_handled_once_across_ui_polls() {
+        use super::{sign_in_change, SignInState};
+        let mut shown = None;
+        let completed = SignInState::Done(Ok(horizon_launcher::account::Account {
+            uuid: "11111111111111111111111111111111".into(),
+            name: "TestAccount".into(),
+            skin: None,
+            cape: None,
+        }));
+        assert!(sign_in_change(&mut shown, SignInState::Starting).is_some());
+        assert!(sign_in_change(&mut shown, SignInState::Starting).is_none());
+        let mut account_reloads = 0;
+        for _ in 0..100 {
+            if matches!(
+                sign_in_change(&mut shown, completed.clone()),
+                Some(SignInState::Done(Ok(_)))
+            ) {
+                account_reloads += 1;
+            }
+        }
+        assert_eq!(
+            account_reloads, 1,
+            "completed sign-in must not restart account checks every frame"
+        );
+        let failed = SignInState::Done(Err("Sign-in cancelled".into()));
+        assert!(sign_in_change(&mut shown, failed.clone()).is_some());
+        assert!(sign_in_change(&mut shown, failed).is_none());
     }
 
     #[test]

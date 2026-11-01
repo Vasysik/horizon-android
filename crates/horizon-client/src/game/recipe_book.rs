@@ -388,6 +388,7 @@ impl Game<'_> {
         }
         if self.recipe_ui.search.is_none() {
             let mut search = EditBox::new(0.0, 0.0, 81.0, 14.0);
+            search.message = super::screen_info::tr("itemGroup.search", &[]);
             search.max_length = 50;
             search.focused = false;
             search.text_color = u32::MAX;
@@ -1176,11 +1177,106 @@ impl Game<'_> {
             by,
         );
         self.draw_ghost(batch, book_type);
-        if !self.book_open(book_type) {
+        if self.book_open(book_type) {
+            self.refresh_book_view(book_type);
+            self.draw_book_panel(batch, book_type);
+        }
+        self.narrate_recipe_book(batch, book_type, [bx, by, 20.0, 18.0]);
+    }
+    /// `AbstractRecipeBookScreen`'s narratables: the book button (an
+    /// `ImageButton` without a message) and the `RecipeBookComponent`, which
+    /// narrates its recipe buttons, search box, filter and tabs while open.
+    fn narrate_recipe_book(&self, batch: &HudBatch, book_type: BookType, button: [f32; 4]) {
+        use horizon_client::widgets::{self, Narratable, key_of};
+        if !widgets::narrating() {
             return;
         }
-        self.refresh_book_view(book_type);
-        self.draw_book_panel(batch, book_type);
+        // The button moves with the book: it keeps the focus a click gave it.
+        widgets::narratable(|| {
+            Narratable::button("", button, true).key(key_of(&"recipe_book/button"))
+        });
+        let open = self.book_open(book_type);
+        let (xo, yo) = self.book_origin(batch);
+        let group = key_of(&"recipe_book");
+        widgets::narratable(|| Narratable::group(open, [xo, yo, WIDTH, HEIGHT]).key(group));
+        if !open {
+            return;
+        }
+        let in_book = |n: Narratable, i: usize| n.key(key_of(&(group, i))).in_group(group);
+        let ui = &self.recipe_ui;
+        let first = ui.page * 20;
+        let shown = ui.view.buttons.iter().skip(first).take(20);
+        if let Some(book) = ui.book.as_ref() {
+            for (n, b) in shown.enumerate() {
+                widgets::narratable(|| {
+                    // RecipeButton: the result it shows now.
+                    let results: Vec<Vec<ItemStack>> = b
+                        .entries
+                        .iter()
+                        .map(|e| vec![book.entries[e.0].result.clone()])
+                        .collect();
+                    let stack = screen::display_stack(&results, self.swap_index());
+                    let names = |id: &str| self.pack.names.display_item(id);
+                    let item = horizon_client::stations::hover_name(&names, &stack);
+                    let (x, y) = Self::button_pos(xo, yo, n);
+                    in_book(
+                        Narratable::recipe(item, b.entries.len() > 1, [x, y, 25.0, 25.0]),
+                        n,
+                    )
+                });
+            }
+        }
+        let tr = |key: &str, args: &[&str]| horizon_client::screen_narrator::translate(key, args);
+        if let Some(search) = &ui.search {
+            widgets::narratable(|| {
+                Narratable::edit_box(
+                    tr("itemGroup.search", &[]),
+                    search.value.clone(),
+                    [xo + 25.0, yo + 13.0, 81.0, 14.0],
+                )
+                .focused(search.focused)
+                .key(key_of(&(group, "search")))
+                .in_group(group)
+            });
+        }
+        widgets::narratable(|| {
+            // A CycleButton of no name that hides its label: ": <value>",
+            // the value's tooltip.
+            let label = |filtering: bool| {
+                tr(
+                    if !filtering {
+                        "gui.recipebook.toggleRecipes.all"
+                    } else {
+                        match book_type {
+                            BookType::Crafting => "gui.recipebook.toggleRecipes.craftable",
+                            BookType::Furnace => "gui.recipebook.toggleRecipes.smeltable",
+                            BookType::BlastFurnace => "gui.recipebook.toggleRecipes.blastable",
+                            BookType::Smoker => "gui.recipebook.toggleRecipes.smokable",
+                        }
+                    },
+                    &[],
+                )
+            };
+            let filtering = self.book_filtering(book_type);
+            let full = |filtering| tr("options.generic_value", &["", &label(filtering)]);
+            Narratable::cycle(
+                full(filtering),
+                full(!filtering),
+                [xo + 110.0, yo + 12.0, 26.0, 16.0],
+                true,
+            )
+            .hint(label(filtering))
+            .key(key_of(&(group, "filter")))
+            .in_group(group)
+        });
+        for n in 0..ui.view.tabs.len() {
+            let (x, y) = self.tab_pos(xo, yo, n);
+            widgets::narratable(|| {
+                Narratable::button("", [x, y, 35.0, 27.0], true)
+                    .key(key_of(&(group, "tab", n)))
+                    .in_group(group)
+            });
+        }
     }
     fn shift_down_or_ctrl(&self) -> bool {
         self.has_control_down()

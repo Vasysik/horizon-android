@@ -79,7 +79,7 @@ impl Game<'_> {
         } else if let Some(b) = self.boats.iter().find(|b| b.id == id) {
             b.entity_type()
         } else if let Some(c) = self.carts.iter().find(|c| c.id == id) {
-            c.kind.id().to_owned()
+            c.kind.item().to_owned()
         } else if self.armor_stands.iter().any(|a| a.id == id) {
             "minecraft:armor_stand".to_owned()
         } else if let Some(c) = self.cushions.iter().find(|c| c.id == id) {

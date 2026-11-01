@@ -234,6 +234,33 @@ impl Layers {
     }
 }
 
+/// `Paletted::from_values`' palette (distinct values in first-seen order)
+/// and each entry's index in it, from a list palette's stored ids (`raw`
+/// indexes `list`), with how many entries use each stored id. A value the
+/// stored palette holds twice still gets one network index.
+fn network_palette(list: &[u32], raw: &[u16]) -> (Vec<i32>, Vec<u32>, Vec<i16>) {
+    let mut map = vec![u32::MAX; list.len()];
+    let mut uses = vec![0i16; list.len()];
+    let mut palette: Vec<i32> = Vec::with_capacity(list.len());
+    let mut ids = Vec::with_capacity(raw.len());
+    for &r in raw {
+        let r = usize::from(r);
+        uses[r] += 1;
+        if map[r] == u32::MAX {
+            let v = list[r] as i32;
+            map[r] = match palette.iter().position(|&p| p == v) {
+                Some(i) => i as u32,
+                None => {
+                    palette.push(v);
+                    palette.len() as u32 - 1
+                }
+            };
+        }
+        ids.push(map[r]);
+    }
+    (palette, ids, uses)
+}
+
 impl SectionCoder {
     /// LevelChunkSection.write, and its block entity blocks.
     fn wire(&self, section: &Section) -> (Arc<[u8]>, Entities) {
@@ -244,7 +271,6 @@ impl SectionCoder {
     }
 
     fn section(&self, section: &Section) -> (horizon_protocol::chunk::Section, Vec<(u16, u32)>) {
-        let mut values = Vec::with_capacity(BLOCKS);
         let (mut non_empty, mut fluids, mut entities) = (0i16, 0i16, Vec::new());
         let mut count = |state: u32, n: i16| {
             let f = self.flags.get(state as usize).copied().unwrap_or(0);
@@ -256,38 +282,55 @@ impl SectionCoder {
             }
             f & ENTITY != 0
         };
+        let global_bits = crate::chunk::block_strategy().global_bits;
         // One block everywhere (all air, mostly): what from_values would give.
         let uniform = section.blocks.uniform();
-        if let Some(v) = uniform {
+        let mut raw = [0u16; BLOCKS];
+        let states = if let Some(v) = uniform {
             if count(v, BLOCKS as i16) {
                 entities = (0..BLOCKS as u16).map(|i| (i, v)).collect();
             }
+            Paletted {
+                bits: 0,
+                palette: vec![v as i32],
+                data: Vec::new(),
+            }
+        } else if let Some(list) = section.blocks.unpack_ids(&mut raw) {
+            // The stored palette's ids, renumbered in first-seen order: the
+            // palette from_values would find in the values, without them.
+            let (palette, ids, uses) = network_palette(list, &raw);
+            let mut any_entity = false;
+            for (&v, &n) in list.iter().zip(&uses) {
+                if n > 0 {
+                    any_entity |= count(v, n);
+                }
+            }
+            if any_entity {
+                for (i, &r) in raw.iter().enumerate() {
+                    let v = list[usize::from(r)];
+                    if self.flags.get(v as usize).copied().unwrap_or(0) & ENTITY != 0 {
+                        entities.push((i as u16, v));
+                    }
+                }
+            }
+            Paletted::from_palette(palette, &ids, Strategy::Blocks, global_bits)
         } else {
             let mut unpacked = [0u32; BLOCKS];
             section.unpack(&mut unpacked);
+            let mut values = Vec::with_capacity(BLOCKS);
             for (i, &v) in unpacked.iter().enumerate() {
                 if count(v, 1) {
                     entities.push((i as u16, v));
                 }
                 values.push(v as i32);
             }
-        }
+            Paletted::from_values(&values, Strategy::Blocks, global_bits)
+        };
         (
             horizon_protocol::chunk::Section {
                 non_empty,
                 fluids,
-                states: match uniform {
-                    Some(v) => Paletted {
-                        bits: 0,
-                        palette: vec![v as i32],
-                        data: Vec::new(),
-                    },
-                    None => Paletted::from_values(
-                        &values,
-                        Strategy::Blocks,
-                        crate::chunk::block_strategy().global_bits,
-                    ),
-                },
+                states,
                 biomes: self.biomes(section),
             },
             entities,
@@ -1663,6 +1706,37 @@ mod tests {
     /// Columns whose sections and heightmaps the warm-up threads made give
     /// the bytes each gives on its own, also with a column twice and its
     /// neighbours' sections deciding the light layers.
+    #[test]
+    fn stored_palette_ids_pack_as_the_values_do() {
+        // Lists with values held twice and ids no entry uses, as `set` can
+        // leave them, at every list width blocks use.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for len in [2usize, 3, 15, 16, 17, 40, 200, 256] {
+            let list: Vec<u32> = (0..len).map(|_| next(30_000) as u32).collect();
+            let mut list = list;
+            list[len - 1] = list[0];
+            let used = (len - 1).max(1) as u64;
+            let raw: Vec<u16> = (0..BLOCKS).map(|_| next(used) as u16).collect();
+            let values: Vec<i32> = raw.iter().map(|&r| list[usize::from(r)] as i32).collect();
+            let (palette, ids, uses) = network_palette(&list, &raw);
+            assert_eq!(
+                Paletted::from_palette(palette, &ids, Strategy::Blocks, 15),
+                Paletted::from_values(&values, Strategy::Blocks, 15),
+                "{len} stored ids"
+            );
+            assert_eq!(
+                uses.iter().map(|&n| i32::from(n)).sum::<i32>(),
+                BLOCKS as i32
+            );
+        }
+    }
+
     #[test]
     fn warmed_columns_give_the_same_bodies() {
         let builtin = Builtin::parse(

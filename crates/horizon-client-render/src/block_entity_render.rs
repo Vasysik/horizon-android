@@ -885,25 +885,26 @@ impl BlockEntityRenderer {
         let mut renderer = Self::new(models, registry);
         renderer.visibility = Some(Mutex::new(visibility));
         // Sherd items: provides_pottery_pattern -> decorated_pot_pattern asset id.
-        if let Ok(bytes) = std::fs::read(root.join("items.json")) {
-            let items: Value = serde_json::from_slice(&bytes)?;
-            for (item, components) in items.as_object().into_iter().flatten() {
-                let Some(pattern) = components["minecraft:provides_pottery_pattern"].as_str()
-                else {
-                    continue;
-                };
-                let name = pattern.strip_prefix("minecraft:").unwrap_or(pattern);
-                let file = root.join(format!("data/minecraft/decorated_pot_pattern/{name}.json"));
-                let Ok(def) = std::fs::read(file) else {
-                    continue;
-                };
-                let def: Value = serde_json::from_slice(&def)?;
-                if let Some(asset) = def["asset_id"].as_str() {
-                    let asset = asset.strip_prefix("minecraft:").unwrap_or(asset);
-                    renderer
-                        .pot_patterns
-                        .insert(item.clone(), format!("entity/decorated_pot/{asset}"));
-                }
+        let items = match horizon_world::item_defaults::read(root) {
+            Ok(items) => items,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
+            Err(e) => return Err(e.into()),
+        };
+        for (item, components) in &items {
+            let Some(pattern) = components["minecraft:provides_pottery_pattern"].as_str() else {
+                continue;
+            };
+            let name = pattern.strip_prefix("minecraft:").unwrap_or(pattern);
+            let file = root.join(format!("data/minecraft/decorated_pot_pattern/{name}.json"));
+            let Ok(def) = std::fs::read(file) else {
+                continue;
+            };
+            let def: Value = serde_json::from_slice(&def)?;
+            if let Some(asset) = def["asset_id"].as_str() {
+                let asset = asset.strip_prefix("minecraft:").unwrap_or(asset);
+                renderer
+                    .pot_patterns
+                    .insert(item.clone(), format!("entity/decorated_pot/{asset}"));
             }
         }
         Ok(renderer)

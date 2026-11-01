@@ -68,6 +68,16 @@ unittest discover -s tests`), `mods/horizon/src/test/java/dev/horizonlab/parity/
 `docs/`, `.github/workflows/`. The website (playhorizon.dev) is the private horizon-rust/horizon-site: its build
 reads `README.md`, `launcher/links.json`, `docs/api/`, `roadmap/roadmap.json` and `crates/horizon-theme/tokens.css` from main.
 
+## Write tests with signal
+
+- Test observable behavior, not words in docs, comments or source. Keep checks for machine-consumed contracts.
+- Use independent expected values or a vanilla oracle; do not derive the answer from the code under test.
+- Test outcomes, not only calls to stubs. Use mocks to isolate behavior, not as the behavior itself.
+- Skip tests of trivial constants, derives and getters, or behavior already covered by another test.
+- Avoid pinning implementation details; a harmless refactor should not break a behavior test.
+- Make slow tests faster without removing cases or weakening their coverage.
+- Never delete parity harnesses or tests that pin vanilla behaviour: they are the spec.
+
 ## Build and test fast
 
 ```sh

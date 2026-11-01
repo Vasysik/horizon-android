@@ -3,8 +3,9 @@ use super::{
     Mob, MobEvent, MobWorld, Species,
     control::Operation,
     goals::{
-        Avoid, AvoidEntity, Breed, ClimbOnTopOfPowderSnow, Cx, Float, Goal, HurtByTarget,
-        LookAtPlayer, MeleeAttack, NearestTarget, Panic, Stroll, Tempt, goal_clone,
+        Avoid, AvoidEntity, Breed, ClimbOnTopOfPowderSnow, Cx, Float, Goal, HurtByTarget, JUMP,
+        LookAtPlayer, MOVE, MeleeAttack, MoveToBlock, NearestTarget, Panic, Stroll, Tempt,
+        goal_clone, reduced,
     },
 };
 use horizon_core::{
@@ -24,7 +25,7 @@ const CLIENT_JUMP_DURATION: usize = 5;
 /// The killer bunny's variant id (`Rabbit.Variant.EVIL`).
 const EVIL: u8 = 99;
 
-/// Rabbit.registerGoals. Not ported yet: RaidGardenGoal (5).
+/// Rabbit.registerGoals.
 pub fn register(m: &mut Mob) {
     let food = m.kind.food.clone();
     let monsters = super::species::ALL
@@ -44,11 +45,136 @@ pub fn register(m: &mut Mob) {
         RabbitAvoid::new(Avoid::Species(vec![Species::Wolf]), 10.0),
     );
     g.add(4, RabbitAvoid::new(Avoid::Species(monsters), 4.0));
+    g.add(5, RaidGarden::new());
     g.add(6, Stroll::avoiding_water(0.6));
     g.add(11, LookAtPlayer::new(10.0));
     m.ai.mov.kind = super::control::MoveKind::Custom;
     m.ai.nav.can_float = true;
     m.extra.ints[IDLE_TIMEOUT] = m.random.next_int_bound(40).unwrap_or(0) + 180;
+}
+
+/// `Rabbit.RaidGardenGoal.isValidTarget`: farmland-like ground (`#supports_crops`) under a
+/// carrot crop at its maximum age, while the rabbit wants more food and has not found one.
+fn raid_target(w: &MobWorld, p: [i32; 3], wants_to_raid: bool, can_raid: bool) -> bool {
+    w.has_tag("minecraft:supports_crops", w.block_name(p[0], p[1], p[2]))
+        && wants_to_raid
+        && !can_raid
+        && w.block_name(p[0], p[1] + 1, p[2]) == "minecraft:carrots"
+        && w.prop(p[0], p[1] + 1, p[2], "age")
+            .and_then(|a| a.parse::<i32>().ok())
+            .is_some_and(|age| age >= CARROT_MAX_AGE)
+}
+/// `CarrotBlock.MAX_AGE`.
+const CARROT_MAX_AGE: i32 = 7;
+
+/// `Rabbit.RaidGardenGoal`: a `MoveToBlockGoal` (0.7, 16) to ripe carrots that eats one age
+/// of them, then keeps the rabbit full for 40 ticks (`moreCarrotTicks`).
+#[derive(Clone, Debug)]
+struct RaidGarden {
+    block: MoveToBlock,
+    wants_to_raid: bool,
+    can_raid: bool,
+}
+impl RaidGarden {
+    fn new() -> Self {
+        Self {
+            block: MoveToBlock::new(0.7, 16, 1),
+            wants_to_raid: false,
+            can_raid: false,
+        }
+    }
+}
+impl Goal for RaidGarden {
+    goal_clone!();
+    fn name(&self) -> &'static str {
+        "RaidGardenGoal"
+    }
+    fn flags(&self) -> u8 {
+        MOVE | JUMP
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // MoveToBlockGoal.canUse draws the next delay only once the last one ran out.
+        if self.block.next_start > 0 {
+            self.block.next_start -= 1;
+            return false;
+        }
+        if !cx.w.mob_griefing {
+            return false;
+        }
+        self.can_raid = false;
+        self.wants_to_raid = m.extra.more_carrot_ticks <= 0;
+        let next = reduced(200 + m.random.next_int_bound(200).unwrap_or(0));
+        let wants = self.wants_to_raid;
+        let found = std::cell::Cell::new(false);
+        let target = self.block.can_use(m, cx.w, next, |w, p| {
+            let ok = raid_target(w, p, wants, false);
+            found.set(found.get() || ok);
+            ok
+        });
+        self.can_raid = found.get();
+        target
+    }
+    fn can_continue(&mut self, _: &mut Mob, cx: &mut Cx) -> bool {
+        let (wants, raid) = (self.wants_to_raid, self.can_raid);
+        self.can_raid
+            && self
+                .block
+                .can_continue(cx.w, |w, p| raid_target(w, p, wants, raid))
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.block.start(m, cx.w);
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.block.tick(m, cx.w);
+        let b = self.block.block;
+        m.ai.look.set_look_at(
+            [
+                f64::from(b[0]) + 0.5,
+                f64::from(b[1] + 1),
+                f64::from(b[2]) + 0.5,
+            ],
+            10.0,
+            m.max_head_x_rot(),
+        );
+        if !self.block.reached {
+            return;
+        }
+        let crop = [b[0], b[1] + 1, b[2]];
+        if self.can_raid && cx.w.block_name(crop[0], crop[1], crop[2]) == "minecraft:carrots" {
+            let age =
+                cx.w.prop(crop[0], crop[1], crop[2], "age")
+                    .and_then(|a| a.parse::<i32>().ok())
+                    .unwrap_or(0);
+            let old = cx.w.world.block(crop[0], crop[1], crop[2]);
+            if age == 0 {
+                // `setBlock(AIR, 2)`, then `destroyBlock` finds air and does nothing.
+                if let Some(air) = cx.w.registry.default_state("minecraft:air") {
+                    cx.events.push(MobEvent::CropRaided {
+                        pos: crop,
+                        state: air,
+                        old: None,
+                        mob: m.id,
+                    });
+                }
+            } else if let Some(mut s) = cx.w.registry.state(old).cloned() {
+                s.properties.insert("age".into(), (age - 1).to_string());
+                if let Some(state) = cx.w.registry.id(&s) {
+                    cx.events.push(MobEvent::CropRaided {
+                        pos: crop,
+                        state,
+                        old: Some(old),
+                        mob: m.id,
+                    });
+                }
+            }
+            m.extra.more_carrot_ticks = 40;
+        }
+        self.can_raid = false;
+        self.block.next_start = 10;
+    }
 }
 
 /// `Rabbit.RabbitAvoidEntityGoal(rabbit, class, maxDist, 2.2, 2.2)`: the
@@ -158,6 +284,11 @@ pub fn server_ai_step(m: &mut Mob, target: Option<Vec3>) {
     }
     if m.extra.ints[MOVE_DELAY] > 0 {
         m.extra.ints[MOVE_DELAY] -= 1;
+    }
+    // `moreCarrotTicks` runs down by up to 2 a tick.
+    if m.extra.more_carrot_ticks > 0 {
+        m.extra.more_carrot_ticks =
+            (m.extra.more_carrot_ticks - m.random.next_int_bound(3).unwrap_or(0)).max(0);
     }
     if m.on_ground {
         if !m.extra.flag {

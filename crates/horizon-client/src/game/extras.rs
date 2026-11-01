@@ -93,13 +93,18 @@ impl Game<'_> {
     }
     /// Auto-reconnect's next attempt after a disconnect, when it is on and
     /// the reason allows one.
-    pub(super) fn reconnect_after(&mut self, reason: &str, from_server: bool) -> Option<Retry> {
+    pub(super) fn reconnect_after(
+        &mut self,
+        reason: &str,
+        key: Option<&str>,
+        from_server: bool,
+    ) -> Option<Retry> {
         if !self.settings.extras.auto_reconnect {
             self.extras.reconnect.reset();
             return None;
         }
         let now = std::time::Instant::now();
-        self.extras.reconnect.ended(reason, from_server, now)
+        self.extras.reconnect.ended(reason, key, from_server, now)
     }
     /// Show the attempt's countdown on the Disconnected screen.
     pub(super) fn offer_reconnect(&mut self, retry: Option<Retry>) {

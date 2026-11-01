@@ -214,3 +214,21 @@ but was slower on the Adreno 710 probe (1600x1000, radius 5: original median
 also rejected: it was substantially slower and differed by up to one channel
 step in the tested images. Neither shader is enabled in this release. Earlier
 CPU bind-group reuse remains; the GPU blur cost is still an open issue.
+
+## Published nightly integration candidate
+
+The candidate integrates published nightly `8c02c0b8534e11b7bb8be14238b140a8534280a0`
+(1,846 upstream commits including merge history). The complete change inventory,
+regression checklist and issue verification boundaries are in
+[android-0.7.7-testing.md](android-0.7.7-testing.md).
+
+Two extra GLES-only compatibility adapters preserve the byte layout of colored
+light uniforms and replace the HDR statistics shader's unsigned switch with
+conditional texture selection. Both Vulkan sources remain unchanged. These
+are format/control-flow adaptations, not removal of transparency or lighting.
+
+The isolated tablet passed a Vulkan Compatibility gameplay/lifecycle smoke test.
+The final F-03L nightly build has not passed device startup, despite progressing
+beyond the corrected shader compilation failures; do not infer ARMv7 readiness
+from its successful Rust build. This is suitable for further ARM64 candidate
+validation, not a completed multi-device release sign-off.

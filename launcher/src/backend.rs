@@ -119,6 +119,14 @@ pub const LAUNCHER_ASSET: Option<&str> = match OWN_ASSETS {
     None => None,
 };
 
+/// The launcher as an AppImage (`packaging/linux/appimage.sh`): the program and its libraries in
+/// one file. A launcher running from one updates by replacing that file ([`appimage_path`]), so it
+/// needs this archive rather than the platform's `.tar.gz`.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub const LAUNCHER_APPIMAGE_ASSET: Option<&str> = Some("horizon-launcher-linux-x86_64.AppImage");
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+pub const LAUNCHER_APPIMAGE_ASSET: Option<&str> = None;
+
 const LAUNCHER_BINARY: &str = if cfg!(windows) {
     "horizon-launcher.exe"
 } else {
@@ -392,7 +400,7 @@ fn launcher_releases_in_with(
     list: &serde_json::Value,
     json: impl Fn(String) -> Result<serde_json::Value, String>,
 ) -> Vec<Release> {
-    let found = parse_releases(list, LAUNCHER_ASSET, is_launcher_tag);
+    let found = parse_releases(list, launcher_asset(), is_launcher_tag);
     if found.iter().any(|r| r.asset.is_some()) {
         return found;
     }
@@ -410,7 +418,7 @@ fn launcher_releases_in_with(
         if let Ok(release) = json(format!("{api}/releases/tags/{tag}")) {
             let one = parse_releases(
                 &serde_json::json!([release]),
-                LAUNCHER_ASSET,
+                launcher_asset(),
                 is_launcher_tag,
             );
             if one.iter().any(|r| r.asset.is_some()) {
@@ -449,13 +457,19 @@ pub fn installable_updates(releases: &[Release]) -> Vec<Release> {
 /// How often a launcher left open looks for new releases: they come out several times a day.
 pub const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
-/// The community, sponsor and website links, from `launcher/links.json` on main, so they can change
-/// without a launcher release. An empty address hides its button.
+/// The community, sponsor and website links and the official server's address, from
+/// `launcher/links.json` on main, so they can change without a launcher release. An empty address
+/// hides its button (an empty `official_server`: no official server offered).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Links {
     pub discord: String,
     pub sponsor: String,
     pub website: String,
+    /// The official server's address, as servers.dat lists it (`server_list::add_official`).
+    pub official_server: String,
+    /// The addresses it had before: a list holding one moves to `official_server`. A move appends
+    /// the old address here.
+    pub official_server_previous: Vec<String>,
 }
 
 impl Default for Links {
@@ -465,6 +479,11 @@ impl Default for Links {
             discord: "https://discord.gg/playhorizon".into(),
             sponsor: "https://github.com/sponsors/ludovic111".into(),
             website: "https://playhorizon.dev".into(),
+            official_server: crate::server_list::OFFICIAL_ADDRESS.into(),
+            official_server_previous: crate::server_list::OFFICIAL_PREVIOUS
+                .iter()
+                .map(|a| a.to_string())
+                .collect(),
         }
     }
 }
@@ -479,9 +498,21 @@ impl Links {
                 ("discord", &mut links.discord),
                 ("sponsor", &mut links.sponsor),
                 ("website", &mut links.website),
+                ("official_server", &mut links.official_server),
             ] {
                 if let Some(url) = map.get(key).and_then(|v| v.as_str()) {
                     *slot = url.trim().to_string();
+                }
+            }
+            // A list of addresses; anything else keeps the built-in one.
+            if let Some(serde_json::Value::Array(previous)) = map.get("official_server_previous") {
+                if previous.iter().all(serde_json::Value::is_string) {
+                    links.official_server_previous = previous
+                        .iter()
+                        .filter_map(|a| a.as_str())
+                        .map(|a| a.trim().to_string())
+                        .filter(|a| !a.is_empty())
+                        .collect();
                 }
             }
         }
@@ -2168,6 +2199,10 @@ pub fn client_command(tag: &str) -> Command {
     let _ = fs::create_dir_all(&home);
     let mut cmd = Command::new(client_program(tag));
     cmd.current_dir(home).arg("--resources").arg(resources(tag));
+    // How the game asks for a renewed session (`account session`) while it runs.
+    if let Ok(exe) = std::env::current_exe() {
+        cmd.env("HORIZON_LAUNCHER_EXE", exe);
+    }
     // PipeWire remembers volume and mute per application name. The game's own name is
     // "PipeWire ALSA [horizon-client]", shared with development and test runs, where
     // muting it once left every later game silent: played from here it is "Horizon".
@@ -2346,8 +2381,16 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
 /// the gate, a sign-in that can't be renewed (no network, expired) still lets the game start,
 /// offline.
 pub fn client(tag: &str) -> Result<Command, String> {
-    let (session, offline) = account::session_for_game(&game_home(), false)
-        .map_err(|refused| format!("{refused} Sign in with `horizon-launcher account sign-in`."))?;
+    client_as(tag, None)
+}
+
+/// [`client`], playing as `who` for this launch only (`play --account`).
+pub fn client_as(tag: &str, who: Option<&account::Player>) -> Result<Command, String> {
+    let (session, offline) = match who {
+        None => account::session_for_game(&game_home(), false).map_err(|e| e.to_string()),
+        Some(who) => account::session_for_game_as(&game_home(), who),
+    }
+    .map_err(|refused| format!("{refused} Sign in with `horizon-launcher account sign-in`."))?;
     need_prepared(tag)?;
     complete_assets(tag);
     crate::browser::horizon::before_play(&game_home());
@@ -2594,6 +2637,55 @@ pub fn exe_path() -> &'static Path {
     EXE.get_or_init(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from(LAUNCHER_BINARY)))
 }
 
+/// The AppImage this launcher runs from, when it does: the runtime sets `$APPIMAGE` to the file it
+/// mounted and `$APPDIR` to the mount, while [`exe_path`] then names a copy inside that read-only
+/// mount, gone with it. Updating and restarting work on this file, and the menu entry, shortcuts and
+/// agent configurations start it.
+pub fn appimage_path() -> Option<PathBuf> {
+    appimage_path_in(
+        std::env::var_os("APPIMAGE").as_deref(),
+        std::env::var_os("APPDIR").as_deref(),
+        exe_path(),
+    )
+}
+
+/// `$APPIMAGE`, if it names a file still there and this binary runs from inside `$APPDIR`. Both
+/// variables reach every child of an AppImage: a launcher a different AppImage's program started
+/// must never take that program's file for its own (an update would overwrite it).
+fn appimage_path_in(
+    appimage: Option<&std::ffi::OsStr>,
+    appdir: Option<&std::ffi::OsStr>,
+    exe: &Path,
+) -> Option<PathBuf> {
+    let appdir = Path::new(appdir?);
+    if !appdir.is_absolute() || !exe.starts_with(appdir) {
+        return None;
+    }
+    appimage
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.is_file())
+}
+
+/// The file a self-update replaces and a restart starts: the AppImage when the launcher runs from
+/// one, the binary this process started from otherwise.
+pub fn update_target() -> PathBuf {
+    appimage_path().unwrap_or_else(|| exe_path().to_path_buf())
+}
+
+/// The launcher archive this build installs from: the AppImage's when it runs from one (a `.tar.gz`
+/// binary would be written inside the read-only mount), this platform's otherwise.
+pub fn launcher_asset() -> Option<&'static str> {
+    launcher_asset_running_from(appimage_path().is_some())
+}
+
+fn launcher_asset_running_from(appimage: bool) -> Option<&'static str> {
+    if appimage {
+        LAUNCHER_APPIMAGE_ASSET
+    } else {
+        LAUNCHER_ASSET
+    }
+}
+
 /// Development builds and `HORIZON_LAUNCHER_NO_SELF_UPDATE` never replace themselves.
 pub fn self_update_allowed() -> bool {
     !cfg!(debug_assertions) && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
@@ -2744,71 +2836,19 @@ fn find_app(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Whether the bundle's signature (Developer ID or ad hoc) is whole: every file it seals is there
-/// and unchanged.
-#[cfg(target_os = "macos")]
-fn signature_holds(app: &Path) -> bool {
-    Command::new("codesign")
-        .args(["--verify", "--deep", "--strict"])
-        .arg(app)
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
-/// Puts the bundle `new` in place of `app`: copied beside it first (`ditto` keeps its links,
-/// modes and signature) and checked, then the old one is moved aside and the new one renamed in,
-/// so `app` is never half written, and checked again where it lands (the old one comes back if it
-/// doesn't hold). The running launcher keeps its open files and works on.
+/// Puts a verified app bundle in place, retaining old bundles until no process uses them.
 #[cfg(target_os = "macos")]
 fn replace_bundle(new: &Path, app: &Path) -> Result<(), String> {
-    let dir = app.parent().ok_or("The app has no folder.")?;
-    let name = app.file_name().unwrap_or_default().to_string_lossy();
-    let staged = dir.join(format!(".{name}.update-{}", std::process::id()));
-    let old = dir.join(format!(".{name}.old-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&staged);
-    let copied = Command::new("ditto")
-        .arg(new)
-        .arg(&staged)
-        .status()
-        .map_err(|e| format!("ditto: {e}"))?;
-    if !copied.success() {
-        let _ = fs::remove_dir_all(&staged);
-        return Err(format!(
-            "Could not copy the new app next to {}.",
-            app.display()
-        ));
+    crate::mac_update::replace_bundle(new, app)
+}
+
+/// Retired macOS launchers are removed only once their executable is no longer in use.
+/// Run for every entry point (GUI, CLI and MCP), before a command can return or exec.
+pub fn cleanup_launcher_updates() {
+    #[cfg(target_os = "macos")]
+    if let Some(app) = app_bundle(exe_path()) {
+        crate::mac_update::cleanup(app);
     }
-    if !signature_holds(&staged) {
-        let _ = fs::remove_dir_all(&staged);
-        return Err(
-            "The downloaded app's signature doesn't hold; the launcher stays as it is.".into(),
-        );
-    }
-    fs::rename(app, &old).map_err(|e| {
-        let _ = fs::remove_dir_all(&staged);
-        format!("Could not move {} aside: {e}", app.display())
-    })?;
-    if let Err(e) = fs::rename(&staged, app) {
-        let _ = fs::rename(&old, app);
-        let _ = fs::remove_dir_all(&staged);
-        return Err(format!(
-            "Could not put the new app at {}: {e}",
-            app.display()
-        ));
-    }
-    if !signature_holds(app) {
-        let failed = dir.join(format!(".{name}.failed-{}", std::process::id()));
-        if fs::rename(app, &failed).is_ok() && fs::rename(&old, app).is_ok() {
-            let _ = fs::remove_dir_all(&failed);
-        }
-        return Err(format!(
-            "The new app's signature doesn't hold at {}; the launcher stays as it was.",
-            app.display()
-        ));
-    }
-    let _ = fs::remove_dir_all(&old);
-    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2816,8 +2856,8 @@ fn replace_bundle(_new: &Path, _app: &Path) -> Result<(), String> {
     Err("App bundles are a macOS thing.".into())
 }
 
-/// Downloads a launcher release and puts its binary in place of this one. The running process
-/// keeps working; `restart` starts the new one. When the file there already is that release or
+/// Downloads a launcher release and puts it in place of this one. The running process keeps
+/// working; `restart` starts the new one. When the file there already is that release or
 /// a newer one (updated from the command line or another window), there is nothing to do.
 pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), String> {
     let (url, size) = release
@@ -2825,18 +2865,38 @@ pub fn self_update(release: &Release, progress: impl Fn(f32)) -> Result<(), Stri
         .clone()
         .ok_or("This launcher release has no build for this platform.")?;
     let target = launcher_version(&release.tag).unwrap_or("0");
-    if installed_launcher_version(exe_path())
+    if installed_launcher_version(&update_target())
         .is_some_and(|v| v != VERSION && compare_versions(&v, target).is_ge())
     {
         progress(1.0);
         return Ok(());
     }
-    let sha256 = signed_digest(&release.tag, LAUNCHER_ASSET.unwrap_or_default())?;
+    let sha256 = signed_digest(&release.tag, launcher_asset().unwrap_or_default())?;
     let work = data_dir().join(".launcher-update");
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let archive = work.join("download");
     download(&url, size, &sha256, &archive, &progress)?;
+    // An AppImage is the whole program: the new one takes the place of the file `$APPIMAGE` names
+    // (the running mount keeps its copy until `restart` starts it). Its archive is not a `.tar.gz`
+    // to unpack, so this comes before the unpacking below.
+    if let Some(appimage) = appimage_path() {
+        if !url.ends_with(".AppImage") {
+            return Err(format!(
+                "{} is not an AppImage, and this launcher runs from one. Install it from its release page instead.",
+                release.tag
+            ));
+        }
+        replace_binary(&archive, &appimage).map_err(|e| {
+            format!(
+                "Could not replace the AppImage at {}: {e}",
+                appimage.display()
+            )
+        })?;
+        let _ = fs::remove_dir_all(&work);
+        progress(1.0);
+        return Ok(());
+    }
     let unpacked = work.join("unpacked");
     unpack(&archive, &url, &unpacked)?;
     // A launcher inside Horizon.app replaces the whole bundle (its Info.plist, icon and
@@ -2877,11 +2937,12 @@ fn find_file(dir: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Starts the launcher again (the updated binary) with the same arguments in place of this one:
-/// on Unix the process becomes the new binary (exec), on Windows the new one starts and this one
-/// exits. Returns only when the new binary could not start.
+/// Starts the launcher again (the updated binary, or the replaced AppImage) with the same
+/// arguments in place of this one: on Unix the process becomes the new binary (exec), on Windows
+/// the new one starts and this one exits. Returns only when the new one could not start.
 pub fn restart() -> String {
-    let mut cmd = Command::new(exe_path());
+    let target = update_target();
+    let mut cmd = Command::new(&target);
     cmd.args(std::env::args_os().skip(1));
     #[cfg(unix)]
     let error = {
@@ -2895,7 +2956,7 @@ pub fn restart() -> String {
     };
     format!(
         "Could not start {}: {error}. Close the launcher and open it again.",
-        exe_path().display()
+        target.display()
     )
 }
 
@@ -2997,6 +3058,11 @@ pub enum Msg {
     Keychain(Option<String>),
     /// Whether an account in the launcher owned the game at its last check (the owner gate).
     Owner(bool),
+    /// Credential-free result from a background account operation.
+    AccountStatus(String, u64, crate::account::session::Status),
+    AccountProgress(String, u64, crate::account::session::Phase),
+    AccountHead(String, Option<String>, Option<Vec<[u8; 4]>>, bool),
+    AccountRemoved(String, u64, Result<bool, String>),
     /// The owner gate's answer for the game about to start: the selected account's session
     /// file (none = offline) and why it plays offline, if it does.
     Session(Result<(Option<PathBuf>, Option<String>), crate::account::NoOwner>),
@@ -3860,17 +3926,17 @@ pub fn {f}("
     #[test]
     fn the_accent_is_violet_unless_picked_and_an_unknown_one_keeps_the_rest() {
         use crate::themes::Accent;
-        assert_eq!(Settings::parse("{}").accent, Accent::Violet);
+        assert_eq!(Settings::parse("{}").accent, Accent::VIOLET);
         let teal =
             Settings::parse(r#"{"accent": "teal", "background": "background-0123456789ab.png"}"#);
         assert_eq!(
             (teal.accent, teal.background.as_deref()),
-            (Accent::Teal, Some("background-0123456789ab.png"))
+            (Accent::TEAL, Some("background-0123456789ab.png"))
         );
         let future = Settings::parse(r#"{"accent": "plaid", "game_args": "--x"}"#);
         assert_eq!(
             (future.accent, future.game_args.as_str()),
-            (Accent::Violet, "--x")
+            (Accent::VIOLET, "--x")
         );
     }
 
@@ -4006,6 +4072,59 @@ pub fn {f}("
         );
     }
 
+    /// A launcher in an AppImage updates with the AppImage's own file: the `.tar.gz` binary would
+    /// be written inside the AppImage's read-only mount.
+    #[test]
+    fn an_appimage_updates_with_the_appimage() {
+        assert_eq!(launcher_asset_running_from(false), LAUNCHER_ASSET);
+        assert_eq!(launcher_asset_running_from(true), LAUNCHER_APPIMAGE_ASSET);
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        assert_eq!(
+            launcher_asset_running_from(true),
+            Some("horizon-launcher-linux-x86_64.AppImage")
+        );
+    }
+
+    /// `$APPIMAGE` names the file the runtime mounted; a path that is not there (moved or deleted
+    /// since the launcher started) is no AppImage, and the launcher updates its own binary again.
+    /// Nor is one inherited from another AppImage's program: the binary has to run from `$APPDIR`.
+    // AppImages are Linux's, and the paths below are absolute only on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn only_an_appimage_file_counts() {
+        use std::ffi::OsStr;
+        let mount = OsStr::new("/tmp/.mount_Horizon123");
+        let exe = Path::new("/tmp/.mount_Horizon123/usr/bin/horizon-launcher");
+        assert_eq!(appimage_path_in(None, Some(mount), exe), None);
+        assert_eq!(
+            appimage_path_in(Some(OsStr::new("Horizon.AppImage")), Some(mount), exe),
+            None,
+            "a relative path is no $APPIMAGE"
+        );
+        assert_eq!(
+            appimage_path_in(
+                Some(OsStr::new("/nonexistent/Horizon.AppImage")),
+                Some(mount),
+                exe
+            ),
+            None
+        );
+        let file = std::env::temp_dir().join(format!("horizon-appimage-{}", std::process::id()));
+        std::fs::write(&file, b"#!AppImage").unwrap();
+        assert_eq!(
+            appimage_path_in(Some(file.as_os_str()), Some(mount), exe),
+            Some(file.clone())
+        );
+        // Inherited from another AppImage: this launcher is installed elsewhere.
+        let elsewhere = Path::new("/home/a/.local/bin/horizon-launcher");
+        assert_eq!(
+            appimage_path_in(Some(file.as_os_str()), Some(mount), elsewhere),
+            None
+        );
+        assert_eq!(appimage_path_in(Some(file.as_os_str()), None, exe), None);
+        let _ = std::fs::remove_file(&file);
+    }
+
     #[test]
     fn game_0_2_follows_every_date_release() {
         assert_eq!(compare_versions("v0.2.0", "v2026.10.19.15"), Greater);
@@ -4061,7 +4180,9 @@ pub fn {f}("
 
     #[test]
     fn the_fallback_looks_for_0_2_launchers_first() {
-        let asset = LAUNCHER_ASSET.unwrap_or("unsupported");
+        // The asset the launcher reading this list installs with (the AppImage's own when it runs
+        // from one), as launcher_releases_in_with looks for it.
+        let asset = launcher_asset().unwrap_or("unsupported");
         let release = |tag: &str| serde_json::json!({"tag_name": tag, "assets": [{"name": asset, "browser_download_url": "u", "size": 1}]});
         let asked = std::cell::RefCell::new(Vec::new());
         let lookup = |with_new: bool| {
@@ -4259,10 +4380,7 @@ pub fn {f}("
         assert_eq!(defaults.sponsor, "https://github.com/sponsors/ludovic111");
         assert_eq!(defaults.website, "https://playhorizon.dev");
         // The file on main says the same thing as the defaults.
-        let file = Links::parse(
-            r#"{"discord": "https://discord.gg/playhorizon", "sponsor": "https://github.com/sponsors/ludovic111", "website": "https://playhorizon.dev"}"#,
-        );
-        assert_eq!(file, defaults);
+        assert_eq!(Links::parse(include_str!("../links.json")), defaults);
         // Unreadable or missing, offline included: the defaults.
         assert_eq!(Links::parse(""), defaults);
         assert_eq!(Links::parse("<html>404</html>"), defaults);

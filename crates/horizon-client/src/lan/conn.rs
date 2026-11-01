@@ -39,6 +39,13 @@ const KEEP_ALIVE_EVERY: Duration = Duration::from_secs(15);
 /// ReadTimeoutHandler(30) in ServerConnectionListener: a connection that sends
 /// nothing for 30 s.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the handshake, a status request and the login may wait for the client's next packet,
+/// where vanilla waits 30 s: a client answers these at once, and each connection holds a thread
+/// and one of the places the server keeps for connections, which a crowd of silent or slow
+/// sockets would otherwise take for 30 s each. Configuration and play keep [`READ_TIMEOUT`] (a
+/// resource pack downloads in configuration).
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(10);
 /// Packets queued for one client beyond this many bytes disconnect it.
 const MAX_PENDING: usize = 96 << 20;
 /// Vanilla's server-side disconnect during login is a JSON component.
@@ -457,8 +464,20 @@ pub fn serve(
     {
         return serve_legacy(stream, &shared);
     }
+    // A peer that stops reading (a frozen game, a dropped network) would otherwise hold
+    // its writer in a full send buffer for good, or until TCP gives up minutes later, and
+    // its thread and its place among the server's connections with it.
+    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     serve_connection(Connection::from_stream(stream).map_err(e)?, address, shared)
 }
+
+/// How long one write may wait on a peer that reads nothing: as long as a read may wait.
+const WRITE_TIMEOUT: Duration = READ_TIMEOUT;
+
+/// The address a memory connection logs in from: no network peer has port 0.
+pub const MEMORY_ADDRESS: std::net::SocketAddr = std::net::SocketAddr::V4(
+    std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 0),
+);
 
 /// `ServerConnectionListener.startMemoryChannel`: an integrated server's
 /// own player, over one end of an in-memory pipe.
@@ -466,8 +485,7 @@ pub fn serve_local(
     pipe: horizon_protocol::connection::Pipe,
     shared: Arc<Shared>,
 ) -> Result<(), String> {
-    let address = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-    serve_connection(Connection::local(pipe), address, shared)
+    serve_connection(Connection::local(pipe), MEMORY_ADDRESS, shared)
 }
 
 fn serve_connection(
@@ -476,9 +494,7 @@ fn serve_connection(
     shared: Arc<Shared>,
 ) -> Result<(), String> {
     let e = |e: horizon_protocol::Error| e.to_string();
-    c.reader
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .map_err(e)?;
+    c.reader.set_read_timeout(Some(LOGIN_TIMEOUT)).map_err(e)?;
     let (id, payload) = c.recv().map_err(e)?;
     let intention = match handshake::Serverbound::decode(id, &payload).map_err(e)? {
         handshake::Serverbound::Intention(i) => i,
@@ -877,6 +893,7 @@ fn login_and_configure(
             _ => return Err("unexpected packet during login".into()),
         }
     }
+    c.reader.set_read_timeout(Some(READ_TIMEOUT)).map_err(e)?;
     // Configuration.
     let sync_data = shared.sync();
     let sync: &SyncData = &sync_data;
@@ -936,16 +953,22 @@ fn login_and_configure(
             _ => {}
         }
     };
-    // horizon-clients-only: the brand the client sent ("vanilla" when it sent
-    // none) must be Horizon's.
-    if shared.config.horizon_clients_only && brand != "horizon" {
-        let text = super::HORIZON_CLIENTS_ONLY_REASON;
+    // Custom component IDs need Horizon's registry check. The server may also
+    // require Horizon clients even when it has no custom components.
+    if brand != "horizon"
+        && (shared.config.horizon_clients_only
+            || horizon_protocol::item::custom::entries().next().is_some())
+    {
+        let text = if shared.config.horizon_clients_only {
+            super::HORIZON_CLIENTS_ONLY_REASON
+        } else {
+            crate::content_identity::MISMATCH
+        };
         let reason = horizon_world::nbt::Tag::String(horizon_world::nbt::JavaString::from(text));
         let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
         if let Some(log) = &shared.config.log {
-            let line = format!(
-                "Disconnecting {name}: its client is \"{brand}\", not Horizon (horizon-clients-only)"
-            );
+            let line =
+                format!("Disconnecting {name}: its client is \"{brand}\", not Horizon ({text})");
             (log.write)("Server thread", "INFO", &line);
         }
         lost(shared, &format!("{name} ({})", uuid_string(uuid)), text);
@@ -1177,6 +1200,7 @@ fn wait_alive<T>(
 }
 
 fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::SocketAddr) {
+    shared.entered_play();
     let conn_id = shared.next_id();
     let events = shared.events.clone();
     let _ = c.reader.set_read_timeout(Some(READ_TIMEOUT));
@@ -1248,9 +1272,11 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
     };
     let _ = tx.send(Out::Close);
     let _ = events.send(NetEvent::Left(conn_id, reason));
+    shared.closing.fetch_add(1, Ordering::AcqRel);
     if let Some(t) = writer_thread {
         let _ = t.join();
     }
+    shared.closing.fetch_sub(1, Ordering::AcqRel);
     shared.release(parts.uuid);
 }
 

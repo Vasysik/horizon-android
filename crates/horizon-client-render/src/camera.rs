@@ -434,6 +434,10 @@ pub struct Camera {
     pub up: [f32; 3],
     pub left: [f32; 3],
     pub detached: bool,
+    /// The entity's eye and view rotation (yaw, pitch), where a detached camera backs off
+    /// from.
+    pub eye: [f64; 3],
+    pub eye_rotation: [f32; 2],
 }
 impl Default for Camera {
     fn default() -> Self {
@@ -450,6 +454,8 @@ impl Default for Camera {
             up: [0.0, 1.0, 0.0],
             left: [-1.0, 0.0, 0.0],
             detached: false,
+            eye: [0.0; 3],
+            eye_rotation: [0.0; 2],
         }
     }
 }
@@ -505,6 +511,8 @@ impl Camera {
                 + f64::from(lerp(partial, self.eye_height_old, self.eye_height)),
             lerp_d(p, entity.previous[2], entity.position[2]),
         ];
+        self.eye = self.position;
+        self.eye_rotation = [self.y_rot, self.x_rot];
         self.detached = !camera_type.is_first_person();
         if self.detached {
             if camera_type.is_mirrored() {

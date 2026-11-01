@@ -107,6 +107,12 @@ pub fn register(m: &mut Mob) {
         outside: 0.1,
         gravity: true,
     };
+    // `Frog.FrogPathNavigation` (`AmphibiousPathNavigation`, and
+    // `prefersShallowSwimming` is the frog's own override): water deeper than
+    // ten blocks under sea level costs more, so a frog paths the shallows.
+    m.ai.nav.kind = super::nav::NavKind::Amphibious {
+        prefers_shallow: true,
+    };
     let g = &mut m.ai.goals;
     g.add(0, Float);
     g.add(1, Panic::new(1.25));

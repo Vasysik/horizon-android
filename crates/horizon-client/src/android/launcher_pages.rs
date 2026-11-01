@@ -59,6 +59,7 @@ pub(super) enum Action {
     ChooseCacheBudget(u32),
     ToggleBundled(&'static str),
     WorldFiles,
+    GameFiles,
     WorkerLimit,
     ChooseWorkerLimit(u32),
     PerformanceHints,
@@ -869,6 +870,11 @@ impl Launcher {
                     Action::CacheBudget,
                 ),
                 (
+                    "Game files",
+                    "Open in system Files".into(),
+                    Action::GameFiles,
+                ),
+                (
                     "World files",
                     "Import / copy / back up in Files".into(),
                     Action::WorldFiles,
@@ -1326,6 +1332,11 @@ impl Launcher {
                     "Bundled {id} {}. Applies on Play; settings are in Options > Mods.",
                     if enabled { "disabled" } else { "enabled" }
                 );
+            }
+            Some(Action::GameFiles) => {
+                self.catalog.status = if crate::platform::open_documents(crate::document_store::ROOT) {
+                    "Game files opened. Worlds, mods, packs, shaders and reports are available here."
+                } else { "Open system Files > Horizon Android." }.into();
             }
             Some(Action::WorldFiles) => {
                 let id = crate::document_store::folder_id(self.catalog.config.profile, "worlds");

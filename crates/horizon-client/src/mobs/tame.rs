@@ -940,9 +940,8 @@ pub fn register_cat(m: &mut Mob) {
     );
 }
 /// `Ocelot.registerGoals`, then `reassessTrustingGoals` adds the player
-/// avoidance last. Trust (`Ocelot.mobInteract`, the `Trusting` tag) is not
-/// ported yet, so every ocelot is wild: it flees players and can be scared
-/// off while tempted.
+/// avoidance last. A trusting ocelot (`Ocelot.mobInteract`, the `Trusting`
+/// tag) neither runs from players nor is scared off while tempted.
 pub fn register_ocelot(m: &mut Mob) {
     let food = m.kind.food.clone();
     let mut stroll = Stroll::avoiding_water(0.8);
@@ -974,11 +973,12 @@ impl Goal for OcelotTempt {
     fn flags(&self) -> u8 {
         self.0.flags()
     }
+    // `OcelotTemptGoal.canScare`: `super.canScare() && !isTrusting()`.
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.0.can_use(m, cx)
+        self.scared_unless_trusting(m, |t, m| t.can_use(m, cx))
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.0.can_continue(m, cx)
+        self.scared_unless_trusting(m, |t, m| t.can_continue(m, cx))
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.0.start(m, cx)
@@ -990,7 +990,21 @@ impl Goal for OcelotTempt {
         self.0.every_tick()
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
-        self.0.tick(m, cx)
+        self.scared_unless_trusting(m, |t, m| t.tick(m, cx))
+    }
+}
+impl OcelotTempt {
+    /// Runs `f` with the tempt goal's `can_scare` off for a trusting ocelot.
+    fn scared_unless_trusting<R>(
+        &mut self,
+        m: &mut Mob,
+        f: impl FnOnce(&mut super::goals::Tempt, &mut Mob) -> R,
+    ) -> R {
+        let scare = self.0.can_scare;
+        self.0.can_scare = scare && !m.extra.trusting;
+        let result = f(&mut self.0, m);
+        self.0.can_scare = scare;
+        result
     }
 }
 /// `Ocelot.OcelotAvoidEntityGoal(ocelot, Player.class, 16.0F, 0.8, 1.33)`.
@@ -1014,11 +1028,12 @@ impl Goal for OcelotAvoid {
     fn flags(&self) -> u8 {
         self.0.flags()
     }
+    // `OcelotAvoidEntityGoal.canUse` and `canContinueToUse`: `!isTrusting() && super`.
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.0.can_use(m, cx)
+        !m.extra.trusting && self.0.can_use(m, cx)
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.0.can_continue(m, cx)
+        !m.extra.trusting && self.0.can_continue(m, cx)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.0.start(m, cx)

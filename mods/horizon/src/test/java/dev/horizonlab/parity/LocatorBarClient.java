@@ -269,18 +269,20 @@ public final class LocatorBarClient {
          * this player sent since. A sleep of 50 ms drifts from the server's ticks, and a jump then gets a tick of
          * gravity more or less. Vanilla runs commands between ticks and movement in the tick (its PacketProcessor),
          * Horizon both at the tick's start: the latest reply, not a new sync, is the tick to wait past on both.
+         * Returns how many ticks the server ran: more than one when it caught up on a busy machine.
          */
-        void nextTick() throws Exception {
+        long nextTick() throws Exception {
             long now = gameTime;
             long until = System.nanoTime() + 30_000_000_000L;
             while (gameTime == now) {
                 if (System.nanoTime() > until) {
                     record("error no tick after " + now);
-                    return;
+                    return 0;
                 }
                 Thread.sleep(1);
                 sync();
             }
+            return gameTime - now;
         }
 
         void record(String line) {
@@ -329,7 +331,12 @@ public final class LocatorBarClient {
                 boolean landed = tick > 0 && y == start.y;
                 send(new ServerboundMovePlayerPacket.PosRot(new Vec3(start.x, y, z), at.yRot(), at.xRot(), landed, false));
                 send(net.minecraft.network.protocol.game.ServerboundClientTickEndPacket.INSTANCE);
-                nextTick();
+                long ran = nextTick();
+                // A server catching up runs a tick with no move in it: up to the jab, its copy of the player then
+                // falls a tick of gravity more, and the motion the jab sends says nothing about the jump (#5656).
+                if (ran > 1 && tick <= stabTick) {
+                    record("error the server ran " + ran + " ticks for move " + tick + " of the jump");
+                }
                 if (landed) break;
             }
             position = new PositionMoveRotation(new Vec3(start.x, y, z), Vec3.ZERO, at.yRot(), at.xRot());

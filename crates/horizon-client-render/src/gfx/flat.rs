@@ -63,6 +63,8 @@ pub struct Call {
 
 pub struct Flat {
     pub solid: wgpu::RenderPipeline,
+    /// The solid draws as the water mirror's camera draws them (`fs_solid_mirror`).
+    pub solid_mirror: wgpu::RenderPipeline,
     pub translucent: wgpu::RenderPipeline,
     flatten: wgpu::ComputePipeline,
     compute_layout: wgpu::BindGroupLayout,
@@ -123,10 +125,16 @@ pub const MIN_SECTIONS: usize = if cfg!(target_os = "android") {
     1600
 };
 
-/// Whether flat draws apply: the backend emulates multi-draw, and vertex
-/// shaders can read storage buffers large enough for an index page.
+/// Whether flat draws exist: vertex shaders can read storage buffers large
+/// enough for an index page. A shader pack's terrain draws flat wherever they
+/// do, since only there does it read each quad's face normal and `mc_Entity`;
+/// frames without one draw flat only where `for_vanilla` says.
 /// `HORIZON_FLAT_DRAWS=1` draws every frame flat, `0` none.
 pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
+    if !cfg!(target_os = "android") {
+        return std::env::var("HORIZON_FLAT_DRAWS").as_deref() != Ok("0")
+            && supported(adapter, device);
+    }
     match std::env::var("HORIZON_FLAT_DRAWS").as_deref() {
         Ok("0") => return false,
         Ok("1") => return supported(adapter, device),
@@ -141,15 +149,43 @@ pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
         && supported(adapter, device)
 }
 
-/// Intel Gen11 (Ice Lake) ANV Vulkan driver has broken `first_instance` for instance-step
-/// vertex attributes (#3529), causing terrain sections to be drawn with another section's origin
-/// and flicker.
+/// Whether frames without a shader pack's terrain draw flat: where the backend
+/// emulates multi-draw (Metal, past `MIN_SECTIONS`), on Intel Gen11/Gen12's Vulkan
+/// driver, or with `HORIZON_FLAT_DRAWS=1`. Elsewhere per-section draws stay.
+pub fn for_vanilla(info: &wgpu::AdapterInfo) -> bool {
+    std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1")
+        || info.backend == wgpu::Backend::Metal
+        || is_broken_intel_vulkan(info)
+}
+
+/// Intel Gen11 (Ice Lake) and Gen12 (Tiger Lake, Rocket Lake, Alder Lake,
+/// Raptor Lake) ANV Vulkan drivers have broken `first_instance` for
+/// instance-step vertex attributes (#3529, #4599), causing terrain sections to
+/// be drawn with another section's origin and flicker.
 pub fn is_broken_intel_vulkan(info: &wgpu::AdapterInfo) -> bool {
     info.backend == wgpu::Backend::Vulkan
         && info.vendor == 0x8086
-        && (info.name.contains("ICL")
-            || info.name.contains("Ice Lake")
-            || (info.device >= 0x8a50 && info.device <= 0x8a71))
+        && (matches!(
+            info.device,
+            0x8a50..=0x8a71 // Gen11: Ice Lake
+                | 0x9a40..=0x9a7f // Gen12: Tiger Lake
+                | 0x4c80..=0x4c9a // Gen12: Rocket Lake
+                | 0x4600..=0x46ff // Gen12: Alder Lake (incl. 0x46a8 in #4599)
+                | 0xa700..=0xa7ff // Gen12: Raptor Lake
+        ) || [
+            "ICL",
+            "Ice Lake",
+            "TGL",
+            "Tiger Lake",
+            "RKL",
+            "Rocket Lake",
+            "ADL",
+            "Alder Lake",
+            "RPL",
+            "Raptor Lake",
+        ]
+        .iter()
+        .any(|tag| info.name.contains(tag)))
 }
 
 fn supported(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
@@ -272,7 +308,7 @@ fn plan(
 }
 
 impl Flat {
-    /// `pipeline(layout, label, vertex entry, fragment entry, blend)` builds a
+    /// `pipeline(layout, label, fragment entry, blend, cull)` builds a
     /// terrain pipeline as the per-section ones, without the origin buffer.
     pub fn new(
         device: &wgpu::Device,
@@ -284,6 +320,7 @@ impl Flat {
             &str,
             &str,
             Option<wgpu::BlendState>,
+            Option<wgpu::Face>,
         ) -> wgpu::RenderPipeline,
     ) -> Self {
         let vertex = wgpu::ShaderStages::VERTEX;
@@ -337,13 +374,23 @@ impl Flat {
         let flatten = compute_pipeline(&compute_layout, "flatten");
         let flatten_seen = compute_pipeline(&seen_layout, "flatten_seen");
         let storage_usage = wgpu::BufferUsages::STORAGE;
+        let back = Some(wgpu::Face::Back);
         Self {
-            solid: pipeline(&layout, "Terrain solid (flat)", "fs_solid", None),
+            solid: pipeline(&layout, "Terrain solid (flat)", "fs_solid", None, back),
+            // The mirror flips the winding: its solid terrain culls the front.
+            solid_mirror: pipeline(
+                &layout,
+                "Terrain solid mirrored (flat)",
+                "fs_solid_mirror",
+                None,
+                Some(wgpu::Face::Front),
+            ),
             translucent: pipeline(
                 &layout,
                 "Terrain translucent (flat)",
                 "fs_translucent",
                 Some(wgpu::BlendState::ALPHA_BLENDING),
+                back,
             ),
             flatten,
             compute_layout,
@@ -717,6 +764,23 @@ impl Flat {
             self.bind_page(pass, call.page, &vertices);
             page(pass, call.page);
             pass.draw_indexed(call.first..call.first + call.count, 0, 0..1);
+        }
+    }
+    /// Draws `calls` without their index buffer, `instances` times: a shader pack's geometry
+    /// stage reads the indices itself (`hz_indices`) and stands for one emitted triangle per
+    /// instance.
+    pub fn draw_geometry<'a>(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        calls: &[Call],
+        vertices: impl Fn(u32) -> &'a wgpu::Buffer,
+        page: impl Fn(&mut wgpu::RenderPass<'_>, u32),
+        instances: u32,
+    ) {
+        for call in calls {
+            self.bind_page(pass, call.page, &vertices);
+            page(pass, call.page);
+            pass.draw(call.first..call.first + call.count, 0..instances);
         }
     }
     /// Draws phase 2's calls, as `flatten_phase2` left them.

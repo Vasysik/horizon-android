@@ -315,13 +315,18 @@ impl Game<'_> {
                         .tick(pos, &players, &mut anims.book_random);
                 }
                 Ticker::Shulker { facing } => {
-                    // The lid's push of entities in its way (moveCollidedEntities)
-                    // and the neighbour updates are left to the level.
-                    self.be_anims
-                        .shulkers
-                        .entry(pos)
-                        .or_default()
-                        .tick(pos, facing);
+                    // A window that simulates the world ticks its boxes on the
+                    // server pass (`tick_block_entities`, which also applies
+                    // `moveCollidedEntities`); a server's client only animates
+                    // what it is sent. Either way the collision queries read
+                    // the lids from `World::shulkers` (`sync_shulkers`).
+                    if self.remote.is_some() {
+                        self.be_anims
+                            .shulkers
+                            .entry(pos)
+                            .or_default()
+                            .tick(pos, facing);
+                    }
                 }
                 Ticker::Skull { powered } => {
                     self.be_anims.skulls.entry(pos).or_default().tick(powered);
@@ -773,6 +778,15 @@ impl Game<'_> {
             return None;
         };
         let skin = skull.skin.as_ref()?;
+        // PlayerSkin.Patch: a `texture` override replaces the profile's skin.
+        if let Some(texture) = &skin.texture
+            && let Some(sprite) =
+                skins::patch_skin(texture, &mut self.skin_downloads.borrow_mut(), |location| {
+                    self.gui.atlas.sprites.contains_key(location)
+                })
+        {
+            return Some(sprite);
+        }
         // The texture a packed or resolved `textures` property fetches: the
         // download of a static profile, or the one the services answer for a
         // `Dynamic` (name- or id-only) profile.

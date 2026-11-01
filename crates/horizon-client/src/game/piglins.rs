@@ -191,11 +191,7 @@ impl Game<'_> {
         }
         for i in 0..self.mobs.len() {
             let m = &self.mobs[i];
-            if m.species() != Species::Piglin
-                || !m.alive()
-                || m.is_baby()
-                || m.extra.using_item > 0
-                || m.extra.egg_time > 0
+            if m.species() != Species::Piglin || !m.alive() || m.is_baby() || m.extra.using_item > 0
             {
                 continue;
             }
@@ -204,7 +200,7 @@ impl Game<'_> {
             // sees (eye to eye); GoToWantedItem then walks to it within 9 blocks.
             let w = self.mob_world_base(&[]);
             let eye = Vec3::new(pos.x, m.eye_y(), pos.z);
-            let best = self
+            let nearest = self
                 .dropped
                 .iter()
                 .enumerate()
@@ -217,8 +213,11 @@ impl Game<'_> {
                     let at = Vec3::new(e.position.x, e.position.y + 0.2125, e.position.z);
                     w.line_of_sight(eye, at)
                 })
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .filter(|(_, d)| *d <= 81.0);
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            let loved =
+                nearest.is_some_and(|(j, _)| self.piglin_loved(&self.dropped[j].stack.item));
+            self.admire_seen_item(i, nearest.map(|(_, d)| d), loved);
+            let best = nearest.filter(|(_, d)| *d <= 81.0);
             let Some((j, _)) = best else {
                 self.mobs[i].extra.point = None;
                 continue;
@@ -241,7 +240,7 @@ impl Game<'_> {
             // LivingEntity.onItemPickup, before PiglinAi.pickUpItem splits the stack.
             self.mob_item_pickup_trigger(i, &taken_item);
             let stack = if &*item == "minecraft:gold_nugget" {
-                self.dropped.remove(j).stack
+                self.remove_dropped(j).stack
             } else {
                 let e = &mut self.dropped[j];
                 e.stack.count -= 1;
@@ -250,7 +249,7 @@ impl Game<'_> {
                     ..e.stack.clone()
                 };
                 if e.stack.count == 0 {
-                    self.dropped.remove(j);
+                    self.remove_dropped(j);
                 }
                 one
             };
@@ -268,8 +267,17 @@ impl Game<'_> {
             }
         }
     }
+    /// `StartAdmiringItemIfSeen` and the admire activity's stop behaviours, from the
+    /// distance squared to `NEAREST_VISIBLE_WANTED_ITEM` and whether that item is loved.
+    fn admire_seen_item(&mut self, index: usize, nearest: Option<f64>, loved: bool) {
+        let m = &mut self.mobs[index];
+        let holding = m.extra.off_hand.is_some();
+        m.extra.piglin.admire_seen(holding, nearest, loved);
+    }
     fn start_admiring(&mut self, index: usize, item: std::sync::Arc<str>) {
         let m = &mut self.mobs[index];
+        // The memory is set again, for the item it holds now.
+        m.extra.piglin.seen_admire = 0;
         m.extra.off_hand = Some(item);
         m.extra.using_item = ADMIRE;
         m.extra.point = None;
@@ -284,7 +292,8 @@ impl Game<'_> {
         if m.species() != Species::Piglin
             || m.is_baby()
             || m.extra.using_item > 0
-            || m.extra.egg_time > 0
+            || m.extra.piglin.seen_admire > 0
+            || m.extra.piglin.admire_disabled > 0
             || item != "minecraft:gold_ingot"
         {
             return false;

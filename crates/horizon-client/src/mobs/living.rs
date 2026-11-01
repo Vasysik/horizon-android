@@ -16,6 +16,7 @@ use horizon_world::{
     entity_fluid::{CurrentAccumulator, CurrentTarget},
     fluid::{FluidKind, FluidState},
     fluid_flow::{FluidFlowWorld, flow_at},
+    movement_restitution::{RestitutionInput, RestitutionWorld, restitute_movement},
     registry::BlockStateId,
 };
 
@@ -595,44 +596,35 @@ impl Mob {
             self.check_fall_damage(w, moved, events);
         }
         // Entity.restituteMovementAfterCollisions: the colliding components
-        // bounce back by the entity's bounciness (zero for most mobs, so they
-        // become signed zero). Block bounciness is not modelled for mobs.
+        // bounce back by the entity's bounciness or the block's (a slime
+        // block, a bed), whichever is larger. A mob never sneaks, so nothing
+        // suppresses its bounce there.
         if moved_vertically && vertical || self.horizontal_collision {
-            let v = self.velocity;
-            let restitution = self.entity_bounciness();
-            let mut after = v;
-            if x_hit {
-                after.x = -v.x * restitution;
-            }
-            if z_hit {
-                after.z = -v.z * restitution;
-            }
-            if vertical {
-                let mut restitution = restitution;
-                if self.vertical_collision_below {
-                    // Only a hard enough landing bounces, and never on honey.
-                    let on = (
-                        self.position.x.floor() as i32,
-                        (self.position.y - f64::from(0.2_f32)).floor() as i32,
-                        self.position.z.floor() as i32,
-                    );
-                    if -v.y <= self.gravity()
-                        || restitution > 0.0
-                            && w.block_name(on.0, on.1, on.2) == "minecraft:honey_block"
-                    {
-                        restitution = 0.0;
-                    }
-                }
-                let (compensation, drag) = if restitution > 0.0 {
-                    let portion = moved.y / v.y;
-                    let air_drag = f64::from(self.air_drag());
-                    (portion * self.gravity(), 1.0 + portion * (air_drag - 1.0))
-                } else {
-                    (0.0, 1.0)
-                };
-                after.y = (compensation - v.y) * drag * restitution;
-            }
-            self.velocity = after;
+            // Entity.getOnPos(0.2F): the block whose bounce this move sees.
+            let on = (
+                self.position.x.floor() as i32,
+                (self.position.y - f64::from(0.2_f32)).floor() as i32,
+                self.position.z.floor() as i32,
+            );
+            let input = RestitutionInput {
+                block: w.world.block(on.0, on.1, on.2),
+                collided_x: x_hit,
+                collided_z: z_hit,
+                vertical_collision: vertical,
+                collision_below: self.vertical_collision_below,
+                living: true,
+                resolved_movement: moved,
+                fall_distance: self.fall_distance,
+            };
+            // The port's phases cannot fail for a mob: a block outside the
+            // registry reads as one with no bounce, never as an error.
+            let _ = restitute_movement(
+                &mut MobRestitution {
+                    mob: self,
+                    world: w,
+                },
+                input,
+            );
         }
         // Entity.checkSupportingBlock
         self.supporting = self.supporting_block(w, moved);
@@ -661,7 +653,7 @@ impl Mob {
         if self.on_ground {
             if self.fall_distance > 0.0 {
                 self.trample_farmland(w, events);
-                self.cause_fall_damage(events);
+                self.cause_fall_damage(w, events);
             }
             self.fall_distance = 0.0;
         }
@@ -904,8 +896,29 @@ impl Mob {
     }
     /// The landing of `check_fall_damage`: the whole fall, with no block
     /// softening it.
-    fn cause_fall_damage(&mut self, events: &mut Vec<MobEvent>) {
-        self.cause_fall_damage_from(self.fall_distance, 1.0, events);
+    fn cause_fall_damage(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
+        let pos = self.block_on_legacy(w);
+        self.cause_fall_damage_at(self.fall_distance, 1.0, events, Some((w, pos)));
+    }
+    fn mod_block_fall(
+        &self,
+        contact: Option<(&MobWorld, [i32; 3])>,
+        distance: f64,
+        damage: f32,
+    ) -> f32 {
+        contact.map_or(damage, |(w, p)| {
+            crate::block_contact::fall(
+                crate::block_contact::Contact {
+                    entity: self.id as i32,
+                    kind: &self.kind.id,
+                    block: w.block_name(p[0], p[1], p[2]),
+                    state: w.world.block(p[0], p[1], p[2]),
+                    position: horizon_core::position::BlockPos::new(p[0], p[1], p[2]),
+                },
+                distance,
+                damage,
+            )
+        })
     }
     /// `LivingEntity.causeFallDamage`: a fall of `distance` blocks at `modifier`
     /// (its own landing, or a vehicle's passed on by `propagateFallToPassengers`)
@@ -917,6 +930,15 @@ impl Mob {
         distance: f64,
         modifier: f32,
         events: &mut Vec<MobEvent>,
+    ) {
+        self.cause_fall_damage_at(distance, modifier, events, None);
+    }
+    fn cause_fall_damage_at(
+        &mut self,
+        distance: f64,
+        modifier: f32,
+        events: &mut Vec<MobEvent>,
+        contact: Option<(&MobWorld, [i32; 3])>,
     ) {
         // Breeze.causeFallDamage: a landing from higher than three blocks.
         if self.species() == super::Species::Breeze && distance > 3.0 {
@@ -947,6 +969,7 @@ impl Mob {
         // Entity.causeFallDamage: nothing happens to a fall immune entity, nor
         // to those on it.
         if self.kind.flags.fall_immune {
+            self.mod_block_fall(contact, distance, 0.0);
             return;
         }
         let power = distance + 1.0e-6 - self.kind.safe_fall_distance;
@@ -958,6 +981,7 @@ impl Mob {
             super::Species::Goat => damage -= 10.0,
             _ => {}
         }
+        let damage = f64::from(self.mod_block_fall(contact, distance, damage as f32));
         // LivingEntity.causeFallDamage lets the riders fall first.
         if !horse {
             self.fall_to_passengers(distance, modifier, events);
@@ -1499,5 +1523,213 @@ impl horizon_world::water_splash::WaterSplashWorld for Splash<'_> {
             state: horizon_world::registry::BlockStateId(0),
         });
         Ok(())
+    }
+}
+
+/// `Entity.restituteMovementAfterCollisions`' native inputs, bound for a mob:
+/// its own bounciness attribute, the block's coefficients and the pose of a
+/// mob that never sneaks. The phases themselves are
+/// `movement_restitution::restitute_movement`, the same port the player and
+/// dropped items use.
+struct MobRestitution<'a, 'w> {
+    mob: &'a mut Mob,
+    world: &'a MobWorld<'w>,
+}
+impl<'a, 'w> MobRestitution<'a, 'w> {
+    /// The block's movement data: its coefficients and its bounce tag.
+    fn movement(
+        &self,
+        state: BlockStateId,
+    ) -> Result<horizon_world::movement_properties::MovementBlock, ()> {
+        self.world.movement.get(state).map_err(|_| ())
+    }
+}
+impl RestitutionWorld for MobRestitution<'_, '_> {
+    // The block data cannot fail here: a state the registry does not know
+    // reads as a block with no bounce, never as an error.
+    type Error = ();
+    /// The entity's own suppression is its sneak pose, and a mob never
+    /// sneaks; the block's tag is `block_suppresses_bounce` below.
+    fn suppressing_bounce(&mut self) -> Result<bool, ()> {
+        Ok(false)
+    }
+    /// `getAttributeValue(BOUNCINESS)`: a sulfur cube's.
+    fn entity_bounciness(&mut self) -> Result<f64, ()> {
+        Ok(self.mob.entity_bounciness())
+    }
+    fn velocity(&mut self) -> Result<Vec3, ()> {
+        Ok(self.mob.velocity)
+    }
+    /// `living_motion::effective_gravity`: the gravity attribute, floored to
+    /// 0.01 while a Slow Falling mob is on its way down.
+    fn effective_gravity(&mut self) -> Result<f64, ()> {
+        let gravity = self.mob.gravity();
+        if self.mob.velocity.y <= 0.0 && self.mob.has_effect("minecraft:slow_falling") {
+            Ok(if gravity.is_nan() {
+                gravity
+            } else {
+                gravity.min(0.01)
+            })
+        } else {
+            Ok(gravity)
+        }
+    }
+    fn block_suppresses_bounce(&mut self, state: BlockStateId) -> Result<bool, ()> {
+        Ok(self.movement(state)?.suppresses_bounce)
+    }
+    /// `Entity.getBlockBounciness`: the restitution of the block under the
+    /// entity, so a mob landing on a slime block or a bed bounces too.
+    fn block_bounce_restitution(&mut self, state: BlockStateId) -> Result<f32, ()> {
+        Ok(self.movement(state)?.coefficients.bounce_restitution)
+    }
+    /// `LivingEntity.getAirDrag`.
+    fn air_drag(&mut self) -> Result<f32, ()> {
+        Ok(self.mob.air_drag())
+    }
+    /// `Entity.getBlockPosBelowThatAffectsMyMovement`: `Entity.getOnPos(0.500001F)`,
+    /// which keeps the supporting fence gate's or wall's column. The offset is
+    /// over 0.5, so the fence case never applies.
+    fn movement_support_position(&mut self) -> Result<BlockPos, ()> {
+        let position = self.mob.position;
+        let offset = f64::from(horizon_world::movement_support::MOVEMENT_SUPPORT_OFFSET);
+        let Some(support) = self.mob.supporting else {
+            return Ok(BlockPos::new(
+                position.x.floor() as i32,
+                (position.y - offset).floor() as i32,
+                position.z.floor() as i32,
+            ));
+        };
+        let state = self.world.world.block(support[0], support[1], support[2]);
+        let keeps_column = self
+            .movement(state)
+            .is_ok_and(|b| b.wall || b.coefficients.fence_gate);
+        Ok(if keeps_column {
+            BlockPos::new(support[0], support[1], support[2])
+        } else {
+            BlockPos::new(support[0], (position.y - offset).floor() as i32, support[2])
+        })
+    }
+    /// `BlockLandingRegistry.bounce_on`'s only case is the shelf mushroom's
+    /// bounce sound, which no path plays yet (`landing.rs` binds it for the
+    /// player too and the game's sound code resolves neither).
+    fn bounce_on(&mut self, _: BlockStateId, _: BlockPos, _: f64) -> Result<(), ()> {
+        Ok(())
+    }
+    fn bounce_event(&mut self) -> Result<(), ()> {
+        Ok(())
+    }
+    /// Nothing to mark: the bounce is already the velocity of this tick, and
+    /// the mob tracker sends the position and velocity it reads.
+    fn mark_position_for_sync(&mut self) {}
+    fn set_velocity(&mut self, velocity: Vec3) -> Result<(), ()> {
+        self.mob.velocity = velocity;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// A pig dropped hard onto a block bounces by that block's restitution
+    /// (`Entity.getBlockBounciness`): landing on a slime block sends it back
+    /// up, landing on stone stops it dead.
+    #[test]
+    fn a_mob_bounces_off_a_bouncy_block_and_not_off_stone() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("entity-types.json").exists()
+            || !root.join("movement-properties.nbt").exists()
+        {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let registry = assets.registry;
+        let facts = crate::blocks::BlockFacts::load(&root, registry).unwrap();
+        let motion = crate::motion::MotionResources::load(&root, &assets).unwrap();
+        let data = super::super::MobData::load(&root, &facts);
+        let types = super::super::MobTypes::load(&root).unwrap();
+        let biomes = crate::biome::Biomes::load(&root).unwrap();
+        let items = crate::items::Items::load(
+            &root,
+            registry,
+            &facts,
+            &horizon_world::loot::PackOverlay::NONE,
+        )
+        .unwrap();
+        let collision = crate::collisions::load(&root, registry).unwrap();
+        let lid_openers = std::collections::HashMap::new();
+        for (ground, bounces) in [("minecraft:slime_block", true), ("minecraft:stone", false)] {
+            let air = registry.default_state("minecraft:air").unwrap();
+            let mut world = crate::world::World::new(air, 0);
+            world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
+            );
+            let floor = registry.default_state(ground).unwrap();
+            for x in 0..=1 {
+                for z in 0..=1 {
+                    world.set(x, 0, z, floor).unwrap();
+                }
+            }
+            let w = MobWorld {
+                teams: Default::default(),
+                world: &world,
+                registry,
+                facts: &facts,
+                fluid_tables: &motion.fluids,
+                movement: &motion.blocks,
+                collision: &collision,
+                data: &data,
+                player: None,
+                nearest_player: None,
+                others: &[],
+                leash_boats: &[],
+                others_grid: None,
+                others_index: None,
+                daylight: true,
+                monsters_burn: false,
+                game_time: 1000,
+                day_time: 18000,
+                raining: false,
+                thundering: false,
+                nether: false,
+                block_tags: &items.block_tags,
+                biomes: &biomes,
+                universal_anger: false,
+                mob_griefing: true,
+                mob_drops: true,
+                max_entity_cramming: 24,
+                difficulty: super::super::spawning::LocalDifficulty::new(2, 18000, 0, 0.0),
+                end: false,
+                world_seed: 0,
+                sea_level: 63,
+                items: Some(&items),
+                lid_openers: &lid_openers,
+                mod_effects: None,
+            };
+            let kind = std::sync::Arc::new(types.types["minecraft:pig"].clone());
+            let mut m = Mob::new(1, kind, Vec3::new(0.5, 1.0, 0.5), 0.0);
+            // Falling faster than gravity, so the landing is hard enough.
+            m.velocity = Vec3::new(0.0, -1.0, 0.0);
+            m.do_move(&w, &mut Vec::new());
+            assert!(
+                m.vertical_collision_below,
+                "{ground}: the pig lands on the block"
+            );
+            if bounces {
+                assert!(
+                    m.velocity.y > 0.0,
+                    "{ground}: restitution sends the pig back up, got {}",
+                    m.velocity.y
+                );
+            } else {
+                assert!(
+                    m.velocity.y <= 0.0,
+                    "{ground}: no bounce, got {}",
+                    m.velocity.y
+                );
+            }
+        }
     }
 }

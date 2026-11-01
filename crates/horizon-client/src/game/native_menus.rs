@@ -129,9 +129,14 @@ impl Game<'_> {
         items: Vec<Option<ItemStack>>,
     ) -> Option<i32> {
         let conn = self.native_conn(uuid)?;
-        let host = self.lan.as_mut()?;
-        host.hub
-            .open_native_menu(conn, rows, component_nbt(&title.component()), items)
+        let mut host = self.lan.take()?;
+        // ServerPlayer.openMenu closes the menu that was open.
+        self.guest_close_all(&mut host, conn);
+        let window =
+            host.hub
+                .open_native_menu(conn, rows, component_nbt(&title.component()), items);
+        self.lan = Some(host);
+        window
     }
     /// Replaces what the player's open native menu shows; sent with the
     /// tick's container sync.

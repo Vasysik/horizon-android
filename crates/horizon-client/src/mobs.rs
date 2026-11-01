@@ -387,7 +387,7 @@ impl MobType {
 }
 /// Each type's default attribute values, parsed exactly (serde_json's
 /// default float parsing can miss the nearest double by one ulp).
-fn exact_attributes(bytes: &[u8]) -> HashMap<String, HashMap<String, f64>> {
+pub(crate) fn exact_attributes(bytes: &[u8]) -> HashMap<String, HashMap<String, f64>> {
     use serde_json::value::RawValue;
     type Raw = HashMap<String, Box<RawValue>>;
     let Ok(types) = serde_json::from_slice::<Raw>(bytes) else {
@@ -578,6 +578,8 @@ pub enum DamageKind {
     WindCharge,
     /// `wither`: the wither effect.
     Wither,
+    /// `wither_skull`: an owned wither skull's hit (`DamageSources.witherSkull`).
+    WitherSkull,
 }
 impl DamageKind {
     /// DamageTypeTags.BYPASSES_INVULNERABILITY
@@ -755,7 +757,11 @@ impl Damage {
     pub fn is_projectile(&self) -> bool {
         matches!(
             self.kind,
-            DamageKind::Arrow | DamageKind::Thrown | DamageKind::Fireball | DamageKind::WindCharge
+            DamageKind::Arrow
+                | DamageKind::Thrown
+                | DamageKind::Fireball
+                | DamageKind::WindCharge
+                | DamageKind::WitherSkull
         )
     }
 }
@@ -784,6 +790,14 @@ pub fn anger_left(anger_end: i64, game_time: i64) -> i32 {
 /// Species-specific persistent state (variants, colours, taming, ageing...).
 #[derive(Clone, Debug, Default)]
 pub struct Extra {
+    /// `Rabbit.moreCarrotTicks`: how long it is full of carrots (saved as `MoreCarrotTicks`).
+    pub more_carrot_ticks: i32,
+    /// `Ocelot.DATA_TRUSTING`: it no longer runs from players.
+    pub trusting: bool,
+    /// `Mannequin.DATA_IMMOVABLE`: it neither moves nor falls (`isEffectiveAi` is false).
+    pub immovable: bool,
+    /// `Mannequin.DATA_DESCRIPTION`: the text under its name.
+    pub description: MannequinDescription,
     /// A player's or mannequin's `minecraft:scale`, which scales the whole model
     /// (`LivingEntityRenderState.scale`): the local player's own, and on a
     /// server the others' from their attribute updates; 0 is the default, 1.
@@ -823,6 +837,12 @@ pub struct Extra {
     pub stew_effects: Option<Vec<(Arc<str>, i32)>>,
     /// Dye colour id (sheep wool, collars).
     pub color: u8,
+    /// `Fox.DATA_TRUSTED_ID_0` and `_1`: the players a fox trusts, first free
+    /// slot first, and a third replaces the second (`Fox.addTrustedEntity`).
+    pub trusted: [Option<[i32; 4]>; 2],
+    /// `Animal.LoveCause`: the player who fed this animal into love, which a
+    /// fox's breeding hands to its baby as trust (`Fox.FoxBreedGoal.breed`).
+    pub love_cause: Option<[i32; 4]>,
     pub sheared: bool,
     /// `Mob.canPickUpLoot` (also lets dispensers equip it).
     pub pick_up_loot: bool,
@@ -1168,6 +1188,36 @@ pub struct Mob {
     /// `textures` property resolves to `skin` like a player's.
     pub profile: Option<horizon_protocol::entity_data::Profile>,
 }
+/// A mannequin's `description` and `hide_description` (`Mannequin.updateDescription`):
+/// the default `entity.minecraft.mannequin.label`, none at all, or a component.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum MannequinDescription {
+    #[default]
+    Default,
+    Hidden,
+    Custom(horizon_world::nbt::Tag),
+}
+impl MannequinDescription {
+    /// `Mannequin.getDescription`: the component `DATA_DESCRIPTION` holds, none when hidden.
+    pub fn component(&self) -> Option<horizon_world::nbt::Tag> {
+        match self {
+            Self::Default => Some(horizon_world::nbt::Tag::compound([(
+                "translate",
+                horizon_world::nbt::Tag::String("entity.minecraft.mannequin.label".into()),
+            )])),
+            Self::Hidden => None,
+            Self::Custom(tag) => Some(tag.clone()),
+        }
+    }
+    /// `DATA_DESCRIPTION` as a client reads it.
+    pub fn from_component(tag: Option<&horizon_world::nbt::Tag>) -> Self {
+        match tag {
+            None => Self::Hidden,
+            Some(tag) if Some(tag) == Self::Default.component().as_ref() => Self::Default,
+            Some(tag) => Self::Custom(tag.clone()),
+        }
+    }
+}
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
 pub enum MobEvent {
@@ -1252,6 +1302,16 @@ pub enum MobEvent {
     /// `InfestedMobEffect.onMobHurt`: the mob was hurt while infested.
     Infested {
         mob: u32,
+    },
+    /// `LivingEntity.hurtArmor` (`doHurtEquipment`): a hit that landed on a mob
+    /// wearing body armour (a horse's) leaves the piece owing
+    /// `max(1, damage / 4)` durability. The host applies it: it is the one
+    /// that knows the item's maximum, whether it wears when hurt at all and
+    /// whether a fire hit leaves it alone (`ItemStack.canBeHurtBy`).
+    ArmorHurt {
+        mob: u32,
+        amount: f32,
+        kind: DamageKind,
     },
     /// `OfferFlowerGoal.stop`: the item goes to the target's antenna (saddle)
     /// slot if it is empty, as a guaranteed drop.
@@ -1374,6 +1434,8 @@ pub enum MobEvent {
         mob: u32,
         charged: bool,
         name: crate::text::Text,
+        /// `Entity.isInWater` of the source: `BlockAttached.ignoreExplosion`.
+        in_water: bool,
     },
     /// The centre, the radius and the kind of the mob blowing up (it may be
     /// gone from the list by the time the blast is handled).
@@ -1490,6 +1552,12 @@ pub enum MobEvent {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
     },
+    /// `TurtleEggBlock.decreaseEggs` after a mob's step won its 1 in 100: the
+    /// break sound, then one egg fewer, or the block destroyed when it was
+    /// the last.
+    CrackTurtleEgg {
+        pos: [i32; 3],
+    },
     /// `LivingEntity.startSleeping` / `stopSleeping`: the bed head at `pos`
     /// gets `occupied` (`setBlockAndUpdate`; the foot follows it).
     BedOccupied {
@@ -1513,6 +1581,15 @@ pub enum MobEvent {
         mob: u32,
         pos: [i32; 3],
         progress: i32,
+    },
+    /// `Rabbit.RaidGardenGoal.tick`: the carrots at `pos` become `state` (`setBlock` with
+    /// flags 2); a crop that only lost an age shows the break particles of the state it had
+    /// (`levelEvent(2001, pos, old)`) and fires `BLOCK_CHANGE` for the rabbit.
+    CropRaided {
+        pos: [i32; 3],
+        state: horizon_world::registry::BlockStateId,
+        old: Option<horizon_world::registry::BlockStateId>,
+        mob: u32,
     },
     /// `Level.levelEvent`: the game plays and sends the event.
     LevelEvent {
@@ -2285,6 +2362,14 @@ pub struct MobWorld<'a> {
     pub items: Option<&'a crate::items::Items>,
     /// `ChestBlockEntity.getOpenCount`: the players with each chest open.
     pub lid_openers: &'a HashMap<(i32, i32, i32), i32>,
+    /// What a content mod's effects do, on a server (None on a client).
+    pub mod_effects: Option<&'a dyn ModEffectTicks>,
+}
+/// `MobEffectInstance.tickServer` for a content mod's effect: its
+/// `shouldApplyEffectTickThisTick` and `applyEffectTick`, which the game's
+/// native mods answer. False removes the effect.
+pub trait ModEffectTicks {
+    fn tick_mod_effect(&self, effect: &str, mob: u32, tick_count: i32, amplifier: i32) -> bool;
 }
 /// `Entity.getTeam` of the player and of the mobs on a team.
 #[derive(Clone, Debug, Default)]
@@ -2558,6 +2643,18 @@ impl Mob {
         if self.species() == Species::Armadillo {
             amount = armadillo::reduce_damage(self, amount);
         }
+        // LivingEntity.hurtServer, past its guards: a native mod's hook.
+        if crate::health::hurt_server_canceled(
+            crate::health::Hurting::Mob(self, &source),
+            &mut amount,
+        ) {
+            // Ghast.hurtServer: true for a reflected fireball whatever
+            // super.hurtServer did.
+            return reflected;
+        }
+        if amount < 0.0 {
+            amount = 0.0;
+        }
         // #damages_helmet: falling anvils, blocks and stalactites.
         if matches!(
             source.kind,
@@ -2575,6 +2672,9 @@ impl Mob {
             )
         {
             amount *= 5.0;
+        }
+        if !amount.is_finite() {
+            amount = f32::MAX;
         }
         let (worn, worn_toughness) = self.worn_armor();
         // Shulker.setRawPeekAmount: a closed shell adds the covered armor modifier.
@@ -2646,6 +2746,20 @@ impl Mob {
         // Wolf.actuallyHurt keeps a hit its armor takes out of it.
         if !absorbed && dealt != 0.0 {
             self.record_damage(source, dealt);
+        }
+        // LivingEntity.hurtArmor: the body armour a mob wears (a horse's) wears
+        // on a hit that reached it. A wolf's armour has its own rule
+        // (`Wolf.actuallyHurt`, `hurt_wolf_armor`).
+        if dealt > 0.0
+            && self.extra.head.is_some()
+            && self.species() != Species::Wolf
+            && drops::head_is_body(self.species())
+        {
+            self.outbox.push(MobEvent::ArmorHurt {
+                mob: self.id,
+                amount: dealt,
+                kind: source.kind,
+            });
         }
         // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
         if drops::is_animal(self.species()) {
@@ -3957,5 +4071,52 @@ mod magic_absorb_tests {
         };
         m.damage(20.0, own);
         assert_eq!(m.health, 10.0);
+    }
+}
+
+#[cfg(test)]
+mod armor_hurt_tests {
+    use super::sensor_scan_tests::kind;
+    use super::*;
+    use horizon_core::geometry::Vec3;
+
+    fn horse() -> Mob {
+        let mut kind = kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:horse".into();
+        k.species = Species::Horse;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    /// `LivingEntity.hurtArmor` (`doHurtEquipment`): a hit that lands on a mob
+    /// wearing body armour leaves the piece owing a wear, which the host
+    /// applies with the item's own maximum and fire rules.
+    #[test]
+    fn a_hurt_horse_reports_the_body_armour_wear() {
+        let hit = Damage {
+            kind: DamageKind::MobAttack,
+            attacker: None,
+            from: None,
+        };
+        let mut m = horse();
+        m.extra.head = Some("minecraft:diamond_horse_armor".into());
+        assert!(m.damage(6.0, hit), "the hit landed");
+        let owed = m.outbox.iter().find_map(|e| match e {
+            MobEvent::ArmorHurt { amount, .. } => Some(*amount),
+            _ => None,
+        });
+        assert!(
+            owed.is_some_and(|amount| amount > 0.0),
+            "the worn armour owes a wear: {owed:?}"
+        );
+        // A horse with no body armour owes nothing.
+        let mut bare = horse();
+        assert!(bare.damage(6.0, hit));
+        assert!(
+            !bare
+                .outbox
+                .iter()
+                .any(|e| matches!(e, MobEvent::ArmorHurt { .. }))
+        );
     }
 }

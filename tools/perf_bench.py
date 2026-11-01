@@ -936,8 +936,9 @@ def table(labels):
             loads = [v["mean"] for k, v in m.items() if k.endswith(".load_ms")]
             sec = lambda k: f"{m[k]['mean'] / 1000:.1f}" if k in m else "–"
             mb = lambda k: f"{m[k]['mean']:.0f}" if k in m else "–"
+            mean_load = f"{statistics.mean(loads) / 1000:.1f}" if loads else "–"
             cells.append(f"{sec('startup.title_ms')} / {sec('startup.world_ms')}, "
-                         f"{statistics.mean(loads) / 1000 if loads else 0:.1f}, "
+                         f"{mean_load}, "
                          f"{mb('memory.rss_steady_mb')} / {mb('memory.rss_peak_mb')}, "
                          f"{mb('memory.footprint_steady_mb')} / {mb('memory.footprint_peak_mb')}, "
                          f"{r['conditions'].get('load_avg_1m', '–')}")

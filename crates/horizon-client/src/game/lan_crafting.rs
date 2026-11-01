@@ -21,7 +21,7 @@ pub(super) struct GuestCrafting {
     /// The inventory menu; its grid lives in the hub's guest.
     inventory: Option<Box<Menu>>,
     /// The open crafting table: its window, state id, menu and block.
-    table: Option<(i32, i32, Box<Menu>, [i32; 3])>,
+    pub(super) table: Option<(i32, i32, Box<Menu>, [i32; 3])>,
     /// The open furnace's or brewing stand's window and menu (`AbstractFurnaceMenu`,
     /// `BrewingStandMenu`); its slots live in the block entity and the hub's
     /// container menu keeps the client in sync.
@@ -373,9 +373,10 @@ impl Game<'_> {
         if g.spectator() {
             return;
         }
-        let Some(id) = self
-            .res
-            .stations()
+        // The server menu uses the world's active data-pack tables, the same
+        // tables used by the guest menu below. The base resources can have a
+        // different display registry or placement for an overridden recipe.
+        let Some(id) = world_stations!(self)
             .recipe_index
             .recipe_of_display(p.recipe)
             .map(str::to_owned)
@@ -384,9 +385,7 @@ impl Game<'_> {
         };
         // An unknown or impossible recipe is refused outright.
         if !g.recipe_book.knows(&id)
-            || self
-                .res
-                .recipes()
+            || world_recipes!(self)
                 .placement(&id)
                 .is_none_or(|placement| placement.impossible())
         {
@@ -437,10 +436,8 @@ impl Game<'_> {
 
     /// The guest opened a crafting table (`CraftingTableBlock.getMenuProvider`).
     pub(super) fn lan_open_crafting(&mut self, host: &mut LanHost, conn: u32, pos: [i32; 3]) {
-        self.lan_crafting_closed(host, conn, None);
-        self.lan_station_closed(host, conn, None);
-        // The container it replaces loses its opener.
-        self.guest_container_closed(host, conn);
+        // ServerPlayer.openMenu closes the menu that was open.
+        self.guest_close_all(host, conn);
         let title = horizon_protocol::text::translatable("container.crafting", &[]);
         let Some(window) = host.hub.open_window(conn, "minecraft:crafting", title) else {
             return;
@@ -510,7 +507,7 @@ impl Game<'_> {
 
     /// `CraftingMenu.stillValid`: the block is still a crafting table and the
     /// guest is within reach of it.
-    fn lan_table_valid(&self, g: &Guest, pos: [i32; 3]) -> bool {
+    pub(super) fn lan_table_valid(&self, g: &Guest, pos: [i32; 3]) -> bool {
         let name = &self
             .res
             .facts()

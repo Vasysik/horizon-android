@@ -1071,6 +1071,15 @@ impl Ticker<'_, '_, '_, '_> {
             }
             effects.advance(step);
             let name = &*self.scene.facts.get(state).name;
+            crate::block_contact::emit(crate::block_contact::Event::Inside(
+                crate::block_contact::Contact {
+                    entity: self.p.id as i32,
+                    kind: self.p.kind.id(),
+                    block: name,
+                    state,
+                    position: p,
+                },
+            ));
             if matches!(name, "minecraft:fire" | "minecraft:soul_fire") {
                 // BaseFireBlock.entityInside (its inFire hurt does nothing to arrows).
                 effects.apply(Effect::ClearFreeze);

@@ -522,20 +522,13 @@ impl Game<'_> {
                 .and_then(|s| s.properties.get(key).cloned())
         };
         if name.ends_with("candle") || name.ends_with("candle_cake") {
-            if prop(self, "lit").as_deref() == Some("true") {
-                let at = [
-                    f64::from(pos[0]) + 0.5,
-                    f64::from(pos[1]) + 0.5,
-                    f64::from(pos[2]) + 0.5,
-                ];
-                self.audio.play(
-                    "minecraft:entity.generic.extinguish_fire",
-                    Some(at),
-                    1.0,
-                    1.0,
-                );
-                self.set_state_named(pos, &name, &["candles", "waterlogged"])?;
-            }
+            // AbstractCandleBlock.onExplosionHit: extinguish(null, ...), the
+            // candle's own sound and a block-change game event (the smoke is a
+            // client-level particle, which a server level never draws).
+            self.with_level(|b, level, ticks| {
+                b.extinguish_candle(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
+            });
+            self.process_level_events()?;
             return Ok(());
         }
         if !triggers(&name) {
@@ -557,6 +550,15 @@ impl Game<'_> {
             return Ok(());
         }
         if prop(self, "powered").as_deref() == Some("true") && &*name != "minecraft:lever" {
+            return Ok(());
+        }
+        // FenceGateBlock.onExplosionHit toggles the gate without turning it
+        // towards anyone, as a click would.
+        if name.ends_with("_fence_gate") {
+            self.with_level(|b, level, ticks| {
+                b.fence_gate_exploded(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
+            });
+            self.process_level_events()?;
             return Ok(());
         }
         let at = Vec3::new(

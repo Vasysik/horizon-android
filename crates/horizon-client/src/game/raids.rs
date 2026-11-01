@@ -920,7 +920,7 @@ impl Game<'_> {
         }
         taken.sort_unstable();
         for i in taken.into_iter().rev() {
-            self.dropped.remove(i);
+            self.remove_dropped(i);
         }
         for (id, wave, mob) in new_leaders {
             if let Some(r) = self.raiding.raids.get_mut(id) {

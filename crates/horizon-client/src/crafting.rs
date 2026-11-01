@@ -44,9 +44,72 @@ impl Ingredient {
         match v {
             Value::String(s) => add(s),
             Value::Array(a) => a.iter().filter_map(Value::as_str).for_each(&mut add),
+            Value::Object(o) => return Self::parse_object(o, items),
             _ => return None,
         }
         (!list.is_empty()).then(|| Self::of(list))
+    }
+    /// NeoForge's ingredient types (`NeoForgeRegistries.Keys.INGREDIENT_TYPES`),
+    /// the standard shapes mods' recipes carry, each resolved to the flat item
+    /// list it matches. A kind outside these still fails the file: a mod's
+    /// own ingredient types come with their own hook, not the loader.
+    fn parse_object(o: &serde_json::Map<String, Value>, items: &Items) -> Option<Self> {
+        // Current NeoForge marks a custom ingredient with
+        // `neoforge:ingredient_type`; `type` is the older packs' key.
+        let kind = o
+            .get("neoforge:ingredient_type")
+            .or_else(|| o.get("type"))?
+            .as_str()?;
+        let children = || {
+            o.get("children")
+                .or_else(|| o.get("ingredients"))
+                .and_then(Value::as_array)
+        };
+        let kept = match kind {
+            // `CompoundIngredient`: any of its children matching the stack
+            // is enough — the union of their items.
+            "neoforge:compound" => {
+                let subs: Vec<Self> = children()?
+                    .iter()
+                    .map(|s| Self::parse(s, items))
+                    .collect::<Option<_>>()?;
+                let mut seen = Vec::new();
+                for sub in &subs {
+                    for item in &sub.1 {
+                        if !seen.contains(item) {
+                            seen.push(item.clone());
+                        }
+                    }
+                }
+                seen
+            }
+            // `IntersectionIngredient`: every child must match the same
+            // stack — the items all of them name.
+            "neoforge:intersection" => {
+                let subs: Vec<Self> = children()?
+                    .iter()
+                    .map(|s| Self::parse(s, items))
+                    .collect::<Option<_>>()?;
+                subs.first()?
+                    .1
+                    .iter()
+                    .filter(|i| subs[1..].iter().all(|s| s.0.contains(*i)))
+                    .cloned()
+                    .collect()
+            }
+            // The base's items without the subtracted's.
+            "neoforge:difference" => {
+                let base = Self::parse(o.get("base")?, items)?;
+                let gone = Self::parse(o.get("subtracted")?, items)?;
+                base.1
+                    .iter()
+                    .filter(|i| !gone.0.contains(*i))
+                    .cloned()
+                    .collect()
+            }
+            _ => return None,
+        };
+        (!kept.is_empty()).then(|| Self::of(kept))
     }
     pub fn test(&self, stack: &ItemStack) -> bool {
         self.0.contains(&*stack.item)
@@ -1252,6 +1315,18 @@ impl Recipes {
         let mut meta = HashMap::new();
         // Vanilla's recipes by bare name, then content mods' as `<ns>:<name>`.
         let mut sources: Vec<(String, Vec<u8>)> = Vec::new();
+        // NeoForge's load conditions: `mod_loaded` asks which mods' data is
+        // in this root (`minecraft`, always, and the content mods').
+        // `mod_loaded` asks which mods are loaded, not which namespaces
+        // they own: a mod that also owns a namespace doesn't make that
+        // namespace another mod.
+        let mods: Vec<String> = {
+            let mut mods = horizon_items::content_namespaces::mod_ids(root);
+            if !mods.iter().any(|m| m == "minecraft") {
+                mods.push("minecraft".to_owned());
+            }
+            mods
+        };
         for (name, p) in recipe_files(&root.join("data/minecraft/recipe"))? {
             sources.push((name, fs::read(&p)?));
         }
@@ -1291,6 +1366,13 @@ impl Recipes {
                     continue;
                 }
             };
+            // A file whose load conditions don't hold is silently absent,
+            // as NeoForge's ICondition leaves it out of the manager.
+            if !horizon_world::conditions::conditions_hold(&v, &|id: &str| {
+                mods.iter().any(|m| m == id)
+            }) {
+                continue;
+            }
             if let Some(kind) = custom_type(&v) {
                 let id = if name.contains(':') {
                     name
@@ -1759,6 +1841,99 @@ mod tests {
         }
     }
 
+    /// A mod's recipe whose ingredient is one of NeoForge's standard shapes
+    /// loads and carries the resolved items, where the plain string parser
+    /// used to drop the file whole.
+    #[test]
+    fn a_neoforge_ingredient_recipe_loads() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-neo-ingredient-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/minecraft/recipe")).unwrap();
+        fs::create_dir_all(root.join("data/mymod/recipe")).unwrap();
+        fs::write(
+            root.join(horizon_items::content_namespaces::MARKER),
+            br#"["mymod"]"#,
+        )
+        .unwrap();
+        let recipe = r##"{
+            "type": "minecraft:crafting_shapeless",
+            "ingredients": [
+                {"neoforge:ingredient_type": "neoforge:compound",
+                 "children": ["minecraft:oak_planks", "minecraft:birch_planks"]},
+                {"type": "neoforge:difference",
+                 "base": ["minecraft:oak_planks", "minecraft:birch_planks"],
+                 "subtracted": "minecraft:birch_planks"}
+            ],
+            "result": {"id": "minecraft:stick", "count": 4}
+        }"##;
+        fs::write(root.join("data/mymod/recipe/treated.json"), recipe).unwrap();
+        let items = Items::for_tests(HashMap::new());
+        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+        assert_eq!(recipes.crafting.len(), 1);
+        assert_eq!(recipes.crafting[0].0, "mymod:treated");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// NeoForge's standard ingredient shapes resolve to their flat item
+    /// lists; a kind the loader doesn't know still fails the file.
+    #[test]
+    fn neoforge_ingredient_shapes_parse() {
+        let mut tags = HashMap::new();
+        tags.insert(
+            "minecraft:planks".to_owned(),
+            ["minecraft:oak_planks", "minecraft:birch_planks"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<HashSet<_>>(),
+        );
+        let items = Items::for_tests(tags);
+        let json = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        // Compound (`CompoundIngredient`): any child matching is enough —
+        // the union of their items, a tag beside an item gives both.
+        let union = Ingredient::parse(
+            &json(r##"{"neoforge:ingredient_type":"neoforge:compound","children":["#minecraft:planks","minecraft:stone"]}"##),
+            &items,
+        )
+        .unwrap();
+        // The tag's items come from a HashSet: their order is not fixed.
+        let mut all = union.1.clone();
+        all.sort();
+        assert_eq!(
+            all,
+            [
+                "minecraft:birch_planks",
+                "minecraft:oak_planks",
+                "minecraft:stone"
+            ]
+        );
+        // Intersection: every child must match — only the items all name.
+        let both = Ingredient::parse(
+            &json(r##"{"type":"neoforge:intersection","children":["#minecraft:planks","minecraft:oak_planks"]}"##),
+            &items,
+        )
+        .unwrap();
+        assert_eq!(both.1, ["minecraft:oak_planks"]);
+        // Difference: the base without the subtracted.
+        let no_oak = Ingredient::parse(
+            &json(r##"{"type":"neoforge:difference","base":"#minecraft:planks","subtracted":"minecraft:oak_planks"}"##),
+            &items,
+        )
+        .unwrap();
+        assert_eq!(no_oak.1, ["minecraft:birch_planks"]);
+        // An empty intersection and an unknown kind fail the file, as today.
+        let empty = Ingredient::parse(
+            &json(
+                r#"{"type":"neoforge:intersection","children":["minecraft:oak_planks","minecraft:birch_planks"]}"#,
+            ),
+            &items,
+        );
+        assert!(empty.is_none());
+        let unknown =
+            Ingredient::parse(&json(r#"{"type":"mymod:aspect","aspect":"fire"}"#), &items);
+        assert!(unknown.is_none());
+    }
+
     fn ingredient(items: &[&str]) -> Ingredient {
         Ingredient::of(items.iter().map(|s| (*s).to_owned()).collect())
     }
@@ -1926,6 +2101,66 @@ mod tests {
         let grid = [Some(ItemStack::new("minecraft:flint", 1)), None, None, None];
         let (_, made) = recipes.find(&grid, 2).unwrap();
         assert_eq!((&*made.item, made.count), ("minecraft:stick", 1));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A recipe whose `neoforge:conditions` hold loads, one whose don't is
+    /// silently absent, from the root's own files and a pack's alike.
+    #[test]
+    fn load_conditions_gate_recipes() {
+        let root = std::env::temp_dir().join(format!("horizon-conditions-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("data/minecraft/recipe")).unwrap();
+        fs::write(
+            root.join(horizon_items::content_namespaces::MARKER),
+            br#"["mymod"]"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(horizon_items::content_namespaces::MOD_IDS_MARKER),
+            br#"["mymod"]"#,
+        )
+        .unwrap();
+        let file = |conditions: &str, tag: &str| {
+            format!(
+                r#"{{"type":"mymod:crusher","tag":"{tag}","neoforge:conditions":{conditions}}}"#
+            )
+            .into_bytes()
+        };
+        // `mymod` is in the root, `ic2` is not.
+        fs::write(
+            root.join("data/minecraft/recipe/yes.json"),
+            file(r#"[{"type":"neoforge:mod_loaded","modid":"mymod"}]"#, "yes"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("data/minecraft/recipe/no.json"),
+            file(r#"[{"type":"neoforge:mod_loaded","modid":"ic2"}]"#, "no"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("data/minecraft/recipe/inverted.json"),
+            file(
+                r#"[{"type":"neoforge:not","value":{"type":"neoforge:mod_loaded","modid":"ic2"}}]"#,
+                "inverted",
+            ),
+        )
+        .unwrap();
+        let items = Items::for_tests(HashMap::new());
+        let recipes = Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+        let ids = &recipes.custom["mymod:crusher"];
+        assert_eq!(
+            ids.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["minecraft:inverted", "minecraft:yes"]
+        );
+        // A pack's gated file answers the same gate.
+        let packs = [(
+            "recipe/minecraft:pack_yes".to_owned(),
+            vec![file(r#"[{"type":"neoforge:true"}]"#, "pack_yes")],
+        )];
+        let recipes = Recipes::load(&root, &items, &PackOverlay { files: &packs }).unwrap();
+        let ids = &recipes.custom["mymod:crusher"];
+        assert!(ids.iter().any(|r| r.id == "minecraft:pack_yes"));
         let _ = fs::remove_dir_all(&root);
     }
     #[test]

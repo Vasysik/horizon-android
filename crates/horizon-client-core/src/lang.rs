@@ -69,6 +69,9 @@ impl ResourceSource for Bundled {
             "assets/horizon/lang/uk_ua.json" => {
                 include_str!("../../horizon-client/assets/horizon/lang/uk_ua.json")
             }
+            "assets/horizon/lang/tr_tr.json" => {
+                include_str!("../../horizon-client/assets/horizon/lang/tr_tr.json")
+            }
             "assets/horizon/lang/es_es.json"
             | "assets/horizon/lang/es_ar.json"
             | "assets/horizon/lang/es_cl.json"
@@ -309,6 +312,8 @@ mod tests {
             uk.get("horizon.options.on_screen_keyboard"),
             Some("Екранна клавіатура")
         );
+        let tr = Language::load(&[&empty], "tr_tr");
+        assert_eq!(tr.get("horizon.options.controller"), Some("Kontrolcü"));
         let es = Language::load(&[&empty], "es_es");
         assert_eq!(es.get("horizon.options.controller"), Some("Mando"));
         let es_ve = Language::load(&[&empty], "es_ve");

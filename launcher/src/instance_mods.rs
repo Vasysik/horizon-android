@@ -34,6 +34,7 @@ pub(super) struct ModRow {
     entry: Option<installed::Entry>,
     /// The icon its jar names, scaled to the row (`images::ROW`) and decoded once by the UI.
     icon: Option<Arc<gpui::Image>>,
+    native: Option<native_status::Installed>,
 }
 
 /// Modrinth projects' icon URLs by project id, kept on disk beside the image cache so the icons
@@ -61,6 +62,7 @@ pub(super) struct InstanceMods {
     /// shown list changes (its length and the filter).
     cull: cull::Cull,
     shown: (usize, String),
+    fingerprint: String,
 }
 
 /// The mods of the instance at `home`: a Java one's jars in `mods/` (on or off), a Horizon one's
@@ -100,6 +102,7 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
                         on,
                         entry,
                         icon,
+                        native: None,
                     }
                 })
             })
@@ -114,9 +117,25 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
                 on: horizon::mod_id(&e).is_some_and(|id| java::is_enabled(home, id)),
                 entry: Some(e),
                 icon: None,
+                native: None,
             })
             .collect()
     };
+    if !java_instance {
+        rows.extend(
+            native_status::untracked(home)
+                .into_iter()
+                .map(|native| ModRow {
+                    file: native.file.clone(),
+                    name: native.id.clone(),
+                    version: native.version.clone(),
+                    on: java::is_enabled(home, &native.id),
+                    entry: None,
+                    icon: None,
+                    native: Some(native),
+                }),
+        );
+    }
     rows.sort_by_key(|r| r.name.to_lowercase());
     rows
 }
@@ -129,6 +148,11 @@ fn switch_jar(home: &Path, file: &str, on: bool) -> Result<(), String> {
 }
 
 impl Launcher {
+    pub(super) fn instance_mods_changed(&mut self) {
+        self.instance_mods.fresh = false;
+        self.instance_mods.cull.reset();
+    }
+
     /// Whether the selected instance has mods to show: Horizon's always, a Java one with a loader.
     pub(super) fn has_mods_tab(&self) -> bool {
         self.selected_instance()
@@ -153,6 +177,15 @@ impl Launcher {
             m.fresh = false;
         }
         m.was_busy = busy;
+        let fingerprint = if java_instance {
+            String::new()
+        } else {
+            native_status::fingerprint(&home, None)
+        };
+        if m.fingerprint != fingerprint {
+            m.fingerprint = fingerprint;
+            m.fresh = false;
+        }
         if m.fresh || m.reading {
             return;
         }
@@ -318,7 +351,7 @@ impl Launcher {
             .value(Field::InstanceModsFilter)
             .trim()
             .to_lowercase();
-        let field = self.field(Field::InstanceModsFilter, "Filter installed", 240., cx);
+        let field = self.field(Field::InstanceModsFilter, tr("Filter installed"), 240., cx);
         let m = &self.instance_mods;
         let rows: Vec<ModRow> = m
             .list
@@ -375,6 +408,14 @@ impl Launcher {
                 |i| rule(self.mod_row(rows[i].clone(), busy, cx).into_any_element()),
             )
         };
+        let native = self.mods.java.is_none()
+            && self.instance_mods.list.iter().any(|r| {
+                r.native.is_some()
+                    || r.entry
+                        .as_ref()
+                        .is_some_and(|e| native_status::is_native_file(&e.file))
+            });
+        let build = native.then(|| self.native_build(cx)).flatten();
         let card = plate::cut(
             night::PIXEL_CORNER,
             2,
@@ -385,6 +426,7 @@ impl Launcher {
         .flex()
         .flex_col()
         .child(header)
+        .children(build)
         .child(body);
         (
             actions,
@@ -401,16 +443,33 @@ impl Launcher {
         let t = self.theme;
         let n = t.night;
         let icon = self.mod_icon(row.entry.as_ref(), row.icon.clone(), 40.);
-        let source = match &row.entry {
-            Some(e) if e.dependency => trf(
-                "{source} · needed by another mod",
-                &[("source", e.source.label())],
-            ),
-            Some(e) => e.source.label().to_string(),
-            None => trf(
-                "Local file · {file}",
-                &[("file", row.file.trim_start_matches("mods/"))],
-            ),
+        let controls = if let Some(native) = &row.native {
+            self.native_mod_actions(native, busy, cx)
+        } else {
+            let switch_row = row.clone();
+            div().child(
+                switch(format!("mod-switch-{}", row.file), row.on, &t).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        this.switch_mod(&switch_row);
+                        cx.notify();
+                    },
+                )),
+            )
+        };
+        let source = if let Some(origin) = row.native.as_ref().and_then(|n| n.origin.as_ref()) {
+            trf("from GitHub: {source}", &[("source", &origin.label())])
+        } else {
+            match &row.entry {
+                Some(e) if e.dependency => trf(
+                    "{source} · needed by another mod",
+                    &[("source", e.source.label())],
+                ),
+                Some(e) => e.source.label().to_string(),
+                None => trf(
+                    "Local file · {file}",
+                    &[("file", row.file.trim_start_matches("mods/"))],
+                ),
+            }
         };
         let update = row.entry.as_ref().and_then(|e| {
             let key = (e.source, e.project.clone());
@@ -440,7 +499,6 @@ impl Launcher {
                 })),
             })
         });
-        let switch_row = row.clone();
         div()
             .flex()
             .items_center()
@@ -474,20 +532,51 @@ impl Launcher {
                     ),
             )
             .children(update)
-            .child(
-                switch(format!("mod-switch-{}", row.file), row.on, &t).on_click(cx.listener(
-                    move |this, _: &ClickEvent, _, cx| {
-                        this.switch_mod(&switch_row);
-                        cx.notify();
-                    },
-                )),
-            )
+            .child(controls)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn horizon_mods_include_local_native_files_without_duplicating_registry_rows() {
+        let home =
+            std::env::temp_dir().join(format!("instance-native-mods-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(native_mods::INSTALLED)).unwrap();
+        for id in ["local", "registry"] {
+            std::fs::write(
+                home.join(native_mods::INSTALLED)
+                    .join(format!("{id}.hnmod")),
+                b"unreadable",
+            )
+            .unwrap();
+        }
+        let entry: installed::Entry = serde_json::from_value(serde_json::json!({"source":"horizon","project":"registry","slug":"registry","title":"Registry mod","kind":"mod","version":"1","number":"1","file":"horizon-native-mods/registry.hnmod","checksum":"","page":""})).unwrap();
+        installed::Installed {
+            entries: vec![entry],
+        }
+        .save(&home)
+        .unwrap();
+        java::set_enabled(&home, "local", false).unwrap();
+        java::set_enabled(&home, "registry", true).unwrap();
+        let rows = read(&home, false);
+        let seen: Vec<_> = rows
+            .iter()
+            .map(|r| (r.name.as_str(), r.on, r.native.is_some()))
+            .collect();
+        assert_eq!(
+            seen,
+            [("local", false, true), ("Registry mod", true, false)]
+        );
+        assert!(
+            read(&home, true).is_empty(),
+            "native mods stay out of Java instances"
+        );
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn a_java_instance_lists_its_jars_on_and_off() {

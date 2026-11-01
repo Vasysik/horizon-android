@@ -159,7 +159,9 @@ impl Capability {
             Capability::Hud => "draw text on your screen",
             Capability::Storage => "save its own settings to disk",
             Capability::Command => "run commands as you, with your permissions",
-            Capability::Registries => "add blocks, items and mob effects to your worlds",
+            Capability::Registries => {
+                "add blocks, items, mob effects and entity types to your worlds"
+            }
             Capability::Ui => "show its own screens and a settings page",
             Capability::Render => "draw on your screen, shake and zoom the camera",
             Capability::Input => {

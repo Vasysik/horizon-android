@@ -568,7 +568,6 @@ impl Game<'_> {
     pub(super) fn player_model_shown(&self) -> bool {
         // A shader pack's shadow pass draws the player in first person too (shadowPlayer).
         (self.own_body_in_view() || self.pack_shadow_casters.1)
-            && !self.spectator()
             && self
                 .player
                 .as_ref()
@@ -605,17 +604,22 @@ impl Game<'_> {
         let Some(m) = self.player_model.as_ref() else {
             return;
         };
-        let light = self.world.light(
-            m.position.x.floor() as i32,
-            (m.position.y + 1.62).floor() as i32,
-            m.position.z.floor() as i32,
-        );
+        let eye = self
+            .player
+            .as_ref()
+            .map_or_else(|| m.eye_height(), |p| f64::from(p.dimensions.eye_height));
+        let probe = entity_light_block(m.position, m.extra.crouching, eye);
+        let light = self.world.light(probe[0], probe[1], probe[2]);
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let start = out.len();
         let body = self.own_body_visible();
-        let render = if body {
+        // A spectator still draws its own model in third person: the poses'
+        // visibility (set by player_model_visibility) hides body parts, and
+        // translucent_body marks the body OIT for the ghostly look. Only first
+        // person and dead players skip it.
+        let render = if body || self.spectator() {
             horizon_client::mobs::render::render_with
         } else {
             horizon_client::mobs::render::render_layers
@@ -716,8 +720,9 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let mut verts = Vec::new();
-        // The same render state as in the world: an invisible body is not drawn.
-        let render = if self.own_body_visible() {
+        // A spectator preview still draws its own model: the poses'
+        // visibility hides body parts, leaving the head and its layers.
+        let render = if self.own_body_visible() || self.spectator() {
             horizon_client::mobs::render::render_with
         } else {
             horizon_client::mobs::render::render_layers
@@ -1161,6 +1166,18 @@ fn turn_rotation(yaw: f32, pitch: f32, pitch_o: Option<f32>, xo: f64, yo: f64) -
     rotation
 }
 
+/// `EntityRenderer.getPackedLightCoords` (`Entity.getLightProbePosition`):
+/// the block containing the entity's eye position, undoing
+/// `AvatarRenderer.getRenderOffset`'s 0.125 crouch drop on the model position.
+pub(super) fn entity_light_block(position: Vec3, crouching: bool, eye_height: f64) -> [i32; 3] {
+    let y = position.y + if crouching { 0.125 } else { 0.0 } + eye_height;
+    [
+        position.x.floor() as i32,
+        y.floor() as i32,
+        position.z.floor() as i32,
+    ]
+}
+
 /// The player's model's old and new positions for a tick: the player's old
 /// (`Entity.xo`, `yo`, `zo`) and new positions, each 0.125 lower while
 /// crouching. The model is the player itself in vanilla, so
@@ -1389,6 +1406,7 @@ mod preview_tests {
             entity_tags: Default::default(),
             villager_hats: Default::default(),
             pois: Default::default(),
+            species_placements: Default::default(),
         };
         let draw = |body: bool| {
             let mut out = Vec::new();
@@ -1445,5 +1463,37 @@ mod preview_tests {
             assert!(quads.iter().any(|q| q.2[0][0] >= 0.5));
             assert!(quads.windows(2).all(|q| q[0].0 <= q[1].0));
         }
+    }
+
+    #[test]
+    fn sleeping_player_light_probe_stays_below_a_two_block_ceiling() {
+        // In a 2-block-high room (bed at y = 64, air at 65, solid ceiling at 66),
+        // setPosToBed places the sleeper at y = 64 + 0.5625 + 0.125 = 64.6875.
+        let in_bed = Vec3::new(10.5, 64.0 + 0.5625 + 0.125, -4.5);
+        let sleeping_eye = f64::from(Pose::Sleeping.dimensions(1.0).eye_height);
+        assert_eq!(
+            entity_light_block(in_bed, false, sleeping_eye),
+            [10, 64, -5]
+        );
+        // Using the standing eye height (1.62) while in bed probed y = 66,
+        // inside the ceiling block where light is 0 (#5121).
+        let standing_eye = f64::from(Pose::Standing.dimensions(1.0).eye_height);
+        assert_eq!(
+            entity_light_block(in_bed, false, standing_eye),
+            [10, 66, -5]
+        );
+        // A crouching player on a 7-layer snow block (feet y = 65.75, model y
+        // dropped by 0.125, crouch eye 1.27) still probes at real y + eye = 67.02.
+        let (_, crouch_model) = player_model_positions(
+            Vec3::new(10.5, 65.75, -4.5),
+            Vec3::new(10.5, 65.75, -4.5),
+            true,
+            true,
+        );
+        let crouch_eye = f64::from(Pose::Crouching.dimensions(1.0).eye_height);
+        assert_eq!(
+            entity_light_block(crouch_model, true, crouch_eye),
+            [10, 67, -5]
+        );
     }
 }

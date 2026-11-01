@@ -268,9 +268,9 @@ impl Servers {
     }
 
     /// Which field has the keyboard, read every frame.
-    pub(super) fn note_focus(&mut self, window: &mut Window) {
+    pub(super) fn note_focus(&mut self, window: &mut Window, cx: &mut App) {
         if let Some(h) = self.focus_soon.take().and_then(|f| self.focus.get(&f)) {
-            window.focus(h);
+            window.focus(h, cx);
         }
         self.focused = Field::ALL
             .into_iter()
@@ -925,7 +925,7 @@ impl Launcher {
                     this.servers.selected = None;
                 }
                 if let Some(h) = this.servers.focus.get(&f) {
-                    window.focus(h);
+                    window.focus(h, cx);
                 }
                 cx.notify();
             }))
@@ -950,7 +950,7 @@ impl Launcher {
                             this.servers.create = None;
                         }
                         this.instance_escape();
-                        window.blur();
+                        window.blur(cx);
                     }
                     // Tab and the rest go on to the window: Tab moves the focus.
                     Key::Pass => return,
@@ -3043,7 +3043,7 @@ impl Launcher {
                 .px(px(32.))
                 .py(px(24.))
                 .bg(t.page.opacity(0.92))
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .on_scroll(|_, _, cx| cx.stop_propagation())
                 .occlude()
                 .child(card),
         )

@@ -243,7 +243,8 @@ impl DebugEntries {
     /// `SerializedOptions.CODEC`: an optional `profile` name and an optional
     /// `custom` map of identifiers to statuses.
     fn parse(text: &str) -> Option<(Option<Profile>, BTreeMap<String, Status>)> {
-        let json: serde_json::Value = serde_json::from_str(text).ok()?;
+        let mut json: serde_json::Value = serde_json::from_str(text).ok()?;
+        upgrade(&mut json);
         let object = json.as_object()?;
         let profile = match object.get("profile") {
             Some(name) => Some(Profile::parse(name.as_str()?)?),
@@ -350,6 +351,54 @@ impl DebugEntries {
     }
 }
 
+/// `DataFixTypes.DEBUG_PROFILE.wrapCodec(..., 4649)`: a file without a
+/// `DataVersion` is from 4649, the version the file first had.
+const FIRST_VERSION: i64 = 4649;
+
+/// The `DataFixers` rules for `References.DEBUG_PROFILE`, each run when the
+/// file is older than its schema, on the `custom` map.
+fn upgrade(json: &mut serde_json::Value) {
+    let version = json
+        .get("DataVersion")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(FIRST_VERSION);
+    let Some(custom) = json.get_mut("custom").and_then(|c| c.as_object_mut()) else {
+        return;
+    };
+    // 4650 DebugProfileOverlayReferenceFix: the status `inF3` is `inOverlay`.
+    if version < 4650 {
+        for status in custom.values_mut() {
+            if status.as_str() == Some("inF3") {
+                *status = "inOverlay".into();
+            }
+        }
+    }
+    // 4763 DebugProfileLookingAtSplitFix: the targeted block and fluid
+    // entries became their `_state` halves; a key already there wins.
+    if version < 4763 {
+        for (old, new) in [
+            (
+                "minecraft:looking_at_block",
+                "minecraft:looking_at_block_state",
+            ),
+            (
+                "minecraft:looking_at_fluid",
+                "minecraft:looking_at_fluid_state",
+            ),
+        ] {
+            if let Some(status) = custom.remove(old) {
+                custom.entry(new).or_insert(status);
+            }
+        }
+    }
+    // 5001 DebugProfileRenameEntryFix: `post_effect` is `post_effects`.
+    if version < 5001
+        && let Some(status) = custom.remove("minecraft:post_effect")
+    {
+        custom.insert("minecraft:post_effects".into(), status);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,6 +457,33 @@ mod tests {
         std::fs::write(dir.join("debug-profile.json"), "{\"profile\":\"nope\"}").unwrap();
         assert!(DebugEntries::load(&dir).is_using_profile(Profile::Default));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn old_files_are_upgraded_by_their_data_version() {
+        // No DataVersion: every fix runs.
+        let (_, custom) = DebugEntries::parse(
+            r#"{"custom":{"minecraft:fps":"inF3","minecraft:looking_at_block":"alwaysOn",
+            "minecraft:looking_at_fluid":"inF3","minecraft:looking_at_fluid_state":"never",
+            "minecraft:post_effect":"alwaysOn"}}"#,
+        )
+        .unwrap();
+        assert_eq!(custom["minecraft:fps"], Status::InOverlay);
+        assert_eq!(custom["minecraft:looking_at_block_state"], Status::AlwaysOn);
+        assert_eq!(custom["minecraft:looking_at_fluid_state"], Status::Never);
+        assert_eq!(custom["minecraft:post_effects"], Status::AlwaysOn);
+        assert!(!custom.contains_key("minecraft:looking_at_block"));
+        assert!(!custom.contains_key("minecraft:post_effect"));
+        // From 4763 on, only the post effects rename is left.
+        let (_, custom) = DebugEntries::parse(
+            r#"{"DataVersion":4763,"custom":{"minecraft:looking_at_block":"alwaysOn",
+            "minecraft:post_effect":"alwaysOn"}}"#,
+        )
+        .unwrap();
+        assert_eq!(custom["minecraft:looking_at_block"], Status::AlwaysOn);
+        assert_eq!(custom["minecraft:post_effects"], Status::AlwaysOn);
+        // `inF3` is no status any more once the file is past 4650.
+        assert!(DebugEntries::parse(r#"{"DataVersion":4650,"custom":{"fps":"inF3"}}"#).is_none());
     }
 
     #[test]

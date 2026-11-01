@@ -50,7 +50,10 @@ def stamp(check):
             if hook["name"] in names:
                 raise ValueError(f"duplicate hook: {hook['name']}")
             names.add(hook["name"])
-            catalog["hooks"].append({"name": hook["name"], "version": 1, "target": hook["target"]})
+            entry = {"name": hook["name"], "version": 1, "target": hook["target"]}
+            # The catalog's optional facts about a hook travel with it.
+            entry.update({k: hook[k] for k in ("neoforge", "side", "cancellable") if k in hook})
+            catalog["hooks"].append(entry)
         rust_summary = fragment["rust_summary"].replace(marker, str(version))
         doc_summary = fragment["doc_summary"].replace(marker, str(version))
         if not rust_summary or not doc_summary:

@@ -209,7 +209,7 @@ pub struct ItemTags {
 
 /// `Mob.aiStep`'s looting gate, `Mob.wantsToPickUp` with `canHoldItem`, for
 /// the species whose pickup ends in the base `Mob.pickUpItem` (the equip of
-/// `equipItemIfPossible`). A villager, piglin, allay, panda, sulfur cube,
+/// `equipItemIfPossible`; a piglin brute takes only a golden axe). A villager, piglin, allay, panda, sulfur cube,
 /// fox, dolphin or pillager overrides the pickup itself and has its own loop
 /// elsewhere; an illager's `Raider.pickUpItem` puts the ominous banner on the
 /// head, which Horizon does not model, so they answer `false` here too.
@@ -227,8 +227,13 @@ pub fn wants_to_pick_up(
             | Species::Drowned
             | Species::ZombieVillager
             | Species::ZombifiedPiglin
+            | Species::PiglinBrute
     ) && !is_skeleton(species)
     {
+        return false;
+    }
+    // `PiglinBrute.wantsToPickUp`: only a golden axe, then `Mob.wantsToPickUp`.
+    if species == Species::PiglinBrute && item != "minecraft:golden_axe" {
         return false;
     }
     // `AbstractSkeleton.wantsToPickUp` and `Drowned.wantsToPickUp`.
@@ -460,6 +465,25 @@ mod tests {
             false,
             "minecraft:iron_sword",
             tags(false, false, true)
+        ));
+        // `PiglinBrute.wantsToPickUp`: a golden axe and nothing else.
+        assert!(gate(
+            Species::PiglinBrute,
+            false,
+            "minecraft:golden_axe",
+            none
+        ));
+        assert!(!gate(
+            Species::PiglinBrute,
+            false,
+            "minecraft:iron_sword",
+            none
+        ));
+        assert!(!gate(
+            Species::PiglinBrute,
+            false,
+            "minecraft:gold_ingot",
+            none
         ));
         // The species whose pickup is elsewhere never answer yes.
         for s in [
