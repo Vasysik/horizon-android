@@ -143,6 +143,21 @@ measured 20.038/19.841/19.814/20.030 ms GPU time (43.71/44.11/44.16/43.56 FPS),
 with the same 8,265 resident sections in each run. This additional approximately
 1% gain is small and remains a short tablet observation, not a Poco claim.
 
+### Looking down and the display's idle refresh policy
+
+At the same camera position looking down at pitch 89 degrees, the current
+optimized test rendered 22 sections rather than 880 and reached the tablet's
+60 FPS display limit (9.584 ms average GPU time). Thus this tablet run does not
+reproduce the owner's report that looking down no longer increases frame rate.
+The exact 0.7.4 public library also reached 60 FPS looking down, with its game
+limit still recorded as 120. Android's display service and SurfaceFlinger both
+reported an active 60 Hz mode. After a touch, repeated display queries reported
+120 Hz at 0.12/1.27/2.38 seconds, then 60 Hz at 3.73 seconds and thereafter,
+without changing system display settings. The observed initial high FPS followed
+by 60 therefore occurs on the old version too and coincides with the firmware's
+idle refresh switch. This does not explain the sub-60 FPS terrain regression or
+prove the same cause on Poco; compare actual GPU/CPU timings as well as FPS.
+
 - Matched production-profile GPU/CPU comparisons and causal isolation of the slowdown.
 - ARMv7 device recheck after the ARM64 GLES fix; other drivers and x86 ABIs.
 - Mixed physical/touch toggle inputs, suspend/resume and resource reloads.
