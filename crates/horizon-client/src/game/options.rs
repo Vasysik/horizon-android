@@ -116,11 +116,17 @@ impl Game<'_> {
         self.screen = Screen::Options;
         self.options_from_title = from_title;
         self.options_to_game = false;
+        let need_languages = self.ui.options.languages.is_empty() || page == Page::Language;
+        let need_packs = self.ui.options.pack_infos.is_empty() || page == Page::Packs;
         let ui = &mut self.ui.options;
         ui.open_at(!from_title && self.title.is_none(), page);
-        let root = self.options.resources.clone();
-        ui.languages = lang::available(&[&root]);
-        self.refresh_pack_lists();
+        if need_languages {
+            let root = self.options.resources.clone();
+            ui.languages = lang::available(&[&root]);
+        }
+        if need_packs {
+            self.refresh_pack_lists();
+        }
     }
     /// While the resource pack screen is open, `resourcepacks/` is looked at once a second
     /// and the list found again when its packs changed (`PackSelectionScreen.tick`'s

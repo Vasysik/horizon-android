@@ -71,6 +71,42 @@ pub fn camera_delta(delta: [f32; 2], width: u32, height: u32, s: &Settings) -> [
     ]
 }
 
+/// Touch camera turn scaled by the in-game mouse sensitivity slider, axis inversion,
+/// and zoom turn scale, with a responsive mobile base multiplier.
+#[allow(clippy::too_many_arguments)]
+pub fn camera_delta_with_mouse(
+    delta: [f32; 2],
+    width: u32,
+    height: u32,
+    s: &Settings,
+    mouse_sensitivity: f32,
+    invert_x: bool,
+    invert_y: bool,
+    zoom_scale: f32,
+) -> [f32; 2] {
+    let base = camera_delta(delta, width, height, s);
+    let m = if mouse_sensitivity.is_finite() {
+        mouse_sensitivity.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    // Vanilla mouse sensitivity curve ((s * 0.6 + 0.2)^3 * 8.0), normalized to 1.0 at s = 0.5,
+    // combined with a 1.75x mobile thumb-turn responsiveness boost.
+    let ss = m * 0.6 + 0.2;
+    let mouse_scale = (ss * ss * ss * 8.0).max(0.15) * 1.75;
+    let zoom = if zoom_scale.is_finite() {
+        zoom_scale.clamp(0.05, 1.0)
+    } else {
+        1.0
+    };
+    let ix = if invert_x { -1.0 } else { 1.0 };
+    let iy = if invert_y { -1.0 } else { 1.0 };
+    [
+        base[0] * mouse_scale * zoom * ix,
+        base[1] * mouse_scale * zoom * iy,
+    ]
+}
+
 /// In tap modes the crosshair is absent, so use Java's native hotbar gauge.
 pub fn attack_indicator(setting: u8, crosshair: bool) -> u8 {
     if setting == 1 && !crosshair {
@@ -672,19 +708,21 @@ impl TouchControls {
                 ..
             } = role
             {
+                *dragged |= ((point[0] - start[0]) * aspect).hypot(point[1] - start[1]) > 0.010;
                 if !*dragged && since.elapsed() >= HOLD_DELAY {
                     *committed = true;
                 }
-                *dragged |= ((point[0] - start[0]) * aspect).hypot(point[1] - start[1]) > 0.018;
                 if *dragged {
-                    [point[0] - previous[0], point[1] - previous[1]]
+                    let d = [point[0] - previous[0], point[1] - previous[1]];
+                    *previous = point;
+                    d
                 } else {
                     [0.0; 2]
                 }
             } else {
+                *previous = point;
                 [0.0; 2]
             };
-            *previous = point;
             return delta;
         }
         [0.0; 2]

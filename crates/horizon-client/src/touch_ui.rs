@@ -26,6 +26,7 @@ struct RelativeTouch {
     id: u64,
     origin: [f32; 2],
     last: [f32; 2],
+    cursor: [f32; 2],
     since: Instant,
     dragged: bool,
     right_sent: bool,
@@ -87,7 +88,7 @@ fn mouse_button_rects(w: f32, h: f32) -> [([f32; 4], bool); 2] {
 
 /// Shared outlined pointer for virtual mouse and controller menus.
 pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
-    let (x, y) = (cursor.0.floor(), cursor.1.floor());
+    let (x, y) = (cursor.0, cursor.1);
     const ROWS: [u8; 10] = [1, 2, 3, 4, 5, 6, 7, 4, 2, 1];
     for (i, &w) in ROWS.iter().enumerate() {
         batch.fill(
@@ -171,6 +172,13 @@ impl TouchUi {
         self.relative = None;
         self.relative_click = None;
     }
+    pub fn owns_relative(&self, id: u64) -> bool {
+        self.relative.as_ref().is_some_and(|t| t.id == id)
+    }
+    pub fn owns_gesture(&self, id: u64) -> bool {
+        self.gesture.as_ref().is_some_and(|(owner, _, _, _)| *owner == id)
+            || self.pointer_drag == Some(id)
+    }
     /// Relative motion: touching down does not teleport the inventory cursor.
     pub fn relative_touch(
         &mut self,
@@ -191,6 +199,7 @@ impl TouchUi {
                 id,
                 origin: point,
                 last: point,
+                cursor,
                 since: Instant::now(),
                 dragged: !clicks,
                 right_sent: false,
@@ -199,11 +208,15 @@ impl TouchUi {
         let Some(touch) = self.relative.as_mut().filter(|t| t.id == id) else {
             return cursor;
         };
+        if (touch.cursor[0] - cursor[0]).abs() > 1.0 || (touch.cursor[1] - cursor[1]).abs() > 1.0 {
+            touch.cursor = cursor;
+        }
         touch.dragged |= (point[0] - touch.origin[0]).hypot(point[1] - touch.origin[1]) > 3.0;
         let position = [0, 1].map(|i| {
-            (cursor[i] + (point[i] - touch.last[i]) * sensitivity)
+            (touch.cursor[i] + (point[i] - touch.last[i]) * sensitivity)
                 .clamp(0.0, (size[i] - 1.0).max(0.0))
         });
+        touch.cursor = position;
         touch.last = point;
         if phase == TouchPhase::Ended {
             if clicks && !touch.dragged && !touch.right_sent {

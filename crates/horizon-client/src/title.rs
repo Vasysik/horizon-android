@@ -1443,23 +1443,21 @@ impl Title {
     ) {
         let path = self.saves.join(&world.folder).join("icon.png");
         let mut icons = self.icons.borrow_mut();
-        let pixels = if let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) {
-            let cached = icons
-                .entry(path.clone())
-                .or_insert_with(|| (std::time::UNIX_EPOCH, None));
-            if cached.0 != modified {
-                *cached = (
+        if !icons.contains_key(&path) {
+            let entry = if let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) {
+                (
                     modified,
                     crate::hud::decode(&path)
                         .ok()
                         .filter(|(w, h, _)| *w == 64 && *h == 64)
                         .map(|(_, _, p)| p),
-                );
-            }
-            cached.1.as_ref()
-        } else {
-            None
-        };
+                )
+            } else {
+                (std::time::UNIX_EPOCH, None)
+            };
+            icons.insert(path.clone(), entry);
+        }
+        let pixels = icons.get(&path).and_then(|(_, p)| p.as_ref());
         let sprite = format!("horizon/world-icon{slot}");
         if let Some(pixels) = pixels
             && let Some(rect) = atlas.sprites.get(&sprite)

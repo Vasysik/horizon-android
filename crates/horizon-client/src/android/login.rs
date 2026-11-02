@@ -46,6 +46,17 @@ impl Login {
             _ => "Offline / Sign in".into(),
         }
     }
+    pub fn account_label(&self, offline_name: &str) -> String {
+        if let Some(name) = &self.profile {
+            name.clone()
+        } else if self.pending() {
+            "Signing in...".into()
+        } else if !offline_name.trim().is_empty() {
+            offline_name.trim().to_owned()
+        } else {
+            "vasysik1".into()
+        }
+    }
 
     pub fn pending(&self) -> bool {
         self.task.is_some()
@@ -175,7 +186,9 @@ impl Login {
         let h = (ui.h - 24.0).min(550.0);
         let x = (ui.w - w) / 2.0;
         let y = (ui.h - h) / 2.0;
-        ui.rounded(x, y, w, h, 8.0, color::BG);
+        ui.rounded(0.0, 0.0, ui.w, ui.h, 0.0, color::hex(0x06050A, 196));
+        ui.rounded(x, y, w, h, 20.0, color::hex(0x161421, 255));
+        ui.border(x, y, w, h, 20.0, color::hex(0x2E2A42, 255));
         if editing_name {
             ui.text(
                 Face::Medium,

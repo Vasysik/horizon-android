@@ -302,7 +302,7 @@ impl Chooser {
     pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>) {
         let (w, h) = (ui.w, ui.h);
         targets.clear();
-        ui.rounded(0.0, 0.0, w, h, 0.0, color::BG);
+        ui.rounded(0.0, 0.0, w, h, 0.0, color::hex(0x0D0C14, 255));
         ui.text(Face::Medium, 28.0, 32.0, 35.0, color::TEXT, self.title);
         ui.text(Face::Regular, 15.0, 32.0, 85.0, color::MUTED, self.help);
         if let Some(device) = &self.device {

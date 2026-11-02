@@ -15831,6 +15831,7 @@ impl Game<'_> {
                     uploads.iter().map(|(k, _)| *k).collect();
                 let chunks = &self.world.chunks;
                 let loaded = |k: &(i32, i32, i32)| chunks.contains_key(&(k.0, k.2));
+                let had_fresh = !fresh.is_empty();
                 let mut spent: Vec<_> = pending
                     .extract_if(.., |(k, _)| fresh.contains(k) || !loaded(k))
                     .collect();
@@ -15842,14 +15843,23 @@ impl Game<'_> {
                     }
                 }
                 let centre = self.streaming.center;
-                let far = |k: &(i32, i32, i32)| (k.0 - centre.0).pow(2) + (k.2 - centre.1).pow(2);
-                pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
-                let mut budget = horizon_client::gfx::upload_budget::UploadBudget::with_wait(
-                    g.chunk_updates as usize,
-                    u64::from(g.upload_budget_kib) * 1024,
-                    mobile_uploads,
-                    renderer.last_wait,
-                );
+                if had_fresh || pending.len() <= 64 {
+                    let far =
+                        |k: &(i32, i32, i32)| (k.0 - centre.0).pow(2) + (k.2 - centre.1).pow(2);
+                    pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
+                }
+                let frame_dt = Duration::from_secs_f32((self.frame_ticks / 20.0).max(0.0));
+                let interactive = self.screen != Screen::Playing
+                    || self.last_input.elapsed() < Duration::from_millis(120);
+                let mut budget =
+                    horizon_client::gfx::upload_budget::UploadBudget::with_frame_state(
+                        g.chunk_updates as usize,
+                        u64::from(g.upload_budget_kib) * 1024,
+                        mobile_uploads,
+                        renderer.last_wait,
+                        frame_dt,
+                        interactive,
+                    );
                 let upload_started = Instant::now();
                 let mut uploaded = false;
                 horizon_client::spans::time("upload", || {
@@ -16207,7 +16217,9 @@ impl Game<'_> {
             use winit::event::TouchPhase;
             self.last_input = Instant::now();
             self.pad.menu.keyboard_focus = false;
-            let size = self.window.as_ref().unwrap().inner_size();
+            let Some(size) = self.window.as_ref().map(|w| w.inner_size()) else {
+                return;
+            };
             self.pad.touch.viewport(size.width, size.height);
             if self.pad.touch.editor.is_some() {
                 if touch.phase == TouchPhase::Cancelled {
@@ -16290,7 +16302,6 @@ impl Game<'_> {
                     return;
                 }
                 self.pad.in_use = true;
-                let size = self.window.as_ref().unwrap().inner_size();
                 if touch.phase == TouchPhase::Started {
                     let batch = HudBatch::new([size.width, size.height]);
                     let point = [
@@ -16321,16 +16332,23 @@ impl Game<'_> {
                     matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled),
                 );
                 self.android_custom_events();
-                let delta = horizon_client::touch::camera_delta(
+                let delta = horizon_client::touch::camera_delta_with_mouse(
                     delta,
                     size.width,
                     size.height,
                     &self.pad.touch.settings,
+                    self.settings.sensitivity,
+                    self.settings.invert_mouse,
+                    self.zoom_scale(),
                 );
-                self.tutorial
-                    .mouse(f64::from(delta[0]), f64::from(delta[1]));
-                self.yaw += delta[0];
-                self.pitch = (self.pitch + delta[1]).clamp(-90.0, 90.0);
+                if delta[0] != 0.0 || delta[1] != 0.0 {
+                    self.tutorial
+                        .mouse(f64::from(delta[0]), f64::from(delta[1]));
+                    self.turn_player(
+                        f64::from(delta[0]) / 0.15,
+                        f64::from(delta[1]) / 0.15,
+                    );
+                }
                 if self.pad.touch.chat_requested {
                     self.audio.play_button_click();
                     self.pad.touch.clear();
@@ -16614,7 +16632,9 @@ impl Game<'_> {
                     {
                         return;
                     }
-                    self.pending_save.as_mut().unwrap().quit = true;
+                    if let Some(save) = self.pending_save.as_mut() {
+                        save.quit = true;
+                    }
                 }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;

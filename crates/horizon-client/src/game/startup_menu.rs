@@ -539,8 +539,12 @@ impl Loading {
 
     fn open_menu_options(&mut self, page: Page) {
         self.menu.options.open_at(false, page);
-        self.menu.options.languages = horizon_client::lang::available(&[&self.menu.root]);
-        self.menu.options.pack_infos = packs::pack_infos(&self.vanilla_root, &[]);
+        if self.menu.options.languages.is_empty() || page == Page::Language {
+            self.menu.options.languages = horizon_client::lang::available(&[&self.menu.root]);
+        }
+        if self.menu.options.pack_infos.is_empty() || page == Page::Packs {
+            self.menu.options.pack_infos = packs::pack_infos(&self.vanilla_root, &[]);
+        }
         self.menu.options.pack_selection = self.settings.resource_packs.clone();
         self.menu.options.pack_screen = None;
         self.menu.options_open = true;
@@ -753,8 +757,9 @@ impl Loading {
         use horizon_client::osk::Output;
         if let Some(notice) = crate::documents::poll() {
             if notice.changed {
-                self.menu.options.pack_infos =
-                    packs::pack_infos(&self.options.as_ref().unwrap().resources, &[]);
+                if let Some(opts) = self.options.as_ref() {
+                    self.menu.options.pack_infos = packs::pack_infos(&opts.resources, &[]);
+                }
                 self.menu.options.pack_screen = None;
                 self.settings.shader_packs =
                     horizon_client::shader_pack_list::scan(&Game::shader_packs_dir());
@@ -765,22 +770,24 @@ impl Loading {
             match out {
                 Output::Text(s) => {
                     if self.menu.options_open {
-                        self.menu
-                            .options
-                            .type_text(&self.gui.as_ref().unwrap().atlas, &s);
+                        if let Some(gui) = self.gui.as_ref() {
+                            self.menu.options.type_text(&gui.atlas, &s);
+                        }
                     } else if let Some(t) = &mut self.menu.title {
                         t.type_text(&s);
                     }
                 }
                 Output::Backspace => {
                     if self.menu.options_open {
-                        let e = self.menu.options.key(
-                            &mut self.settings,
-                            &self.gui.as_ref().unwrap().atlas,
-                            KeyCode::Backspace,
-                            None,
-                        );
-                        self.menu_option_events(e);
+                        if let Some(gui) = self.gui.as_ref() {
+                            let e = self.menu.options.key(
+                                &mut self.settings,
+                                &gui.atlas,
+                                KeyCode::Backspace,
+                                None,
+                            );
+                            self.menu_option_events(e);
+                        }
                     } else if let Some(t) = &mut self.menu.title {
                         t.backspace();
                     }
@@ -1183,13 +1190,15 @@ impl Loading {
             }
             crate::platform::hide();
             if self.menu.options_open {
-                let e = self.menu.options.key(
-                    &mut self.settings,
-                    &self.gui.as_ref().unwrap().atlas,
-                    KeyCode::Escape,
-                    None,
-                );
-                self.menu_option_events(e);
+                if let Some(gui) = self.gui.as_ref() {
+                    let e = self.menu.options.key(
+                        &mut self.settings,
+                        &gui.atlas,
+                        KeyCode::Escape,
+                        None,
+                    );
+                    self.menu_option_events(e);
+                }
             } else if let Some(t) = &mut self.menu.title {
                 t.escape();
             }
@@ -1221,54 +1230,58 @@ impl Loading {
                 }
                 return Ok(());
             }
-            if let Some(action) = self.menu.touch.action(b.width, b.height, p, true) {
-                if touch.phase == TouchPhase::Started {
-                    match action {
-                        Action::VirtualMouse => {
-                            for right in self.menu.touch.release_all_mouse() {
-                                self.startup_mouse_button(event_loop, right, false)?;
-                            }
-                            self.menu.touch.cancel();
-                            self.menu.touch.virtual_mouse ^= true;
+            if touch.phase == TouchPhase::Started
+                && !self.menu.touch.owns_relative(touch.id)
+                && !self.menu.touch.owns_gesture(touch.id)
+                && let Some(action) = self.menu.touch.action(b.width, b.height, p, true)
+            {
+                match action {
+                    Action::VirtualMouse => {
+                        for right in self.menu.touch.release_all_mouse() {
+                            self.startup_mouse_button(event_loop, right, false)?;
                         }
-                        Action::MouseButton(right) => {
-                            if self.menu.touch.press_mouse(touch.id, right) {
-                                self.startup_mouse_button(event_loop, right, true)?;
-                            }
+                        self.menu.touch.cancel();
+                        self.menu.touch.virtual_mouse ^= true;
+                    }
+                    Action::MouseButton(right) => {
+                        if self.menu.touch.press_mouse(touch.id, right) {
+                            self.startup_mouse_button(event_loop, right, true)?;
                         }
-                        Action::More => self.menu.touch.expanded = !self.menu.touch.expanded,
-                        Action::Keyboard => {
-                            if crate::platform::active() {
-                                crate::platform::hide();
-                            } else {
-                                let initial = self
-                                    .menu
-                                    .title
-                                    .as_mut()
-                                    .and_then(|t| {
-                                        t.field_key(KeyCode::End, false, false);
-                                        t.focused_field().map(|(_, s, _)| s.to_owned())
-                                    })
-                                    .unwrap_or_default();
-                                crate::platform::show(&initial);
-                            }
-                        }
-                        Action::Key(KeyCode::Escape) => {
+                    }
+                    Action::More => self.menu.touch.expanded = !self.menu.touch.expanded,
+                    Action::Keyboard => {
+                        if crate::platform::active() {
                             crate::platform::hide();
-                            if self.menu.options_open {
+                        } else {
+                            let initial = self
+                                .menu
+                                .title
+                                .as_mut()
+                                .and_then(|t| {
+                                    t.field_key(KeyCode::End, false, false);
+                                    t.focused_field().map(|(_, s, _)| s.to_owned())
+                                })
+                                .unwrap_or_default();
+                            crate::platform::show(&initial);
+                        }
+                    }
+                    Action::Key(KeyCode::Escape) => {
+                        crate::platform::hide();
+                        if self.menu.options_open {
+                            if let Some(gui) = self.gui.as_ref() {
                                 let events = self.menu.options.key(
                                     &mut self.settings,
-                                    &self.gui.as_ref().unwrap().atlas,
+                                    &gui.atlas,
                                     KeyCode::Escape,
                                     None,
                                 );
                                 self.menu_option_events(events);
-                            } else if let Some(t) = &mut self.menu.title {
-                                t.escape();
                             }
+                        } else if let Some(t) = &mut self.menu.title {
+                            t.escape();
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
                 return Ok(());
             }
@@ -1488,7 +1501,9 @@ impl Loading {
                         .map_or([1280, 720], |r| [r.config.width, r.config.height]);
                     let b = HudBatch::new(size);
                     title.drag(self.menu.cursor, (b.width, b.height));
-                    title.drag_field(&self.gui.as_ref().unwrap().atlas, self.menu.cursor.0);
+                    if let Some(gui) = self.gui.as_ref() {
+                        title.drag_field(&gui.atlas, self.menu.cursor.0);
+                    }
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if self.menu.options_open => {

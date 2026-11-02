@@ -87,6 +87,25 @@ pub enum Face {
     /// Counts, timestamps and the boot screen's console lines.
     Mono,
 }
+
+/// Vector icons used by the Material You 3 Android launcher navigation rail,
+/// top bar, and progress controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Icon {
+    HorizonLogo,
+    ChevronDown,
+    Play,
+    Mods,
+    Packs,
+    Shaders,
+    Installed,
+    Settings,
+    Pause,
+    Close,
+    Search,
+    Check,
+}
+
 struct Fonts {
     faces: [FontRef<'static>; 4],
 }
@@ -117,6 +136,8 @@ enum Key {
     Glyph(Face, u16, u16),
     /// A quarter disc (`false`) or a 1px quarter ring of this radius in pixels.
     Corner(u16, bool),
+    /// A supersampled vector icon at this pixel size.
+    Vector(Icon, u16),
 }
 #[derive(Clone, Copy)]
 struct Cached {
@@ -129,6 +150,7 @@ struct Cached {
 struct Cache {
     fonts: Fonts,
     entries: HashMap<Key, Cached>,
+    images: HashMap<String, Rect>,
     shelf: (u32, u32, u32),
     pending: Vec<crate::font::Patch>,
     /// The atlas the entries were uploaded to (a new atlas starts over).
@@ -148,6 +170,7 @@ fn with_cache<R>(atlas: &HudAtlas, f: impl FnOnce(&mut Cache) -> R) -> R {
         let cache = c.get_or_insert_with(|| Cache {
             fonts: Fonts::load(),
             entries: HashMap::new(),
+            images: HashMap::new(),
             shelf: (0, 0, 0),
             pending: Vec::new(),
             atlas: id,
@@ -155,12 +178,140 @@ fn with_cache<R>(atlas: &HudAtlas, f: impl FnOnce(&mut Cache) -> R) -> R {
         if cache.atlas != id {
             cache.atlas = id;
             cache.entries.clear();
+            cache.images.clear();
             cache.shelf = (0, 0, 0);
             cache.pending.clear();
         }
         f(cache)
     })
 }
+
+fn seg_dist(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let (dx, dy) = (bx - ax, by - ay);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 1e-6 {
+        ((px - ax) * dx + (py - ay) * dy) / len2
+    } else {
+        0.0
+    }
+    .clamp(0.0, 1.0);
+    ((px - (ax + t * dx)).powi(2) + (py - (ay + t * dy)).powi(2)).sqrt()
+}
+
+fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
+    match icon {
+        Icon::HorizonLogo => {
+            let left_bar =
+                seg_dist(u, v, 0.22, 0.16, 0.22, 0.84) <= 0.095;
+            let right_bar =
+                seg_dist(u, v, 0.78, 0.16, 0.78, 0.84) <= 0.095;
+            let bridge =
+                seg_dist(u, v, 0.22, 0.56, 0.78, 0.42) <= 0.088;
+            left_bar || right_bar || bridge
+        }
+        Icon::ChevronDown => {
+            seg_dist(u, v, 0.24, 0.38, 0.50, 0.64) <= 0.075
+                || seg_dist(u, v, 0.50, 0.64, 0.76, 0.38) <= 0.075
+        }
+        Icon::Play => {
+            // Rounded right-pointing play triangle.
+            let x0 = 0.26;
+            let x1 = 0.80;
+            if u < x0 - 0.04 || u > x1 + 0.04 {
+                return false;
+            }
+            let t = ((u - x0) / (x1 - x0)).clamp(0.0, 1.0);
+            let half_h = (1.0 - t) * 0.31 + 0.025;
+            (v - 0.50).abs() <= half_h
+        }
+        Icon::Mods => {
+            // 4-lobe puzzle / clover grid mark matching the screenshot's Mods icon.
+            let centers = [(0.33, 0.33), (0.67, 0.33), (0.33, 0.67), (0.67, 0.67)];
+            let in_lobe = centers.iter().any(|&(cx, cy)| {
+                let dx = (u - cx).abs();
+                let dy = (v - cy).abs();
+                let r = 0.07;
+                let qx = (dx - 0.075).max(0.0);
+                let qy = (dy - 0.075).max(0.0);
+                (qx * qx + qy * qy).sqrt() <= r
+            });
+            let center_bridge = (u - 0.50).abs() <= 0.09 && (v - 0.50).abs() <= 0.09;
+            let hole = ((u - 0.50).powi(2) + (v - 0.50).powi(2)).sqrt() <= 0.065;
+            (in_lobe || center_bridge) && !hole
+        }
+        Icon::Packs => {
+            // Layered isometric diamond/package stack matching the screenshot's Packs icon.
+            let top_diamond = ((u - 0.50).abs() * 0.62 + (v - 0.34).abs()).abs() <= 0.22
+                && ((u - 0.50).abs() * 0.62 + (v - 0.34).abs()).abs() >= 0.11;
+            let top_fill = (u - 0.50).abs() * 0.65 + (v - 0.33).abs() <= 0.19;
+            let mid_layer = seg_dist(u, v, 0.18, 0.53, 0.50, 0.70) <= 0.055
+                || seg_dist(u, v, 0.50, 0.70, 0.82, 0.53) <= 0.055;
+            let bot_layer = seg_dist(u, v, 0.18, 0.69, 0.50, 0.86) <= 0.055
+                || seg_dist(u, v, 0.50, 0.86, 0.82, 0.69) <= 0.055;
+            top_diamond || top_fill || mid_layer || bot_layer
+        }
+        Icon::Shaders => {
+            // Sunburst / 8-ray sparkle icon matching the screenshot's Shaders icon.
+            let (dx, dy) = (u - 0.50, v - 0.50);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d <= 0.15 {
+                return true;
+            }
+            let dirs: [(f32, f32); 8] = [
+                (1.0, 0.0),
+                (-1.0, 0.0),
+                (0.0, 1.0),
+                (0.0, -1.0),
+                (0.7071, 0.7071),
+                (-0.7071, 0.7071),
+                (0.7071, -0.7071),
+                (-0.7071, -0.7071),
+            ];
+            dirs.iter().any(|&(rx, ry)| {
+                seg_dist(u, v, 0.50 + rx * 0.24, 0.50 + ry * 0.24, 0.50 + rx * 0.39, 0.50 + ry * 0.39)
+                    <= 0.048
+            })
+        }
+        Icon::Installed => {
+            // Folder outline/fill matching the screenshot's Installed icon.
+            let in_tab = (0.14..=0.45).contains(&u) && (0.20..=0.34).contains(&v);
+            let in_body = (0.14..=0.86).contains(&u) && (0.30..=0.80).contains(&v);
+            let in_inner = (0.22..=0.78).contains(&u) && (0.40..=0.72).contains(&v);
+            (in_tab || in_body) && !in_inner
+        }
+        Icon::Settings => {
+            // Horizontal tuning sliders with circular knobs matching the screenshot's Settings icon.
+            let track1 = seg_dist(u, v, 0.16, 0.33, 0.84, 0.33) <= 0.048;
+            let track2 = seg_dist(u, v, 0.16, 0.67, 0.84, 0.67) <= 0.048;
+            let knob1 = ((u - 0.36).powi(2) + (v - 0.33).powi(2)).sqrt() <= 0.125;
+            let knob1_hole = ((u - 0.36).powi(2) + (v - 0.33).powi(2)).sqrt() <= 0.05;
+            let knob2 = ((u - 0.64).powi(2) + (v - 0.67).powi(2)).sqrt() <= 0.125;
+            let knob2_hole = ((u - 0.64).powi(2) + (v - 0.67).powi(2)).sqrt() <= 0.05;
+            ((track1 || knob1) && !knob1_hole) || ((track2 || knob2) && !knob2_hole)
+        }
+        Icon::Pause => {
+            // Two vertical pause bars ||
+            seg_dist(u, v, 0.34, 0.24, 0.34, 0.76) <= 0.068
+                || seg_dist(u, v, 0.66, 0.24, 0.66, 0.76) <= 0.068
+        }
+        Icon::Close => {
+            // Crisp X cross
+            seg_dist(u, v, 0.27, 0.27, 0.73, 0.73) <= 0.062
+                || seg_dist(u, v, 0.73, 0.27, 0.27, 0.73) <= 0.062
+        }
+        Icon::Search => {
+            let d = ((u - 0.43).powi(2) + (v - 0.43).powi(2)).sqrt();
+            let ring = (0.19..=0.28).contains(&d);
+            let handle = seg_dist(u, v, 0.59, 0.59, 0.82, 0.82) <= 0.055;
+            ring || handle
+        }
+        Icon::Check => {
+            seg_dist(u, v, 0.22, 0.54, 0.42, 0.74) <= 0.068
+                || seg_dist(u, v, 0.42, 0.74, 0.80, 0.28) <= 0.068
+        }
+    }
+}
+
 impl Cache {
     fn region(atlas: &HudAtlas) -> Option<Rect> {
         atlas.sprites.get("horizon/ui-text").copied()
@@ -176,6 +327,7 @@ impl Cache {
         }
         if y + h > region.h || w > region.w {
             self.entries.clear();
+            self.images.clear();
             self.shelf = (0, 0, 0);
             return None;
         }
@@ -183,15 +335,18 @@ impl Cache {
         Some((x, y, region))
     }
     fn upload(&mut self, atlas: &HudAtlas, w: u32, h: u32, alpha: &[f32]) -> Option<Rect> {
+        let rgba: Vec<u8> = alpha
+            .iter()
+            .flat_map(|a| [255, 255, 255, (a.clamp(0.0, 1.0) * 255.0).round() as u8])
+            .collect();
+        self.upload_rgba(atlas, w, h, rgba)
+    }
+    fn upload_rgba(&mut self, atlas: &HudAtlas, w: u32, h: u32, rgba: Vec<u8>) -> Option<Rect> {
         let (x, y, region) = self.place(atlas, w, h)?;
         let (ax, ay) = (
             (region.u0 * atlas.width as f32).round() as u32 + x,
             (region.v0 * atlas.height as f32).round() as u32 + y,
         );
-        let rgba = alpha
-            .iter()
-            .flat_map(|a| [255, 255, 255, (a.clamp(0.0, 1.0) * 255.0).round() as u8])
-            .collect();
         self.pending.push(crate::font::Patch {
             x: ax,
             y: ay,
@@ -285,6 +440,83 @@ impl Cache {
             );
         }
         rect
+    }
+    fn vector_icon(&mut self, atlas: &HudAtlas, icon: Icon, px: u16) -> Option<Rect> {
+        let n = u32::from(px.clamp(8, 128));
+        let key = Key::Vector(icon, n as u16);
+        if let Some(c) = self.entries.get(&key) {
+            return c.rect;
+        }
+        let nf = n as f32;
+        let mut alpha = vec![0.0; (n * n) as usize];
+        for y in 0..n {
+            for x in 0..n {
+                let mut hits = 0;
+                for sy in 0..4 {
+                    for sx in 0..4 {
+                        let u = (x as f32 + (sx as f32 + 0.5) / 4.0) / nf;
+                        let v = (y as f32 + (sy as f32 + 0.5) / 4.0) / nf;
+                        if icon_hit(icon, u, v) {
+                            hits += 1;
+                        }
+                    }
+                }
+                alpha[(y * n + x) as usize] = hits as f32 / 16.0;
+            }
+        }
+        let rect = self.upload(atlas, n, n, &alpha);
+        if rect.is_some() {
+            self.entries.insert(
+                key,
+                Cached {
+                    rect,
+                    left: 0.0,
+                    top: 0.0,
+                },
+            );
+        }
+        rect
+    }
+    fn image(&mut self, atlas: &HudAtlas, key: &str, w: u32, h: u32, rgba: &[u8]) -> Option<Rect> {
+        if let Some(&rect) = self.images.get(key) {
+            return Some(rect);
+        }
+        if w == 0 || h == 0 || rgba.len() != (w * h * 4) as usize {
+            return None;
+        }
+        // Apply a soft rounded-corner mask to project icons so they sit cleanly in cards.
+        let mut masked = rgba.to_vec();
+        let r = (w.min(h) as f32 * 0.22).max(2.0);
+        let (wf, hf) = (w as f32, h as f32);
+        for y in 0..h {
+            for x in 0..w {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let dx = if px < r {
+                    r - px
+                } else if px > wf - r {
+                    px - (wf - r)
+                } else {
+                    0.0
+                };
+                let dy = if py < r {
+                    r - py
+                } else if py > hf - r {
+                    py - (hf - r)
+                } else {
+                    0.0
+                };
+                if dx > 0.0 && dy > 0.0 {
+                    let d = (dx * dx + dy * dy).sqrt();
+                    let cov = (r + 0.5 - d).clamp(0.0, 1.0);
+                    let idx = ((y * w + x) * 4 + 3) as usize;
+                    masked[idx] = (masked[idx] as f32 * cov).round() as u8;
+                }
+            }
+        }
+        let rect = self.upload_rgba(atlas, w, h, masked)?;
+        self.images.insert(key.to_owned(), rect);
+        Some(rect)
     }
 }
 
@@ -461,6 +693,110 @@ impl<'a> Ui<'a> {
         self.raw_fill(x0, y0 + r, x0 + 1.0, y1 - r, color);
         self.raw_fill(x1 - 1.0, y0 + r, x1, y1 - r, color);
         self.corners(x0, y0, x1, y1, r, true, color);
+    }
+
+    /// Draw a supersampled vector icon in `size x size` dp.
+    pub fn icon(&mut self, icon: Icon, x: f32, y: f32, size: f32, color: u32) {
+        if color >> 24 == 0 || size <= 0.0 {
+            return;
+        }
+        let (x0, y0) = (self.px_x(x), self.px_y(y));
+        let px = (size * self.density).round().clamp(8.0, 128.0) as u16;
+        let atlas = self.atlas;
+        if let Some(rect) = with_cache(atlas, |c| c.vector_icon(atlas, icon, px)) {
+            let s = self.scale;
+            let draw_px = f32::from(px) / s;
+            self.batch
+                .rect_uv(x0 / s, y0 / s, draw_px, draw_px, rect, color);
+        }
+    }
+
+    /// Draw the stylized two-tone purple Horizon `H` mark at `(x, y)` in `size x size` dp.
+    pub fn horizon_logo(&mut self, x: f32, y: f32, size: f32) {
+        // Subtle glow/shadow plate behind the mark, then the crisp supersampled H mark.
+        let primary = color::hex(0x9A7BFF, 255);
+        let accent = color::hex(0x7C5CE6, 255);
+        self.icon(Icon::HorizonLogo, x, y + 0.5, size, accent);
+        self.icon(Icon::HorizonLogo, x, y, size, primary);
+    }
+
+    /// Draw the circular player head avatar badge inside the top-right account pill.
+    pub fn avatar_head(&mut self, x: f32, y: f32, size: f32) {
+        let r = size / 2.0;
+        self.rounded(x, y, size, size, r, color::hex(0x6E56C4, 255));
+        // Hair/top cap and face details inside the circular badge.
+        let inset = size * 0.18;
+        let face_w = size - inset * 2.0;
+        self.rounded(
+            x + inset,
+            y + inset,
+            face_w,
+            face_w,
+            face_w * 0.28,
+            color::hex(0xB89EFF, 255),
+        );
+        self.rounded(
+            x + inset,
+            y + inset,
+            face_w,
+            face_w * 0.36,
+            face_w * 0.2,
+            color::hex(0x41307A, 255),
+        );
+        let eye_w = (size * 0.11).max(2.0);
+        let eye_h = (size * 0.13).max(2.0);
+        let eye_y = y + size * 0.48;
+        self.rounded(
+            x + size * 0.31,
+            eye_y,
+            eye_w,
+            eye_h,
+            1.0,
+            color::hex(0x231942, 255),
+        );
+        self.rounded(
+            x + size * 0.58,
+            eye_y,
+            eye_w,
+            eye_h,
+            1.0,
+            color::hex(0x231942, 255),
+        );
+    }
+
+    /// Draw a cached RGBA project icon (`w x h`) into `(x, y, dw, dh)` dp.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image(
+        &mut self,
+        key: &str,
+        w: u32,
+        h: u32,
+        rgba: &[u8],
+        x: f32,
+        y: f32,
+        dw: f32,
+        dh: f32,
+    ) -> bool {
+        let atlas = self.atlas;
+        let Some(rect) = with_cache(atlas, |c| c.image(atlas, key, w, h, rgba)) else {
+            return false;
+        };
+        let (x0, y0, x1, y1) = (
+            self.px_x(x),
+            self.px_y(y),
+            self.px_x(x + dw),
+            self.px_y(y + dh),
+        );
+        let s = self.scale;
+        self.batch.rect_uv(
+            x0 / s,
+            y0 / s,
+            (x1 - x0) / s,
+            (y1 - y0) / s,
+            rect,
+            u32::MAX,
+        );
+        true
     }
 
     // ---- text ----

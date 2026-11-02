@@ -40,6 +40,8 @@ pub(super) struct Launcher {
     mouse_down: bool,
     feedback: Option<(pages::Action, Instant)>,
     install: Arc<Mutex<horizon_client::official_install::InstallProgress>>,
+    install_paused: Arc<std::sync::atomic::AtomicBool>,
+    install_cancelled: Arc<std::sync::atomic::AtomicBool>,
     worker: Option<mpsc::Receiver<std::result::Result<(), String>>>,
     error: Option<String>,
     catalog: Catalog,
@@ -96,6 +98,8 @@ impl Launcher {
             mouse_down: false,
             feedback: None,
             install: Arc::default(),
+            install_paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            install_cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             worker: None,
             error: None,
             catalog,
@@ -179,12 +183,12 @@ impl Launcher {
         self.configure_screen();
         crate::display::set_scale(self.catalog.config.render_scale);
         horizon_client::android_runtime::configure_gpu(false);
-        if let Some(renderer) = &mut self.renderer {
-            if let Some(size) = crate::display::prepare(self.window.as_ref().unwrap())? {
+        if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+            if let Some(size) = crate::display::prepare(window)? {
                 renderer.resize(size[0], size[1]);
             }
             renderer.recreate_surface()?;
-            let size = self.window.as_ref().unwrap().inner_size();
+            let size = window.inner_size();
             renderer.resize(size.width, size.height);
             return Ok(());
         }
@@ -376,15 +380,31 @@ impl Launcher {
                 );
             }
             self.error = None;
-            *self.install.lock().unwrap() = Default::default();
+            *self
+                .install
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Default::default();
+            self.install_paused
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            self.install_cancelled
+                .store(false, std::sync::atomic::Ordering::Relaxed);
             let home = self.home.clone();
             let install = self.install.clone();
+            let paused = self.install_paused.clone();
+            let cancelled = self.install_cancelled.clone();
             let (sender, receiver) = mpsc::channel();
             self.worker = Some(receiver);
             std::thread::spawn(move || {
                 let result =
                     horizon_client::official_install::install_with_progress(&home, |update| {
-                        let mut current = install.lock().unwrap();
+                        while paused.load(std::sync::atomic::Ordering::Relaxed)
+                            && !cancelled.load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                        let mut current = install
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         let done = if current.stage == update.stage {
                             current.done.max(update.done)
                         } else {
@@ -618,8 +638,17 @@ impl ApplicationHandler for Launcher {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+        let frame_ms = if self.worker.is_some()
+            || self.catalog.busy()
+            || self.drag.is_some()
+            || self.login.pending()
+        {
+            16
+        } else {
+            33
+        };
         events.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + Duration::from_millis(100),
+            Instant::now() + Duration::from_millis(frame_ms),
         ));
     }
     fn exiting(&mut self, events: &ActiveEventLoop) {

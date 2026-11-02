@@ -5763,7 +5763,9 @@ impl Renderer {
         let section_translucent = self.translucent_draws.len();
         for (i, v) in visible_lods.iter().enumerate() {
             let instance = visible.len() + i;
-            let tile = self.lods.get_mut(&v.key).expect("visible resident tile");
+            let Some(tile) = self.lods.get_mut(&v.key) else {
+                continue;
+            };
             let s = tile.drawn_mut();
             if let Some((index_page, index_start)) = s.sorted_indices {
                 let scheduled = (instance + count - self.translucency_cursor) % count < budget;

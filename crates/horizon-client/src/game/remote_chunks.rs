@@ -282,10 +282,13 @@ impl Game<'_> {
             }
         };
         let (x, z) = (p.x, p.z);
+        let replaced_column = self.world.chunks.contains_key(&(x, z));
         self.streaming.insert_remote(&mut self.world, chunk);
-        self.world
-            .block_entities
-            .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));
+        if replaced_column {
+            self.world
+                .block_entities
+                .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));
+        }
         for info in &p.chunk.block_entities {
             let pos = (
                 x * 16 + i32::from(info.packed_xz as u8 >> 4),

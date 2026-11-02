@@ -296,15 +296,21 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        let size = self.window.as_ref().unwrap().inner_size();
+        let Some(window) = self.window.as_ref() else {
+            return Ok(false);
+        };
+        let size = window.inner_size();
         let b = HudBatch::new([size.width, size.height]);
         let p = [t.location.x as f32 / b.scale, t.location.y as f32 / b.scale];
-        if let Some(action) = self
-            .pad
-            .touch_ui
-            .action(b.width, b.height, p, self.pad_in_menu())
+        if t.phase == TouchPhase::Started
+            && !self.pad.touch_ui.owns_relative(t.id)
+            && !self.pad.touch_ui.owns_gesture(t.id)
+            && let Some(action) = self
+                .pad
+                .touch_ui
+                .action(b.width, b.height, p, self.pad_in_menu())
         {
-            if t.phase == TouchPhase::Started {
+            {
                 self.pad.touch.clear();
                 self.pad.touch.ignore(t.id);
                 match action {
@@ -685,6 +691,7 @@ impl Game<'_> {
             self.settings.touch.virtual_mouse_sensitivity,
             !self.pad.touch_ui.mouse_held(),
         );
+        self.cursor = (position[0], position[1]);
         self.handle_window_event(
             events,
             id,
@@ -696,6 +703,9 @@ impl Game<'_> {
                 ),
             },
         );
+        if t.phase == TouchPhase::Ended {
+            self.android_virtual_mouse_clicks(events);
+        }
     }
     pub(super) fn android_virtual_mouse_clicks(
         &mut self,

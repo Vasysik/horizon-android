@@ -206,7 +206,7 @@ pub(crate) fn with_context<R>(
         let app = app.as_ref()?;
         let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }.ok()?;
         let mut env = vm.attach_current_thread().ok()?;
-        let result = env.with_local_frame(16, |env| {
+        let result = env.with_local_frame(64, |env| {
             let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
             f(env, &activity)
         });
@@ -666,6 +666,7 @@ pub fn poll_gamepad_connections() {
     }) {
         return;
     }
+    thread_local! { static LAST_IDS: std::cell::RefCell<Option<(Vec<i32>, Vec<i32>)>> = const { std::cell::RefCell::new(None) }; }
     let ids = with_context(|env, _| {
         let ids = env
             .call_static_method("android/view/InputDevice", "getDeviceIds", "()[I", &[])?
@@ -673,6 +674,14 @@ pub fn poll_gamepad_connections() {
         let ids = jni::objects::JIntArray::from(ids);
         let mut values = vec![0; env.get_array_length(&ids)? as usize];
         env.get_int_array_region(&ids, 0, &mut values)?;
+        if let Some(cached) = LAST_IDS.with(|c| {
+            c.borrow()
+                .as_ref()
+                .filter(|(prev, _)| *prev == values)
+                .cloned()
+        }) {
+            return Ok(cached);
+        }
         let mut controllers = Vec::new();
         for id in &values {
             let device = env
@@ -691,6 +700,7 @@ pub fn poll_gamepad_connections() {
                 env.delete_local_ref(device)?;
             }
         }
+        LAST_IDS.with(|c| *c.borrow_mut() = Some((values.clone(), controllers.clone())));
         Ok((values, controllers))
     });
     if let Some((ids, controllers)) = ids {

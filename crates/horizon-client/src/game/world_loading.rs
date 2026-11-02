@@ -678,6 +678,13 @@ pub(super) fn make_streaming(
             }
         }
     });
+    let worker_threads = if cfg!(target_os = "android") && !options.execution_role.is_client() {
+        (res.threads() / 2).max(2)
+    } else if cfg!(target_os = "android") {
+        res.threads().min(4)
+    } else {
+        res.threads()
+    };
     let mut streaming = if let Some(inner) = debug {
         Streaming::new(
             Arc::new(Persistent {
@@ -687,7 +694,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     } else if let Some(inner) = flat_vanilla {
         inner.search_rings_behind();
@@ -710,7 +717,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     } else if let Some(inner) = flat {
         Streaming::new(
@@ -721,7 +728,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     } else if options.test_terrain && dim == Dim::Overworld {
         let inner = Arc::new(TestTerrain::new(pack.assets.registry, res.biomes())?);
@@ -733,7 +740,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     } else {
         // WorldOptions.generateStructures, from the world's settings.
@@ -780,7 +787,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     };
     streaming.forced = save.load_forced_chunks();
