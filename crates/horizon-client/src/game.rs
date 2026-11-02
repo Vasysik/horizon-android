@@ -16338,8 +16338,9 @@ impl Game<'_> {
                     size.height,
                     &self.pad.touch.settings,
                     self.settings.sensitivity,
-                    self.settings.invert_mouse,
-                    self.zoom_scale(),
+                    self.settings.invert_x,
+                    self.settings.invert_y,
+                    self.zoom_turn_scale() as f32,
                 );
                 if delta[0] != 0.0 || delta[1] != 0.0 {
                     self.tutorial
