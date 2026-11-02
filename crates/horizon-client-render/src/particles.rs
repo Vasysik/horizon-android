@@ -480,6 +480,7 @@ pub fn entity_event_burst(entity: &str, event: u8) -> Option<(&'static str, Burs
             | "zombie_horse"
     );
     Some(match (entity, event) {
+        ("villager", 11) => ("cloud", Burst::VILLAGER),
         ("villager", 12) => ("heart", Burst::VILLAGER),
         ("villager", 13) => ("angry_villager", Burst::VILLAGER),
         ("villager", 14) => ("happy_villager", Burst::VILLAGER),
