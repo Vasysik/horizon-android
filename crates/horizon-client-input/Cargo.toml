@@ -8,6 +8,8 @@ description = "The client's input layer: key bindings and their names, mouse, co
 
 [dependencies]
 horizon-client-core = { path = "../horizon-client-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 winit = "0.30.13"
 # The window icon.
 horizon-theme = { path = "../horizon-theme" }

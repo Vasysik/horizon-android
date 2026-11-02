@@ -4,6 +4,7 @@
 //! (`horizon_client::keybinds`, ...).
 #![forbid(unsafe_code)]
 pub mod clipboard;
+pub mod control_layout;
 pub mod gamepad;
 pub mod input;
 pub mod interaction_input;
