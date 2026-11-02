@@ -98,6 +98,8 @@ def main():
     parser.add_argument('--abi', choices=TARGETS, default='arm64-v8a')
     parser.add_argument('--sdk', type=Path, default=os.environ.get('ANDROID_HOME') or Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'Android/Sdk')
     parser.add_argument('--java-home', type=Path, default=os.environ.get('JAVA_HOME') or 'C:/Program Files/Android/Android Studio/jbr')
+    parser.add_argument('--ndk-version', help='Select an installed NDK version explicitly (CI reproducibility)')
+    parser.add_argument('--build-tools-version', help='Select an installed Android build-tools version explicitly')
     parser.add_argument('--skip-rust', action='store_true')
     parser.add_argument('--rust-only', action='store_true', help='Build the Rust host without touching shared APK staging')
     parser.add_argument('--release-candidate', action='store_true', help='Build a non-debuggable candidate and audit privacy; this does not authorize redistribution of bundled game resources')
@@ -126,8 +128,14 @@ def main():
     if args.release_candidate and args.profile == 'dev':
         parser.error('--release-candidate requires an optimized release or fast profile')
     suffix = '.exe' if os.name == 'nt' else ''
-    tools = latest(args.sdk / 'build-tools')
-    ndk = latest(args.sdk / 'ndk') / 'toolchains/llvm/prebuilt' / ('windows-x86_64' if os.name == 'nt' else 'linux-x86_64')
+    for name, value in [('ndk-version', args.ndk_version), ('build-tools-version', args.build_tools_version)]:
+        if value is not None and not re.fullmatch(r'\d+(?:\.\d+)+', value):
+            parser.error(f'--{name} must be a numeric SDK version')
+    tools = args.sdk / 'build-tools' / args.build_tools_version if args.build_tools_version else latest(args.sdk / 'build-tools')
+    ndk_root = args.sdk / 'ndk' / args.ndk_version if args.ndk_version else latest(args.sdk / 'ndk')
+    if not tools.is_dir() or not ndk_root.is_dir():
+        raise FileNotFoundError('Requested Android build-tools or NDK version is not installed')
+    ndk = ndk_root / 'toolchains/llvm/prebuilt' / ('windows-x86_64' if os.name == 'nt' else 'linux-x86_64')
     target = TARGETS[args.abi]
     # NDK spells the ARMv7 compiler triple differently from Rust. Android 8.1
     # is the legacy build's floor; the modern builds keep their existing floor.

@@ -75,7 +75,12 @@ jobs:
         env:
           ABI: ${{ matrix.abi }}
         run: |
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then
+            sdkmanager=$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)
+          fi
+          test -x "$sdkmanager"
+          "$sdkmanager" --sdk_root="$ANDROID_HOME" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
           rustup show
           case "$ABI" in
             arm64-v8a) target=aarch64-linux-android ;;
@@ -104,7 +109,8 @@ jobs:
           ABI: ${{ matrix.abi }}
         run: |
           python3 tools/android_build.py --abi "$ABI" --public --profile release \
-            --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME" --gradle "$(command -v gradle)" \
+            --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" --gradle "$(command -v gradle)" \
+            --ndk-version 28.2.13676358 --build-tools-version 35.0.0 \
             --dev-build "${GITHUB_RUN_NUMBER}.${GITHUB_SHA:0:12}" \
             --dev-version-code "$((1000 + GITHUB_RUN_NUMBER))"
       - name: Collect only audited APK and public metadata
