@@ -93,8 +93,15 @@ impl VoiceChatClient {
     ) -> Result<Option<(String, Vec<u8>)>, String> {
         match channel {
             CHANNEL_SECRET => {
+                log::info!("SVC: Raw secret payload ({} bytes): {:02x?}", data.len(), data);
                 let secret = SecretPacket::from_bytes(data)
                     .map_err(|e| format!("Failed to parse SecretPacket: {e}"))?;
+                if !(1..=65535).contains(&secret.server_port) {
+                    return Err(format!(
+                        "Invalid server port in SecretPacket: {}",
+                        secret.server_port
+                    ));
+                }
                 log::info!(
                     "SVC: Received secret from server, port: {}, codec: {}, mtu: {}",
                     secret.server_port,

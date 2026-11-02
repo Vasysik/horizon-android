@@ -61,6 +61,13 @@ pub struct UdpWorker;
 impl UdpWorker {
     /// Spawn the background UDP worker thread with SecretPacket parameters.
     pub fn spawn(secret: SecretPacket, fallback_host: &str) -> Result<UdpWorkerHandle, String> {
+        if !(1..=65535).contains(&secret.server_port) {
+            return Err(format!(
+                "Invalid server port in SecretPacket: {}",
+                secret.server_port
+            ));
+        }
+
         let state = Arc::new(RwLock::new(UdpConnectionState::Connecting));
         let (mic_tx, mic_rx) = std::sync::mpsc::channel::<MicPacket>();
         let (sound_tx, sound_rx) = std::sync::mpsc::channel::<IncomingSound>();
