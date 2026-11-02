@@ -153,6 +153,12 @@ impl TouchUi {
     pub fn mouse_held(&self) -> bool {
         !self.mouse_buttons.is_empty()
     }
+    /// The pointer holds one of the auxiliary mouse buttons (a `press_mouse`
+    /// without its `release_mouse`), so its releases end it even when the
+    /// screen or layout changed underneath.
+    pub fn owns_mouse(&self, id: u64) -> bool {
+        self.mouse_buttons.contains_key(&id)
+    }
     pub fn release_all_mouse(&mut self) -> Vec<bool> {
         let mut buttons: Vec<_> = std::mem::take(&mut self.mouse_buttons)
             .into_values()
@@ -427,6 +433,22 @@ fn button(b: &mut HudBatch, a: &HudAtlas, label: &str, x: f32, y: f32, w: f32) {
     b.text(a, label, x + 4.0, y + 6.0, rgba(245, 245, 245, 255), true);
 }
 
+/// Whether a physical left click takes part in the pad's utility buttons
+/// instead of going to the screen handler. Presses start only over a
+/// touched button (anything else belongs to the world: attack, use).
+/// Releases end whatever the pad already owns even when the layout no
+/// longer touches, so a held press survives menu entry, exit and the IME
+/// (a release the press never produced is a stray and is ignored).
+pub fn aux_mouse_phase(pressed: bool, owned: bool, touched: bool) -> Option<TouchPhase> {
+    (owned || touched).then(|| {
+        if pressed {
+            TouchPhase::Started
+        } else {
+            TouchPhase::Ended
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,5 +633,59 @@ mod tests {
             u.gesture(1, [20.0, 20.0], TouchPhase::Ended),
             Gesture::None
         ));
+    }
+
+    /// The press/release decision table of a physical left click the pad may
+    /// take: `(pressed, owned, touched)`.
+    #[test]
+    fn aux_mouse_presses_belong_to_the_pad_only_over_its_buttons() {
+        // Gameplay in a world: attack and use are not the pad's.
+        assert_eq!(aux_mouse_phase(true, false, false), None);
+        // The free pointer uses the gameplay auxiliary buttons (keypad
+        // profile) and menu actions alike: the press starts a touch.
+        assert_eq!(
+            aux_mouse_phase(true, false, true),
+            Some(TouchPhase::Started)
+        );
+    }
+    #[test]
+    fn a_menu_press_survives_closing_the_menu_before_its_release() {
+        // Press an action, then the screen closes and redraws elsewhere: the
+        // release must still complete the press, through the owned key.
+        let mut ui = TouchUi::default();
+        let owned = |ui: &TouchUi| ui.owns_key(7);
+        assert_eq!(aux_mouse_phase(true, owned(&ui), false), None);
+        assert_eq!(
+            aux_mouse_phase(true, owned(&ui), true),
+            Some(TouchPhase::Started)
+        );
+        ui.key_down(7, KeyCode::KeyT);
+        assert_eq!(
+            aux_mouse_phase(false, owned(&ui), false),
+            Some(TouchPhase::Ended)
+        );
+        assert_eq!(ui.key_up(7), Some(KeyCode::KeyT));
+        // The pad released everything: later strays do nothing (a release
+        // game screens can drop on menu entry also stays inert).
+        assert_eq!(aux_mouse_phase(false, owned(&ui), false), None);
+        assert_eq!(aux_mouse_phase(true, owned(&ui), false), None);
+    }
+    #[test]
+    fn a_held_auxiliary_mouse_button_releases_after_a_screen_change() {
+        // Where LMB/RMB utility buttons own the pointer, a release stays
+        // theirs across ownership checks, then frees it.
+        let mut ui = TouchUi::default();
+        assert_eq!(aux_mouse_phase(false, ui.owns_mouse(7), false), None);
+        ui.press_mouse(7, true);
+        assert_eq!(
+            aux_mouse_phase(false, ui.owns_mouse(7), false),
+            Some(TouchPhase::Ended)
+        );
+        assert_eq!(ui.release_mouse(7), Some((true, true)));
+        assert_eq!(aux_mouse_phase(false, ui.owns_mouse(7), false), None);
+    }
+    #[test]
+    fn a_release_over_a_touched_button_ends_it() {
+        assert_eq!(aux_mouse_phase(false, false, true), Some(TouchPhase::Ended));
     }
 }
