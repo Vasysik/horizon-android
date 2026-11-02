@@ -16,6 +16,15 @@
 //! each. Coplanar quads facing one way keep their model order, so an overlay
 //! on its base still draws in that order. Solid cutout quads are otherwise
 //! ordered from the outside toward the section interior to reduce overdraw.
+//!
+//! The opaque quads (`OPAQUE_LAYER`) and the cutout ones of each bucket are
+//! apart, so that each of Metal's two solid passes draws only its own quads
+//! (`Part`). Where the renderer draws them in two passes (`group_parts`), all
+//! the opaque buckets come first, then all the cutout ones, so each part is
+//! one or two runs; elsewhere each bucket holds its opaque quads, then its
+//! cutout ones, so one pass over all of them draws the runs it drew before.
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::{OPAQUE_LAYER, TerrainVertex};
 
 /// The buckets in mesh order: +X, +Z, other, +Y, -Z, -X, -Y. Seen from
@@ -44,58 +53,115 @@ enum Bucket {
     Other,
 }
 
-/// Where each bucket of a mesh's solid quads ends, and the planes that tell
-/// whether it can face the eye.
+/// Whether meshes sorted from now on put every bucket's opaque quads before
+/// any cutout ones: set by the renderer when it draws them in two passes.
+static GROUPED: AtomicBool = AtomicBool::new(false);
+
+/// Sorts later meshes for two solid passes (`true`) or one.
+pub fn group_parts(on: bool) {
+    GROUPED.store(on, Ordering::Relaxed);
+}
+
+/// The bucket and whether it holds cutout quads of the `n`th part of a
+/// mesh, in mesh order.
+fn slot(grouped: bool, n: usize) -> (usize, bool) {
+    if grouped {
+        (n % 7, n >= 7)
+    } else {
+        (n / 2, n % 2 == 1)
+    }
+}
+
+/// Where each part of each bucket of a mesh's solid quads ends, and the
+/// planes that tell whether a bucket can face the eye.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Sides {
-    /// The solid quads up to the end of each bucket, in `BUCKETS` order.
-    ends: [u32; 7],
+    /// The solid quads up to the end of each part of each bucket, in mesh
+    /// order (`slot`).
+    ends: [u32; 14],
+    /// Whether all the opaque parts come first (`group_parts`).
+    grouped: bool,
+    /// Whether opaque and cutout quads are apart; else either part is every
+    /// quad.
+    split: bool,
     /// Per bucket facing a positive direction, its lowest plane; facing a
     /// negative one, its highest (unused for the other bucket).
     planes: [f32; 7],
 }
 
 impl Sides {
+    /// Whether separating opaque/cutout draws preserves this mesh's ordering.
+    pub fn can_partition(&self) -> bool {
+        self.split
+    }
     /// `quads` solid quads in one bucket drawn from everywhere: for meshes
     /// that were not sorted.
     pub fn unsorted(quads: u32) -> Self {
-        let mut ends = [0; 7];
-        ends[OTHER..].fill(quads);
+        let mut ends = [0; 14];
+        ends[OTHER * 2..].fill(quads);
         Self {
             ends,
+            grouped: false,
+            split: false,
             planes: [0.0; 7],
         }
     }
 
     /// The number of solid quads the buckets hold.
     pub fn quads(&self) -> u32 {
-        self.ends[6]
+        self.ends[13]
     }
 
     /// Calls `draw(first, count)` for each run of quads an eye at `eye`
     /// (relative to the mesh's origin) can see the front of, nearest the
     /// start first. Empty buckets do not break a run.
     pub fn visible(&self, eye: [f32; 3], draw: impl FnMut(u32, u32)) {
-        self.visible_from(eye, eye[1], draw);
+        self.visible_part_from(eye, eye[1], Part::All, draw);
     }
 
     /// `visible` for every eye from `eye` straight down to the height `low`: the camera and
-    /// its water mirror's eye below the plane, which differ only in y.
-    pub fn visible_from(&self, eye: [f32; 3], low: f32, mut draw: impl FnMut(u32, u32)) {
+    /// its water mirror's eye below the plane, which differ only in y. Only the quads of
+    /// `part`, but every quad of a mesh whose parts are not split.
+    pub fn visible_from(&self, eye: [f32; 3], low: f32, draw: impl FnMut(u32, u32)) {
+        self.visible_part_from(eye, low, Part::All, draw);
+    }
+    pub fn visible_part_from(
+        &self,
+        eye: [f32; 3],
+        low: f32,
+        part: Part,
+        draw: impl FnMut(u32, u32),
+    ) {
+        let seen = |i: usize| match BUCKETS[i] {
+            Bucket::Side(axis, true) => eye[axis] > self.planes[i] - MARGIN,
+            Bucket::Side(1, false) => low < self.planes[i] + MARGIN,
+            Bucket::Side(axis, false) => eye[axis] < self.planes[i] + MARGIN,
+            Bucket::Other => true,
+        };
+        self.runs(seen, part, draw);
+    }
+
+    /// The runs of `part`'s quads facing every way.
+    pub fn every(&self, part: Part, draw: impl FnMut(u32, u32)) {
+        self.runs(|_| true, part, draw);
+    }
+
+    /// Calls `draw` for each run of `part`'s quads in the buckets `seen` keeps.
+    fn runs(&self, seen: impl Fn(usize) -> bool, part: Part, mut draw: impl FnMut(u32, u32)) {
         let mut start = 0;
         let mut run: Option<u32> = None;
-        for (i, bucket) in BUCKETS.iter().enumerate() {
-            let end = self.ends[i];
+        for (n, &end) in self.ends.iter().enumerate() {
             if end == start {
                 continue;
             }
-            let seen = match *bucket {
-                Bucket::Side(axis, true) => eye[axis] > self.planes[i] - MARGIN,
-                Bucket::Side(1, false) => low < self.planes[i] + MARGIN,
-                Bucket::Side(axis, false) => eye[axis] < self.planes[i] + MARGIN,
-                Bucket::Other => true,
+            let (bucket, cutout) = slot(self.grouped, n);
+            let wanted = match part {
+                Part::All => true,
+                _ if !self.split => true,
+                Part::Opaque => !cutout,
+                Part::Cutout => cutout,
             };
-            match (seen, run) {
+            match (wanted && seen(bucket), run) {
                 (true, None) => run = Some(start),
                 (false, Some(first)) => {
                     draw(first, start - first);
@@ -109,6 +175,15 @@ impl Sides {
             draw(first, start - first);
         }
     }
+}
+
+/// The quads `Sides::visible_from` draws: all of them, or those of one of
+/// Metal's two solid passes (terrain.wgsl's `opaque_quad`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    All,
+    Opaque,
+    Cutout,
 }
 
 /// The bucket of a quad: the axis plane it lies in and the side its
@@ -139,10 +214,166 @@ fn bucket(quad: &[TerrainVertex; 4]) -> usize {
     OTHER
 }
 
-/// Reorders `solid`'s quads by bucket. Solid cutout quads are also ordered
-/// front to back within each axis-facing bucket; stable sorting preserves the
-/// mesher's order for coplanar overlays.
+/// Reorders `solid`'s quads by bucket, opaque ones first in each. Solid
+/// cutout quads are also ordered front to back within each axis-facing
+/// bucket; stable sorting preserves the mesher's order for coplanar overlays.
 pub fn sort(solid: &mut Vec<TerrainVertex>) -> Sides {
+    if !GROUPED.load(Ordering::Relaxed) || !partition_safe(solid) {
+        return sort_legacy(solid);
+    }
+    sort_parts(solid, true)
+}
+
+// Coplanar overlays need model order. A later opaque quad must not be moved
+// before an overlapping cutout. Nonplanar meshes and expensive proofs
+// conservatively retain their original ordering and single shader.
+fn partition_safe(solid: &[TerrainVertex]) -> bool {
+    let quads = solid.as_chunks::<4>().0;
+    let opaque = |q: &[TerrainVertex; 4]| q[0].layer & OPAQUE_LAYER != 0;
+    if quads.iter().all(opaque) || quads.iter().all(|q| !opaque(q)) {
+        return true;
+    }
+    let mut cutouts = std::collections::BTreeMap::<(usize, u32), Vec<[f32; 4]>>::new();
+    let mut sloped_cutouts: Vec<[glam::Vec3; 4]> = Vec::new();
+    let mut comparisons = 0;
+    for q in quads {
+        let b = bucket(q);
+        let Bucket::Side(axis, _) = BUCKETS[b] else {
+            let points = q.map(|v| glam::Vec3::from(v.pos));
+            let normal = (points[1] - points[0]).cross(points[2] - points[0]);
+            let tolerance = normal.length() * 1e-5;
+            if tolerance <= 1e-12 || normal.dot(points[3] - points[0]).abs() > tolerance {
+                return false;
+            }
+            if !opaque(q) {
+                sloped_cutouts.push(points);
+            } else {
+                for previous in &sloped_cutouts {
+                    comparisons += 1;
+                    // A non-axis plane cannot overlap an axis plane over an area.
+                    // Of two sloped quads, only coplanar overlapping bounds need
+                    // the original order. Line intersections are resolved by depth.
+                    if comparisons > 4096 {
+                        return false;
+                    }
+                    if previous
+                        .iter()
+                        .all(|p| normal.dot(*p - points[0]).abs() <= tolerance)
+                    {
+                        let min_a = previous.iter().copied().reduce(glam::Vec3::min).unwrap();
+                        let max_a = previous.iter().copied().reduce(glam::Vec3::max).unwrap();
+                        let min_b = points.iter().copied().reduce(glam::Vec3::min).unwrap();
+                        let max_b = points.iter().copied().reduce(glam::Vec3::max).unwrap();
+                        if min_a.cmple(max_b).all() && min_b.cmple(max_a).all() {
+                            return false;
+                        }
+                    }
+                }
+            }
+            continue;
+        };
+        let p = q[0].pos[axis];
+        let key = (b, if p == 0.0 { 0 } else { p.to_bits() });
+        let u = (axis + 1) % 3;
+        let v = (axis + 2) % 3;
+        let lo = |axis: usize| q.iter().map(|v| v.pos[axis]).fold(f32::INFINITY, f32::min);
+        let hi = |axis: usize| {
+            q.iter()
+                .map(|v| v.pos[axis])
+                .fold(f32::NEG_INFINITY, f32::max)
+        };
+        let rect = [lo(u), lo(v), hi(u), hi(v)];
+        if !opaque(q) {
+            cutouts.entry(key).or_default().push(rect);
+        } else if let Some(previous) = cutouts.get(&key) {
+            for a in previous {
+                comparisons += 1;
+                if comparisons > 4096
+                    || (a[0] < rect[2] && rect[0] < a[2] && a[1] < rect[3] && rect[1] < a[3])
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// `sort`, with all the opaque parts first when `grouped`.
+fn sort_parts(solid: &mut Vec<TerrainVertex>, grouped: bool) -> Sides {
+    let (quads, rest) = solid.as_chunks::<4>();
+    debug_assert!(rest.is_empty(), "solid vertices come in quads");
+    let cutout = |q: &[TerrainVertex; 4]| q[0].layer & OPAQUE_LAYER == 0;
+    // Each quad's part, by its place in mesh order (`slot`).
+    let position = |b: usize, cutout: bool| match grouped {
+        true => b + 7 * usize::from(cutout),
+        false => b * 2 + usize::from(cutout),
+    };
+    let slots: Vec<u8> = quads
+        .iter()
+        .map(|q| position(bucket(q), cutout(q)) as u8)
+        .collect();
+    let has_cutout = quads.iter().any(cutout);
+    let mut counts = [0u32; 7];
+    let mut slot_counts = [0u32; 14];
+    let mut planes = [0f32; 7];
+    for (quad, &part) in quads.iter().zip(&slots) {
+        slot_counts[usize::from(part)] += 1;
+        let b = slot(grouped, usize::from(part)).0;
+        if let Bucket::Side(axis, positive) = BUCKETS[b] {
+            let p = quad[0].pos[axis];
+            planes[b] = match (counts[b], positive) {
+                (0, _) => p,
+                (_, true) => planes[b].min(p),
+                (_, false) => planes[b].max(p),
+            };
+        }
+        counts[b] += 1;
+    }
+    let mut slot_ends = [0u32; 14];
+    let mut total = 0;
+    for (end, count) in slot_ends.iter_mut().zip(slot_counts) {
+        total += count;
+        *end = total;
+    }
+    if has_cutout || counts.iter().filter(|&&c| c > 0).count() > 1 {
+        let mut next: [u32; 14] = std::array::from_fn(|s| slot_ends[s] - slot_counts[s]);
+        let mut sorted = vec![quads[0]; quads.len()];
+        for (quad, &part) in quads.iter().zip(&slots) {
+            let at = &mut next[usize::from(part)];
+            sorted[*at as usize] = *quad;
+            *at += 1;
+        }
+        if has_cutout {
+            let mut start = 0;
+            for (s, &end) in slot_ends.iter().enumerate() {
+                let end = end as usize;
+                let slice = &mut sorted[start..end];
+                if let Bucket::Side(axis, positive) = BUCKETS[slot(grouped, s).0] {
+                    slice.sort_by(|a, b| {
+                        let a = a[0].pos[axis];
+                        let b = b[0].pos[axis];
+                        if positive {
+                            b.total_cmp(&a)
+                        } else {
+                            a.total_cmp(&b)
+                        }
+                    });
+                }
+                start = end;
+            }
+        }
+        *solid = sorted.into_flattened();
+    }
+    Sides {
+        ends: slot_ends,
+        grouped,
+        split: true,
+        planes,
+    }
+}
+
+fn sort_legacy(solid: &mut Vec<TerrainVertex>) -> Sides {
     let (quads, rest) = solid.as_chunks::<4>();
     debug_assert!(rest.is_empty(), "solid vertices come in quads");
     let buckets: Vec<u8> = quads.iter().map(|q| bucket(q) as u8).collect();
@@ -196,12 +427,61 @@ pub fn sort(solid: &mut Vec<TerrainVertex>) -> Sides {
         }
         *solid = sorted.into_flattened();
     }
-    Sides { ends, planes }
+    Sides {
+        ends: std::array::from_fn(|i| ends[i / 2]),
+        grouped: false,
+        split: false,
+        planes,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coplanar_overlay_order_requires_the_original_path_only_when_it_changes() {
+        let face = |layer| {
+            quad(
+                [
+                    [1.0, 0.0, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [1.0, 1.0, 1.0],
+                    [1.0, 0.0, 1.0],
+                ],
+                layer,
+            )
+        };
+        let opaque_then_cutout = [face(OPAQUE_LAYER | 1), face(2)].concat();
+        assert!(partition_safe(&opaque_then_cutout));
+        let mut cutout_then_opaque = [face(2), face(OPAQUE_LAYER | 1)].concat();
+        assert!(!partition_safe(&cutout_then_opaque));
+        let sides = sort_legacy(&mut cutout_then_opaque);
+        assert!(!sides.can_partition());
+        assert_eq!(cutout_then_opaque[0].layer, 2);
+        assert_eq!(cutout_then_opaque[4].layer, OPAQUE_LAYER | 1);
+
+        let mut separate = face(OPAQUE_LAYER | 1);
+        for vertex in &mut separate {
+            vertex.pos[1] += 2.0;
+        }
+        assert!(partition_safe(&[face(2), separate].concat()));
+        let diagonal = quad(
+            [
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 1.0],
+                [1.0, 0.0, 1.0],
+            ],
+            3,
+        );
+        assert!(partition_safe(&[diagonal, face(OPAQUE_LAYER | 1)].concat()));
+        let mut diagonal_opaque = diagonal;
+        for vertex in &mut diagonal_opaque {
+            vertex.layer = OPAQUE_LAYER | 4;
+        }
+        assert!(!partition_safe(&[diagonal, diagonal_opaque].concat()));
+    }
 
     fn quad(corners: [[f32; 3]; 4], layer: u16) -> [TerrainVertex; 4] {
         corners.map(|p| TerrainVertex::new(p, [0.0; 2], layer, 0, 0))
@@ -223,6 +503,12 @@ mod tests {
         .into_iter()
         .flat_map(|q| quad(q, layer))
         .collect()
+    }
+
+    /// Where each bucket ends, in a mesh sorted for one pass.
+    fn bucket_ends(sides: &Sides) -> [u32; 7] {
+        assert!(!sides.grouped);
+        std::array::from_fn(|b| sides.ends[b * 2 + 1])
     }
 
     fn runs(sides: &Sides, eye: [f32; 3]) -> Vec<(u32, u32)> {
@@ -261,7 +547,7 @@ mod tests {
             v.layer = (i / 4) as u16;
         }
         let sides = sort(&mut solid);
-        assert_eq!(sides.ends, [1, 2, 2, 3, 4, 5, 6]);
+        assert_eq!(bucket_ends(&sides), [1, 2, 2, 3, 4, 5, 6]);
         let layers: Vec<u16> = solid.iter().step_by(4).map(|v| v.layer).collect();
         // +X, +Z, +Y, -Z, -X, -Y.
         assert_eq!(layers, [0, 4, 2, 5, 1, 3]);
@@ -348,7 +634,7 @@ mod tests {
         let sides = sort(&mut solid);
         let both = |eye: [f32; 3], low: f32| {
             let mut out = Vec::new();
-            sides.visible_from(eye, low, |first, count| out.push((first, count)));
+            sides.visible_part_from(eye, low, Part::All, |first, count| out.push((first, count)));
             out
         };
         // Above the block: +X, +Z and +Y; with the mirror's eye below it, -Y too.
@@ -358,6 +644,98 @@ mod tests {
         assert_eq!(both([8.0, 8.0, 8.0], 0.5), [(0, 3)]);
         // The sides depend on x and z alone.
         assert_eq!(both([-8.0, 8.0, -8.0], -8.0), [(2, 4)]);
+    }
+
+    /// Opaque and cutout quads of each bucket split: each pass's runs hold
+    /// exactly its own quads facing the eye, and all of them together the
+    /// same runs as one pass.
+    #[test]
+    fn each_part_draws_its_own_quads_facing_the_eye() {
+        // Two blocks: one opaque, one cutout, then an opaque one again, so
+        // every bucket holds both kinds out of order.
+        let mut solid = Vec::new();
+        let mut id = 0u16;
+        for (origin, opaque) in [
+            ([0.0, 0.0, 0.0], true),
+            ([4.0, 2.0, 6.0], false),
+            ([9.0, 5.0, 3.0], true),
+        ] {
+            for q in cube(origin, 0).chunks(4) {
+                let layer = id | if opaque { OPAQUE_LAYER } else { 0 };
+                solid.extend(q.iter().map(|v| TerrainVertex { layer, ..*v }));
+                id += 1;
+            }
+        }
+        let unsorted = solid;
+        for grouped in [false, true] {
+            let mut solid = unsorted.clone();
+            let sides = sort_parts(&mut solid, grouped);
+            let layers: Vec<u16> = solid
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|q| q[0].layer)
+                .collect();
+            for eye in [[20.0, 30.0, -10.0], [-5.0, 1.0, 4.0], [5.0, 3.0, 7.0]] {
+                let quads = |part| {
+                    let mut out = Vec::new();
+                    sides.visible_part_from(eye, eye[1], part, |first, count| {
+                        out.extend(
+                            layers[first as usize..(first + count) as usize]
+                                .iter()
+                                .copied(),
+                        )
+                    });
+                    out.sort_unstable();
+                    out
+                };
+                let mut facing = front_facing(&solid, eye);
+                facing.sort_unstable();
+                let opaque = quads(Part::Opaque);
+                let cutout = quads(Part::Cutout);
+                assert!(opaque.iter().all(|l| l & OPAQUE_LAYER != 0), "{eye:?}");
+                assert!(cutout.iter().all(|l| l & OPAQUE_LAYER == 0), "{eye:?}");
+                for l in &facing {
+                    let mine = if l & OPAQUE_LAYER != 0 {
+                        &opaque
+                    } else {
+                        &cutout
+                    };
+                    assert!(
+                        mine.contains(l),
+                        "{eye:?}: quad {l} facing the eye left out"
+                    );
+                }
+                let mut both = [opaque, cutout].concat();
+                both.sort_unstable();
+                assert_eq!(both, quads(Part::All), "{eye:?}");
+            }
+            // Every way: each part once, whole.
+            let mut every = Vec::new();
+            sides.every(Part::Opaque, |first, count| every.push((first, count)));
+            sides.every(Part::Cutout, |first, count| every.push((first, count)));
+            let total: u32 = every.iter().map(|r| r.1).sum();
+            assert_eq!(total, sides.quads());
+
+            // Two passes: from above a corner, each part is one or two runs.
+            if grouped {
+                let mut count = 0;
+                sides.visible_part_from([20.0, 30.0, -10.0], 30.0, Part::Opaque, |_, _| count += 1);
+                assert_eq!(count, 2);
+            }
+        }
+    }
+
+    /// A mesh that was not sorted has no parts: each pass draws all of it
+    /// (the shader leaves out the other pass's quads).
+    #[test]
+    fn unsorted_meshes_draw_everything_in_each_part() {
+        let sides = Sides::unsorted(9);
+        for part in [Part::Opaque, Part::Cutout] {
+            let mut out = Vec::new();
+            sides.every(part, |first, count| out.push((first, count)));
+            assert_eq!(out, [(0, 9)]);
+        }
     }
 
     #[test]
@@ -385,7 +763,7 @@ mod tests {
             .collect();
         let before = solid.clone();
         let sides = sort(&mut solid);
-        assert_eq!(sides.ends, [3; 7]);
+        assert_eq!(bucket_ends(&sides), [3; 7]);
         assert_eq!(
             solid.iter().map(|v| v.layer).collect::<Vec<_>>(),
             before.iter().map(|v| v.layer).collect::<Vec<_>>()
