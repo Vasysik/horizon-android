@@ -12,15 +12,40 @@ use crate::Properties;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Values {
     values: BTreeMap<String, String>,
+    /// The most a numeric option may say, whatever the pack or a profile asks.
+    caps: BTreeMap<String, f64>,
 }
 
 impl Values {
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.values.is_empty() && self.caps.is_empty()
     }
 
     pub fn set(&mut self, name: &str, value: &str) {
         self.values.insert(name.to_owned(), value.to_owned());
+    }
+
+    /// Every declaration of `name` says at most `max`; a lower value and a value that isn't a
+    /// plain number stay.
+    pub fn cap(&mut self, name: &str, max: f64) {
+        self.caps.insert(name.to_owned(), max);
+    }
+
+    /// The first of `wanted` the pack has as a profile, its name as the pack writes it. Names
+    /// compare without case or `_`: packs write `VERYLOW`, `very_low` and `low`.
+    pub fn first_profile(properties: &Properties, wanted: &[&str]) -> Option<String> {
+        let plain = |name: &str| name.replace('_', "").to_ascii_lowercase();
+        let names: Vec<&str> = properties
+            .entries
+            .iter()
+            .filter_map(|e| e.key.strip_prefix("profile."))
+            .collect();
+        wanted.iter().find_map(|want| {
+            names
+                .iter()
+                .find(|name| plain(name) == plain(want))
+                .map(|name| (*name).to_owned())
+        })
     }
 
     /// `NAME=VALUE` (or OptiFine's `NAME:VALUE`), `NAME` (a switch on) and `!NAME` (off),
@@ -62,7 +87,7 @@ impl Values {
 
     /// `text` with every declaration of an option set here carrying its value.
     pub fn apply(&self, text: &str) -> String {
-        if self.values.is_empty() {
+        if self.is_empty() {
             return text.to_owned();
         }
         let mut out = String::with_capacity(text.len());
@@ -92,12 +117,11 @@ impl Values {
             let after = after.strip_prefix([' ', '\t'])?.trim_start();
             let name_len = identifier(after);
             let (name, tail) = after.split_at(name_len);
-            let value = self.values.get(name)?;
             // What follows the name: a value, then perhaps a comment.
             let (old, comment) = split_comment(tail);
             if old.trim().is_empty() {
                 // A switch.
-                let on = match value.as_str() {
+                let on = match self.values.get(name)?.as_str() {
                     "true" => true,
                     "false" => false,
                     _ => return None,
@@ -108,6 +132,7 @@ impl Values {
             if commented {
                 return None;
             }
+            let value = self.declared(name, old.trim())?;
             return Some(format!("{indent}#define {name} {value}{}", spaced(comment)));
         }
         if commented {
@@ -121,13 +146,32 @@ impl Values {
         let after_type = after[type_len..].trim_start();
         let name_len = identifier(after_type);
         let name = &after_type[..name_len];
-        let value = self.values.get(name)?;
         let after_name = after_type[name_len..].trim_start().strip_prefix('=')?;
-        let (_, tail) = after_name.split_once(';')?;
+        let (old, tail) = after_name.split_once(';')?;
+        let value = self.declared(name, old.trim())?;
         Some(format!(
             "{indent}const {} {name} = {value};{tail}",
             &after[..type_len]
         ))
+    }
+
+    /// What the declaration of `name`, now saying `old`, should say: the picked value, kept under
+    /// its cap. None leaves the line as it is.
+    fn declared(&self, name: &str, old: &str) -> Option<String> {
+        let picked = self.values.get(name);
+        let now = picked.map_or(old, String::as_str);
+        if let Some(&cap) = self.caps.get(name)
+            && let Ok(value) = now.trim_end_matches(['f', 'F']).parse::<f64>()
+            && value > cap
+        {
+            // In the form the line has: a `const int` takes no `1024.0`.
+            return Some(if now.contains('.') {
+                format!("{cap:?}")
+            } else {
+                format!("{cap}")
+            });
+        }
+        picked.cloned()
     }
 }
 
@@ -191,6 +235,41 @@ mod tests {
         expected.parse_list("SHADOW_QUALITY=0 shadowDistance=64.0 !SSAO");
         assert_eq!(potato, expected);
         assert!(Values::profile(&properties, "ULTRA").is_none());
+    }
+
+    #[test]
+    fn a_cap_lowers_what_is_above_it_and_nothing_else() {
+        let mut values = Values::default();
+        values.cap("shadowMapResolution", 1024.0);
+        values.cap("shadowDistance", 96.0);
+        values.parse_list("shadowDistance=192.0");
+        let source = "const int shadowMapResolution = 4096;\n\
+                      const int shadowMapResolution = 512;\n\
+                      const int shadowMapResolution = RES * 2;\n\
+                      //const int shadowMapResolution = 8192;\n\
+                      const float shadowDistance = 64.0;\n\
+                      #define shadowMapResolution 2048 //[1024 2048]\n\
+                      #define OTHER 4096\n";
+        assert_eq!(
+            values.apply(source),
+            "const int shadowMapResolution = 1024;\n\
+             const int shadowMapResolution = 512;\n\
+             const int shadowMapResolution = RES * 2;\n\
+             //const int shadowMapResolution = 8192;\n\
+             const float shadowDistance = 96.0;\n\
+             #define shadowMapResolution 1024 //[1024 2048]\n\
+             #define OTHER 4096\n"
+        );
+    }
+
+    #[test]
+    fn the_first_wanted_profile_the_pack_has_is_found_however_it_is_written() {
+        let text = "profile.VERY_LOW = !SSAO\nprofile.low = SSAO\nprofile.ULTRA = SSAO\n";
+        let properties = Properties::parse(text, &Macros::standard());
+        let found = |wanted| Values::first_profile(&properties, wanted);
+        assert_eq!(found(&["potato", "verylow", "low"]).unwrap(), "VERY_LOW");
+        assert_eq!(found(&["LOW"]).unwrap(), "low");
+        assert_eq!(found(&["potato"]), None);
     }
 
     #[test]

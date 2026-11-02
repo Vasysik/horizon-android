@@ -6,6 +6,7 @@
 
 use horizon_client::camera::CameraFluid;
 use horizon_client::gfx::pack_uniforms::PackInputs;
+use horizon_client::graphics::AUTO_PROFILE;
 use horizon_shaders::{BlockIds, Macros, Pack, Properties, dimension_folder, load_post};
 
 use super::{Dim, Game};
@@ -39,11 +40,67 @@ pub(super) struct Making {
     started: std::time::Instant,
 }
 
+/// What the Auto profile does to a pack on this device. Packs written for a PC spend most of a
+/// phone's frame on their pixels and their shadow map, so it takes the pack's own lightest fitting
+/// profile, then limits those two.
+struct AutoProfile {
+    /// The profiles to look for, the first the pack has wins (`Values::first_profile`).
+    profiles: &'static [&'static str],
+    shadow_resolution: f64,
+    shadow_distance: f64,
+    /// The most of the screen's resolution the world draws at (`light_pack`s aside).
+    scale: f32,
+}
+
+impl AutoProfile {
+    fn here() -> Self {
+        use horizon_client::system_stats::Tier;
+        match Tier::here().unwrap_or(Tier::High) {
+            Tier::High => Self {
+                profiles: &["low", "verylow", "potato"],
+                shadow_resolution: 1024.0,
+                shadow_distance: 96.0,
+                scale: 0.5,
+            },
+            Tier::Mid => Self {
+                profiles: &["verylow", "shadowlesslow", "low", "potato"],
+                shadow_resolution: 1024.0,
+                shadow_distance: 64.0,
+                scale: 0.4,
+            },
+            Tier::Low => Self {
+                profiles: &["potato", "verylow", "shadowlesslow", "low"],
+                shadow_resolution: 512.0,
+                shadow_distance: 64.0,
+                scale: 0.3,
+            },
+        }
+    }
+}
+
+/// A pack made to be cheap, which Auto leaves at the player's resolution: Starling Visuals and
+/// MakeUp Ultra Fast.
+fn light_pack(name: &str) -> bool {
+    let name = name.replace(['-', '_', ' '], "").to_ascii_lowercase();
+    name.starts_with("starlingvisuals") || name.starts_with("makeup")
+}
+
 /// The pack's option values: the chosen `profile` (`LOW`), then `HORIZON_SHADER_OPTIONS` lists
 /// values over it (`shadowDistance=64.0 SHADOW_QUALITY=0 !BLOOM`).
 fn picked_values(properties: &Properties, name: &str, profile: &str) -> horizon_shaders::Values {
     let mut values = horizon_shaders::Values::default();
-    if !profile.is_empty() {
+    if profile == AUTO_PROFILE {
+        let auto = AutoProfile::here();
+        match horizon_shaders::Values::first_profile(properties, auto.profiles) {
+            Some(found) => {
+                log::info!("shader pack {name}: Auto picks profile `{found}`");
+                values = horizon_shaders::Values::profile(properties, &found).unwrap_or_default();
+            }
+            None => log::info!("shader pack {name}: Auto finds no light profile"),
+        }
+        values.cap("shadowMapResolution", auto.shadow_resolution);
+        values.cap("shadowDistance", auto.shadow_distance);
+    } else if !profile.is_empty() {
         match horizon_shaders::Values::profile(properties, profile) {
             Some(p) => values = p,
             None => log::warn!("shader pack {name}: no profile `{profile}`"),
@@ -70,8 +127,11 @@ impl Game<'_> {
             self.native_shaders = Default::default();
             self.pack_ids = None;
             self.pack_making = None;
+            let scale = self.world_scale();
+            let antialias = self.settings.horizon.fxaa;
             if let Some(renderer) = &mut self.renderer {
                 renderer.drop_shader_packs();
+                renderer.set_world_post(scale, antialias);
             }
         }
         let Some((name, profile)) = self.shader_choice.clone() else {
@@ -234,6 +294,33 @@ impl Game<'_> {
             rainfall: info.map_or(0.0, |b| b.downfall),
             held_items,
             held_light,
+            player_flags: self.player.as_ref().map_or([false; 5], |p| {
+                [
+                    p.fire_ticks > 0,
+                    p.health.hurt.cooldown > 0,
+                    self.potions.effects.get("invisibility").is_some(),
+                    p.shift_key_down,
+                    p.sprinting,
+                ]
+            }),
+        }
+    }
+
+    /// The world's resolution, of the screen's: the player's, and no more than Auto's while it
+    /// runs a pack that isn't a light one.
+    pub(super) fn world_scale(&self) -> f32 {
+        let chosen = self.settings.horizon.resolution_scale as f32 / 100.0;
+        match &self.shader_choice {
+            Some((name, profile))
+                if profile == AUTO_PROFILE
+                    && !light_pack(name)
+                    && !horizon_shader_api::package::is_pack(
+                        &Self::shader_packs_dir().join(name),
+                    ) =>
+            {
+                chosen.min(AutoProfile::here().scale)
+            }
+            _ => chosen,
         }
     }
 

@@ -2069,10 +2069,10 @@ impl OptionsUi {
                         .iter()
                         .any(|p| p.file == *pack && p.kind == PackKind::Horizon)
                 {
-                    let shown = if profile.is_empty() {
-                        "Pack Default"
-                    } else {
-                        profile
+                    let shown = match profile.as_str() {
+                        "" => "Pack Default",
+                        crate::graphics::AUTO_PROFILE => "Auto",
+                        profile => profile,
                     };
                     rows.push(Row::Buttons(
                         button(
@@ -2100,6 +2100,10 @@ impl OptionsUi {
             .unwrap_or_default()
             .join(crate::shader_pack_list::DIR);
         self.shader_profiles = vec![String::new()];
+        if cfg!(target_os = "android") {
+            self.shader_profiles
+                .insert(0, crate::graphics::AUTO_PROFILE.to_owned());
+        }
         if let Some((pack, _)) = s.horizon.shader_choice()
             && let Ok(pack) = horizon_shaders::Pack::open(&dir.join(pack))
         {
@@ -3171,11 +3175,11 @@ impl OptionsUi {
                             let at = list.iter().position(|p| *p == now).unwrap_or(0);
                             if let Some(next) = list.get((at + 1) % list.len().max(1)) {
                                 // Empty would fall back to the variable's: the pack's own
-                                // defaults are `default`.
-                                s.horizon.shader_profile = if next.is_empty() {
-                                    "default".into()
-                                } else {
-                                    next.clone()
+                                // defaults are `default`, and empty is what means Auto.
+                                s.horizon.shader_profile = match next.as_str() {
+                                    "" => "default".into(),
+                                    crate::graphics::AUTO_PROFILE => String::new(),
+                                    next => next.to_owned(),
                                 };
                             }
                             events.push(Event::ShaderPack);

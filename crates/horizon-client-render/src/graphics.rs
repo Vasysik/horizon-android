@@ -285,6 +285,10 @@ pub struct Graphics {
     /// `HORIZON_SHADER_PROFILE`'s, `default` for the pack's own defaults.
     pub shader_profile: String,
 }
+/// The profile that fits the pack to the device (`game/shader_packs.rs`): a phone's until the
+/// player picks another.
+pub const AUTO_PROFILE: &str = "auto";
+
 impl Graphics {
     /// The shader pack and profile chosen: `HORIZON_SHADER_PACK`'s, for development, else the
     /// Shader Packs page's.
@@ -293,7 +297,13 @@ impl Graphics {
         let pack = env("HORIZON_SHADER_PACK")
             .or_else(|| Some(self.shader_pack.clone()).filter(|p| !p.is_empty()))?;
         let profile = match self.shader_profile.as_str() {
-            "" => env("HORIZON_SHADER_PROFILE").unwrap_or_default(),
+            "" => env("HORIZON_SHADER_PROFILE").unwrap_or_else(|| {
+                if cfg!(target_os = "android") {
+                    AUTO_PROFILE.to_owned()
+                } else {
+                    String::new()
+                }
+            }),
             "default" => String::new(),
             profile => profile.to_owned(),
         };

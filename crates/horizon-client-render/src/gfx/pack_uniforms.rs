@@ -33,6 +33,8 @@ pub struct PackInputs {
     /// `heldItemId`, `heldItemId2` (item.properties, 5.3) and `heldBlockLightValue(2)`.
     pub held_items: [i32; 2],
     pub held_light: [i32; 2],
+    /// `is_burning`, `is_hurt`, `is_invisible`, `is_sneaking`, `is_sprinting`.
+    pub player_flags: [bool; 5],
 }
 
 /// One uniform's value: up to 16 floats or 3 integers.
@@ -164,6 +166,13 @@ pub const NAMES: &[&str] = &[
     "shadowModelViewInverse",
     "shadowProjection",
     "shadowProjectionInverse",
+    "is_burning",
+    "is_hurt",
+    "is_invisible",
+    "is_sneaking",
+    "is_sprinting",
+    "cloudHeight",
+    "eyePosition",
 ];
 
 /// Values carried from frame to frame.
@@ -421,6 +430,14 @@ impl FrameUniforms {
                 "heldItemId2" => Value::i(&[inputs.held_items[1]]),
                 "heldBlockLightValue" => Value::i(&[inputs.held_light[0]]),
                 "heldBlockLightValue2" => Value::i(&[inputs.held_light[1]]),
+                "is_burning" => Value::i(&[i32::from(inputs.player_flags[0])]),
+                "is_hurt" => Value::i(&[i32::from(inputs.player_flags[1])]),
+                "is_invisible" => Value::i(&[i32::from(inputs.player_flags[2])]),
+                "is_sneaking" => Value::i(&[i32::from(inputs.player_flags[3])]),
+                "is_sprinting" => Value::i(&[i32::from(inputs.player_flags[4])]),
+                // Where clouds.rs draws them: a pack that reads 0 puts its own under the world.
+                "cloudHeight" => Value::f(&[192.33]),
+                "eyePosition" => v3(frame.camera.as_vec3()),
                 // renderStage is NONE outside gbuffers draws.
                 _ => Value::i(&[0]),
             }
@@ -482,7 +499,8 @@ fn components(name: &str) -> usize {
         | "moonPosition"
         | "shadowLightPosition"
         | "fogColor"
-        | "skyColor" => 3,
+        | "skyColor"
+        | "eyePosition" => 3,
         "eyeBrightness" | "eyeBrightnessSmooth" | "atlasSize" => 2,
         n if n.starts_with("gbuffer") || n.starts_with("shadow") && n != "shadowAngle" => 16,
         _ => 1,
