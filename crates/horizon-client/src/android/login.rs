@@ -181,42 +181,118 @@ impl Login {
         offline_name: &str,
         editing_name: bool,
     ) {
+        use horizon_client::ui_theme::Icon;
         targets.clear();
-        let w = (ui.w - 36.0).clamp(280.0, 520.0);
-        let h = if editing_name {
-            (ui.h - 32.0).clamp(210.0, 250.0)
-        } else {
-            (ui.h - 24.0).clamp(286.0, 344.0)
-        };
-        let x = (ui.w - w) * 0.5;
-        let y = (ui.h - h) * 0.5;
+        let (sw, sh) = (ui.w, ui.h);
+        ui.rounded(0.0, 0.0, sw, sh, 0.0, color::hex(0x06050A, 196));
 
-        // Fullscreen dimmed backdrop scrim + Material You 3 modal surface
-        ui.rounded(0.0, 0.0, ui.w, ui.h, 0.0, color::hex(0x06050B, 212));
-        ui.rounded(x, y, w, h, 22.0, color::hex(0x171522, 255));
+        let w = (sw - 28.0).min(488.0);
+        let h = (sh - 20.0).min(368.0).max(248.0);
+        let x = (sw - w) * 0.5;
+        let y = (sh - h) * 0.5;
+
+        ui.rounded(x, y, w, h, 22.0, color::hex(0x161421, 255));
         ui.border(x, y, w, h, 22.0, color::hex(0x2E2A42, 255));
+
+        let inner_x = x + 20.0;
+        let inner_w = w - 40.0;
+
+        // Header Row (Avatar + Title + Status Badge + Close Button)
+        let header_y = y + 14.0;
+        ui.avatar_head(inner_x, header_y + 2.0, 30.0);
+        ui.text(
+            Face::SemiBold,
+            17.5,
+            inner_x + 38.0,
+            header_y + 4.0,
+            color::TEXT,
+            "Accounts & Sign-In",
+        );
+
+        let close_rect = [x + w - 50.0, header_y, 32.0, 32.0];
+        ui.rounded(
+            close_rect[0],
+            close_rect[1],
+            close_rect[2],
+            close_rect[3],
+            10.0,
+            color::hex(0x262235, 255),
+        );
+        ui.icon(
+            Icon::Close,
+            close_rect[0] + 9.0,
+            close_rect[1] + 9.0,
+            14.0,
+            color::TEXT,
+        );
+        targets.push((close_rect, Action::CloseLogin));
+
+        let status_label = self.status(offline_name);
+        let badge_w = (ui.measure(Face::Medium, 11.0, &status_label) + 18.0).min(156.0);
+        let badge_x = (close_rect[0] - badge_w - 8.0).max(inner_x + 190.0);
+        if badge_x + badge_w <= close_rect[0] - 4.0 {
+            ui.rounded(
+                badge_x,
+                header_y + 4.0,
+                badge_w,
+                24.0,
+                12.0,
+                if self.signed_in {
+                    color::hex(0x233B2E, 255)
+                } else {
+                    color::hex(0x262235, 255)
+                },
+            );
+            ui.border(
+                badge_x,
+                header_y + 4.0,
+                badge_w,
+                24.0,
+                12.0,
+                if self.signed_in {
+                    color::hex(0x4E8E6E, 255)
+                } else {
+                    color::hex(0x38334C, 255)
+                },
+            );
+            ui.centered_fit(
+                Face::Medium,
+                10.5,
+                [badge_x + 4.0, header_y + 4.0, badge_w - 8.0, 24.0],
+                if self.signed_in {
+                    color::hex(0x7FE3AF, 255)
+                } else {
+                    color::MUTED
+                },
+                &status_label,
+            );
+        }
+
+        let mut cy = header_y + 38.0;
+        ui.rounded(inner_x, cy, inner_w, 1.0, 0.0, color::hex(0x29253B, 255));
+        cy += 10.0;
 
         if editing_name {
             ui.text(
                 Face::SemiBold,
-                20.0,
-                x + 22.0,
-                y + 20.0,
+                15.0,
+                inner_x,
+                cy + 6.0,
                 color::TEXT,
                 "Offline player name",
             );
             ui.text(
                 Face::Regular,
-                13.5,
-                x + 22.0,
-                y + 52.0,
+                12.5,
+                inner_x,
+                cy + 30.0,
                 color::MUTED,
-                "Used for singleplayer and offline LAN worlds when signed out of Microsoft.",
+                "Used when signed out of Microsoft.",
             );
             button(
                 ui,
                 targets,
-                [x + 22.0, y + 88.0, w - 44.0, 42.0],
+                [inner_x, cy + 56.0, inner_w, 40.0],
                 offline_name,
                 Action::Field("name"),
                 false,
@@ -224,162 +300,84 @@ impl Login {
             button(
                 ui,
                 targets,
-                [x + 22.0, y + h - 54.0, w - 44.0, 38.0],
-                "Save & Done",
+                [inner_x, y + h - 50.0, inner_w, 36.0],
+                "Done",
                 Action::FinishNameEdit,
                 true,
             );
             return;
         }
 
-        // Top Header: Avatar + "Accounts" + Status Pill + Close (X) button
-        ui.avatar_head(x + 22.0, y + 18.0, 28.0);
-        ui.text(
-            Face::SemiBold,
-            20.0,
-            x + 58.0,
-            y + 18.0,
-            color::TEXT,
-            "Accounts",
-        );
+        // Reserve bottom space for Offline Player Name + Action Buttons so nothing ever overlaps!
+        let row2_y = y + h - 44.0;
+        let row1_y = row2_y - 38.0;
+        let offline_y = row1_y - 54.0;
 
-        let status_str = self.status(offline_name);
-        let status_col = if self.signed_in {
-            color::hex(0x9A7BFF, 255)
-        } else {
-            color::MUTED
-        };
-        let status_fit = ui.fit_text(Face::Medium, 13.5, &status_str, (w - 130.0).max(80.0));
-        ui.text(
-            Face::Medium,
-            13.5,
-            x + 58.0,
-            y + 43.0,
-            status_col,
-            &status_fit,
-        );
+        // Section 1: Microsoft Account Status / Device Code Box
+        let box_h = (offline_y - cy - 6.0).clamp(44.0, 96.0);
+        ui.rounded(inner_x, cy, inner_w, box_h, 12.0, color::hex(0x1E1B2B, 255));
+        ui.border(inner_x, cy, inner_w, box_h, 12.0, color::hex(0x2D2940, 255));
 
-        // Top-right Close button
-        let close_rect = [x + w - 54.0, y + 16.0, 34.0, 34.0];
-        ui.rounded(
-            close_rect[0],
-            close_rect[1],
-            close_rect[2],
-            close_rect[3],
-            12.0,
-            color::hex(0x232032, 255),
-        );
-        ui.icon(
-            horizon_client::ui_theme::Icon::Close,
-            close_rect[0] + 9.0,
-            close_rect[1] + 9.0,
-            16.0,
-            color::TEXT,
-        );
-        targets.push((close_rect, Action::CloseLogin));
-
-        let mut cy = y + 72.0;
-
-        // Status / Device Code Card (strictly sequential cy so nothing ever overlaps!)
         if let Some(SignInState::Code(code)) = &self.state {
             button(
                 ui,
                 targets,
-                [x + 22.0, cy, w - 44.0, 42.0],
-                &format!("Code: {}   •   Tap to copy", code.user_code),
+                [inner_x + 8.0, cy + 6.0, inner_w - 16.0, 32.0],
+                &format!("Code: {}  •  Tap to Copy", code.user_code),
                 Action::CopyLoginCode,
                 false,
             );
-            cy += 48.0;
         } else {
-            let box_h = 46.0;
-            ui.rounded(
-                x + 22.0,
-                cy,
-                w - 44.0,
-                box_h,
-                12.0,
-                color::hex(0x1E1B2E, 255),
-            );
-            ui.border(
-                x + 22.0,
-                cy,
-                w - 44.0,
-                box_h,
-                12.0,
-                color::hex(0x2D2942, 255),
-            );
-            let primary_note = if self.signed_in {
+            let subtitle = if self.signed_in {
                 "Account saved securely. Sessions renew automatically."
-            } else if matches!(self.state, Some(SignInState::Starting)) {
-                "Requesting a Microsoft device sign-in code..."
             } else {
-                "Sign in with Microsoft in your browser, or play offline below."
+                "Your password is entered in Microsoft's browser."
             };
-            let fit_note = ui.fit_text(Face::Regular, 13.0, primary_note, w - 68.0);
-            let has_extra = !self.message.trim().is_empty();
-            ui.text(
-                Face::Regular,
-                13.0,
-                x + 34.0,
-                cy + if has_extra { 6.0 } else { 13.0 },
-                color::TEXT,
-                &fit_note,
-            );
-            if has_extra {
-                let fit_msg = ui.fit_text(Face::Medium, 12.0, self.message.trim(), w - 68.0);
-                ui.text(
-                    Face::Medium,
-                    12.0,
-                    x + 34.0,
-                    cy + 24.0,
-                    color::hex(0x9A7BFF, 255),
-                    &fit_msg,
-                );
-            }
-            cy += box_h + 10.0;
+            let fitted_sub = ui.fit_text(Face::Medium, 12.0, subtitle, inner_w - 20.0);
+            ui.text(Face::Medium, 12.0, inner_x + 10.0, cy + 6.0, color::TEXT, &fitted_sub);
         }
 
-        // Offline player name field (when not actively waiting on browser sign-in)
-        if !self.pending() {
+        let msg_text = match &self.state {
+            Some(SignInState::Starting) => "Requesting a sign-in code...",
+            _ => &self.message,
+        };
+        if !msg_text.is_empty() && box_h >= 46.0 {
+            let fitted_msg = ui.fit_text(Face::Regular, 11.5, msg_text, inner_w - 20.0);
+            ui.text(
+                Face::Regular,
+                11.5,
+                inner_x + 10.0,
+                cy + box_h - 22.0,
+                color::MUTED,
+                &fitted_msg,
+            );
+        }
+
+        // Section 2: Offline Player Name Input (never overlaps status box!)
+        if !self.pending() && offline_y >= cy + box_h + 2.0 {
             ui.text(
                 Face::Medium,
-                12.5,
-                x + 22.0,
-                cy,
+                11.5,
+                inner_x,
+                offline_y,
                 color::MUTED,
                 "Offline player name",
             );
-            cy += 20.0;
             button(
                 ui,
                 targets,
-                [x + 22.0, cy, w - 44.0, 36.0],
-                if offline_name.trim().is_empty() {
-                    "Tap to enter an offline player name..."
+                [inner_x, offline_y + 16.0, inner_w, 32.0],
+                if offline_name.is_empty() {
+                    "Enter an offline name"
                 } else {
                     offline_name
                 },
                 Action::Field("name"),
                 false,
             );
-        } else if !self.message.trim().is_empty() {
-            let fit_msg = ui.fit_text(Face::Regular, 13.0, self.message.trim(), w - 44.0);
-            ui.text(Face::Regular, 13.0, x + 22.0, cy + 6.0, color::TEXT, &fit_msg);
         }
 
-        if self.message.contains("not approved by Mojang") {
-            button(
-                ui,
-                targets,
-                [x + 22.0, y + h - 138.0, w - 44.0, 28.0],
-                "Request Minecraft API approval",
-                Action::ReviewApp,
-                false,
-            );
-        }
-
-        // Bottom Buttons Area
+        // Section 3: Action Buttons (2 compact rows at bottom)
         let (primary_label, primary_action) = if matches!(self.state, Some(SignInState::Code(_))) {
             ("Copy code & open browser", Action::LoginLink)
         } else if self.pending() {
@@ -387,55 +385,48 @@ impl Login {
         } else if self.signed_in {
             ("Switch Microsoft account", Action::SignIn)
         } else {
-            ("Sign in with Microsoft", Action::SignIn)
+            ("Sign in with browser", Action::SignIn)
         };
-
-        let btn_primary_y = y + h - 100.0;
+        let half = (inner_w - 8.0) * 0.5;
         button(
             ui,
             targets,
-            [x + 22.0, btn_primary_y, w - 44.0, 38.0],
+            [inner_x, row1_y, half, 32.0],
             primary_label,
             primary_action,
             true,
         );
-
-        let row2_y = y + h - 52.0;
-        let col_gap = 10.0;
-        let col3_w = (w - 44.0 - col_gap * 2.0) / 3.0;
         button(
             ui,
             targets,
-            [x + 22.0, row2_y, col3_w, 36.0],
-            "Device code",
+            [inner_x + half + 8.0, row1_y, half, 32.0],
+            "Use device code",
             Action::DeviceSignIn,
             false,
         );
+
+        let (sec_label, sec_action) = if self.pending() {
+            ("Cancel sign-in", Action::CancelLogin)
+        } else if self.profile.is_some() {
+            ("Sign out", Action::SignOut)
+        } else if self.message.contains("not approved by Mojang") {
+            ("Request API approval", Action::ReviewApp)
+        } else {
+            ("Close", Action::CloseLogin)
+        };
         button(
             ui,
             targets,
-            [x + 22.0 + col3_w + col_gap, row2_y, col3_w, 36.0],
-            if self.pending() {
-                "Cancel"
-            } else if self.profile.is_some() {
-                "Sign out"
-            } else {
-                "Clear"
-            },
-            if self.pending() {
-                Action::CancelLogin
-            } else if self.profile.is_some() {
-                Action::SignOut
-            } else {
-                Action::CloseLogin
-            },
+            [inner_x, row2_y, half, 32.0],
+            sec_label,
+            sec_action,
             false,
         );
         button(
             ui,
             targets,
-            [x + 22.0 + (col3_w + col_gap) * 2.0, row2_y, col3_w, 36.0],
-            if self.pending() { "Hide" } else { "Done" },
+            [inner_x + half + 8.0, row2_y, half, 32.0],
+            if self.pending() { "Back (continues)" } else { "Done" },
             Action::CloseLogin,
             false,
         );

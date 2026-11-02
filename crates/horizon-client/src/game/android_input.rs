@@ -166,6 +166,28 @@ impl Game<'_> {
                 }
                 continue;
             }
+            if let Some(button) = horizon_client::keybinds::mouse_button(&name) {
+                if let Err(error) = self.android_custom_mouse(button, down) {
+                    log::warn!("Custom mouse button: {error}");
+                }
+                continue;
+            }
+            if name == "mouse.virtual.toggle" {
+                if down {
+                    self.pad.touch_ui.virtual_mouse ^= true;
+                }
+                continue;
+            }
+            if name == "mouse.scroll.up" || name == "mouse.scroll.down" {
+                if down && let Some(p) = self.player.as_mut() {
+                    let delta = if name == "mouse.scroll.up" { 8 } else { 1 };
+                    p.selected_slot = (p.selected_slot + delta) % 9;
+                }
+                continue;
+            }
+            if name == "mouse.look" {
+                continue;
+            }
             let Some(key) = horizon_client::keybinds::key_code(&name) else {
                 continue;
             };
@@ -296,9 +318,6 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        if t.phase == TouchPhase::Moved {
-            return Ok(false);
-        }
         let size = if let Some(r) = self.renderer.as_ref() {
             winit::dpi::PhysicalSize::new(r.config.width, r.config.height)
         } else if let Some(window) = self.window.as_ref() {
@@ -308,24 +327,32 @@ impl Game<'_> {
         };
         let mut b = HudBatch::new([size.width, size.height]);
         let p = [t.location.x as f32 / b.scale, t.location.y as f32 / b.scale];
-        if t.phase == TouchPhase::Started
-            && !self.pad.touch_ui.owns_relative(t.id)
+        if !self.pad.touch_ui.owns_relative(t.id)
             && !self.pad.touch_ui.owns_gesture(t.id)
             && let Some(menu_act) = self.pad.touch_ui.floating_menu_touch(
                 &mut b,
                 &self.gui.atlas,
+                t.id,
+                t.phase,
                 p,
-                &self.pad.touch.settings,
+                &mut self.pad.touch.settings,
             )
         {
             use horizon_client::touch_ui::InGameMenuAction;
             self.pad.touch.clear();
             self.pad.touch.ignore(t.id);
-            self.audio.play_button_click();
+            if t.phase == TouchPhase::Started {
+                self.audio.play_button_click();
+            }
             match menu_act {
                 InGameMenuAction::Close => {}
                 InGameMenuAction::OpenControlEditor => {
                     self.pad.touch.open_editor();
+                }
+                InGameMenuAction::SetControlStyle(style) => {
+                    self.pad.touch.settings.set_control_style(style);
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ApplyPreset(name) => {
                     self.pad.touch.settings.apply_preset(name);
@@ -333,7 +360,18 @@ impl Game<'_> {
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::CycleMovementMode => {
-                    self.pad.touch.settings.cycle_movement_mode();
+                    use horizon_client::touch::Mode;
+                    self.pad.touch.settings.mode = match self.pad.touch.settings.mode {
+                        Mode::Dpad => Mode::Crosshair,
+                        Mode::Crosshair => Mode::Tap,
+                        Mode::Tap => Mode::Dpad,
+                    };
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::CycleJoystickArea => {
+                    self.pad.touch.settings.joystick_style.move_area =
+                        self.pad.touch.settings.joystick_style.move_area.next();
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
@@ -368,17 +406,13 @@ impl Game<'_> {
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
-                InGameMenuAction::StepButtonOpacity(dir) => {
-                    self.pad.touch.settings.step_opacity(dir as f32 * 0.10);
-                    let _ = self.pad.touch.settings.save();
-                    self.settings.touch = self.pad.touch.settings.clone();
-                }
                 InGameMenuAction::TriggerKey(key) => {
                     if !self.debug_key(key, KeyAction::Press) {
                         self.key_pressed(key)?;
                     }
                     self.debug_key(key, KeyAction::Release);
-                    if matches!(key, KeyCode::KeyT | KeyCode::Slash) && self.screen == Screen::Chat {
+                    if matches!(key, KeyCode::KeyT | KeyCode::Slash) && self.screen == Screen::Chat
+                    {
                         self.android_show_keyboard();
                     }
                 }
@@ -387,6 +421,9 @@ impl Game<'_> {
                 }
             }
             return Ok(true);
+        }
+        if t.phase == TouchPhase::Moved {
+            return Ok(false);
         }
         if t.phase == TouchPhase::Started
             && !self.pad.touch_ui.owns_relative(t.id)

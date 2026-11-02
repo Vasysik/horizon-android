@@ -62,35 +62,9 @@ pub mod color {
     pub const MUTED: u32 = hex(P.ink_soft, 255);
     pub const ACCENT: u32 = hex(P.accent, 255);
     pub const ON_ACCENT: u32 = hex(P.on_accent, 255);
-    pub(crate) fn with_alpha(c: u32, a: f32) -> u32 {
+    pub fn with_alpha(c: u32, a: f32) -> u32 {
         let base = (c >> 24) as f32;
         (c & 0x00ff_ffff) | ((base * a.clamp(0.0, 1.0)).round() as u32) << 24
-    }
-}
-
-/// The HUD editor's semantic colours.
-pub struct Palette {
-    pub text: u32,
-    pub muted: u32,
-    pub accent: u32,
-    pub accent_soft: u32,
-    pub card_hi: u32,
-    pub border: u32,
-    pub border_light: u32,
-    pub warn: u32,
-    pub danger: u32,
-}
-pub fn palette() -> Palette {
-    Palette {
-        text: color::TEXT,
-        muted: color::MUTED,
-        accent: color::ACCENT,
-        accent_soft: color::hex(0x332854, 255),
-        card_hi: color::hex(0x232032, 255),
-        border: color::BORDER,
-        border_light: color::hex(0x3A3650, 255),
-        warn: color::hex(0xFFB74D, 255),
-        danger: color::hex(0xFF6B6B, 255),
     }
 }
 
@@ -121,12 +95,19 @@ static UI_SCALE_PERCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomi
 
 pub fn set_android_dpi(dpi: f32) {
     if dpi.is_finite() && dpi >= 1.0 {
-        ANDROID_DPI_BITS.store(dpi.clamp(1.0, 5.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+        ANDROID_DPI_BITS.store(
+            dpi.clamp(1.0, 5.0).to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 }
 
 pub fn set_ui_scale_percent(percent: u32) {
-    let clamped = if percent == 0 { 100 } else { percent.clamp(75, 165) };
+    let clamped = if percent == 0 {
+        100
+    } else {
+        percent.clamp(75, 165)
+    };
     UI_SCALE_PERCENT.store(clamped, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -152,6 +133,9 @@ pub enum Icon {
     Gamepad,
     ArrowLeft,
     MenuEquals,
+    Undo,
+    Redo,
+    Plus,
 }
 
 struct Fonts {
@@ -249,12 +233,9 @@ fn seg_dist(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
 fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
     match icon {
         Icon::HorizonLogo => {
-            let left_bar =
-                seg_dist(u, v, 0.22, 0.16, 0.22, 0.84) <= 0.095;
-            let right_bar =
-                seg_dist(u, v, 0.78, 0.16, 0.78, 0.84) <= 0.095;
-            let bridge =
-                seg_dist(u, v, 0.22, 0.56, 0.78, 0.42) <= 0.088;
+            let left_bar = seg_dist(u, v, 0.22, 0.16, 0.22, 0.84) <= 0.095;
+            let right_bar = seg_dist(u, v, 0.78, 0.16, 0.78, 0.84) <= 0.095;
+            let bridge = seg_dist(u, v, 0.22, 0.56, 0.78, 0.42) <= 0.088;
             left_bar || right_bar || bridge
         }
         Icon::ChevronDown => {
@@ -316,8 +297,14 @@ fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
                 (-0.7071, -0.7071),
             ];
             dirs.iter().any(|&(rx, ry)| {
-                seg_dist(u, v, 0.50 + rx * 0.24, 0.50 + ry * 0.24, 0.50 + rx * 0.39, 0.50 + ry * 0.39)
-                    <= 0.048
+                seg_dist(
+                    u,
+                    v,
+                    0.50 + rx * 0.24,
+                    0.50 + ry * 0.24,
+                    0.50 + rx * 0.39,
+                    0.50 + ry * 0.39,
+                ) <= 0.048
             })
         }
         Icon::Installed => {
@@ -433,10 +420,42 @@ fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
             top || bot
         }
         Icon::MenuEquals => {
-            // Crisp two-bar "=" floating menu icon with rounded caps.
-            let bar1 = seg_dist(u, v, 0.20, 0.36, 0.80, 0.36) <= 0.065;
-            let bar2 = seg_dist(u, v, 0.20, 0.64, 0.80, 0.64) <= 0.065;
-            bar1 || bar2
+            // Sleek floating control-hub icon: two horizontal tracks with circular slider knobs.
+            let top_bar = seg_dist(u, v, 0.16, 0.35, 0.84, 0.35) <= 0.058;
+            let bot_bar = seg_dist(u, v, 0.16, 0.65, 0.84, 0.65) <= 0.058;
+            let top_knob = ((u - 0.64).powi(2) + (v - 0.35).powi(2)).sqrt() <= 0.135;
+            let top_hole = ((u - 0.64).powi(2) + (v - 0.35).powi(2)).sqrt() <= 0.052;
+            let bot_knob = ((u - 0.36).powi(2) + (v - 0.65).powi(2)).sqrt() <= 0.135;
+            let bot_hole = ((u - 0.36).powi(2) + (v - 0.65).powi(2)).sqrt() <= 0.052;
+            (top_bar || bot_bar || top_knob || bot_knob) && !top_hole && !bot_hole
+        }
+        Icon::Undo => {
+            let arc = {
+                let dx = u - 0.54;
+                let dy = v - 0.56;
+                let r = (dx * dx + dy * dy).sqrt();
+                (0.20..=0.31).contains(&r) && !(dx < -0.05 && dy > 0.08)
+            };
+            let arrow1 = seg_dist(u, v, 0.22, 0.42, 0.38, 0.26) <= 0.058;
+            let arrow2 = seg_dist(u, v, 0.22, 0.42, 0.40, 0.52) <= 0.058;
+            arc || arrow1 || arrow2
+        }
+        Icon::Redo => {
+            let mu = 1.0 - u;
+            let arc = {
+                let dx = mu - 0.54;
+                let dy = v - 0.56;
+                let r = (dx * dx + dy * dy).sqrt();
+                (0.20..=0.31).contains(&r) && !(dx < -0.05 && dy > 0.08)
+            };
+            let arrow1 = seg_dist(mu, v, 0.22, 0.42, 0.38, 0.26) <= 0.058;
+            let arrow2 = seg_dist(mu, v, 0.22, 0.42, 0.40, 0.52) <= 0.058;
+            arc || arrow1 || arrow2
+        }
+        Icon::Plus => {
+            let h_bar = seg_dist(u, v, 0.22, 0.50, 0.78, 0.50) <= 0.068;
+            let v_bar = seg_dist(u, v, 0.50, 0.22, 0.50, 0.78) <= 0.068;
+            h_bar || v_bar
         }
     }
 }
@@ -678,8 +697,8 @@ impl<'a> Ui<'a> {
             cursor: (cursor.0 * scale / density, cursor.1 * scale / density),
             density,
             scale,
-            batch,
             clip: None,
+            batch,
         }
     }
     /// Native phone DPI-adaptive launcher density; game HUD scale is untouched.
@@ -688,8 +707,9 @@ impl<'a> Ui<'a> {
         let pw = ui.batch.width * ui.scale;
         let ph = ui.batch.height * ui.scale;
         let hw_dpi = f32::from_bits(ANDROID_DPI_BITS.load(std::sync::atomic::Ordering::Relaxed));
-        let user_scale =
-            (UI_SCALE_PERCENT.load(std::sync::atomic::Ordering::Relaxed) as f32 / 100.0).clamp(0.75, 1.65);
+        let user_scale = (UI_SCALE_PERCENT.load(std::sync::atomic::Ordering::Relaxed) as f32
+            / 100.0)
+            .clamp(0.75, 1.65);
         let base_density = if ph > pw {
             // Portrait phone screen: target ~410dp width so cards and touch buttons are comfortable.
             let target_dpi = (pw / 410.0).min(ph / 640.0);
@@ -717,7 +737,9 @@ impl<'a> Ui<'a> {
         } else {
             (ph / 365.0).min(pw / 660.0).max(0.65)
         };
-        ui.density = (base_density * user_scale).min(max_safe_density).clamp(0.5, 4.5);
+        ui.density = (base_density * user_scale)
+            .min(max_safe_density)
+            .clamp(0.5, 4.5);
         ui.w = pw / ui.density;
         ui.h = ph / ui.density;
         ui.cursor = (
@@ -748,8 +770,6 @@ impl<'a> Ui<'a> {
     }
 
     /// Set or clear a scissor clip rectangle `[x, y, w, h]` in dp coordinates.
-    /// Every shape, border, icon, image, and text glyph drawn while active is
-    /// smoothly clipped at pixel granularity so scrolling lists never pop.
     pub fn set_clip(&mut self, rect: Option<[f32; 4]>) {
         self.clip = rect.map(|[x, y, w, h]| {
             [
@@ -1017,17 +1037,7 @@ impl<'a> Ui<'a> {
             self.px_x(x + dw),
             self.px_y(y + dh),
         );
-        self.emit_clipped_uv(
-            x0,
-            y0,
-            x1,
-            y1,
-            rect.u0,
-            rect.v0,
-            rect.u1,
-            rect.v1,
-            u32::MAX,
-        );
+        self.emit_clipped_uv(x0, y0, x1, y1, rect.u0, rect.v0, rect.u1, rect.v1, u32::MAX);
         true
     }
 
@@ -1118,88 +1128,6 @@ impl<'a> Ui<'a> {
     pub fn text(&mut self, face: Face, size: f32, x: f32, y: f32, color: u32, text: &str) -> f32 {
         self.text_line(face, size, (size * 1.45).round(), x, y, color, text)
     }
-
-    // ---- the HUD editor's small drawing vocabulary ----
-
-    /// A sharp-cornered filled rectangle.
-    pub fn fill(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
-        self.rounded(x, y, w, h, 0.0, color);
-    }
-
-    /// A rounded outline `thickness` dp wide.
-    #[allow(clippy::too_many_arguments)]
-    pub fn stroke_rounded(
-        &mut self,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        radius: f32,
-        thickness: f32,
-        color: u32,
-    ) {
-        let rings = thickness.max(1.0).round() as i32;
-        for ring in 0..rings {
-            let inset = ring as f32;
-            self.border(
-                x + inset,
-                y + inset,
-                w - inset * 2.0,
-                h - inset * 2.0,
-                radius,
-                color,
-            );
-        }
-    }
-
-    /// Text at `(x, y)` in the HUD editor's argument order.
-    pub fn label(&mut self, text: &str, x: f32, y: f32, size: f32, color: u32, face: Face) {
-        self.text(face, size, x, y, color, text);
-    }
-
-    /// Text shortened to `width` before drawing.
-    #[allow(clippy::too_many_arguments)]
-    pub fn label_fit(
-        &mut self,
-        text: &str,
-        x: f32,
-        y: f32,
-        width: f32,
-        size: f32,
-        color: u32,
-        face: Face,
-    ) {
-        let fitted = self.fit_text(face, size, text, width);
-        self.text(face, size, x, y, color, &fitted);
-    }
-
-    /// Text centred inside `rect`, shortened when it does not fit.
-    pub fn centered_fit(
-        &mut self,
-        text: &str,
-        rect: [f32; 4],
-        size: f32,
-        color: u32,
-        face: Face,
-    ) {
-        let [x, y, w, h] = rect;
-        let fitted = self.fit_text(face, size, text, w);
-        let text_w = self.measure(face, size, &fitted);
-        let text_h = size * 1.45;
-        self.text(
-            face,
-            size,
-            x + (w - text_w) / 2.0,
-            y + (h - text_h) / 2.0,
-            color,
-            &fitted,
-        );
-    }
-
-    /// The drawn width of `text`, in dp.
-    pub fn width(&self, text: &str, size: f32, face: Face) -> f32 {
-        self.measure(face, size, text)
-    }
     pub(crate) fn text_centered(
         &mut self,
         face: Face,
@@ -1211,6 +1139,166 @@ impl<'a> Ui<'a> {
     ) {
         let w = self.measure(face, size, text);
         self.text(face, size, cx - w / 2.0, y, color, text);
+    }
+
+    /// Filled axis-aligned rectangle in dp.
+    pub fn fill(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
+        if color >> 24 == 0 || w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        self.raw_fill(
+            self.px_x(x),
+            self.px_y(y),
+            self.px_x(x + w),
+            self.px_y(y + h),
+            color,
+        );
+    }
+
+    /// Multi-pixel rounded border in dp (`stroke_w` dp thick).
+    pub fn stroke_rounded(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        stroke_w: f32,
+        color: u32,
+    ) {
+        if color >> 24 == 0 || stroke_w <= 0.0 || w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let steps = (stroke_w * self.density).round().clamp(1.0, 14.0) as i32;
+        let step_dp = 1.0 / self.density.max(0.5);
+        for i in 0..steps {
+            let inset = i as f32 * step_dp;
+            let rw = w - inset * 2.0;
+            let rh = h - inset * 2.0;
+            if rw <= 1.0 || rh <= 1.0 {
+                break;
+            }
+            self.border(
+                x + inset,
+                y + inset,
+                rw,
+                rh,
+                (radius - inset).max(0.0),
+                color,
+            );
+        }
+    }
+
+    /// Centered fitted text inside `[x, y, w, h]` dp.
+    pub fn centered_fit(&mut self, face: Face, size: f32, rect: [f32; 4], color: u32, text: &str) {
+        let [x, y, w, h] = rect;
+        if w <= 2.0 || h <= 2.0 || text.is_empty() {
+            return;
+        }
+        let fitted = self.fit_text(face, size, text, (w - 4.0).max(4.0));
+        let tw = self.measure(face, size, &fitted);
+        let line_h = (size * 1.45).round();
+        self.text(
+            face,
+            size,
+            x + (w - tw) * 0.5,
+            y + (h - line_h) * 0.5,
+            color,
+            &fitted,
+        );
+    }
+
+    /// Draws a GoyControl shape (0=RoundedRect, 1=Square, 2=Circle/Pill, 3=CutOctagon, 4=Diamond, 5=Hexagon)
+    /// with customizable shadow, fill, stroke thickness, stroke margin, and stroke roundness.
+    #[allow(clippy::too_many_arguments)]
+    pub fn goy_box(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        shape: u8,
+        roundness: f32,
+        fill_color: u32,
+        stroke_size: f32,
+        stroke_margin: f32,
+        stroke_roundness: f32,
+        stroke_color: u32,
+        shadow_size: f32,
+        shadow_color: u32,
+    ) {
+        let eff_radius = match shape {
+            1 => 0.0,
+            2 => w.min(h) * 0.5,
+            3 => (w.min(h) * 0.22).max(4.0),
+            4 => (w.min(h) * 0.36).max(6.0),
+            5 => (w.min(h) * 0.28).max(5.0),
+            _ => roundness.clamp(0.0, w.min(h) * 0.5),
+        };
+        let eff_stroke_r = match shape {
+            1 => 0.0,
+            2 => (w + stroke_margin * 2.0).min(h + stroke_margin * 2.0) * 0.5,
+            _ => stroke_roundness.clamp(
+                0.0,
+                (w + stroke_margin * 2.0).min(h + stroke_margin * 2.0) * 0.5,
+            ),
+        };
+        // 1. Drop shadow plate
+        if shadow_size > 0.1 && (shadow_color >> 24) > 0 {
+            let so = shadow_size.clamp(0.5, 14.0);
+            self.rounded(x + so * 0.45, y + so * 0.75, w, h, eff_radius, shadow_color);
+        }
+        // 2. Main Fill Shape
+        match shape {
+            3 => {
+                // Cut-Corner Octagon / Beveled Tactical Plate
+                let cut = (w.min(h) * 0.20).clamp(3.0, 14.0);
+                self.fill(x + cut, y, (w - cut * 2.0).max(1.0), h, fill_color);
+                self.fill(x, y + cut, w, (h - cut * 2.0).max(1.0), fill_color);
+                let half_c = cut * 0.5;
+                self.fill(
+                    x + half_c,
+                    y + half_c,
+                    (w - cut).max(1.0),
+                    (h - cut).max(1.0),
+                    fill_color,
+                );
+            }
+            4 => {
+                // Stepped Diamond / Rhombus Plate
+                let steps = 7;
+                for i in 0..steps {
+                    let frac = (i as f32 + 0.5) / steps as f32;
+                    let dist = (frac - 0.5).abs() * 2.0;
+                    let sw = (w * (1.0 - dist * 0.72)).max(4.0);
+                    let sy = y + (i as f32 / steps as f32) * h;
+                    let sh = (h / steps as f32) + 0.8;
+                    self.rounded(x + (w - sw) * 0.5, sy, sw, sh, 2.0, fill_color);
+                }
+            }
+            5 => {
+                // Hexagon Tactical Badge
+                let steps = 5;
+                for i in 0..steps {
+                    let dist = ((i as f32 - 2.0).abs() / 2.0).powf(1.2);
+                    let sw = (w * (1.0 - dist * 0.34)).max(4.0);
+                    let sy = y + (i as f32 / steps as f32) * h;
+                    let sh = (h / steps as f32) + 0.8;
+                    self.rounded(x + (w - sw) * 0.5, sy, sw, sh, 3.0, fill_color);
+                }
+            }
+            _ => {
+                self.rounded(x, y, w, h, eff_radius, fill_color);
+            }
+        }
+        // 3. Stroke Border (with stroke_margin offset and stroke_roundness)
+        if stroke_size > 0.1 && (stroke_color >> 24) > 0 {
+            let sx = x - stroke_margin;
+            let sy = y - stroke_margin;
+            let sw = (w + stroke_margin * 2.0).max(2.0);
+            let sh = (h + stroke_margin * 2.0).max(2.0);
+            self.stroke_rounded(sx, sy, sw, sh, eff_stroke_r, stroke_size, stroke_color);
+        }
     }
 
     // ---- the launcher's components ----

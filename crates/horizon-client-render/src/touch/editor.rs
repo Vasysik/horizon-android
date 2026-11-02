@@ -1,11 +1,46 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EditorDragKind {
+    Move {
+        offset: [f32; 2],
+    },
+    Resize {
+        mask: u8,
+        start_pos: [f32; 2],
+        start_size: f32,
+        start_wr: f32,
+        start_hr: f32,
+    },
+    FloatingPod {
+        offset: [f32; 2],
+        moved: bool,
+    },
+    KeyboardScroll {
+        last_x: f32,
+        moved: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickerStep {
+    None,
+    /// Step 1: Ask user whether to bind a Keyboard Key or Mouse/Game Action for event slot 0..=2.
+    AskInputType {
+        event_slot: usize,
+    },
+    /// Step 2a: Full Horizontally Scrollable 104-Key PC Keyboard Dialog.
+    Keyboard {
+        event_slot: usize,
+    },
+    /// Step 2b: Mouse Buttons, Wheel, Look & Game Actions Dialog.
+    MouseAndActions {
+        event_slot: usize,
+    },
+}
+
 pub struct Editor {
     pub selected: Option<Control>,
-    /// The full-screen HUD editor's selection (built-in control or custom key).
-    pub target: Target,
-    /// `(Some(index))` rebinds custom button `index`; `None` adds a new one.
-    pub picking_for: Option<Option<usize>>,
     pub option: Option<usize>,
     pub apply_all: bool,
     pub original: Settings,
@@ -16,9 +51,30 @@ pub struct Editor {
     pub key_picker: bool,
     pub key_page: usize,
     pub raw_keys: bool,
+    /// True when the Main Floating Control Manager Dialog (MCPE vs GoyControl, Save, Default Always) is open.
     pub menu_open: bool,
+    /// True when the Component Property Inspector Dialog (Style, Hint Text, Stroke, Colors, Shadow, Events, Joystick) is open.
+    pub props_open: bool,
+    /// Active tab inside the Component Property Inspector (0 = Style & Colors, 1 = Stroke & Shape, 2 = Events & Behavior).
+    pub props_tab: usize,
+    /// Active event picker dialog state.
+    pub picker_step: PickerStep,
+    /// Horizontal scroll offset (in dp) for the full PC keyboard picker dialog.
+    pub kb_scroll_x: f32,
+    /// Whether the floating pod is expanded to show Undo / Redo / Properties / Add / Save pills.
+    pub pod_expanded: bool,
+    /// Smooth 0..1 animation progress for the floating pod & dialogs.
+    pub pod_anim: f32,
+    /// Show hidden built-in controls as translucent ghosts in the editor.
     pub show_hidden: bool,
-    pub active_drag: Option<(u64, [f32; 2], bool)>,
+    /// Active canvas drag or corner/edge resize operation.
+    pub active_drag: Option<(u64, EditorDragKind)>,
+    /// Undo history stack (up to 40 snapshots).
+    pub undo_stack: Vec<Settings>,
+    /// Redo history stack.
+    pub redo_stack: Vec<Settings>,
+    /// Status banner message inside editor.
+    pub status_msg: Option<String>,
 }
 
 enum Drag {
@@ -30,9 +86,7 @@ impl TouchControls {
     pub fn open_editor(&mut self) {
         self.clear();
         self.editor = Some(Editor {
-            selected: None,
-            target: Target::default(),
-            picking_for: None,
+            selected: Some(Control::Move),
             option: None,
             apply_all: false,
             original: self.settings.clone(),
@@ -44,8 +98,17 @@ impl TouchControls {
             key_page: 0,
             raw_keys: false,
             menu_open: false,
+            props_open: false,
+            props_tab: 0,
+            picker_step: PickerStep::None,
+            kb_scroll_x: 0.0,
+            pod_expanded: true,
+            pod_anim: 1.0,
             show_hidden: true,
             active_drag: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            status_msg: None,
         });
     }
     pub fn cancel_editor(&mut self) {
@@ -109,7 +172,9 @@ impl TouchControls {
                     .position(|n| *n == self.settings.active_profile)
                     .unwrap_or(0);
                 let next = presets[(idx + 1) % presets.len()];
-                let _ = self.settings.save_profile(std::path::Path::new("."), &self.settings.active_profile);
+                let _ = self
+                    .settings
+                    .save_profile(std::path::Path::new("."), &self.settings.active_profile);
                 self.settings = Settings::load_profile(std::path::Path::new("."), next);
             } else if layout::contains([0.32, 0.46, 0.115, 0.06], p) && e.selected.is_some() {
                 let slot = self.settings.slot(e.selected.unwrap());
@@ -208,7 +273,14 @@ impl TouchControls {
             ([0.25, 0.04, 0.105, 0.075], "Reset".to_owned(), false),
             (
                 [0.365, 0.04, 0.14, 0.075],
-                format!("Grid: {}", if self.settings.snap_to_grid { "On" } else { "Off" }),
+                format!(
+                    "Grid: {}",
+                    if self.settings.snap_to_grid {
+                        "On"
+                    } else {
+                        "Off"
+                    }
+                ),
                 self.settings.snap_to_grid,
             ),
             (
@@ -216,7 +288,11 @@ impl TouchControls {
                 format!("Profile: {}", self.settings.active_profile),
                 false,
             ),
-            ([0.02, 0.13, 0.335, 0.075], "Add buttons...".to_owned(), false),
+            (
+                [0.02, 0.13, 0.335, 0.075],
+                "Add buttons...".to_owned(),
+                false,
+            ),
         ] {
             plate(b, a, rect, &label, on);
         }
@@ -229,27 +305,9 @@ impl TouchControls {
         if let Some(selected) = e.selected {
             plate(b, a, [0.32, 0.88, 0.36, 0.07], "Remove button", false);
             let p = self.placement(selected);
-            plate(
-                b,
-                a,
-                [0.32, 0.46, 0.115, 0.06],
-                "PassThru",
-                p.passthrough,
-            );
-            plate(
-                b,
-                a,
-                [0.442, 0.46, 0.115, 0.06],
-                "Toggle",
-                p.toggleable,
-            );
-            plate(
-                b,
-                a,
-                [0.565, 0.46, 0.115, 0.06],
-                "Swipe",
-                p.swipeable,
-            );
+            plate(b, a, [0.32, 0.46, 0.115, 0.06], "PassThru", p.passthrough);
+            plate(b, a, [0.442, 0.46, 0.115, 0.06], "Toggle", p.toggleable);
+            plate(b, a, [0.565, 0.46, 0.115, 0.06], "Swipe", p.swipeable);
             plate(
                 b,
                 a,

@@ -7,10 +7,13 @@ use std::{
 };
 const HOLD_DELAY: Duration = Duration::from_millis(350);
 pub mod custom;
-mod editor;
+pub mod editor;
 pub use custom::CustomButton;
+pub use editor::{Editor, EditorDragKind, PickerStep};
 pub mod layout;
-pub use layout::{Control, Mode, MovementMode, Settings, Target};
+pub use layout::{
+    Control, ControlStyle, JoystickMoveArea, JoystickStyle, Mode, Placement, Settings,
+};
 /// Entity-placement items retain short-tap placement, like building blocks.
 pub fn item_places_entity_on_tap(item: &str) -> bool {
     let Some(id) = item.strip_prefix("minecraft:") else {
@@ -209,11 +212,6 @@ impl TouchControls {
             self.loaded = true;
         }
     }
-    /// Load a HUD layout from an explicit file instead of the working directory.
-    pub fn load_settings_from(&mut self, path: &std::path::Path) {
-        self.settings = Settings::load_from(path);
-        self.loaded = true;
-    }
     pub fn aspect(&self) -> f32 {
         if self.aspect > 0.0 {
             self.aspect
@@ -358,6 +356,31 @@ impl TouchControls {
         let state = self.state();
         for control in Control::ALL {
             if !self.visible(control) {
+                continue;
+            }
+            let p = self.placement(control);
+            if (self.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
+                && control != Control::Move
+            {
+                let [nx, ny, nw, nh] = p.rect(self.aspect());
+                let rect = [nx * w, ny * h, nw * w, nh * h];
+                let held = Self::button(control).is_some_and(|bt| state.held(bt));
+                let toggled = (self.latched_controls & (1 << (control as u16))) != 0;
+                draw_goy_static_button(b, a, rect, &p, control.name(), held, toggled, p.opacity);
+                continue;
+            }
+            if control == Control::Move
+                && (self.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
+            {
+                let size = p.size * h;
+                let (x, y) = (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0);
+                draw_goy_joystick(
+                    b,
+                    a,
+                    [x, y, size, size],
+                    &self.settings.joystick_style,
+                    state.left,
+                );
                 continue;
             }
             let p = self.placement(control);
@@ -624,15 +647,34 @@ impl TouchControls {
             return [0.0; 2];
         }
         if started {
-            let control = self.control_at(point);
+            let mut control = self.control_at(point);
+            let has_move = self
+                .fingers
+                .values()
+                .any(|(r, _)| matches!(r, Role::Move(_)));
+            if control.is_none() && !has_move {
+                match self.settings.joystick_style.move_area {
+                    JoystickMoveArea::MidBottomLeft if point[0] < 0.45 && point[1] > 0.35 => {
+                        control = Some(Control::Move);
+                    }
+                    JoystickMoveArea::RightSideAnywhere if point[0] >= 0.50 => {
+                        control = Some(Control::Move);
+                    }
+                    JoystickMoveArea::FollowFinger if point[0] < 0.48 && point[1] > 0.25 => {
+                        control = Some(Control::Move);
+                    }
+                    _ => {}
+                }
+            }
             let role = match control {
-                Some(Control::Move)
-                    if !self
-                        .fingers
-                        .values()
-                        .any(|(r, _)| matches!(r, Role::Move(_))) =>
-                {
-                    Role::Move(self.placement(Control::Move).center)
+                Some(Control::Move) if !has_move => {
+                    let anchor = match self.settings.joystick_style.move_area {
+                        JoystickMoveArea::FollowFinger | JoystickMoveArea::RightSideAnywhere => {
+                            point
+                        }
+                        _ => self.placement(Control::Move).center,
+                    };
+                    Role::Move(anchor)
                 }
                 Some(Control::Shield) => {
                     self.clicked = true;
@@ -683,7 +725,8 @@ impl TouchControls {
                     }
                 }
                 Some(Control::Sprint)
-                    if self.settings.sprint_toggle || self.placement(Control::Sprint).toggleable =>
+                    if self.settings.sprint_toggle
+                        || self.placement(Control::Sprint).toggleable =>
                 {
                     self.sprint_latched = !self.sprint_latched;
                     Role::Ignore
@@ -1086,9 +1129,232 @@ fn ring(b: &mut HudBatch, a: &HudAtlas, center: [f32; 2], radius: f32, color: u3
 }
 /// Glyphs such as the inventory ellipsis are deliberately wide and short.
 /// Fit their original pixels inside the hit target without stretching them.
+/// Renders a single MCPE control using bedrock sprites when loaded or authentic
+/// MCPE pixel-art bevel buttons + pixel icons when in the Launcher editor.
+pub fn draw_single_mcpe_control(
+    tc: &TouchControls,
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    control: Control,
+    [x, y, w, h]: [f32; 4],
+    color: u32,
+    pressed: bool,
+) {
+    let size = w.min(h);
+    let cx = x + (w - size) * 0.5;
+    let cy = y + (h - size) * 0.5;
+    if control == Control::Move {
+        if tc.settings.mode == Mode::Dpad {
+            let cell = size / 3.0;
+            for (dx, dy, name) in [
+                (0, -1, "up"),
+                (-1, 0, "left"),
+                (1, 0, "right"),
+                (0, 1, "down"),
+            ] {
+                fitted_sprite(
+                    b,
+                    a,
+                    &format!("controls/{name}"),
+                    [
+                        cx + cell * (dx + 1) as f32,
+                        cy + cell * (dy + 1) as f32,
+                        cell,
+                        cell,
+                    ],
+                    color,
+                );
+            }
+            fitted_sprite(
+                b,
+                a,
+                "controls/jump_dpad",
+                [cx + cell, cy + cell, cell, cell],
+                color,
+            );
+        } else {
+            sprite(b, a, "ui/joystick_frame", [cx, cy, size, size], color);
+            sprite(
+                b,
+                a,
+                "ui/joystick_knob",
+                [cx + size * 0.33, cy + size * 0.33, size * 0.34, size * 0.34],
+                color,
+            );
+        }
+        return;
+    }
+    let bounds = [cx, cy, size, size];
+    let themed = match control {
+        Control::Chat => Some("chat"),
+        Control::Pause => Some("pause"),
+        Control::Settings => Some("settings"),
+        Control::Debug => Some("debug"),
+        Control::Perspective => Some("perspective"),
+        _ => None,
+    };
+    if themed.is_some_and(|name| theme_button(b, a, name, bounds, pressed, color, false)) {
+        return;
+    }
+    let name = match control {
+        Control::Sprint => "ui/sprint",
+        Control::Attack => "ui/attack",
+        Control::Use => "ui/interact",
+        Control::Jump if tc.settings.mode == Mode::Dpad => "controls/jump_dpad",
+        Control::Sneak if tc.settings.mode == Mode::Dpad => "controls/sneak_dpad",
+        Control::Jump => "ui/jump",
+        Control::Sneak => "ui/sneak",
+        Control::Pause => "ui/pause_icon",
+        Control::Chat => "ui/chat_icon",
+        Control::Debug => "ui/debug_icon",
+        Control::Perspective => "ui/perspective_icon",
+        Control::Inventory => "ui/more-dots",
+        Control::Settings => "ui/gear",
+        Control::Offhand => "ui/offhand_icon",
+        Control::Shield => "ui/shield_icon",
+        Control::Move => "ui/joystick_frame",
+    };
+    match control {
+        Control::Chat if a.sprites.contains_key("gui/bedrock/gui") => {
+            region(b, a, "gui", [200.0, 82.0, 18.0, 18.0], bounds, color)
+        }
+        Control::Debug if a.sprites.contains_key("gui/bedrock/gui") => {
+            region(b, a, "gui", [236.0, 82.0, 18.0, 18.0], bounds, color)
+        }
+        Control::Perspective if a.sprites.contains_key("gui/bedrock/gui") => {
+            region(b, a, "gui", [236.0, 46.0, 18.0, 18.0], bounds, color)
+        }
+        Control::Inventory if a.sprites.contains_key("gui/bedrock/ui/joystick_knob") => {
+            sprite(b, a, "ui/joystick_knob", bounds, color);
+            fitted_sprite(
+                b,
+                a,
+                name,
+                [cx + size * 0.2, cy + size * 0.2, size * 0.6, size * 0.6],
+                color,
+            );
+        }
+        Control::Pause | Control::Settings if a.sprites.contains_key("gui/bedrock/gui") => {
+            menu_frame(b, a, bounds, color);
+            fitted_sprite(
+                b,
+                a,
+                name,
+                [cx + size * 0.23, cy + size * 0.23, size * 0.54, size * 0.54],
+                color,
+            );
+        }
+        _ => fitted_sprite(b, a, name, bounds, color),
+    }
+}
+
+fn scale_alpha(c: u32, opacity: f32) -> u32 {
+    let a = ((c >> 24) as f32 * opacity.clamp(0.0, 1.0)).round() as u32;
+    (c & 0x00FF_FFFF) | (a << 24)
+}
+
+/// Renders a GoyControl Static Button in-game using HudBatch primitives.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_goy_static_button(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    [x, y, w, h]: [f32; 4],
+    p: &Placement,
+    label: &str,
+    held: bool,
+    toggled: bool,
+    opacity: f32,
+) {
+    let fill_c = if held {
+        scale_alpha(p.on_click_color, opacity)
+    } else if toggled {
+        scale_alpha(p.on_toggle_color, opacity)
+    } else {
+        scale_alpha(p.button_color, opacity)
+    };
+    let stroke_c = if held {
+        scale_alpha(p.on_click_stroke_color, opacity)
+    } else if toggled {
+        scale_alpha(p.on_toggle_stroke_color, opacity)
+    } else {
+        scale_alpha(p.stroke_color, opacity)
+    };
+    if p.shadow_size > 0.2 {
+        let so = (p.shadow_size * 0.65).clamp(1.0, 8.0);
+        b.fill(
+            a,
+            x + so * 0.5,
+            y + so,
+            w,
+            h,
+            scale_alpha(p.shadow_color, opacity),
+        );
+    }
+    b.fill(a, x, y, w, h, fill_c);
+    if p.stroke_size > 0.1 {
+        let sm = p.stroke_margin;
+        let sx = x - sm;
+        let sy = y - sm;
+        let sw = (w + sm * 2.0).max(2.0);
+        let sh = (h + sm * 2.0).max(2.0);
+        let t = (p.stroke_size * 0.75).clamp(1.0, 5.0);
+        b.fill(a, sx, sy, sw, t, stroke_c);
+        b.fill(a, sx, sy + sh - t, sw, t, stroke_c);
+        b.fill(a, sx, sy, t, sh, stroke_c);
+        b.fill(a, sx + sw - t, sy, t, sh, stroke_c);
+    }
+    if !label.is_empty() && a.sprites.contains_key("font/ascii") {
+        let width = HudBatch::text_width(a, label);
+        let start = b.vertices.len();
+        b.text(
+            a,
+            label,
+            x + (w - width) / 2.0,
+            y + (h - 8.0) / 2.0,
+            rgba(245, 243, 255, (opacity.clamp(0.2, 1.0) * 255.0) as u8),
+            true,
+        );
+        let scale = ((w - 6.0).max(1.0) / width.max(1.0)).min(((h - 6.0).max(1.0) / 8.0).min(1.0));
+        b.scale_since(start, x + w / 2.0, y + h / 2.0, scale, scale);
+    }
+}
+
+/// Renders the GoyControl customizable Joystick (Base analog area + Stick knob) in-game.
+pub fn draw_goy_joystick(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    [x, y, w, h]: [f32; 4],
+    js: &JoystickStyle,
+    stick_vec: [f32; 2],
+) {
+    let base_fill = scale_alpha(js.base_color, js.base_opacity);
+    let base_stroke = scale_alpha(js.base_stroke_color, js.base_opacity);
+    let center = [x + w * 0.5, y + h * 0.5];
+    let radius = w.min(h) * 0.5;
+    b.fill(a, x + w * 0.08, y + h * 0.08, w * 0.84, h * 0.84, base_fill);
+    if js.base_stroke > 0.1 {
+        ring(b, a, center, radius, base_stroke);
+    }
+    let kw = w * js.stick_size.clamp(0.20, 0.85);
+    let kh = h * js.stick_size.clamp(0.20, 0.85);
+    let kx = center[0] + stick_vec[0] * (w * 0.25) - kw * 0.5;
+    let ky = center[1] - stick_vec[1] * (h * 0.25) - kh * 0.5;
+    let stick_fill = scale_alpha(js.stick_color, js.stick_opacity);
+    let stick_stroke = scale_alpha(js.stick_stroke_color, js.stick_opacity);
+    b.fill(a, kx, ky, kw, kh, stick_fill);
+    if js.stick_stroke > 0.1 {
+        ring(
+            b,
+            a,
+            [kx + kw * 0.5, ky + kh * 0.5],
+            kw.min(kh) * 0.5,
+            stick_stroke,
+        );
+    }
+}
+
 fn fitted_sprite(b: &mut HudBatch, a: &HudAtlas, name: &str, [x, y, w, h]: [f32; 4], color: u32) {
-    let key = format!("gui/bedrock/{name}");
-    if let Some(rect) = a.sprites.get(&key).copied() {
+    if let Some(rect) = a.sprites.get(&format!("gui/bedrock/{name}")).copied() {
         let scale = (w / rect.w as f32).min(h / rect.h as f32);
         let (width, height) = (rect.w as f32 * scale, rect.h as f32 * scale);
         control_quad(
@@ -1102,31 +1368,85 @@ fn fitted_sprite(b: &mut HudBatch, a: &HudAtlas, name: &str, [x, y, w, h]: [f32;
             color,
         );
     } else {
-        // Procedural Pocket Edition style fallback when bedrock textures are not yet loaded.
+        // Authentic MCPE classic double-bevel stone plate + pixel-art icon when bedrock atlas is unloaded.
         let alpha = (color >> 24) as u8;
-        let bg = rgba(28, 25, 42, (u16::from(alpha) * 190 / 255) as u8);
-        let border = rgba(154, 123, 255, (u16::from(alpha) * 215 / 255) as u8);
-        let fg = rgba(244, 240, 252, alpha);
-        b.fill(a, x + 1.0, y + 1.0, (w - 2.0).max(1.0), (h - 2.0).max(1.0), bg);
-        b.fill(a, x, y, w, 1.5, border);
-        b.fill(a, x, y + h - 1.5, w, 1.5, border);
-        b.fill(a, x, y, 1.5, h, border);
-        b.fill(a, x + w - 1.5, y, 1.5, h, border);
-        // Simple geometric glyph inside the procedural button
+        let bg = rgba(58, 58, 62, (u16::from(alpha) * 185 / 255) as u8);
+        let hi = rgba(215, 215, 222, (u16::from(alpha) * 210 / 255) as u8);
+        let lo = rgba(28, 28, 32, (u16::from(alpha) * 220 / 255) as u8);
+        let fg = rgba(242, 242, 246, alpha);
+        let bw = (w.min(h) * 0.065).clamp(1.2, 3.0);
+        b.fill(a, x, y, w, h, lo);
+        b.fill(
+            a,
+            x + bw,
+            y + bw,
+            (w - bw * 2.0).max(1.0),
+            (h - bw * 2.0).max(1.0),
+            bg,
+        );
+        b.fill(a, x + bw, y + bw, (w - bw * 2.0).max(1.0), bw, hi);
+        b.fill(a, x + bw, y + bw, bw, (h - bw * 2.0).max(1.0), hi);
         let cx = x + w * 0.5;
         let cy = y + h * 0.5;
-        let s = w.min(h) * 0.22;
+        let u = w.min(h) * 0.08;
         if name.contains("up") || name.contains("jump") || name.contains("ascend") {
-            b.fill(a, cx - s * 0.3, cy - s, s * 0.6, s * 1.8, fg);
-            b.fill(a, cx - s, cy - s * 0.3, s * 2.0, s * 0.5, fg);
-        } else if name.contains("down") || name.contains("sneak") || name.contains("descend") {
-            b.fill(a, cx - s * 0.7, cy - s * 0.4, s * 1.4, s * 0.8, fg);
+            // Pixel-art upward chevron / arrow
+            b.fill(a, cx - u, cy - u * 2.5, u * 2.0, u, fg);
+            b.fill(a, cx - u * 2.0, cy - u * 1.5, u * 4.0, u, fg);
+            b.fill(a, cx - u * 3.0, cy - u * 0.5, u * 6.0, u, fg);
+            b.fill(a, cx - u, cy + u * 0.5, u * 2.0, u * 2.2, fg);
+        } else if name.contains("down") || name.contains("descend") {
+            b.fill(a, cx - u, cy - u * 2.5, u * 2.0, u * 2.2, fg);
+            b.fill(a, cx - u * 3.0, cy - u * 0.3, u * 6.0, u, fg);
+            b.fill(a, cx - u * 2.0, cy + u * 0.7, u * 4.0, u, fg);
+            b.fill(a, cx - u, cy + u * 1.7, u * 2.0, u, fg);
         } else if name.contains("left") {
-            b.fill(a, cx - s, cy - s * 0.3, s * 1.8, s * 0.6, fg);
+            b.fill(a, cx - u * 2.5, cy - u, u, u * 2.0, fg);
+            b.fill(a, cx - u * 1.5, cy - u * 2.0, u, u * 4.0, fg);
+            b.fill(a, cx - u * 0.5, cy - u * 3.0, u, u * 6.0, fg);
+            b.fill(a, cx + u * 0.5, cy - u, u * 2.2, u * 2.0, fg);
         } else if name.contains("right") {
-            b.fill(a, cx - s * 0.8, cy - s * 0.3, s * 1.8, s * 0.6, fg);
+            b.fill(a, cx - u * 2.7, cy - u, u * 2.2, u * 2.0, fg);
+            b.fill(a, cx - u * 0.5, cy - u * 3.0, u, u * 6.0, fg);
+            b.fill(a, cx + u * 0.5, cy - u * 2.0, u, u * 4.0, fg);
+            b.fill(a, cx + u * 1.5, cy - u, u, u * 2.0, fg);
+        } else if name.contains("sneak") {
+            // MCPE center diamond / sneak icon
+            b.fill(a, cx - u, cy - u * 2.2, u * 2.0, u * 4.4, fg);
+            b.fill(a, cx - u * 2.2, cy - u, u * 4.4, u * 2.0, fg);
+            b.fill(a, cx - u * 0.8, cy - u * 0.8, u * 1.6, u * 1.6, bg);
+        } else if name.contains("attack") {
+            // MCPE diagonal sword icon
+            for step in -2..=2 {
+                let sf = step as f32 * u;
+                b.fill(
+                    a,
+                    cx + sf - u * 0.6,
+                    cy - sf - u * 0.6,
+                    u * 1.3,
+                    u * 1.3,
+                    fg,
+                );
+            }
+            b.fill(a, cx - u * 2.4, cy + u * 0.4, u * 2.6, u * 0.9, fg);
+        } else if name.contains("interact") {
+            // MCPE split-crosshair / use icon
+            b.fill(a, cx - u * 2.8, cy - u * 0.45, u * 5.6, u * 0.9, fg);
+            b.fill(a, cx - u * 0.45, cy - u * 2.8, u * 0.9, u * 5.6, fg);
+        } else if name.contains("sprint") {
+            // Double forward chevrons
+            b.fill(a, cx - u * 2.2, cy - u * 2.0, u * 1.4, u * 4.0, fg);
+            b.fill(a, cx + u * 0.4, cy - u * 2.0, u * 1.4, u * 4.0, fg);
+        } else if name.contains("more-dots") {
+            // 3 inventory ellipsis dots
+            for dx in [-2.2, 0.0, 2.2] {
+                b.fill(a, cx + dx * u - u * 0.6, cy - u * 0.6, u * 1.2, u * 1.2, fg);
+            }
+        } else if name.contains("pause") {
+            b.fill(a, cx - u * 1.8, cy - u * 2.2, u * 1.2, u * 4.4, fg);
+            b.fill(a, cx + u * 0.6, cy - u * 2.2, u * 1.2, u * 4.4, fg);
         } else {
-            b.fill(a, cx - s * 0.5, cy - s * 0.5, s, s, fg);
+            b.fill(a, cx - u * 1.6, cy - u * 1.6, u * 3.2, u * 3.2, fg);
         }
     }
 }

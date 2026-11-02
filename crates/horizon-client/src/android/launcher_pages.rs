@@ -654,7 +654,7 @@ impl Launcher {
         self.list_targets.clear();
         self.list_view = None;
 
-        // Fullscreen Material You 3 + Pocket Edition HUD Control Editor
+        // Fullscreen MCPE + GoyControl Editor with Draggable Floating Menu Pod
         if let Some(tc) = &mut self.control_editor {
             let mut b = HudBatch::new([r.config.width, r.config.height]);
             tc.viewport(r.config.width, r.config.height);
@@ -989,7 +989,7 @@ impl Launcher {
                     [
                         "• Native Rust client with hardware Vulkan & OpenGL ES rendering",
                         "• Browse Mods, Resource Packs & Shaders with Modrinth previews",
-                        "• Customize Pojav-style HUD controls in Settings → Controls",
+                        "• Customize MCPE & GoyControl HUD layouts in Settings → Controls",
                     ]
                 } else {
                     [
@@ -2426,7 +2426,7 @@ impl Launcher {
                     ),
                     (
                         "Active control layout profile",
-                        "Switch between saved Pojav-style HUD layouts (default, pvp, building)",
+                        "Switch between MCPE Style Touch Controls and GoyControl custom layouts",
                         SettingControl::Button(&profile_label, Action::ControlProfileChooser, false),
                     ),
                     (
@@ -2904,7 +2904,9 @@ impl Launcher {
             Some(Action::OpenControlEditor) => {
                 let game_home = self.catalog.config.game_home(&self.home);
                 let mut tc = horizon_client::touch::TouchControls::default();
-                tc.load_settings_from(&game_home.join("horizon-touch.json"));
+                tc.settings = horizon_client::touch::Settings::load_from(
+                    &game_home.join("horizon-touch.json"),
+                );
                 tc.open_editor();
                 self.control_editor = Some(tc);
             }
@@ -2945,7 +2947,7 @@ impl Launcher {
                         let _ = loaded.save_profile(&game_home, name);
                         let _ = loaded.save_to(&game_home.join("horizon-touch.json"));
                     }
-                    self.catalog.status = format!("Applied HUD control layout preset '{name}'.");
+                    self.catalog.status = format!("Applied HUD control layout '{name}'.");
                 }
                 self.chooser = None;
             }
@@ -3392,8 +3394,8 @@ impl Launcher {
         }
         self.cursor = (t.location.x, t.location.y);
 
-        // Route all touches in the Material You 3 + Pocket Edition HUD Control Editor
-        // through touch_hud_editor (handles dragging, '=' floating menu, presets, and Done).
+        // Route all touches in the MCPE + GoyControl Editor through touch_hud_editor
+        // and persist changes directly to game_home/horizon-touch.json and controlmap/.
         if self.control_editor.is_some() {
             let (rw, rh) = self
                 .renderer
@@ -3401,6 +3403,7 @@ impl Launcher {
                 .map_or((1920, 1080), |r| {
                     (r.config.width.max(1), r.config.height.max(1))
                 });
+            let game_home = self.catalog.config.game_home(&self.home);
             if let (Some(tc), Some(gui)) = (&mut self.control_editor, &self.gui) {
                 tc.viewport(rw, rh);
                 let mut b = HudBatch::new([rw, rh]);
@@ -3408,6 +3411,7 @@ impl Launcher {
                     (t.location.x as f32 / rw as f32).clamp(0.0, 1.0),
                     (t.location.y as f32 / rh as f32).clamp(0.0, 1.0),
                 ];
+                let ended = matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled);
                 let closed = horizon_client::touch_ui::touch_hud_editor(
                     tc,
                     &mut b,
@@ -3415,16 +3419,18 @@ impl Launcher {
                     t.id,
                     norm,
                     t.phase == TouchPhase::Started,
-                    matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled),
+                    ended,
                 );
-                if closed || tc.editor.is_none() {
-                    let game_home = self.catalog.config.game_home(&self.home);
+                if ended || closed {
                     let _ = tc
                         .settings
                         .save_profile(&game_home, &tc.settings.active_profile.clone());
                     let _ = tc.settings.save_to(&game_home.join("horizon-touch.json"));
+                }
+                if closed || tc.editor.is_none() {
                     self.catalog.status = format!(
-                        "Saved HUD control layout '{}'.",
+                        "Saved {} layout '{}'.",
+                        tc.settings.control_style.label(),
                         tc.settings.active_profile
                     );
                     self.control_editor = None;

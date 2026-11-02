@@ -8,6 +8,8 @@ pub struct CustomButton {
     #[serde(default)]
     pub second_key: String,
     #[serde(default)]
+    pub third_key: String,
+    #[serde(default)]
     pub custom_label: String,
     #[serde(default)]
     pub always_visible: bool,
@@ -18,6 +20,7 @@ impl CustomButton {
         Self {
             key,
             second_key: String::new(),
+            third_key: String::new(),
             custom_label: String::new(),
             always_visible: false,
             layouts: [Placement::new(
@@ -30,88 +33,125 @@ impl CustomButton {
     pub fn valid_token(token: &str) -> bool {
         token == "key.keyboard.unknown"
             || crate::keybinds::key_code(token).is_some()
+            || crate::keybinds::mouse_button(token).is_some()
+            || matches!(
+                token,
+                "mouse.scroll.up" | "mouse.scroll.down" | "mouse.virtual.toggle" | "mouse.look"
+            )
             || token
                 .strip_prefix("action:")
                 .is_some_and(|name| crate::keybinds::MAPPINGS.iter().any(|m| m.0 == name))
+    }
+    pub fn event_slot(&self, slot: usize) -> &str {
+        match slot {
+            0 => &self.key,
+            1 => &self.second_key,
+            _ => &self.third_key,
+        }
+    }
+    pub fn set_event_slot(&mut self, slot: usize, token: String) {
+        match slot {
+            0 => self.key = token,
+            1 => self.second_key = token,
+            _ => self.third_key = token,
+        }
+    }
+    pub fn active_tokens(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for t in [&self.key, &self.second_key, &self.third_key] {
+            if !t.is_empty()
+                && t != "key.keyboard.unknown"
+                && Self::valid_token(t)
+                && !out.contains(t)
+            {
+                out.push(t.clone());
+            }
+        }
+        out
     }
     pub fn label(&self) -> String {
         if !self.custom_label.trim().is_empty() {
             return self.custom_label.trim().to_owned();
         }
-        if self.key == "key.keyboard.unknown" {
+        let tokens = self.active_tokens();
+        if tokens.is_empty() {
             return "Button".into();
         }
-        let primary = if let Some(name) = self.key.strip_prefix("action:") {
-            friendly_action_name(name)
-        } else {
-            crate::keybinds::display_name(&self.key).plain()
-        };
-        if !self.second_key.is_empty() && Self::valid_token(&self.second_key) && self.second_key != "key.keyboard.unknown" {
-            let sec = if let Some(name) = self.second_key.strip_prefix("action:") {
-                friendly_action_name(name)
-            } else {
-                crate::keybinds::display_name(&self.second_key).plain()
-            };
-            format!("{primary}+{sec}")
-        } else {
-            primary
-        }
-    }
-    pub fn choices(raw_keys: bool) -> Vec<(String, String)> {
-        choices(raw_keys)
+        let parts: Vec<String> = tokens.iter().map(|t| friendly_token_name(t)).collect();
+        parts.join("+")
     }
 }
-fn friendly_action_name(name: &str) -> String {
-    let translated = crate::text::Text::translate(name, &[]).plain();
-    if translated != name && !translated.starts_with("key.") {
-        return translated;
-    }
-    match name {
-        "key.attack" => "Attack / Destroy".into(),
-        "key.use" => "Use Item / Place Block".into(),
-        "key.forward" => "Walk Forward".into(),
-        "key.left" => "Strafe Left".into(),
-        "key.back" => "Walk Backwards".into(),
-        "key.right" => "Strafe Right".into(),
-        "key.jump" => "Jump".into(),
-        "key.sneak" => "Sneak / Crouch".into(),
-        "key.sprint" => "Sprint".into(),
-        "key.drop" => "Drop Selected Item (Q)".into(),
-        "key.inventory" => "Open Inventory (E)".into(),
-        "key.chat" => "Open Chat (T)".into(),
-        "key.playerlist" => "List Players (Tab)".into(),
-        "key.pickItem" => "Pick Block (Middle Click)".into(),
-        "key.command" => "Open Command (/)".into(),
-        "key.socialInteractions" => "Social Interactions (P)".into(),
-        "key.screenshot" => "Take Screenshot (F2)".into(),
-        "key.togglePerspective" => "Toggle Perspective (F5)".into(),
-        "key.smoothCamera" => "Toggle Cinematic Camera".into(),
-        "key.fullscreen" => "Toggle Fullscreen (F11)".into(),
-        "key.spectatorOutlines" => "Highlight Players (Spectator)".into(),
-        "key.swapOffhand" => "Swap Item With Offhand (F)".into(),
-        "key.saveToolbarActivator" => "Save Hotbar Activator (C)".into(),
-        "key.loadToolbarActivator" => "Load Hotbar Activator (X)".into(),
-        "key.advancements" => "Advancements (L)".into(),
-        other => {
-            if let Some(slot) = other.strip_prefix("key.hotbar.") {
-                format!("Hotbar Slot {slot}")
+
+pub fn friendly_token_name(token: &str) -> String {
+    match token {
+        "" | "key.keyboard.unknown" => "Unassigned".into(),
+        "key.mouse.left" => "LMB (Attack)".into(),
+        "key.mouse.right" => "RMB (Use)".into(),
+        "key.mouse.middle" => "MMB (Pick)".into(),
+        "key.mouse.4" => "Mouse 4".into(),
+        "key.mouse.5" => "Mouse 5".into(),
+        "mouse.scroll.up" => "Wheel Up".into(),
+        "mouse.scroll.down" => "Wheel Down".into(),
+        "mouse.virtual.toggle" => "Virtual Mouse".into(),
+        "mouse.look" => "Mouse Look".into(),
+        _ => {
+            if let Some(name) = token.strip_prefix("action:") {
+                let tr = crate::text::Text::translate(name, &[]).plain();
+                if tr == name || tr.starts_with("key.") {
+                    match name {
+                        "key.attack" => "Attack / Mine".into(),
+                        "key.use" => "Use / Place".into(),
+                        "key.forward" => "Walk Forward".into(),
+                        "key.left" => "Strafe Left".into(),
+                        "key.back" => "Walk Back".into(),
+                        "key.right" => "Strafe Right".into(),
+                        "key.jump" => "Jump".into(),
+                        "key.sneak" => "Sneak".into(),
+                        "key.sprint" => "Sprint".into(),
+                        "key.drop" => "Drop Item".into(),
+                        "key.inventory" => "Inventory".into(),
+                        "key.chat" => "Open Chat".into(),
+                        "key.playerlist" => "Player List".into(),
+                        "key.pickItem" => "Pick Block".into(),
+                        "key.command" => "Command /".into(),
+                        "key.toggleGui" => "Hide HUD (F1)".into(),
+                        "key.screenshot" => "Screenshot (F2)".into(),
+                        "key.togglePerspective" => "Perspective (F5)".into(),
+                        "key.swapOffhand" => "Swap Hands (F)".into(),
+                        "key.advancements" => "Advancements (L)".into(),
+                        "key.debug.overlay" => "Debug Info (F3)".into(),
+                        other => other.trim_start_matches("key.").into(),
+                    }
+                } else {
+                    tr
+                }
             } else {
-                other.strip_prefix("key.").unwrap_or(other).to_owned()
+                let d = crate::keybinds::display_name(token).plain();
+                if d.starts_with("key.keyboard.") {
+                    token.trim_start_matches("key.keyboard.").to_uppercase()
+                } else {
+                    d
+                }
             }
         }
     }
 }
+
 pub fn choices(raw_keys: bool) -> Vec<(String, String)> {
     if raw_keys {
         crate::keybinds::available_keys()
             .iter()
-            .map(|(name, _)| ((*name).into(), crate::keybinds::display_name(name).plain()))
+            .map(|(name, _)| ((*name).into(), friendly_token_name(name)))
             .collect()
     } else {
         crate::keybinds::MAPPINGS
             .iter()
             .filter(|m| m.1 != "key.keyboard.unknown")
-            .map(|(name, _, _)| (format!("action:{name}"), friendly_action_name(name)))
+            .map(|(name, _, _)| {
+                let tok = format!("action:{name}");
+                let lbl = friendly_token_name(&tok);
+                (tok, lbl)
+            })
             .collect()
     }
 }
@@ -149,7 +189,7 @@ impl TouchControls {
         false
     }
     pub fn fit_placement(&self, mut p: Placement) -> Placement {
-        p.size = (p.size * p.scale * self.settings.button_scale)
+        p.size = (p.size * self.settings.button_scale)
             .min(self.aspect())
             .min(1.0);
         let half = [p.size / self.aspect() / 2.0, p.size / 2.0];
@@ -228,19 +268,25 @@ impl TouchControls {
                 return false;
             }
             self.clicked = true;
+            let third_key = btn.third_key.clone();
             if placement.toggleable {
                 let now_on = !self.latched_custom.remove(&key);
                 if now_on {
                     self.latched_custom.insert(key.clone());
                 }
                 self.custom_events.push((key, now_on));
-                if !second_key.is_empty() && CustomButton::valid_token(&second_key) && second_key != "key.keyboard.unknown" {
-                    if now_on {
-                        self.latched_custom.insert(second_key.clone());
-                    } else {
-                        self.latched_custom.remove(&second_key);
+                for extra in [second_key, third_key] {
+                    if !extra.is_empty()
+                        && CustomButton::valid_token(&extra)
+                        && extra != "key.keyboard.unknown"
+                    {
+                        if now_on {
+                            self.latched_custom.insert(extra.clone());
+                        } else {
+                            self.latched_custom.remove(&extra);
+                        }
+                        self.custom_events.push((extra, now_on));
                     }
-                    self.custom_events.push((second_key, now_on));
                 }
                 if !placement.passthrough {
                     self.fingers.insert(id, (Role::Ignore, point));
@@ -253,8 +299,13 @@ impl TouchControls {
             self.custom_fingers.insert(id, key.clone());
             if pressed {
                 self.custom_events.push((key, true));
-                if !second_key.is_empty() && CustomButton::valid_token(&second_key) && second_key != "key.keyboard.unknown" {
-                    self.custom_events.push((second_key, true));
+                for extra in [second_key, third_key] {
+                    if !extra.is_empty()
+                        && CustomButton::valid_token(&extra)
+                        && extra != "key.keyboard.unknown"
+                    {
+                        self.custom_events.push((extra, true));
+                    }
                 }
             }
             if placement.passthrough {
@@ -301,15 +352,11 @@ impl TouchControls {
     pub(super) fn draw_custom(&self, b: &mut HudBatch, a: &HudAtlas) {
         for (i, button) in self.settings.custom_buttons.iter().enumerate() {
             let p = self.custom_placement(i);
-            let size = p.size * b.height;
-            let rect = [
-                p.center[0] * b.width - size / 2.0,
-                p.center[1] * b.height - size / 2.0,
-                size,
-                size,
-            ];
-            let pressed = self.custom_fingers.values().any(|key| *key == button.key)
-                || self.latched_custom.contains(&button.key);
+            let [nx, ny, nw, nh] = p.rect(self.aspect());
+            let rect = [nx * b.width, ny * b.height, nw * b.width, nh * b.height];
+            let held = self.custom_fingers.values().any(|key| *key == button.key);
+            let toggled = self.latched_custom.contains(&button.key);
+            let pressed = held || toggled;
             let opacity = if self.editor.is_some() {
                 p.opacity.max(0.25)
             } else {
@@ -318,15 +365,19 @@ impl TouchControls {
             if opacity <= 0.0 {
                 continue;
             }
-            text_button(
-                b,
-                a,
-                rect,
-                &button.label(),
-                pressed,
-                rgba(255, 255, 255, (opacity * 255.0) as u8),
-                true,
-            );
+            if self.settings.control_style == layout::ControlStyle::GoyControl || p.use_goy_style {
+                draw_goy_static_button(b, a, rect, &p, &button.label(), held, toggled, opacity);
+            } else {
+                text_button(
+                    b,
+                    a,
+                    rect,
+                    &button.label(),
+                    pressed,
+                    rgba(255, 255, 255, (opacity * 255.0) as u8),
+                    true,
+                );
+            }
         }
     }
 }

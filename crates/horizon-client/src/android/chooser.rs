@@ -287,10 +287,11 @@ impl Launcher {
                     .enumerate()
                     .map(|(idx, name)| {
                         let active = touch.active_profile.eq_ignore_ascii_case(&name);
+                        let is_def = touch.default_profile.eq_ignore_ascii_case(&name);
                         let preset_info = horizon_client::touch::Settings::PRESETS
                             .iter()
                             .find(|(id, _, _)| id.eq_ignore_ascii_case(&name));
-                        let (title, sub) = if let Some((_, title, desc)) = preset_info {
+                        let (mut title, sub) = if let Some((_, title, desc)) = preset_info {
                             ((*title).to_owned(), (*desc).to_owned())
                         } else {
                             (
@@ -302,6 +303,9 @@ impl Launcher {
                                 },
                             )
                         };
+                        if is_def {
+                            title.push_str(" ★");
+                        }
                         (
                             title,
                             sub,
@@ -311,8 +315,8 @@ impl Launcher {
                     })
                     .collect();
                 (
-                    "HUD Control Presets & Profiles",
-                    "Select a built-in Pocket Edition / Pojav preset or a custom saved layout.",
+                    "MCPE & GoyControl Profiles",
+                    "Switch between MCPE Style Touch Controls, GoyControl Custom Static Style, or saved JSON profiles.",
                     choices,
                 )
             }
@@ -351,10 +355,10 @@ impl Chooser {
             .map(|(i, (_, _, action, _))| {
                 (
                     [
-                        28.0,
-                        108.0 + i as f32 * 64.0 - self.scroll,
-                        width - 56.0,
-                        58.0,
+                        32.0,
+                        137.0 + i as f32 * 84.0 - self.scroll,
+                        width - 64.0,
+                        76.0,
                     ],
                     *action,
                 )
@@ -362,90 +366,50 @@ impl Chooser {
             .collect()
     }
     pub(super) fn viewport(&self, height: f32) -> [f32; 3] {
-        let top = 108.0;
-        let bottom = (height - 64.0).max(top + 60.0);
         [
-            top,
-            bottom,
-            (self.choices.len() as f32 * 64.0 - (bottom - top)).max(0.0),
+            137.0,
+            height - 100.0,
+            (self.choices.len() as f32 * 84.0 - (height - 237.0)).max(0.0),
         ]
     }
     pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>) {
         let (w, h) = (ui.w, ui.h);
         targets.clear();
         ui.rounded(0.0, 0.0, w, h, 0.0, color::hex(0x0D0C14, 255));
-        ui.text(Face::SemiBold, 22.0, 28.0, 20.0, color::TEXT, self.title);
-        let fitted_help = ui.fit_text(Face::Regular, 13.5, self.help, w - 56.0);
-        ui.text(Face::Regular, 13.5, 28.0, 54.0, color::MUTED, &fitted_help);
+        ui.text(Face::Medium, 28.0, 32.0, 35.0, color::TEXT, self.title);
+        ui.text(Face::Regular, 15.0, 32.0, 85.0, color::MUTED, self.help);
         if let Some(device) = &self.device {
-            let fitted_dev = ui.fit_text(Face::Regular, 12.5, device, w - 56.0);
-            ui.text(Face::Regular, 12.5, 28.0, 78.0, color::MUTED, &fitted_dev);
+            ui.text(Face::Regular, 13.0, 32.0, 111.0, color::MUTED, device);
         }
-        let top = 108.0;
-        let bottom = (h - 64.0).max(top + 60.0);
+        let top = 137.0;
+        let bottom = h - 100.0;
         self.scroll = self.scroll.clamp(
             0.0,
-            (self.choices.len() as f32 * 64.0 - (bottom - top)).max(0.0),
+            (self.choices.len() as f32 * 84.0 - (bottom - top)).max(0.0),
         );
-        ui.set_clip(Some([0.0, top, w, bottom - top]));
+        ui.set_clip(Some([0.0, top, w, (bottom - top).max(1.0)]));
         for (i, (label, detail, action, selected)) in self.choices.iter().enumerate() {
-            let y = top + i as f32 * 64.0 - self.scroll;
-            if y + 58.0 < top || y > bottom {
+            let y = top + i as f32 * 84.0 - self.scroll;
+            if y + 76.0 < top || y > bottom {
                 continue;
             }
-            let bg = if *selected {
-                color::hex(0x282142, 255)
-            } else {
-                color::hex(0x171621, 255)
-            };
-            let border = if *selected {
-                color::hex(0x9A7BFF, 255)
-            } else {
-                color::hex(0x262435, 255)
-            };
-            ui.rounded(28.0, y, w - 56.0, 56.0, 14.0, bg);
-            ui.border(28.0, y, w - 56.0, 56.0, 14.0, border);
-            ui.rounded(
-                44.0,
-                y + 18.0,
-                20.0,
-                20.0,
-                10.0,
-                if *selected {
-                    color::hex(0x9A7BFF, 255)
-                } else {
-                    color::hex(0x353248, 255)
-                },
-            );
-            ui.rounded(46.0, y + 20.0, 16.0, 16.0, 8.0, bg);
+            ui.rounded(34.0, y + 10.0, 22.0, 22.0, 11.0, color::TEXT);
+            ui.rounded(36.0, y + 12.0, 18.0, 18.0, 9.0, color::BG);
             if *selected {
-                ui.rounded(50.0, y + 24.0, 8.0, 8.0, 4.0, color::hex(0x9A7BFF, 255));
+                ui.rounded(40.0, y + 16.0, 10.0, 10.0, 5.0, color::TEXT);
             }
-            let has_detail = !detail.trim().is_empty();
-            let fitted_lbl = ui.fit_text(Face::SemiBold, 15.5, label, w - 120.0);
-            ui.text(
-                Face::SemiBold,
-                15.5,
-                76.0,
-                y + if has_detail { 8.0 } else { 17.0 },
-                color::TEXT,
-                &fitted_lbl,
-            );
-            if has_detail {
-                let fitted_det = ui.fit_text(Face::Regular, 12.5, detail, w - 120.0);
-                ui.text(Face::Regular, 12.5, 76.0, y + 31.0, color::MUTED, &fitted_det);
-            }
-            let cy0 = y.max(top);
-            let cy1 = (y + 56.0).min(bottom);
-            if cy1 > cy0 + 8.0 {
-                targets.push(([28.0, cy0, w - 56.0, cy1 - cy0], *action));
+            ui.text(Face::Medium, 19.0, 80.0, y + 8.0, color::TEXT, label);
+            ui.text(Face::Regular, 14.0, 80.0, y + 40.0, color::MUTED, detail);
+            ui.rounded(32.0, y + 75.0, w - 64.0, 1.0, 0.0, color::BORDER);
+            if let Some(c) = ui.clip_rect([32.0, y, w - 64.0, 76.0]) {
+                targets.push((c, *action));
             }
         }
         ui.set_clip(None);
         button(
             ui,
             targets,
-            [28.0, h - 50.0, 136.0, 38.0],
+            [32.0, h - 78.0, 160.0, 44.0],
             "Cancel",
             Action::Dismiss,
             false,
