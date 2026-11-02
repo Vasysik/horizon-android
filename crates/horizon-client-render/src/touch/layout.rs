@@ -153,6 +153,13 @@ pub struct Settings {
     pub gyroscope: bool,
     pub gyro_sensitivity: f32,
     pub attack_indicator_left: bool,
+    pub dynamic_joystick: bool,
+    /// Fraction of the width, from the movement edge inward, where a dynamic
+    /// joystick may start.
+    pub dynamic_area_x: f32,
+    /// Fraction of the height the dynamic area spans, centred on the movement
+    /// control (1.0 is the full surface).
+    pub dynamic_area_y: f32,
     #[serde(deserialize_with = "deserialize_visibility")]
     pub button_visibility: [u8; 14],
     pub horizontal_margin: f32,
@@ -232,6 +239,9 @@ impl Default for Settings {
             gyroscope: false,
             gyro_sensitivity: 1.0,
             attack_indicator_left: true,
+            dynamic_joystick: false,
+            dynamic_area_x: 0.25,
+            dynamic_area_y: 1.0,
             button_visibility: [0; 14],
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
@@ -321,6 +331,16 @@ impl Settings {
         }
         self.button_scale = if self.button_scale.is_finite() {
             self.button_scale.clamp(0.5, 2.0)
+        } else {
+            1.0
+        };
+        self.dynamic_area_x = if self.dynamic_area_x.is_finite() {
+            self.dynamic_area_x.clamp(0.0, 1.0)
+        } else {
+            0.25
+        };
+        self.dynamic_area_y = if self.dynamic_area_y.is_finite() {
+            self.dynamic_area_y.clamp(0.0, 1.0)
         } else {
             1.0
         };

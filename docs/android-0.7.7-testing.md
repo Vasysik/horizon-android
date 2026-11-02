@@ -116,6 +116,13 @@ render/simulation distance, enabled mods/shaders and whether diagnostics are on.
 
 ## Release gates
 
+For the optional dynamic joystick, test both joystick schemes with the option
+off and on. With it on, touch inside and outside the configured width/height,
+drag and release, then repeat with the left-handed layout. The frame should stay
+at the initial touch, movement should stop on release, and a second finger should
+still turn the camera. Other buttons retain priority. Hide the movement control
+and confirm the area no longer starts movement. D-pad behavior must stay unchanged.
+
 ARM64 compilation alone is insufficient. Require clean merge markers, formatting, lockfile,
 public-tree/license audit, Android checks, targeted host/GPU tests and a final device smoke test.
 Check ARMv7 separately; report untested x86/x86_64 instead of inferring success.

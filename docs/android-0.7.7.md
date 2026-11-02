@@ -10,6 +10,12 @@ when a shield is equipped. An explicitly saved Sneak setting remains available.
 Contributor PR #105 restores golden horse armor rendering by using the vanilla
 `gold` equipment texture name; iron, diamond and leather remain unchanged.
 
+Contributor PR #91 adds an optional dynamic joystick in Touch Controls. Its frame
+starts at the first movement touch and stays anchored until release; width and
+height settings restrict where it may start. It defaults to off and does not
+change D-pad behavior. The integration also respects a hidden movement control,
+removes the old fixed hitbox in dynamic mode, and preserves other button hitboxes.
+
 - Reuse menu blur bind groups until the target size changes, instead of recreating six per frame. Filtering, resolution and pass order are unchanged.
 - Skip the identity blur chain when the radius is zero.
 - Adreno 304 investigation: removing terrain fade discard alone did not fix transparent terrain. Removing alpha discard as an additional private probe did not restore correct rendering either. Neither shader experiment is retained.
