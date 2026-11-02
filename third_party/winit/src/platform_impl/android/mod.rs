@@ -616,27 +616,6 @@ impl<T: 'static> EventLoop<T> {
                         }
                         let location =
                             native_pointer_position(pointer.x() as f64, pointer.y() as f64);
-                        static LAST_TOUCH: std::sync::Mutex<[(u64, f64, f64); 10]> =
-                            std::sync::Mutex::new([(u64::MAX, 0.0, 0.0); 10]);
-                        let pid = pointer.pointer_id() as u64;
-                        if let Ok(mut table) = LAST_TOUCH.lock() {
-                            let slot = (pid as usize) % table.len();
-                            if phase == event::TouchPhase::Moved
-                                && table[slot].0 == pid
-                                && (table[slot].1 - location.x).abs() < 0.05
-                                && (table[slot].2 - location.y).abs() < 0.05
-                            {
-                                continue;
-                            }
-                            if matches!(
-                                phase,
-                                event::TouchPhase::Ended | event::TouchPhase::Cancelled
-                            ) {
-                                table[slot] = (u64::MAX, 0.0, 0.0);
-                            } else {
-                                table[slot] = (pid, location.x, location.y);
-                            }
-                        }
                         trace!(
                             "Input event {device_id:?}, {phase:?}, loc={location:?}, \
                              pointer={pointer:?}"

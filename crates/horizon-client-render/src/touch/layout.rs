@@ -86,23 +86,11 @@ impl Control {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Placement {
     pub center: [f32; 2],
     pub size: f32,
     pub opacity: f32,
-    /// Pojav-style Pass-through: dragging on this button also turns the camera.
-    #[serde(default)]
-    pub passthrough: bool,
-    /// Pojav-style Toggle mode: tapping latches the button on/off until tapped again.
-    #[serde(default)]
-    pub toggleable: bool,
-    /// Pojav-style Swipeable: sliding a finger from outside onto this button activates it.
-    #[serde(default)]
-    pub swipeable: bool,
-    /// Button border shape: 0 = Rounded (default), 1 = Square, 2 = Circle/Pill.
-    #[serde(default)]
-    pub shape: u8,
 }
 impl Placement {
     pub(super) fn new(x: f32, y: f32, size: f32) -> Self {
@@ -110,10 +98,6 @@ impl Placement {
             center: [x, y],
             size,
             opacity: 0.65,
-            passthrough: false,
-            toggleable: false,
-            swipeable: false,
-            shape: 0,
         }
     }
     pub fn rect(self, aspect: f32) -> [f32; 4] {
@@ -134,7 +118,6 @@ impl Placement {
         }
         self.size = self.size.clamp(0.045, 0.45);
         self.opacity = self.opacity.clamp(0.0, 1.0);
-        self.shape = self.shape.min(2);
         for c in &mut self.center {
             *c = if c.is_finite() {
                 c.clamp(0.025, 0.975)
@@ -174,15 +157,8 @@ pub struct Settings {
     pub button_visibility: [u8; 14],
     pub horizontal_margin: f32,
     pub vertical_margin: f32,
-    #[serde(default = "default_profile_name")]
-    pub active_profile: String,
-    #[serde(default)]
-    pub snap_to_grid: bool,
     #[serde(deserialize_with = "deserialize_layouts")]
     pub layouts: [[Placement; 14]; 3],
-}
-fn default_profile_name() -> String {
-    "default".into()
 }
 // Append new buttons without resetting a player's existing ten-button layout.
 fn deserialize_layouts<'de, D: serde::Deserializer<'de>>(
@@ -259,8 +235,6 @@ impl Default for Settings {
             button_visibility: [0; 14],
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
-            active_profile: default_profile_name(),
-            snap_to_grid: false,
             layouts,
         }
     }
@@ -363,95 +337,17 @@ impl Settings {
                 p.sanitize();
             }
         }
-        if self.active_profile.trim().is_empty() {
-            self.active_profile = default_profile_name();
-        }
         for p in self.layouts.iter_mut().flatten() {
             p.sanitize();
         }
     }
     pub fn save(&self) -> std::io::Result<()> {
-        let _ = self.save_profile(std::path::Path::new("."), &self.active_profile);
         self.save_to(std::path::Path::new("horizon-touch.json"))
     }
     pub fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
         let temp = path.with_extension("json.tmp");
         std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(temp, path)
-    }
-    pub fn sanitize_profile_name(name: &str) -> String {
-        let cleaned: String = name
-            .trim()
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                    c.to_ascii_lowercase()
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        let trimmed = cleaned.trim_matches('-');
-        if trimmed.is_empty() {
-            "default".into()
-        } else {
-            trimmed.chars().take(40).collect()
-        }
-    }
-    pub fn list_profiles(game_home: &std::path::Path) -> Vec<String> {
-        let mut names = vec!["default".to_owned()];
-        let dir = game_home.join("controlmap");
-        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            if !entry.file_type().is_ok_and(|t| t.is_file()) {
-                continue;
-            }
-            let file_name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(stem) = file_name.strip_suffix(".json") {
-                let clean = Self::sanitize_profile_name(stem);
-                if !names.contains(&clean) {
-                    names.push(clean);
-                }
-            }
-        }
-        names
-    }
-    pub fn save_profile(&self, game_home: &std::path::Path, name: &str) -> std::io::Result<std::path::PathBuf> {
-        let clean = Self::sanitize_profile_name(name);
-        let dir = game_home.join("controlmap");
-        std::fs::create_dir_all(&dir)?;
-        let mut copy = self.clone();
-        copy.active_profile = clean.clone();
-        let target = dir.join(format!("{clean}.json"));
-        copy.save_to(&target)?;
-        let active_file = game_home.join("horizon-touch.json");
-        let _ = copy.save_to(&active_file);
-        Ok(target)
-    }
-    pub fn load_profile(game_home: &std::path::Path, name: &str) -> Self {
-        let clean = Self::sanitize_profile_name(name);
-        let candidate = game_home.join("controlmap").join(format!("{clean}.json"));
-        let mut loaded = if candidate.is_file() {
-            Self::load_from(&candidate)
-        } else {
-            Self::load_from(&game_home.join("horizon-touch.json"))
-        };
-        loaded.active_profile = clean;
-        let _ = loaded.save_to(&game_home.join("horizon-touch.json"));
-        loaded
-    }
-    pub fn export_profile(
-        &self,
-        root_home: &std::path::Path,
-        game_home: &std::path::Path,
-        name: &str,
-    ) -> std::io::Result<std::path::PathBuf> {
-        let clean = Self::sanitize_profile_name(name);
-        let _ = self.save_profile(game_home, &clean);
-        let reports = root_home.join("performance");
-        std::fs::create_dir_all(&reports)?;
-        let exported = reports.join(format!("horizon-controls-{clean}.json"));
-        self.save_to(&exported)?;
-        Ok(exported)
     }
     pub fn crosshair(&self) -> bool {
         self.mode == Mode::Crosshair || self.split_controls

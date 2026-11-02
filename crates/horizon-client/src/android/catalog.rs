@@ -63,22 +63,6 @@ pub struct Config {
     pub device: crate::device_preferences::Settings,
     pub shader_source: crate::shader_catalog::Origin,
     pub mod_source: crate::shader_catalog::Origin,
-    #[serde(default)]
-    pub ui_scale_percent: u32,
-    #[serde(default)]
-    pub super_perf_mode: bool,
-    #[serde(default)]
-    pub battery_perf_mode: bool,
-    #[serde(default)]
-    pub max_fps_mode: bool,
-    #[serde(default = "default_true")]
-    pub zero_latency_touch: bool,
-    #[serde(default = "default_true")]
-    pub fast_chunk_upload: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 pub use horizon_client::android_gamepad::InputMode as InputHost;
@@ -165,32 +149,6 @@ impl Config {
         // Legacy modpack selections are ignored; their files remain untouched.
         self.profile_home(home)
     }
-    pub fn apply_experimental_to_game(&self, home: &Path) {
-        let game = self.game_home(home);
-        let _ = std::fs::create_dir_all(&game);
-        let options_path = game.join("options.txt");
-        let mut settings = horizon_client::settings::Settings::load(&options_path);
-        if self.super_perf_mode {
-            settings.render_distance = settings.render_distance.min(8);
-            settings.simulation_distance = settings.simulation_distance.min(6);
-            settings.menu_background_blurriness = 0;
-            settings.clouds = horizon_client::settings::Clouds::Off;
-            settings.horizon.upload_budget_kib = 1536;
-        } else if self.battery_perf_mode {
-            settings.render_distance = settings.render_distance.min(8);
-            settings.simulation_distance = settings.simulation_distance.min(5);
-            settings.max_framerate = 60;
-            settings.enable_vsync = true;
-            settings.menu_background_blurriness = 0;
-        } else if self.max_fps_mode {
-            settings.max_framerate = 260;
-            settings.enable_vsync = false;
-            if self.fast_chunk_upload {
-                settings.horizon.upload_budget_kib = 4096;
-            }
-        }
-        settings.save(&options_path);
-    }
 }
 #[derive(Clone, Copy, PartialEq)]
 pub enum Page {
@@ -214,7 +172,7 @@ impl Page {
         match self {
             Self::Play => "Play",
             Self::Mods => "Mods",
-            Self::Packs => "Resource Pack",
+            Self::Packs => "Packs",
             Self::Shaders => "Shaders",
             Self::Installed => "Installed",
             Self::Settings => "Settings",
@@ -228,136 +186,7 @@ enum Reply {
     Done(String, horizon_client::content_files::Kind),
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-pub enum SettingsCategory {
-    #[default]
-    Overview,
-    Video,
-    Launcher,
-    Controls,
-    Experimental,
-    Diagnostics,
-    Account,
-}
-
-#[derive(Clone, Copy)]
-pub struct TransferTracker {
-    pub started_at: std::time::Instant,
-    pub last_sample_at: std::time::Instant,
-    pub last_mib: f64,
-    pub speed_mib_s: f64,
-}
-impl Default for TransferTracker {
-    fn default() -> Self {
-        let now = std::time::Instant::now();
-        Self {
-            started_at: now,
-            last_sample_at: now,
-            last_mib: 0.0,
-            speed_mib_s: 0.0,
-        }
-    }
-}
-impl TransferTracker {
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-    pub fn observe(&mut self, done_mib: f64, paused: bool) {
-        let now = std::time::Instant::now();
-        if paused {
-            self.last_sample_at = now;
-            self.last_mib = done_mib;
-            self.speed_mib_s = 0.0;
-            return;
-        }
-        let dt = now.duration_since(self.last_sample_at).as_secs_f64();
-        if dt >= 0.18 {
-            let delta = (done_mib - self.last_mib).max(0.0);
-            let inst = delta / dt;
-            if inst > 0.0 {
-                self.speed_mib_s = if self.speed_mib_s <= 0.01 {
-                    inst
-                } else {
-                    self.speed_mib_s * 0.68 + inst * 0.32
-                };
-            } else if dt > 1.2 {
-                let avg_dt = now.duration_since(self.started_at).as_secs_f64().max(0.5);
-                self.speed_mib_s = (done_mib / avg_dt).max(0.4);
-            }
-            self.last_sample_at = now;
-            self.last_mib = done_mib;
-        } else if self.speed_mib_s <= 0.01 && done_mib > 0.0 {
-            let avg_dt = now.duration_since(self.started_at).as_secs_f64().max(0.25);
-            self.speed_mib_s = (done_mib / avg_dt).clamp(0.5, 95.0);
-        }
-    }
-    pub fn speed_label(&self, paused: bool) -> String {
-        if paused {
-            return "0.0 MiB/s".into();
-        }
-        let s = self.speed_mib_s.max(0.0);
-        if s < 0.05 {
-            "Calculating...".into()
-        } else if s < 1.0 {
-            format!("{:.0} KiB/s", s * 1024.0)
-        } else {
-            format!("{s:.1} MiB/s")
-        }
-    }
-    pub fn eta_label(&self, done_mib: f64, total_mib: f64, paused: bool) -> String {
-        if paused {
-            return "Paused".into();
-        }
-        let rem = (total_mib - done_mib).max(0.0);
-        if rem <= 0.05 {
-            return "ETA <1s".into();
-        }
-        let speed = self.speed_mib_s;
-        if speed <= 0.05 {
-            return "ETA --".into();
-        }
-        let secs = (rem / speed).ceil() as u64;
-        if secs >= 60 {
-            format!("ETA {}m {:02}s", secs / 60, secs % 60)
-        } else {
-            format!("ETA {secs}s")
-        }
-    }
-}
-
-pub struct ProjectModal {
-    pub project: Project,
-    pub bundled_id: Option<&'static str>,
-    pub catalog_index: Option<usize>,
-    pub description: String,
-    pub author: String,
-    pub downloads: u64,
-    pub followers: u64,
-    pub license: String,
-    pub categories: Vec<String>,
-    pub versions: Vec<browser::Version>,
-    pub selected_version: usize,
-    pub screenshots: Vec<(String, u32, u32, Vec<u8>)>,
-    pub loading: bool,
-    pub scroll: f32,
-}
-
-pub enum ModalUpdate {
-    Metadata {
-        description: String,
-        author: String,
-        downloads: u64,
-        followers: u64,
-        license: String,
-        categories: Vec<String>,
-        versions: Vec<browser::Version>,
-    },
-    Icon(String, u32, u32, Vec<u8>),
-    Screenshot(String, u32, u32, Vec<u8>),
-    Finished,
-}
-
-type IconData = (String, u32, u32, Vec<u8>, Option<String>);
+type IconData = (String, u32, u32, Vec<u8>);
 
 pub struct Catalog {
     pub local: Vec<LocalItem>,
@@ -377,11 +206,6 @@ pub struct Catalog {
     pub query: String,
     pub results: Vec<Project>,
     pub icons: HashMap<String, (u32, u32, Vec<u8>)>,
-    pub enriched_summaries: HashMap<String, String>,
-    pub project_modal: Option<ProjectModal>,
-    modal_worker: Option<mpsc::Receiver<ModalUpdate>>,
-    pub settings_category: SettingsCategory,
-    pub transfer: TransferTracker,
     pub status: String,
     pub offset: usize,
     pub scroll: f32,
@@ -421,11 +245,6 @@ impl Catalog {
             query: String::new(),
             results: vec![],
             icons: HashMap::new(),
-            enriched_summaries: HashMap::new(),
-            project_modal: None,
-            modal_worker: None,
-            settings_category: SettingsCategory::Overview,
-            transfer: TransferTracker::default(),
             status: String::new(),
             offset: 0,
             scroll: 0.0,
@@ -622,70 +441,9 @@ impl Catalog {
     }
     pub fn poll(&mut self, home: &Path) {
         if let Some(rx) = &self.icon_worker {
-            while let Ok((key, w, h, rgba, summary)) = rx.try_recv() {
-                self.icons.insert(key.clone(), (w, h, rgba));
-                if let Some(s) = summary.filter(|s| !s.trim().is_empty()) {
-                    self.enriched_summaries.insert(key, s);
-                }
+            while let Ok((key, w, h, rgba)) = rx.try_recv() {
+                self.icons.insert(key, (w, h, rgba));
             }
-        }
-        if let Some(rx) = &self.modal_worker {
-            while let Ok(update) = rx.try_recv() {
-                match update {
-                    ModalUpdate::Metadata {
-                        description,
-                        author,
-                        downloads,
-                        followers,
-                        license,
-                        categories,
-                        versions,
-                    } => {
-                        if let Some(modal) = &mut self.project_modal {
-                            if !description.trim().is_empty() {
-                                modal.description = description;
-                            }
-                            if !author.trim().is_empty() {
-                                modal.author = author;
-                            }
-                            if downloads > 0 {
-                                modal.downloads = downloads;
-                            }
-                            if followers > 0 {
-                                modal.followers = followers;
-                            }
-                            if !license.trim().is_empty() {
-                                modal.license = license;
-                            }
-                            if !categories.is_empty() {
-                                modal.categories = categories;
-                            }
-                            if !versions.is_empty() {
-                                modal.versions = versions;
-                                modal.selected_version = 0;
-                            }
-                        }
-                    }
-                    ModalUpdate::Icon(id, w, h, rgba) => {
-                        self.icons.insert(id, (w, h, rgba));
-                    }
-                    ModalUpdate::Screenshot(title, w, h, rgba) => {
-                        if let Some(modal) = &mut self.project_modal {
-                            modal.screenshots.push((title, w, h, rgba));
-                        }
-                    }
-                    ModalUpdate::Finished => {
-                        if let Some(modal) = &mut self.project_modal {
-                            modal.loading = false;
-                        }
-                    }
-                }
-            }
-        }
-        if self.downloading.is_some() && self.busy() {
-            let frac = self.progress_fraction().clamp(0.0, 1.0);
-            let total = f64::from(self.downloading_size_mib.max(1.0));
-            self.transfer.observe(total * f64::from(frac), self.is_paused());
         }
         let reply = self.worker.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(v) => Some(v),
@@ -732,216 +490,31 @@ impl Catalog {
         self.start_search();
     }
     fn fetch_icons(&mut self, home: &Path) {
-        // Collect both direct icon URLs and Horizon/bundled items that need a Modrinth name search
-        // for their PFP and description.
-        let mut tasks: Vec<(String, String, Option<String>, Kind)> = Vec::new();
-        if self.page == Page::Mods && self.config.mod_source == crate::shader_catalog::Origin::Horizon {
-            for (id, title, _) in horizon_client::mod_list::ANDROID_BUNDLED {
-                if !self.icons.contains_key(id) {
-                    tasks.push((id.to_owned(), title.to_owned(), None, Kind::Mod));
+        let missing: Vec<(String, String)> = self
+            .results
+            .iter()
+            .filter_map(|p| {
+                let url = p.icon.as_ref()?.trim();
+                if url.is_empty() || self.icons.contains_key(&p.id) {
+                    return None;
                 }
-            }
-        }
-        for p in &self.results {
-            if self.icons.contains_key(&p.id) {
-                continue;
-            }
-            let direct = p.icon.as_ref().map(|u| u.trim().to_owned()).filter(|u| !u.is_empty());
-            tasks.push((p.id.clone(), p.title.clone(), direct, p.kind));
-        }
-        if tasks.is_empty() {
+                Some((p.id.clone(), url.to_owned()))
+            })
+            .collect();
+        if missing.is_empty() {
             return;
         }
         let home = home.to_path_buf();
         let (tx, rx) = mpsc::channel();
         self.icon_worker = Some(rx);
         std::thread::spawn(move || {
-            for (id, title, direct_url, kind) in tasks {
-                let mut icon_url = direct_url;
-                let mut found_summary = None;
-                if icon_url.is_none() {
-                    if let Some(hit) = lookup_modrinth_by_name(&title, kind) {
-                        icon_url = hit.icon;
-                        if !hit.summary.trim().is_empty() {
-                            found_summary = Some(hit.summary);
-                        }
-                    }
-                }
-                if let Some(url) = icon_url
-                    && let Ok(path) = browser::images::fetch(&home, &url, browser::images::ROW)
+            for (id, url) in missing {
+                if let Ok(path) = browser::images::fetch(&home, &url, browser::images::ROW)
                     && let Ok((w, h, rgba)) = horizon_client::hud::decode(&path)
                 {
-                    let _ = tx.send((id, w, h, rgba, found_summary));
+                    let _ = tx.send((id, w, h, rgba));
                 }
             }
-        });
-    }
-
-    pub fn open_project_modal(
-        &mut self,
-        home: &Path,
-        project: Project,
-        bundled_id: Option<&'static str>,
-        catalog_index: Option<usize>,
-    ) {
-        let initial_desc = self
-            .enriched_summaries
-            .get(&project.id)
-            .cloned()
-            .unwrap_or_else(|| project.summary.clone());
-        let initial_versions = vec![browser::Version {
-            id: format!("{}-latest", project.id),
-            number: "26.3-latest".into(),
-            published: "2026".into(),
-            game_versions: vec![browser::GAME.into()],
-            loaders: if project.loaders.is_empty() {
-                vec![project.source.label().to_lowercase()]
-            } else {
-                project.loaders.clone()
-            },
-            files: Vec::new(),
-            required: Vec::new(),
-            blocked: None,
-        }];
-        self.project_modal = Some(ProjectModal {
-            author: if project.author.is_empty() {
-                project.source.label().to_owned()
-            } else {
-                project.author.clone()
-            },
-            downloads: project.downloads,
-            followers: 0,
-            license: project.license.clone(),
-            categories: project.loaders.clone(),
-            description: initial_desc,
-            versions: initial_versions,
-            selected_version: 0,
-            screenshots: Vec::new(),
-            loading: true,
-            scroll: 0.0,
-            project: project.clone(),
-            bundled_id,
-            catalog_index,
-        });
-        let home = home.to_path_buf();
-        let need_icon = !self.icons.contains_key(&project.id);
-        let (tx, rx) = mpsc::channel();
-        self.modal_worker = Some(rx);
-        std::thread::spawn(move || {
-            let mut description = project.summary.clone();
-            let mut author = project.author.clone();
-            let mut downloads = project.downloads;
-            let mut followers = 0;
-            let mut license = project.license.clone();
-            let mut categories = project.loaders.clone();
-            let mut versions = Vec::new();
-            let mut gallery = Vec::new();
-            let mut icon_url = project.icon.clone();
-
-            if let Some(source) = browser::source(project.source) {
-                if let Ok(v) = source.versions(&project) && !v.is_empty() {
-                    versions = v;
-                }
-                if let Ok(d) = source.details(&project) {
-                    if !d.body.trim().is_empty() {
-                        description = clean_markdown_body(&d.body);
-                    }
-                    if !d.authors.is_empty() {
-                        author = d.authors.join(", ");
-                    }
-                    if d.followers > 0 {
-                        followers = d.followers;
-                    }
-                    if !d.categories.is_empty() {
-                        categories = d.categories;
-                    }
-                    gallery = d.gallery;
-                }
-            }
-
-            // For Horizon list items (or bundled mods), search Modrinth by the project's name
-            // to enrich with Modrinth's full description, PFP icon, and gallery screenshots!
-            if project.source == browser::SourceId::Horizon || gallery.is_empty() || icon_url.is_none() {
-                if let Some(m_hit) = lookup_modrinth_by_name(&project.title, project.kind) {
-                    if icon_url.is_none() {
-                        icon_url = m_hit.icon.clone();
-                    }
-                    if downloads == 0 {
-                        downloads = m_hit.downloads;
-                    }
-                    if author.is_empty() && !m_hit.author.is_empty() {
-                        author = m_hit.author.clone();
-                    }
-                    if license.is_empty() && !m_hit.license.is_empty() {
-                        license = m_hit.license.clone();
-                    }
-                    if let Ok(m_details) = browser::modrinth::Modrinth.details(&m_hit) {
-                        if !m_details.body.trim().is_empty() {
-                            let body_clean = clean_markdown_body(&m_details.body);
-                            if project.source == browser::SourceId::Horizon {
-                                let caps = browser::horizon::trust_and_capabilities(&project.id);
-                                if caps.is_empty() {
-                                    description = body_clean;
-                                } else {
-                                    description = format!("{}
-
-{}", caps.join(" • "), body_clean);
-                                }
-                            } else {
-                                description = body_clean;
-                            }
-                        }
-                        if followers == 0 {
-                            followers = m_details.followers;
-                        }
-                        if !m_details.categories.is_empty() {
-                            categories = m_details.categories;
-                        }
-                        if gallery.is_empty() {
-                            gallery = m_details.gallery;
-                        }
-                    } else if description.len() < m_hit.summary.len() {
-                        description = m_hit.summary.clone();
-                    }
-                    if versions.is_empty()
-                        && let Ok(m_vers) = browser::modrinth::Modrinth.versions(&m_hit)
-                    {
-                        versions = m_vers;
-                    }
-                }
-            }
-
-            let _ = tx.send(ModalUpdate::Metadata {
-                description,
-                author,
-                downloads,
-                followers,
-                license,
-                categories,
-                versions,
-            });
-
-            if need_icon
-                && let Some(url) = icon_url
-                && let Ok(path) = browser::images::fetch(&home, &url, browser::images::ROW)
-                && let Ok((w, h, rgba)) = horizon_client::hud::decode(&path)
-            {
-                let _ = tx.send(ModalUpdate::Icon(project.id.clone(), w, h, rgba));
-            }
-
-            for (idx, img) in gallery.into_iter().take(3).enumerate() {
-                if let Ok(path) = browser::images::fetch(&home, &img.url, 240)
-                    && let Ok((w, h, rgba)) = horizon_client::hud::decode(&path)
-                {
-                    let label = if img.title.trim().is_empty() {
-                        format!("Screenshot {}", idx + 1)
-                    } else {
-                        img.title
-                    };
-                    let _ = tx.send(ModalUpdate::Screenshot(label, w, h, rgba));
-                }
-            }
-            let _ = tx.send(ModalUpdate::Finished);
         });
     }
     pub fn search(&mut self, home: &Path) {
@@ -1119,7 +692,6 @@ impl Catalog {
             Kind::Mod => 3.8,
             _ => 5.0,
         };
-        self.transfer.reset();
         self.failed = None;
         self.paused.store(false, Ordering::Relaxed);
         self.cancelled.store(false, Ordering::Relaxed);
@@ -1425,61 +997,4 @@ fn install_modrinth_jar_fallback(
     installed.save(home)?;
     progress(&format!("Installed {}", project.title), 1.0);
     Ok(1)
-}
-
-fn lookup_modrinth_by_name(title: &str, kind: Kind) -> Option<Project> {
-    let clean_title = title
-        .split('(')
-        .next()
-        .unwrap_or(title)
-        .trim();
-    let mut query = Query::new(clean_title, kind);
-    query.everything = true;
-    query.limit = 5;
-    let hits = if kind == Kind::Shader {
-        browser::modrinth::search_shader_packs(&query).ok()?
-    } else {
-        browser::modrinth::Modrinth.search(&query).ok()?
-    };
-    let lower = clean_title.to_lowercase();
-    hits.iter()
-        .find(|p| p.title.to_lowercase() == lower || p.slug.to_lowercase() == lower.replace(' ', "-"))
-        .cloned()
-        .or_else(|| hits.into_iter().next())
-}
-
-fn clean_markdown_body(raw: &str) -> String {
-    let mut out = Vec::new();
-    let mut in_html = false;
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            if out.last().is_some_and(|l: &String| !l.is_empty()) {
-                out.push(String::new());
-            }
-            continue;
-        }
-        if trimmed.starts_with("![") || trimmed.starts_with("<img") || trimmed.starts_with("<a ") || trimmed.starts_with("<div") || trimmed.starts_with("</div") || trimmed.starts_with("<p align") || trimmed.starts_with("<center") || trimmed.starts_with("</center") {
-            continue;
-        }
-        let mut clean_line = String::with_capacity(trimmed.len());
-        let trimmed = trimmed.trim_start_matches('#').trim();
-        for ch in trimmed.chars() {
-            if ch == '<' {
-                in_html = true;
-            } else if ch == '>' {
-                in_html = false;
-            } else if !in_html && ch != '*' && ch != '`' {
-                clean_line.push(ch);
-            }
-        }
-        let collapsed = clean_line.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !collapsed.is_empty() {
-            out.push(collapsed);
-        }
-        if out.len() >= 18 {
-            break;
-        }
-    }
-    out.join("\n")
 }

@@ -42,9 +42,6 @@ pub(super) struct Launcher {
     install: Arc<Mutex<horizon_client::official_install::InstallProgress>>,
     install_paused: Arc<std::sync::atomic::AtomicBool>,
     install_cancelled: Arc<std::sync::atomic::AtomicBool>,
-    install_transfer: crate::catalog::TransferTracker,
-    pub(super) anim: pages::AnimState,
-    pub(super) control_editor: Option<horizon_client::touch::TouchControls>,
     worker: Option<mpsc::Receiver<std::result::Result<(), String>>>,
     error: Option<String>,
     catalog: Catalog,
@@ -88,7 +85,6 @@ impl Launcher {
         }
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
-        horizon_client::ui_theme::set_ui_scale_percent(catalog.config.ui_scale_percent);
         Self {
             home,
             controller_edges: Default::default(),
@@ -104,9 +100,6 @@ impl Launcher {
             install: Arc::default(),
             install_paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             install_cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            install_transfer: Default::default(),
-            anim: Default::default(),
-            control_editor: None,
             worker: None,
             error: None,
             catalog,
@@ -188,8 +181,6 @@ impl Launcher {
     fn open(&mut self, events: &ActiveEventLoop) -> Result<()> {
         crate::platform::set_orientation(self.catalog.config.orientation);
         self.configure_screen();
-        horizon_client::ui_theme::set_android_dpi(crate::platform::display_density());
-        horizon_client::ui_theme::set_ui_scale_percent(self.catalog.config.ui_scale_percent);
         crate::display::set_scale(self.catalog.config.render_scale);
         horizon_client::android_runtime::configure_gpu(false);
         if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
@@ -231,26 +222,12 @@ impl Launcher {
 
     fn request_back(&mut self) {
         crate::platform::hide();
-        if let Some(mut editor) = self.control_editor.take() {
-            let game_home = self.catalog.config.game_home(&self.home);
-            let _ = editor.settings.save_profile(&game_home, &editor.settings.active_profile.clone());
-            self.catalog.status = "Saved HUD touch control layout.".into();
-            return;
-        }
         if self.exit_confirmation {
             self.exit_confirmation = false;
-        } else if self.catalog.project_modal.take().is_some() {
-            self.catalog.scroll = 0.0;
         } else if self.login.visible {
             self.login.hide();
         } else if self.chooser.take().is_some() {
             // Back dismisses the current dialog, including the exit question.
-        } else if self.catalog.page == Page::Settings
-            && self.catalog.settings_category != crate::catalog::SettingsCategory::Overview
-        {
-            self.catalog.settings_category = crate::catalog::SettingsCategory::Overview;
-            self.catalog.scroll = 0.0;
-            self.anim.trigger_page_transition();
         } else if self.catalog.editing.take().is_none() {
             self.exit_confirmation = true;
         }
@@ -295,7 +272,6 @@ impl Launcher {
             )?;
             crate::platform::hide();
             self.catalog.config.save(&self.home)?;
-            self.catalog.config.apply_experimental_to_game(&self.home);
             // Migrate the earlier launcher preset once; subsequent edits belong to Key Binds.
             let keypad_path = self
                 .catalog
@@ -412,7 +388,6 @@ impl Launcher {
                 .store(false, std::sync::atomic::Ordering::Relaxed);
             self.install_cancelled
                 .store(false, std::sync::atomic::Ordering::Relaxed);
-            self.install_transfer.reset();
             let home = self.home.clone();
             let install = self.install.clone();
             let paused = self.install_paused.clone();
@@ -667,9 +642,6 @@ impl ApplicationHandler for Launcher {
             || self.catalog.busy()
             || self.drag.is_some()
             || self.login.pending()
-            || self.control_editor.is_some()
-            || self.catalog.project_modal.as_ref().is_some_and(|m| m.loading)
-            || self.anim.is_active()
         {
             16
         } else {

@@ -169,8 +169,6 @@ pub struct TouchControls {
     pub editor: Option<editor::Editor>,
     fingers: BTreeMap<u64, (Role, [f32; 2])>,
     custom_fingers: BTreeMap<u64, String>,
-    latched_custom: std::collections::BTreeSet<String>,
-    latched_controls: u16,
     custom_events: Vec<(String, bool)>,
     pending: PadState,
     pub aim: Option<[f32; 2]>,
@@ -677,14 +675,8 @@ impl TouchControls {
                         Role::Ignore
                     }
                 }
-                Some(Control::Sprint)
-                    if self.settings.sprint_toggle || self.placement(Control::Sprint).toggleable =>
-                {
+                Some(Control::Sprint) if self.settings.sprint_toggle => {
                     self.sprint_latched = !self.sprint_latched;
-                    Role::Ignore
-                }
-                Some(c) if self.placement(c).toggleable => {
-                    self.latched_controls ^= 1 << (c as u16);
                     Role::Ignore
                 }
                 Some(c) => Self::button(c).map_or(Role::Ignore, Role::Button),
@@ -727,14 +719,6 @@ impl TouchControls {
                 } else {
                     [0.0; 2]
                 }
-            } else if matches!(role, Role::Button(_) | Role::Shield)
-                && self
-                    .control_at(point)
-                    .is_some_and(|c| self.placement(c).passthrough)
-            {
-                let d = [point[0] - previous[0], point[1] - previous[1]];
-                *previous = point;
-                d
             } else {
                 *previous = point;
                 [0.0; 2]
@@ -746,7 +730,6 @@ impl TouchControls {
     pub fn clear(&mut self) {
         self.clear_custom();
         self.fingers.clear();
-        self.latched_controls = 0;
         self.last_sneak_tap = None;
         self.sprint_latched = false;
         self.pending = PadState::default();
@@ -820,24 +803,8 @@ impl TouchControls {
     }
     pub fn state(&self) -> PadState {
         let mut state = PadState::default();
-        if (self.settings.sprint_toggle || self.placement(Control::Sprint).toggleable)
-            && self.settings.sprint_button
-            && self.sprint_latched
-        {
+        if self.settings.sprint_toggle && self.settings.sprint_button && self.sprint_latched {
             state.set(Button::LeftStick, true);
-        }
-        if self.latched_controls != 0 {
-            for c in Control::ALL {
-                if (self.latched_controls & (1 << (c as u16))) != 0
-                    && let Some(bt) = Self::button(c)
-                {
-                    match bt {
-                        Button::LeftTrigger => state.triggers[0] = 1.0,
-                        Button::RightTrigger => state.triggers[1] = 1.0,
-                        other => state.set(other, true),
-                    }
-                }
-            }
         }
         for (role, point) in self.fingers.values() {
             match role {

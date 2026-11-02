@@ -16,8 +16,6 @@ pub(super) enum Kind {
     Profile,
     Orientation,
     InputHost,
-    UiScale,
-    ControlProfile,
 }
 pub(super) struct Chooser {
     title: &'static str,
@@ -246,59 +244,6 @@ impl Launcher {
                 (
                     "Choose profile",
                     "Each profile keeps its own game settings and saves.",
-                    choices,
-                )
-            }
-            Kind::UiScale => (
-                "Launcher UI scale",
-                "Adapts the launcher to your phone's DPI. Increase or decrease if touch controls and text feel too small or too large.",
-                [
-                    (0u32, "Auto (Phone DPI)", "Automatically matches your display's DPI density"),
-                    (85, "85% (Compact)", "Fits more rows on screen"),
-                    (100, "100% (Default DPI)", "Standard phone DPI scaling"),
-                    (115, "115% (Large)", "Larger buttons, cards and text"),
-                    (130, "130% (Extra Large)", "Maximum touch comfort on high-DPI phones"),
-                ]
-                .into_iter()
-                .map(|(pct, title, desc)| {
-                    (
-                        title.into(),
-                        desc.into(),
-                        Action::ChooseUiScale(pct),
-                        c.ui_scale_percent == pct,
-                    )
-                })
-                .collect(),
-            ),
-            Kind::ControlProfile => {
-                let game_home = c.game_home(&self.home);
-                let touch = horizon_client::touch::Settings::load_from(&game_home.join("horizon-touch.json"));
-                let mut profiles = horizon_client::touch::Settings::list_profiles(&game_home);
-                for preset in ["default", "pvp", "building", "speedrun"] {
-                    if !profiles.iter().any(|p| p == preset) {
-                        profiles.push(preset.to_owned());
-                    }
-                }
-                let choices = profiles
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, name)| {
-                        let active = touch.active_profile == name;
-                        (
-                            format!("Layout: {name}"),
-                            if active {
-                                "Currently active HUD control profile".into()
-                            } else {
-                                "Tap to load this HUD control layout".into()
-                            },
-                            Action::ChooseControlProfile(idx as u32),
-                            active,
-                        )
-                    })
-                    .collect();
-                (
-                    "HUD Control Profiles",
-                    "Switch between saved HUD button layouts or export/import them as JSON files.",
                     choices,
                 )
             }

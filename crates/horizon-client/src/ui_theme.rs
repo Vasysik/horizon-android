@@ -90,20 +90,6 @@ pub enum Face {
 
 /// Vector icons used by the Material You 3 Android launcher navigation rail,
 /// top bar, and progress controls.
-static ANDROID_DPI_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-static UI_SCALE_PERCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(100);
-
-pub fn set_android_dpi(dpi: f32) {
-    if dpi.is_finite() && dpi >= 1.0 {
-        ANDROID_DPI_BITS.store(dpi.clamp(1.0, 5.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-pub fn set_ui_scale_percent(percent: u32) {
-    let clamped = if percent == 0 { 100 } else { percent.clamp(75, 165) };
-    UI_SCALE_PERCENT.store(clamped, std::sync::atomic::Ordering::Relaxed);
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
     HorizonLogo,
@@ -118,13 +104,6 @@ pub enum Icon {
     Close,
     Search,
     Check,
-    Monitor,
-    Gear,
-    Flask,
-    Terminal,
-    MicrosoftGrid,
-    Gamepad,
-    ArrowLeft,
 }
 
 struct Fonts {
@@ -329,81 +308,6 @@ fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
         Icon::Check => {
             seg_dist(u, v, 0.22, 0.54, 0.42, 0.74) <= 0.068
                 || seg_dist(u, v, 0.42, 0.74, 0.80, 0.28) <= 0.068
-        }
-        Icon::Monitor => {
-            // Desktop monitor outline + stand + base matching Settings -> Video Settings.
-            let outer = (0.14..=0.86).contains(&u) && (0.18..=0.66).contains(&v);
-            let inner = (0.21..=0.79).contains(&u) && (0.25..=0.59).contains(&v);
-            let screen = outer && !inner;
-            let neck = (0.46..=0.54).contains(&u) && (0.66..=0.80).contains(&v);
-            let base = seg_dist(u, v, 0.33, 0.80, 0.67, 0.80) <= 0.04;
-            screen || neck || base
-        }
-        Icon::Gear => {
-            // 8-tooth cogwheel with hollow center matching Settings -> Launcher Settings.
-            let (dx, dy) = (u - 0.50, v - 0.50);
-            let d = (dx * dx + dy * dy).sqrt();
-            if d <= 0.14 || d >= 0.41 {
-                return false;
-            }
-            if (0.14..=0.28).contains(&d) {
-                return true;
-            }
-            let dirs: [(f32, f32); 8] = [
-                (1.0, 0.0),
-                (-1.0, 0.0),
-                (0.0, 1.0),
-                (0.0, -1.0),
-                (0.7071, 0.7071),
-                (-0.7071, 0.7071),
-                (0.7071, -0.7071),
-                (-0.7071, -0.7071),
-            ];
-            dirs.iter().any(|&(rx, ry)| {
-                let proj = dx * rx + dy * ry;
-                let perp = (dx * ry - dy * rx).abs();
-                (0.24..=0.39).contains(&proj) && perp <= 0.075
-            })
-        }
-        Icon::Flask => {
-            // Erlenmeyer laboratory flask with liquid level matching Settings -> Experimental Stuff.
-            let rim = seg_dist(u, v, 0.36, 0.17, 0.64, 0.17) <= 0.038;
-            let neck_l = seg_dist(u, v, 0.42, 0.17, 0.42, 0.40) <= 0.036;
-            let neck_r = seg_dist(u, v, 0.58, 0.17, 0.58, 0.40) <= 0.036;
-            let slope_l = seg_dist(u, v, 0.42, 0.40, 0.18, 0.80) <= 0.038;
-            let slope_r = seg_dist(u, v, 0.58, 0.40, 0.82, 0.80) <= 0.038;
-            let bottom = seg_dist(u, v, 0.18, 0.82, 0.82, 0.82) <= 0.038;
-            let liquid = seg_dist(u, v, 0.30, 0.63, 0.70, 0.63) <= 0.032;
-            rim || neck_l || neck_r || slope_l || slope_r || bottom || liquid
-        }
-        Icon::Terminal => {
-            // ">_" terminal prompt matching Settings -> Diagnostics.
-            let chev_top = seg_dist(u, v, 0.18, 0.30, 0.44, 0.50) <= 0.045;
-            let chev_bot = seg_dist(u, v, 0.44, 0.50, 0.18, 0.70) <= 0.045;
-            let underscore = seg_dist(u, v, 0.52, 0.72, 0.82, 0.72) <= 0.045;
-            chev_top || chev_bot || underscore
-        }
-        Icon::MicrosoftGrid => {
-            // 2x2 four-pane window grid matching Settings -> Account.
-            let in_x = (0.18..=0.46).contains(&u) || (0.54..=0.82).contains(&u);
-            let in_y = (0.18..=0.46).contains(&v) || (0.54..=0.82).contains(&v);
-            in_x && in_y
-        }
-        Icon::Gamepad => {
-            // Controller / D-pad + buttons icon for Settings -> Controls.
-            let body = ((u - 0.50).abs() <= 0.32 && (v - 0.52).abs() <= 0.20)
-                || ((u - 0.24).powi(2) + (v - 0.58).powi(2)).sqrt() <= 0.15
-                || ((u - 0.76).powi(2) + (v - 0.58).powi(2)).sqrt() <= 0.15;
-            let dpad_h = (0.24..=0.42).contains(&u) && (0.48..=0.55).contains(&v);
-            let dpad_v = (0.295..=0.365).contains(&u) && (0.42..=0.61).contains(&v);
-            let btn1 = ((u - 0.68).powi(2) + (v - 0.46).powi(2)).sqrt() <= 0.045;
-            let btn2 = ((u - 0.76).powi(2) + (v - 0.55).powi(2)).sqrt() <= 0.045;
-            body && !(dpad_h || dpad_v || btn1 || btn2)
-        }
-        Icon::ArrowLeft => {
-            let top = seg_dist(u, v, 0.62, 0.24, 0.34, 0.50) <= 0.055;
-            let bot = seg_dist(u, v, 0.34, 0.50, 0.62, 0.76) <= 0.055;
-            top || bot
         }
     }
 }
@@ -647,48 +551,28 @@ impl<'a> Ui<'a> {
             batch,
         }
     }
-    /// Native phone DPI-adaptive launcher density; game HUD scale is untouched.
+    /// Native launcher density on tall phone screens; game HUD scale is untouched.
     pub fn mobile(atlas: &'a HudAtlas, batch: &'a mut HudBatch, cursor: (f32, f32)) -> Self {
         let mut ui = Self::new(atlas, batch, cursor);
         let pw = ui.batch.width * ui.scale;
         let ph = ui.batch.height * ui.scale;
-        let hw_dpi = f32::from_bits(ANDROID_DPI_BITS.load(std::sync::atomic::Ordering::Relaxed));
-        let user_scale =
-            (UI_SCALE_PERCENT.load(std::sync::atomic::Ordering::Relaxed) as f32 / 100.0).clamp(0.75, 1.65);
-        let base_density = if ph > pw {
-            // Portrait phone screen: target ~410dp width so cards and touch buttons are comfortable.
-            let target_dpi = (pw / 410.0).min(ph / 640.0);
-            if hw_dpi >= 1.0 {
-                (target_dpi * 0.7 + hw_dpi * 0.3).clamp(1.0, 4.5)
-            } else {
-                target_dpi.clamp(1.0, 4.5)
-            }
-        } else {
-            // Landscape phone/tablet screen: target ~425dp height (and ~840dp width) so the
-            // left navigation rail, header, and 2-column cards match phone DPI instead of
-            // shrinking to a 700dp desktop monitor layout.
-            let fit_phone = (pw / 840.0).min(ph / 425.0);
-            let dpi = if hw_dpi >= 1.0 {
-                // Blend hardware DisplayMetrics density with viewport fit so small screens never clip.
-                (hw_dpi * 0.88).min(ph / 385.0).max(fit_phone)
-            } else {
-                fit_phone
-            };
-            dpi.clamp(0.65, 4.5)
-        };
-        // Ensure user_scale still keeps at least 365dp height in landscape so all 6 rail items fit.
-        let max_safe_density = if ph > pw {
-            (pw / 340.0).max(1.0)
-        } else {
-            (ph / 365.0).min(pw / 660.0).max(0.65)
-        };
-        ui.density = (base_density * user_scale).min(max_safe_density).clamp(0.5, 4.5);
-        ui.w = pw / ui.density;
-        ui.h = ph / ui.density;
-        ui.cursor = (
-            cursor.0 * ui.scale / ui.density,
-            cursor.1 * ui.scale / ui.density,
-        );
+        if ph > pw {
+            ui.density = (pw / 480.0).clamp(1.0, 4.0);
+            ui.w = pw / ui.density;
+            ui.h = ph / ui.density;
+            ui.cursor = (
+                cursor.0 * ui.scale / ui.density,
+                cursor.1 * ui.scale / ui.density,
+            );
+        } else if ph < 700.0 {
+            ui.density = (pw / 1040.0).min(ph / 700.0).clamp(0.5, 4.0);
+            ui.w = pw / ui.density;
+            ui.h = ph / ui.density;
+            ui.cursor = (
+                cursor.0 * ui.scale / ui.density,
+                cursor.1 * ui.scale / ui.density,
+            );
+        }
         ui
     }
 

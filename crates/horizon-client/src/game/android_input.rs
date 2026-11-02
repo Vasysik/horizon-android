@@ -296,16 +296,10 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        if t.phase == TouchPhase::Moved {
-            return Ok(false);
-        }
-        let size = if let Some(r) = self.renderer.as_ref() {
-            winit::dpi::PhysicalSize::new(r.config.width, r.config.height)
-        } else if let Some(window) = self.window.as_ref() {
-            window.inner_size()
-        } else {
+        let Some(window) = self.window.as_ref() else {
             return Ok(false);
         };
+        let size = window.inner_size();
         let b = HudBatch::new([size.width, size.height]);
         let p = [t.location.x as f32 / b.scale, t.location.y as f32 / b.scale];
         if t.phase == TouchPhase::Started

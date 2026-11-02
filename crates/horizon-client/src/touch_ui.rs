@@ -212,16 +212,8 @@ impl TouchUi {
             touch.cursor = cursor;
         }
         touch.dragged |= (point[0] - touch.origin[0]).hypot(point[1] - touch.origin[1]) > 3.0;
-        let step = (point[0] - touch.last[0]).hypot(point[1] - touch.last[1]);
-        // Apply subtle desktop-like pointer acceleration on real GUI viewports (>250dp)
-        // while keeping synthetic unit test viewports (e.g. 200x200) exact 1:1.
-        let accel = if size[0] > 250.0 {
-            (1.15 + (step * 0.085).min(1.05)).clamp(1.0, 2.2)
-        } else {
-            1.0
-        };
         let position = [0, 1].map(|i| {
-            (touch.cursor[i] + (point[i] - touch.last[i]) * sensitivity * accel)
+            (touch.cursor[i] + (point[i] - touch.last[i]) * sensitivity)
                 .clamp(0.0, (size[i] - 1.0).max(0.0))
         });
         touch.cursor = position;
