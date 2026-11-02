@@ -100,7 +100,7 @@ Berdasarkan analisis AST dan kode sumber resmi Simple Voice Chat (`de.maxhenkel.
 
 ### 3.1. Compatibility Version & Channel Identifiers
 
-- **`COMPATIBILITY_VERSION` saat ini**: **`21`** (Minecraft 26.3 / SVC 2.7.x).
+- **`COMPATIBILITY_VERSION` default saat ini**: **`20`** (SVC 2.6.x, versi stabil yang umum dipakai di server produksi seperti SlimeSkyes dan SoraMC). Auto-negotiation & fallback list: `[20, 21, 19, 18, 22]`.
 - **Identifier Channel Minecraft CustomPayload (TCP)**:
   Semua identifier menggunakan namespace `voicechat`:
 
@@ -149,19 +149,24 @@ Protokol SVC menggunakan `FriendlyByteBuf` (Netty ByteBuf) dengan konvensi:
 | 0..4 | `compatibility_version` | `i32` (Big-Endian) | Nilai tetap: `21` |
 
 #### 2. `SecretPacket` (`voicechat:secret`)
+Format wire terverifikasi (kompatibilitas versi 20 & 18/19):
 | Urutan | Field | Tipe Data | Keterangan |
 |---|---|---|---|
 | 1 | `secret` | `[u8; 16]` | 16 byte AES-128 key mentah |
-| 2 | `connection_id` | `UUID` (16 bytes) | ID koneksi client untuk header UDP |
-| 3 | `server_port` | `i32` (Big-Endian) | Port UDP server voice chat |
-| 4 | `player_uuid` | `UUID` (16 bytes) | UUID player pemilik sesi |
-| 5 | `codec` | `u8` (Byte) | Ordinal enum: `0` = VOIP |
-| 6 | `mtu_size` | `i32` (Big-Endian) | MTU jaringan (biasanya 1024 atau 1500) |
-| 7 | `voice_chat_distance`| `f64` (IEEE 754 Big-Endian) | Radius suara proximity (default: 48.0) |
-| 8 | `keep_alive` | `i32` (Big-Endian) | Interval keepalive (ms) |
-| 9 | `groups_enabled` | `bool` (1 byte) | Apakah grup voice diaktifkan |
-| 10 | `voice_host` | `String` (VarInt + UTF-8) | Hostname/IP server UDP (kosong = pakai IP server MC) |
-| 11 | `allow_recording` | `bool` (1 byte) | Izin client merekam audio |
+| 2 | `server_port` | `i32` (Big-Endian) | Port UDP server voice chat |
+| 3 | `player_uuid` | `UUID` (16 bytes) | UUID player pemilik sesi |
+| 4 | `codec` | `u8` (Byte) | Ordinal enum: `0` = VOIP |
+| 5 | `mtu_size` | `i32` (Big-Endian) | MTU jaringan (biasanya 1024 atau 1500) |
+| 6 | `voice_chat_distance`| `f64` (IEEE 754 Big-Endian) | Radius suara proximity (default: 48.0 atau 14.0) |
+| 7 | `keep_alive` | `i32` (Big-Endian) | Interval keepalive (ms, default 1000) |
+| 8 | `groups_enabled` | `bool` (1 byte) | Apakah grup voice diaktifkan |
+| 9 | `voice_host` | `String` (VarInt + UTF-8) | Hostname/IP server UDP (bisa berisi `host`, `host:port`, atau kosong) |
+| 10 (opsional) | `allow_recording` | `bool` (1 byte) | Izin client merekam audio (default false jika terpotong) |
+
+> **CATATAN PROTOKOL PENTING**:
+> 1. Pada compatibility version 20 (dan 18/19), **TIDAK ADA field `connection_id` terpisah di dalam `SecretPacket`**. ID koneksi untuk framing UDP client->server langsung menggunakan `player_uuid`.
+> 2. `voice_host` dapat berisi string kosong (gunakan IP server Minecraft), hostname saja (`edge.slimeskyes.id`), format dengan port (`edge.slimeskyes.id:8000`), port numerik saja (`8000`), atau IPv6 (`[::1]:8000`). Fungsi `parse_voice_host` memisahkan host dan port; port pada `voice_host` menimpa `server_port`.
+> 3. Resolusi alamat DNS UDP **WAJIB** menggunakan tuple `(&host, port).to_socket_addrs()`, **BUKAN** `format!("{}:{}", host, port)` agar tidak terjadi bug double-port (`edge.slimeskyes.id:8000:8000`).
 
 #### 3. `UpdateStatePacket` (`voicechat:client_state`)
 | Urutan | Field | Tipe Data | Keterangan |
