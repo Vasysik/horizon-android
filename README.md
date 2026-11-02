@@ -7,7 +7,7 @@ Rust engine for Minecraft Java 26.3. Unofficial and in active development.
 
 [Download APK](https://github.com/Vasysik/horizon-android/releases) · [Build & play](docs/android.md) · [Contribute](CONTRIBUTING_ANDROID.md) ·
 [Report an Android bug](https://github.com/Vasysik/horizon-android/issues/new?template=android-bug.yml) ·
-[Discord community](https://discord.gg/GGwGWhHZT)
+[Discord community](https://discord.gg/PG79z2PhjG)
 
 ## What works
 
@@ -84,6 +84,8 @@ and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Mojang textures are not
 licensed under Horizon's MIT license. Game files, prepared resources, accounts,
 APKs and signing keys stay outside Git. This project is not affiliated with or
 endorsed by Mojang or Microsoft.
+
+Optional: [support development on Boosty](https://boosty.to/vasys).
 
 <details>
 <summary>Upstream Horizon documentation (desktop)</summary>
