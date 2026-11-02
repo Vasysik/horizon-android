@@ -440,12 +440,10 @@ fn button(b: &mut HudBatch, a: &HudAtlas, label: &str, x: f32, y: f32, w: f32) {
 /// longer touches, so a held press survives menu entry, exit and the IME
 /// (a release the press never produced is a stray and is ignored).
 pub fn aux_mouse_phase(pressed: bool, owned: bool, touched: bool) -> Option<TouchPhase> {
-    (owned || touched).then(|| {
-        if pressed {
-            TouchPhase::Started
-        } else {
-            TouchPhase::Ended
-        }
+    (owned || touched).then_some(if pressed {
+        TouchPhase::Started
+    } else {
+        TouchPhase::Ended
     })
 }
 
