@@ -514,6 +514,13 @@ pub struct ScreenshotRequest {
     /// `Renderer::screenshot_quality`, not the window's.
     pub scaled: bool,
 }
+/// Vanilla sky at the far depth plane, drawn after solid terrain in the same pass.
+struct LateSky {
+    sky: wgpu::RenderPipeline,
+    dark_disc: wgpu::RenderPipeline,
+    celestial: wgpu::RenderPipeline,
+}
+
 pub struct Renderer {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
@@ -562,6 +569,9 @@ pub struct Renderer {
     /// No-discard opaque and alpha-cutout pipelines for Android Vulkan.
     opaque_terrain: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     opaque_terrain_on: bool,
+    /// Android Vulkan only; packs keep their original sky/material ordering.
+    late_sky: Option<LateSky>,
+    late_sky_on: bool,
     /// Last frame's opaque/cutout/order-sensitive draw counts; None uses the ordinary path.
     pub terrain_pass_draws: Option<[u32; 3]>,
     translucent: wgpu::RenderPipeline,
@@ -2952,7 +2962,7 @@ impl Renderer {
             },
             ..additive_descriptor
         });
-        let celestial_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let celestial_descriptor = wgpu::RenderPipelineDescriptor {
             label: Some("Celestial bodies"),
             layout: Some(&entity_layout),
             vertex: wgpu::VertexState {
@@ -3000,6 +3010,56 @@ impl Renderer {
             }),
             multiview_mask: None,
             cache: None,
+        };
+        let celestial_pipeline = device.create_render_pipeline(&celestial_descriptor);
+        let mut late_sky = opaque_terrain.as_ref().and_then(|_| {
+            let checks = GpuChecks::push(&device);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let sky = pipeline(
+                "Late sky",
+                "vs_sky",
+                "fs_sky",
+                &[],
+                tri,
+                None,
+                false,
+                true,
+                None,
+            );
+            let dark = pipeline(
+                "Late dark disc",
+                "vs_sky",
+                "fs_dark_disc",
+                &[],
+                tri,
+                None,
+                false,
+                true,
+                Some(alpha_blend),
+            );
+            let celestial = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Late celestial bodies"),
+                vertex: wgpu::VertexState {
+                    entry_point: Some("vs_entity_sky"),
+                    ..celestial_descriptor.vertex.clone()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    ..celestial_descriptor.depth_stencil.clone().unwrap()
+                }),
+                ..celestial_descriptor.clone()
+            });
+            let error = pollster::block_on(internal.pop()).or(checks.pop());
+            if let Some(error) = error {
+                log::warn!("Late sky unavailable; retaining original order: {error}");
+                None
+            } else {
+                Some(LateSky {
+                    sky,
+                    dark_disc: dark,
+                    celestial,
+                })
+            }
         });
         // WorldBorderRenderer: misc/forcefield.png as a MipmappedTexture
         // (repeat, linear minification with mipmaps, nearest magnification).
@@ -3357,7 +3417,14 @@ impl Renderer {
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
-        let stars = stars::Stars::new(&device, config.format.remove_srgb_suffix());
+        let stars = stars::Stars::new(
+            &device,
+            config.format.remove_srgb_suffix(),
+            late_sky.is_some(),
+        );
+        if !stars.has_late_pipeline() {
+            late_sky = None;
+        }
         let entity_outline = entity_outline::EntityOutline::new(
             &device,
             (&entity_shader, &entity_layout, &entity_vertex),
@@ -3407,6 +3474,8 @@ impl Renderer {
             solid,
             opaque_terrain,
             opaque_terrain_on: true,
+            late_sky,
+            late_sky_on: true,
             terrain_pass_draws: None,
             translucent,
             flat_on: flat.is_some(),
@@ -3824,6 +3893,14 @@ impl Renderer {
             return Err("split opaque terrain is unavailable on this backend".into());
         }
         self.opaque_terrain_on = on;
+        Ok(())
+    }
+    /// Developer-only comparison, with the ordinary path retained for packs and mirrors.
+    pub fn set_late_sky(&mut self, on: bool) -> Result<()> {
+        if on && self.late_sky.is_none() {
+            return Err("late sky unavailable".into());
+        }
+        self.late_sky_on = on;
         Ok(())
     }
     /// Whether one of Horizon's own packs reads the water mirror, which needs the frame's
@@ -6733,7 +6810,16 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.group, &[]);
             pack_frame(&mut pass);
-            if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
+            let late_sky = self.late_sky_on
+                && self.late_sky.is_some()
+                && !frame.title
+                && frame.skybox
+                && !frame.end_sky
+                && self.native.is_none()
+                && self.pack_post.is_none()
+                && mirror.is_none()
+                && cull.is_none();
+            if !late_sky && (frame.title || (sky_visible && (frame.skybox || frame.end_sky))) {
                 if !frame.title && frame.skybox && !pack_draws_sky && !native_sky_pass {
                     match self
                         .native
@@ -6776,7 +6862,7 @@ impl Renderer {
                     .as_ref()
                     .is_some_and(|n| n.sky.is_some() && !n.vanilla_stars);
                 if !frame.title && frame.stars.is_some() && !pack_draws_sky && !own_stars {
-                    self.stars.draw(&mut pass);
+                    self.stars.draw(&mut pass, false);
                     pass.set_bind_group(0, &self.group, &[]);
                 }
                 if !frame.title && frame.dark_disc && !pack_draws_sky {
@@ -6884,6 +6970,28 @@ impl Renderer {
                             }
                         }
                     }
+                }
+            }
+            // Read the depth left by solids, without writing depth or adding a render pass.
+            // At reverse-Z's far plane, the unchanged sky shaders run only in uncovered pixels.
+            if let Some(sky) = self.late_sky.as_ref().filter(|_| late_sky && sky_visible) {
+                pass.set_pipeline(&sky.sky);
+                pass.draw(0..3, 0..1);
+                if celestial_vertices > 0 {
+                    pass.set_pipeline(&sky.celestial);
+                    pass.set_bind_group(0, &self.entity_group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
+                    pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
+                    pass.set_bind_group(0, &self.group, &[]);
+                }
+                if frame.stars.is_some() {
+                    self.stars.draw(&mut pass, true);
+                    pass.set_bind_group(0, &self.group, &[]);
+                }
+                if frame.dark_disc {
+                    pass.set_pipeline(&sky.dark_disc);
+                    pass.draw(0..3, 0..1);
                 }
             }
             if entity_quads > 0 {

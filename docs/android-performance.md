@@ -79,3 +79,36 @@ The terrain shader regression tests compare the output of both paths over alpha
 thresholds, fog, section fading and emission tiers. Geometry tests preserve the
 ordering of overlapping cutout/opaque faces. This does not replace testing on
 other GPUs, shader packs and resource packs.
+
+## Vulkan sky ordering
+
+Without a shader pack, Android Vulkan can draw the vanilla Overworld sky after
+solid terrain, before entities and translucent surfaces, within the same render
+pass. The sky reads depth at the far plane without writing it. This avoids shading
+pixels hidden by terrain; see the [skybox ordering discussion from NVIDIA](https://developer.nvidia.com/gpugems/gpugems/part-v-performance-and-practicalities/chapter-28-graphics-pipeline-performance).
+The sky fragment shaders, time, colours, fog and celestial rotation are unchanged.
+
+Native and classic shader packs retain their existing ordering. The title screen,
+End sky, water mirror and GPU occlusion path also retain their original path.
+OpenGL ES is unchanged. Failure to create any of the additional pipelines retains
+the original sky order. The authenticated developer command `sky-order early|late`
+allows comparison without changing the world's settings or network protocol.
+
+On the same Adreno 710 tablet at 2560×1600 and 16 chunks, with split terrain active:
+
+| Test | Early sky | Late sky |
+| --- | ---: | ---: |
+| Stationary GPU time, mean of three runs | 14.73 ms | 13.59 ms |
+| GPU time while turning, two runs | 16.47–16.58 ms | 13.43–13.49 ms |
+| Frame p99 while turning | 21.17–21.40 ms | 18.45–18.91 ms |
+
+The turning test used running world time near sunrise and the same eight-second
+touch swipe from the same initial camera direction. It is a separate workload
+from the stationary comparison; its percentages must not be multiplied with the
+earlier terrain results to claim a combined speedup.
+
+Paired daytime, sunset, night and sunrise captures had identical RGB pixels outside
+the changing diagnostic counters. Golden Hour was enabled and disabled, and its
+captures also matched between the two sky-order requests. This verifies that pack
+on this device, not every shader pack or GPU. Capture tools and captures are not
+included in the APK or repository.

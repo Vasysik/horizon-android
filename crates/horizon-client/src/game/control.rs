@@ -11,6 +11,7 @@ use std::{
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 const HELP: &[&str] = &[
+    "sky-order early|late           A/B vanilla sky ordering on supported Android Vulkan devices",
     "terrain-passes single|split    A/B terrain pipelines; split requires a supported backend",
     "status                         game, player, streaming and renderer state",
     "simulation                     authoritative projectiles in the owner's level",
@@ -302,6 +303,18 @@ impl Game<'_> {
                     Some(other) => return Err(format!("unknown section draw mode {other}").into()),
                 }
                 Ok(Some(json!({ "ok": true, "flat": r.flat_draws() })))
+            }
+            "sky-order" => {
+                let on = match arg(1)? {
+                    "early" => false,
+                    "late" => true,
+                    _ => return Err("sky-order early|late".into()),
+                };
+                self.renderer
+                    .as_mut()
+                    .ok_or("no renderer")?
+                    .set_late_sky(on)?;
+                ok()
             }
             "terrain-passes" => {
                 let on = match arg(1)? {
