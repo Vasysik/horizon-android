@@ -26,6 +26,11 @@ use std::{
 /// generator's scratch buffers ([`ChunkGenerator::idle`]).
 pub const IDLE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Copper's bound on columns generating at once on phones: about one per
+/// worker thread plus room for the decoration neighbourhood, so the closest
+/// columns complete in order instead of all at once.
+const COPPER_INFLIGHT: usize = 6;
+
 /// A chunk under generation, opaque to the streamer.
 pub type Proto = Box<dyn std::any::Any + Send>;
 /// Chunk generation in vanilla's stages: a neighbour-independent proto chunk
@@ -457,6 +462,14 @@ impl GenerationScan {
         input: GenerationInputs<'_>,
         capacity: usize,
     ) -> Option<Vec<(i64, i32, i32)>> {
+        // Copper caps in-flight generation on phones: close columns finish
+        // before far ones start, so the chunks the player sees land sooner
+        // and half-built columns churn less memory and CPU.
+        let capacity = if crate::android_runtime::copper() {
+            capacity.min(COPPER_INFLIGHT)
+        } else {
+            capacity
+        };
         // Generation (load or proto), closest first, bounded in flight.
         let (margin, reach) = Ranges::margins(input.decorates);
         if input.remote

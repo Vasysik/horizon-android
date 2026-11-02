@@ -2953,6 +2953,10 @@ impl Renderer {
         let cull_env = std::env::var("HORIZON_GPU_CULL");
         let cull = cull::Cull::supported(&adapter, &device)
             .filter(|_| !crate::android_runtime::compatibility())
+            // Copper: tiled phone GPUs pay more for the occlusion pass and
+            // its readback than the hidden sections it saves on small
+            // screens, so the mod turns the extra passes off.
+            .filter(|_| !(cfg!(target_os = "android") && crate::android_runtime::copper()))
             .filter(|_| cull_env.as_deref() != Ok("0"))
             .map(|depth_test| match cull_env.as_deref() {
                 Ok("shader") => cull::DepthTest::InShader,

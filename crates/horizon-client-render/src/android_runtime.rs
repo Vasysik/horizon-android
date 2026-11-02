@@ -120,6 +120,15 @@ pub fn clear_keypad() {
 pub fn keypad_state() -> crate::gamepad::PadState {
     KEYPAD.lock().unwrap().poll()
 }
+/// The Copper mobile performance mod is installed and turned on: it paces
+/// chunk streaming and leaves the render thread more headroom on phones.
+static COPPER: AtomicBool = AtomicBool::new(false);
+pub fn configure_copper(on: bool) {
+    COPPER.store(on, Ordering::Relaxed);
+}
+pub fn copper() -> bool {
+    COPPER.load(Ordering::Relaxed)
+}
 static OPEN_GL: AtomicBool = AtomicBool::new(cfg!(target_pointer_width = "32"));
 pub fn configure_graphics(open_gl: bool) {
     OPEN_GL.store(open_gl, Ordering::Relaxed);

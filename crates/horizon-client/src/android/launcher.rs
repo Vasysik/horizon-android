@@ -240,9 +240,19 @@ impl Launcher {
         if self.login.pending() {
             return Ok(());
         }
+        // Copper is a first-party mod package: installing and enabling it
+        // turns the native mobile performance suite on for this session.
+        let copper = horizon_client::mod_list::ModList::load(
+            &self.catalog.config.game_home(&self.home),
+        )
+        .enabled
+        .contains("copper");
+        horizon_client::android_runtime::configure_copper(copper);
         crate::diagnostics::heartbeat(
             "play_requested",
-            || serde_json::json!({"renderer":self.catalog.config.renderer.label(),"resolution_percent":self.catalog.config.render_scale.percent()}),
+            || {
+                serde_json::json!({"renderer":self.catalog.config.renderer.label(),"resolution_percent":self.catalog.config.render_scale.percent(),"copper":copper})
+            },
         );
         crate::configure_input_mode(self.catalog.config.input_host);
         crate::device_runtime::configure(self.catalog.config.device);

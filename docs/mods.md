@@ -31,6 +31,21 @@ To carry mod *content* (blocks, items, recipes, textures) over from a Java mod, 
 described in [modpacks.md](modpacks.md); to write behaviour, build a sandboxed `.hmod` (below) or a native
 `.hnmod` ([native-mods.md](native-mods.md)).
 
+## Copper: Oxide's mobile performance mod
+
+Copper is Oxide's own mod, downloadable from the launcher's Mods page under the **Oxide** source (Android).
+The package is content-only: the performance suite itself is native client code, and installing plus enabling
+the mod is what turns it on for a play session. With Copper enabled, Oxide:
+
+- caps how many chunk columns generate at once, so the closest columns finish first and half-built columns
+  churn less memory and CPU;
+- leaves the phone one more core for the render thread and the GPU driver while chunks stream;
+- skips the occlusion-culling depth passes on Android, which tiled phone GPUs pay more for than the hidden
+  sections save on a phone screen.
+
+Copper is off by default (parity first): install it from the Oxide source, enable it in Installed, then Play.
+Its state is recorded in the `play_requested` diagnostic heartbeat.
+
 ## Playing with mods
 
 1. Install a mod from the launcher's Mods page ([mod-browser.md](mod-browser.md)), or put its files by hand in the
