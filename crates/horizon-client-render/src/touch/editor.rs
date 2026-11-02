@@ -88,6 +88,26 @@ impl TouchControls {
                         self.settings.button_visibility[index] = if show { 1 } else { 2 };
                     }
                 }
+            } else if layout::contains([0.365, 0.04, 0.14, 0.075], p) {
+                self.settings.snap_to_grid = !self.settings.snap_to_grid;
+            } else if layout::contains([0.515, 0.04, 0.22, 0.075], p) {
+                let presets = ["default", "pvp", "building", "speedrun"];
+                let idx = presets
+                    .iter()
+                    .position(|n| *n == self.settings.active_profile)
+                    .unwrap_or(0);
+                let next = presets[(idx + 1) % presets.len()];
+                let _ = self.settings.save_profile(std::path::Path::new("."), &self.settings.active_profile);
+                self.settings = Settings::load_profile(std::path::Path::new("."), next);
+            } else if layout::contains([0.32, 0.46, 0.115, 0.06], p) && e.selected.is_some() {
+                let slot = self.settings.slot(e.selected.unwrap());
+                self.settings.layouts[self.settings.mode.index()][slot].passthrough ^= true;
+            } else if layout::contains([0.442, 0.46, 0.115, 0.06], p) && e.selected.is_some() {
+                let slot = self.settings.slot(e.selected.unwrap());
+                self.settings.layouts[self.settings.mode.index()][slot].toggleable ^= true;
+            } else if layout::contains([0.565, 0.46, 0.115, 0.06], p) && e.selected.is_some() {
+                let slot = self.settings.slot(e.selected.unwrap());
+                self.settings.layouts[self.settings.mode.index()][slot].swipeable ^= true;
             } else if layout::contains([0.32, 0.88, 0.36, 0.07], p) && e.selected.is_some() {
                 self.settings.button_visibility[e.selected.unwrap() as usize] = 2;
                 e.selected = None;
@@ -134,6 +154,9 @@ impl TouchControls {
                     // Match the displayed size on narrow portrait surfaces.
                     // A stored button may be wider than the screen; its raw
                     // size would otherwise produce inverted clamp bounds.
+                    if self.settings.snap_to_grid {
+                        center = center.map(|v| (v * 40.0).round() / 40.0);
+                    }
                     let size = (place.size * self.settings.button_scale)
                         .min(aspect)
                         .min(1.0);
@@ -167,13 +190,23 @@ impl TouchControls {
         false
     }
     pub(super) fn draw_editor_toolbar(&self, b: &mut HudBatch, a: &HudAtlas) {
-        for (rect, label) in [
-            ([0.02, 0.04, 0.105, 0.075], "Done"),
-            ([0.135, 0.04, 0.105, 0.075], "Cancel"),
-            ([0.25, 0.04, 0.105, 0.075], "Reset"),
-            ([0.02, 0.13, 0.335, 0.075], "Add buttons..."),
+        for (rect, label, on) in [
+            ([0.02, 0.04, 0.105, 0.075], "Done".to_owned(), false),
+            ([0.135, 0.04, 0.105, 0.075], "Cancel".to_owned(), false),
+            ([0.25, 0.04, 0.105, 0.075], "Reset".to_owned(), false),
+            (
+                [0.365, 0.04, 0.14, 0.075],
+                format!("Grid: {}", if self.settings.snap_to_grid { "On" } else { "Off" }),
+                self.settings.snap_to_grid,
+            ),
+            (
+                [0.515, 0.04, 0.22, 0.075],
+                format!("Profile: {}", self.settings.active_profile),
+                false,
+            ),
+            ([0.02, 0.13, 0.335, 0.075], "Add buttons...".to_owned(), false),
         ] {
-            plate(b, a, rect, label, false);
+            plate(b, a, rect, &label, on);
         }
     }
 
@@ -184,6 +217,27 @@ impl TouchControls {
         if let Some(selected) = e.selected {
             plate(b, a, [0.32, 0.88, 0.36, 0.07], "Remove button", false);
             let p = self.placement(selected);
+            plate(
+                b,
+                a,
+                [0.32, 0.46, 0.115, 0.06],
+                "PassThru",
+                p.passthrough,
+            );
+            plate(
+                b,
+                a,
+                [0.442, 0.46, 0.115, 0.06],
+                "Toggle",
+                p.toggleable,
+            );
+            plate(
+                b,
+                a,
+                [0.565, 0.46, 0.115, 0.06],
+                "Swipe",
+                p.swipeable,
+            );
             plate(
                 b,
                 a,
@@ -403,6 +457,20 @@ impl TouchControls {
             return false;
         }
         if started && e.selected_custom.is_some() {
+            let idx = e.selected_custom.unwrap();
+            let mode_idx = self.settings.mode.index();
+            if layout::contains([0.32, 0.46, 0.115, 0.06], p) {
+                self.settings.custom_buttons[idx].layouts[mode_idx].passthrough ^= true;
+                return true;
+            }
+            if layout::contains([0.442, 0.46, 0.115, 0.06], p) {
+                self.settings.custom_buttons[idx].layouts[mode_idx].toggleable ^= true;
+                return true;
+            }
+            if layout::contains([0.565, 0.46, 0.115, 0.06], p) {
+                self.settings.custom_buttons[idx].layouts[mode_idx].swipeable ^= true;
+                return true;
+            }
             if layout::contains([0.32, 0.54, 0.36, 0.07], p) {
                 e.key_picker = true;
                 e.key_page = 0;
@@ -508,6 +576,9 @@ impl TouchControls {
             && !e.key_picker
         {
             let p = self.settings.custom_buttons[i].layouts[self.settings.mode.index()];
+            plate(b, a, [0.32, 0.46, 0.115, 0.06], "PassThru", p.passthrough);
+            plate(b, a, [0.442, 0.46, 0.115, 0.06], "Toggle", p.toggleable);
+            plate(b, a, [0.565, 0.46, 0.115, 0.06], "Swipe", p.swipeable);
             plate(
                 b,
                 a,

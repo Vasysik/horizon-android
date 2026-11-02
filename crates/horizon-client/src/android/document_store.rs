@@ -62,7 +62,9 @@ struct Document {
     reports: bool,
 }
 fn shareable_report(name: &str) -> bool {
-    (name.starts_with("horizon-diagnostics-") && name.ends_with(".zip")) || name.ends_with(".jsonl")
+    (name.starts_with("horizon-diagnostics-") && name.ends_with(".zip"))
+        || (name.starts_with("horizon-controls-") && name.ends_with(".json"))
+        || name.ends_with(".jsonl")
 }
 fn resolve(home: &Path, id: &str) -> io::Result<Document> {
     let mut parts = id.split('/');

@@ -16217,7 +16217,11 @@ impl Game<'_> {
             use winit::event::TouchPhase;
             self.last_input = Instant::now();
             self.pad.menu.keyboard_focus = false;
-            let Some(size) = self.window.as_ref().map(|w| w.inner_size()) else {
+            let size = if let Some(r) = self.renderer.as_ref() {
+                winit::dpi::PhysicalSize::new(r.config.width, r.config.height)
+            } else if let Some(w) = self.window.as_ref() {
+                w.inner_size()
+            } else {
                 return;
             };
             self.pad.touch.viewport(size.width, size.height);
@@ -16320,8 +16324,10 @@ impl Game<'_> {
                         return;
                     }
                 }
-                self.pad.touch.projectile_crosshair = self.touch_projectile_crosshair();
-                self.pad.touch.hold_uses_item = self.touch_item_held_use();
+                if touch.phase == TouchPhase::Started {
+                    self.pad.touch.projectile_crosshair = self.touch_projectile_crosshair();
+                    self.pad.touch.hold_uses_item = self.touch_item_held_use();
+                }
                 let delta = self.pad.touch.update(
                     touch.id,
                     [
@@ -16331,7 +16337,9 @@ impl Game<'_> {
                     touch.phase == TouchPhase::Started,
                     matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled),
                 );
-                self.android_custom_events();
+                if self.pad.touch.has_pending_key_events() {
+                    self.android_custom_events();
+                }
                 let delta = horizon_client::touch::camera_delta_with_mouse(
                     delta,
                     size.width,

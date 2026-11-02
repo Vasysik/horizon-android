@@ -712,6 +712,38 @@ pub fn poll_gamepad_connections() {
     }
 }
 
+/// Hardware display density (dp scale factor) from Android DisplayMetrics, queried once.
+pub fn display_density() -> f32 {
+    static CACHED_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let cached = f32::from_bits(CACHED_BITS.load(std::sync::atomic::Ordering::Relaxed));
+    if cached >= 1.0 && cached <= 6.0 {
+        return cached;
+    }
+    let queried = with_context(|env, activity| {
+        let resources = env
+            .call_method(
+                activity,
+                "getResources",
+                "()Landroid/content/res/Resources;",
+                &[],
+            )?
+            .l()?;
+        let metrics = env
+            .call_method(
+                resources,
+                "getDisplayMetrics",
+                "()Landroid/util/DisplayMetrics;",
+                &[],
+            )?
+            .l()?;
+        env.get_field(metrics, "density", "F")?.f()
+    })
+    .unwrap_or(2.65)
+    .clamp(1.0, 5.0);
+    CACHED_BITS.store(queried.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    queried
+}
+
 /// Display rotation is queried only while gyro aiming is enabled.
 pub fn display_rotation() -> i32 {
     with_context(|env, activity| {
