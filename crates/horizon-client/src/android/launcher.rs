@@ -9,6 +9,8 @@ mod gesture;
 mod login;
 #[path = "launcher_pages.rs"]
 mod pages;
+#[path = "wardrobe.rs"]
+mod wardrobe;
 use horizon_client::{
     Result,
     gfx::Renderer,
@@ -51,6 +53,7 @@ pub(super) struct Launcher {
     chooser: Option<chooser::Chooser>,
     exit_confirmation: bool,
     login: login::Login,
+    wardrobe: wardrobe::Wardrobe,
     session_worker: Option<mpsc::Receiver<std::result::Result<Option<PathBuf>, String>>>,
     session_ready: bool,
     prepared_session: Option<PathBuf>,
@@ -59,6 +62,19 @@ pub(super) struct Launcher {
 }
 
 impl Launcher {
+    fn edit_text(&mut self, output: horizon_client::osk::Output) {
+        if self.login.edit(self.catalog.editing, &output) {
+            if matches!(
+                output,
+                horizon_client::osk::Output::Enter | horizon_client::osk::Output::Close
+            ) {
+                self.catalog.editing = None;
+                crate::platform::hide();
+            }
+        } else {
+            self.catalog.edit(output, &self.home);
+        }
+    }
     pub(super) fn new(home: PathBuf) -> Self {
         // Upgrade existing installations that retained the old download cache.
         let cleanup_home = home.clone();
@@ -84,6 +100,7 @@ impl Launcher {
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
         Self {
+            wardrobe: wardrobe::Wardrobe::new(&home),
             home,
             controller_edges: Default::default(),
             controller_repeat: None,
@@ -288,13 +305,20 @@ impl Launcher {
             let game_home = self.catalog.config.game_home(&self.home);
             if !self.session_ready && crate::account::Accounts::load().selected().is_some() {
                 let id = self.catalog.config.microsoft_client_id.clone();
+                let wardrobe_home = self.home.join("wardrobe");
                 let (sender, receiver) = mpsc::channel();
                 self.session_worker = Some(receiver);
-                self.catalog.status = "Preparing Microsoft session...".into();
+                self.catalog.status = "Preparing account session and appearance...".into();
                 std::thread::spawn(move || {
                     let result = (|| {
                         login::Login::session(&id)?
                             .map(|(a, s)| {
+                                let cache = crate::skins::cloud::fetch(&a, &s, &wardrobe_home).ok();
+                                let cloud = cache.as_ref().and_then(|c| {
+                                    c.skin.as_deref().map(|p| (p, c.slim, c.cape.as_deref()))
+                                });
+                                crate::skins::library::Library::load(&wardrobe_home)?
+                                    .prepare_game(&wardrobe_home, &a.key(), &game_home, cloud)?;
                                 crate::account::write_session_file(
                                     &game_home.join("sessions"),
                                     &a,
@@ -309,6 +333,10 @@ impl Launcher {
             }
             self.session_ready = false;
             std::fs::create_dir_all(&game_home)?;
+            if crate::account::Accounts::load().selected().is_none() {
+                self.wardrobe
+                    .prepare_game(&self.catalog.config.name, &game_home)?;
+            }
             let extra_arguments = if crate::PUBLIC_BUILD {
                 Vec::new()
             } else {
@@ -584,13 +612,15 @@ impl ApplicationHandler for Launcher {
             if matches!(out, horizon_client::osk::Output::Enter) {
                 crate::platform::hide();
             }
-            self.catalog.edit(out, &self.home);
+            self.edit_text(out);
         }
         if let Some(audio) = &mut self.audio {
             audio.tick(false, &Default::default());
         }
         self.catalog.poll(&self.home);
+        self.wardrobe.poll();
         if let Some(notice) = crate::documents::poll() {
+            self.wardrobe.reload();
             self.catalog.status = notice.text;
             if notice.changed {
                 self.catalog.refresh(&self.home);
