@@ -4875,6 +4875,31 @@ impl Game<'_> {
                 resolved.push((uuid, skin));
             }
         }
+        // A frontend's local override changes this viewer only, never the
+        // server's profile properties or the account's cloud appearance.
+        if let Some(appearance) = horizon_client::skins::appearance::current() {
+            if let Some((rgba, is_slim)) = &appearance.skin {
+                const LOCAL: &str = "horizon/offline_skin";
+                if !self.skin_slots.contains(LOCAL) || !self.gui.atlas.sprites.contains_key(LOCAL) {
+                    self.store_skin(LOCAL.into(), rgba.clone());
+                }
+                resolved.retain(|(uuid, _)| *uuid != local);
+                resolved.push((local, LOCAL.into()));
+                slim.remove(&local);
+                if *is_slim {
+                    slim.insert(local);
+                }
+            }
+            if appearance.hide_cape {
+                capes.remove(&local);
+            } else if let Some(rgba) = &appearance.cape {
+                const LOCAL: &str = "capes/local";
+                if !self.skin_slots.contains(LOCAL) || !self.gui.atlas.sprites.contains_key(LOCAL) {
+                    self.store_skin(LOCAL.into(), rgba.clone());
+                }
+                capes.insert(local, LOCAL.into());
+            }
+        }
         // An offline name's skin from the launcher, where neither the server
         // nor an account gives the local player one.
         if !resolved.iter().any(|(u, _)| *u == local)
@@ -4890,7 +4915,8 @@ impl Game<'_> {
             resolved.push((local, OFFLINE.into()));
         }
         // An offline name's cape from the launcher, where the profile has none.
-        if !capes.contains_key(&local)
+        if !horizon_client::skins::appearance::current().is_some_and(|a| a.hide_cape)
+            && !capes.contains_key(&local)
             && let Some(rgba) = horizon_client::skins::offline_cape()
         {
             const OFFLINE: &str = "capes/offline";
