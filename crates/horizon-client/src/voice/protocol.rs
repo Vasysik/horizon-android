@@ -1029,18 +1029,112 @@ impl LocationSoundPacket {
     }
 }
 
-/// AuthenticateAckPacket (UDP ID 0x06): server response to authenticate with nonce.
+/// AuthenticatePacket (UDP ID 0x05): client authentication to voice server.
+/// In v20: body contains `player_uuid` (16 bytes BE) + `secret` (16 bytes).
+/// In v21: body can be empty, but v21 servers ignore extra bytes in buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatePacket {
+    pub player_uuid: u128,
+    pub secret: [u8; 16],
+}
+
+impl AuthenticatePacket {
+    pub fn new(player_uuid: u128, secret: [u8; 16]) -> Self {
+        Self {
+            player_uuid,
+            secret,
+        }
+    }
+
+    pub fn to_body(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_uuid(self.player_uuid);
+        w.write_raw_bytes(&self.secret);
+        w.into_bytes()
+    }
+
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        if body.len() >= 32 {
+            let mut r = ByteBufReader::new(body);
+            let player_uuid = r.read_uuid()?;
+            let mut secret = [0u8; 16];
+            r.read_exact_bytes(&mut secret)?;
+            Ok(Self {
+                player_uuid,
+                secret,
+            })
+        } else {
+            Ok(Self {
+                player_uuid: 0,
+                secret: [0u8; 16],
+            })
+        }
+    }
+}
+
+/// AuthenticateAckPacket (UDP ID 0x06): server response to authenticate with optional nonce.
+/// In v20: body is empty.
+/// In v21: body contains 16-byte nonce.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AuthenticateAckPacket {
-    pub nonce: [u8; 16],
+    pub nonce: Option<[u8; 16]>,
 }
 
 impl AuthenticateAckPacket {
+    pub fn new(nonce: Option<[u8; 16]>) -> Self {
+        Self { nonce }
+    }
+
+    pub fn to_body(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        if let Some(nonce) = self.nonce {
+            w.write_raw_bytes(&nonce);
+        }
+        w.into_bytes()
+    }
+
     pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
-        let mut r = ByteBufReader::new(body);
-        let mut nonce = [0u8; 16];
-        r.read_exact_bytes(&mut nonce)?;
-        Ok(Self { nonce })
+        if body.len() >= 16 {
+            let mut r = ByteBufReader::new(body);
+            let mut nonce = [0u8; 16];
+            r.read_exact_bytes(&mut nonce)?;
+            Ok(Self { nonce: Some(nonce) })
+        } else {
+            Ok(Self { nonce: None })
+        }
+    }
+}
+
+/// ConnectionCheckPacket (UDP ID 0x09): client connection verification.
+/// In v20: body is empty.
+/// In v21: body contains the 16-byte nonce received in AuthenticateAckPacket.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConnectionCheckPacket {
+    pub nonce: Option<[u8; 16]>,
+}
+
+impl ConnectionCheckPacket {
+    pub fn new(nonce: Option<[u8; 16]>) -> Self {
+        Self { nonce }
+    }
+
+    pub fn to_body(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        if let Some(nonce) = self.nonce {
+            w.write_raw_bytes(&nonce);
+        }
+        w.into_bytes()
+    }
+
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        if body.len() >= 16 {
+            let mut r = ByteBufReader::new(body);
+            let mut nonce = [0u8; 16];
+            r.read_exact_bytes(&mut nonce)?;
+            Ok(Self { nonce: Some(nonce) })
+        } else {
+            Ok(Self { nonce: None })
+        }
     }
 }
 
@@ -1363,5 +1457,91 @@ mod tests {
         assert_eq!(parsed_mic.sequence_number, 1001);
         assert!(parsed_mic.whispering);
         assert_eq!(parsed_mic.opus_data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn test_authenticate_packet_serialization() {
+        let player_uuid = 0x1234_5678_9ABC_DEF0_1122_3344_5566_7788;
+        let secret = [0x42u8; 16];
+        let pkt = AuthenticatePacket::new(player_uuid, secret);
+        let body = pkt.to_body();
+        assert_eq!(body.len(), 32);
+
+        let decoded = AuthenticatePacket::from_body(&body).expect("Decode AuthenticatePacket");
+        assert_eq!(decoded, pkt);
+
+        // v21 empty body compatibility
+        let empty_decoded =
+            AuthenticatePacket::from_body(&[]).expect("Empty body should not error");
+        assert_eq!(empty_decoded.player_uuid, 0);
+    }
+
+    #[test]
+    fn test_authenticate_ack_packet_serialization() {
+        // v20: empty body
+        let v20_ack = AuthenticateAckPacket::from_body(&[]).expect("v20 ack decode");
+        assert_eq!(v20_ack.nonce, None);
+        assert_eq!(v20_ack.to_body().len(), 0);
+
+        // v21: 16-byte nonce
+        let nonce = [0x55u8; 16];
+        let v21_ack = AuthenticateAckPacket::new(Some(nonce));
+        let body = v21_ack.to_body();
+        assert_eq!(body.len(), 16);
+        let decoded = AuthenticateAckPacket::from_body(&body).expect("v21 ack decode");
+        assert_eq!(decoded.nonce, Some(nonce));
+    }
+
+    #[test]
+    fn test_connection_check_packet_serialization() {
+        // v20: empty body
+        let v20_check = ConnectionCheckPacket::new(None);
+        assert_eq!(v20_check.to_body().len(), 0);
+        let decoded_v20 = ConnectionCheckPacket::from_body(&[]).expect("v20 check decode");
+        assert_eq!(decoded_v20.nonce, None);
+
+        // v21: 16-byte nonce
+        let nonce = [0xAAu8; 16];
+        let v21_check = ConnectionCheckPacket::new(Some(nonce));
+        let body = v21_check.to_body();
+        assert_eq!(body.len(), 16);
+        let decoded_v21 = ConnectionCheckPacket::from_body(&body).expect("v21 check decode");
+        assert_eq!(decoded_v21.nonce, Some(nonce));
+    }
+
+    #[test]
+    fn test_client_udp_packet_wire_framing_and_decryption() {
+        let key = [0x33u8; 16];
+        let cipher = SvcCipher::new(&key);
+        let conn_id = 0xA1B2_C3D4_E5F6_0718_293A_4B5C_6D7E_8F90;
+
+        let player_uuid = conn_id;
+        let auth_pkt = AuthenticatePacket::new(player_uuid, key);
+        let auth_body = auth_pkt.to_body();
+
+        let wire_bytes =
+            build_client_udp_packet(conn_id, &cipher, PACKET_ID_AUTHENTICATE, &auth_body)
+                .expect("Build client UDP packet");
+
+        // Wire layout check:
+        // Byte 0: Magic byte 0xFF
+        assert_eq!(wire_bytes[0], MAGIC_BYTE);
+
+        // Bytes 1..17: 16-byte UUID in Big-Endian
+        let mut r = ByteBufReader::new(&wire_bytes[1..]);
+        let read_conn_id = r.read_uuid().expect("Read connection ID UUID");
+        assert_eq!(read_conn_id, conn_id);
+
+        // Next: VarInt length + encrypted payload
+        let enc_payload = r
+            .read_byte_array()
+            .expect("Read VarInt-prefixed encrypted payload");
+        assert_eq!(enc_payload.len(), 12 + (1 + 32) + 16); // 12B IV + (1B type + 32B body) + 16B Tag = 61B
+
+        // Server decrypts payload
+        let decrypted = cipher.decrypt(&enc_payload).expect("Server decrypt");
+        assert_eq!(decrypted[0], PACKET_ID_AUTHENTICATE);
+        let parsed_auth = AuthenticatePacket::from_body(&decrypted[1..]).expect("Parse auth body");
+        assert_eq!(parsed_auth, auth_pkt);
     }
 }

@@ -287,11 +287,11 @@ Setelah payload didekripsi, byte pertama adalah **Packet ID** (`u8`), disusul is
 | `0x2` | `PlayerSoundPacket` | Server -> Client | Dinamis (Proximity audio) |
 | `0x3` | `GroupSoundPacket` | Server -> Client | Dinamis (Group audio) |
 | `0x4` | `LocationSoundPacket` | Server -> Client | Dinamis (Positional audio) |
-| `0x5` | `AuthenticatePacket` | Client -> Server | 1 Byte (`0x5` saja) |
-| `0x6` | `AuthenticateAckPacket` | Server -> Client | 17 Byte (`0x6` + 16B Nonce) |
+| `0x5` | `AuthenticatePacket` | Client -> Server | 33 Byte pada v20 (`0x5` + 16B Player UUID + 16B Secret) / 1 Byte pada v21 (`0x5` saja) |
+| `0x6` | `AuthenticateAckPacket` | Server -> Client | 1 Byte pada v20 (`0x6` saja) / 17 Byte pada v21 (`0x6` + 16B Nonce) |
 | `0x7` | `PingPacket` | Bidirectional | 25 Byte (`0x7` + 16B UUID + 8B Timestamp) |
 | `0x8` | `KeepAlivePacket` | Bidirectional | 1 Byte (`0x8` saja) |
-| `0x9` | `ConnectionCheckPacket` | Client -> Server | 17 Byte (`0x9` + 16B Nonce) |
+| `0x9` | `ConnectionCheckPacket` | Client -> Server | 1 Byte pada v20 (`0x9` saja) / 17 Byte pada v21 (`0x9` + 16B Nonce) |
 | `0xA` | `ConnectionCheckAckPacket` | Server -> Client | 1 Byte (`0xA` saja) |
 
 #### Rincian Struktur Internal Paket UDP:
@@ -333,15 +333,18 @@ Setelah payload didekripsi, byte pertama adalah **Packet ID** (`u8`), disusul is
 - `.. (opsional)`: `category`: `String` (max 16)
 
 #### 5. `AuthenticatePacket` (`0x5`)
-- `0`: `0x05` (`u8` Packet ID). Payload body kosong.
+- `0`: `0x05` (`u8` Packet ID).
+- `1..16`: `player_uuid`: `UUID` (16 bytes Big-Endian) - *Wajib pada v20 untuk validasi secret di server; diabaikan oleh v21*.
+- `17..32`: `secret`: `[u8; 16]` (16 bytes raw AES key) - *Wajib pada v20; diabaikan oleh v21*.
+- *Catatan Kompatibilitas*: Mengirim 32 byte body kompatibel dengan v20 (yang melempar `IndexOutOfBoundsException` bila kosong) dan v21 (yang membaca `fromBytes` tanpa membaca sisa buffer).
 
 #### 6. `AuthenticateAckPacket` (`0x6`)
-- `0`: `0x06` (`u8` Packet ID)
-- `1..16`: `nonce`: `[u8; 16]` (16 bytes nonce acak untuk verifikasi koneksi)
+- `0`: `0x06` (`u8` Packet ID).
+- `1..16 (opsional)`: `nonce`: `[u8; 16]` (16 bytes nonce acak pada v21; body kosong 0 byte pada v20).
 
 #### 7. `ConnectionCheckPacket` (`0x9`)
-- `0`: `0x09` (`u8` Packet ID)
-- `1..16`: `nonce`: `[u8; 16]` (Nonce yang sama persis diterima dari `AuthenticateAckPacket`)
+- `0`: `0x09` (`u8` Packet ID).
+- `1..16 (opsional)`: `nonce`: `[u8; 16]` (Wajib mengirim kembali nonce jika diterima di `AuthenticateAckPacket` pada v21; body kosong 0 byte pada v20).
 
 #### 8. `ConnectionCheckAckPacket` (`0xA`)
 - `0`: `0x0A` (`u8` Packet ID). Payload body kosong.
