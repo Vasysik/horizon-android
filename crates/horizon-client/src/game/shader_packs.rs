@@ -41,8 +41,9 @@ pub(super) struct Making {
 }
 
 /// What the Auto profile does to a pack on this device. Packs written for a PC spend most of a
-/// phone's frame on their pixels and their shadow map, so it takes the pack's own lightest fitting
-/// profile, then limits those two.
+/// phone's frame on their pixels, water and shadow map, so it takes the pack's own light profile
+/// (Complementary on a Snapdragon 8 Gen 2 at distance 10: 46 ms of GPU on LOW, 28 ms on VERYLOW),
+/// limits the shadow and the resolution, and has terrain draw its depth first.
 struct AutoProfile {
     /// The profiles to look for, the first the pack has wins (`Values::first_profile`).
     profiles: &'static [&'static str],
@@ -57,13 +58,13 @@ impl AutoProfile {
         use horizon_client::system_stats::Tier;
         match Tier::here().unwrap_or(Tier::High) {
             Tier::High => Self {
-                profiles: &["low", "verylow", "potato"],
+                profiles: &["verylow", "low", "potato"],
                 shadow_resolution: 1024.0,
-                shadow_distance: 96.0,
+                shadow_distance: 64.0,
                 scale: 0.5,
             },
             Tier::Mid => Self {
-                profiles: &["verylow", "shadowlesslow", "low", "potato"],
+                profiles: &["potato", "verylow", "shadowlesslow", "low"],
                 shadow_resolution: 1024.0,
                 shadow_distance: 64.0,
                 scale: 0.4,
@@ -170,6 +171,7 @@ impl Game<'_> {
                         );
                     }
                     let folder = dimension_folder(&pack, dimension);
+                    renderer.set_pack_prepass(profile == AUTO_PROFILE && !light_pack(name));
                     let inputs = renderer.pack_inputs();
                     let biomes: Vec<String> = self
                         .res

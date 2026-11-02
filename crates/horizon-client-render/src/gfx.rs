@@ -3538,6 +3538,10 @@ impl Renderer {
         }
         Ok(labels)
     }
+    /// Whether the packs loaded from now on draw terrain's depth before shading it.
+    pub fn set_pack_prepass(&self, on: bool) {
+        pack_post::set_prepass(on);
+    }
     /// What a shader pack's gbuffers programs read from Horizon's geometry: the sky's, and
     /// terrain's in the pack's block atlas (made here when missing; none when it does not fit).
     pub fn pack_inputs(&mut self) -> horizon_shaders::GameInputs {
