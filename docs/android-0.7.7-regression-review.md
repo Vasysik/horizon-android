@@ -189,6 +189,27 @@ were empty. These changes did not recover the stationary GPU loss; they may
 still affect generation, memory pressure and longer movement tests. Test-only
 configuration was restored afterwards.
 
+### Exact 0.7.4 library on Poco
+
+The owner's phone subsequently ran the exact 0.7.4 public native library in the
+isolated wrapper on a copy of the test profile. At the matching position and
+zero yaw/pitch, 16 chunks, 2772×1280, no packs and 8,266 resident sections,
+eight pre-AFK-cap one-second samples averaged 32.98 FPS and 30.194 ms GPU time.
+The current optimized-fast build with recording/profiling also enabled measured
+31.73/31.72 FPS and 30.334/30.333 ms GPU time in two ten-second runs. This scene
+therefore does not reproduce a historical 60-versus-30 FPS loss, and its GPU
+times are now close. These are not matched production-profile CPU comparisons:
+0.7.4 used the public release library, whereas the current test used fast.
+Other scenes and longer phone sessions remain unverified.
+
+An intermediate current-build downward test hit the game's own AFK limit of
+30 FPS after a minute without physical input. Control commands do not reset
+that timer. It must not be cited as proof of a recording-induced 30 FPS cap.
+Repeating with the test-only inactivity setting set to `minimized` reached
+59.69 FPS / 7.889 ms GPU time looking down. Ordinary Android touch events do
+reset the idle timer in the game event handler. Existing records still show
+higher CPU timings with detailed recording, but require separate isolation.
+
 - Matched production-profile GPU/CPU comparisons and causal isolation of the slowdown.
 - ARMv7 device recheck after the ARM64 GLES fix; other drivers and x86 ABIs.
 - Mixed physical/touch toggle inputs, suspend/resume and resource reloads.
