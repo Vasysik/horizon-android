@@ -157,6 +157,11 @@ without changing system display settings. The observed initial high FPS followed
 by 60 therefore occurs on the old version too and coincides with the firmware's
 idle refresh switch. This does not explain the sub-60 FPS terrain regression or
 prove the same cause on Poco; compare actual GPU/CPU timings as well as FPS.
+With the current test app's existing preferred-display setting temporarily set
+to 120 Hz, Android remained at 120 Hz after idle. A verified pitch-89-degree
+measurement then reached 118.57 FPS with 5.501 ms average GPU time and 22 drawn
+sections. The setting was restored after testing. This is a display-policy
+observation on this tablet, not a promise that every firmware honors requests.
 
 - Matched production-profile GPU/CPU comparisons and causal isolation of the slowdown.
 - ARMv7 device recheck after the ARM64 GLES fix; other drivers and x86 ABIs.
