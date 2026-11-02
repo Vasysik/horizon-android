@@ -530,18 +530,28 @@ impl Launcher {
             );
             if matches!(page, Page::Shaders | Page::Mods) {
                 use crate::shader_catalog::Origin;
-                let width = ((w - 185.0) / 2.0).clamp(58.0, 120.0);
-                for (i, origin) in [Origin::Horizon, Origin::Modrinth].into_iter().enumerate() {
-                    let rect = [w - 32.0 - (2 - i) as f32 * width, 134.0, width - 5.0, 32.0];
+                let origins: &[Origin] = if page == Page::Mods {
+                    &[Origin::Horizon, Origin::Modrinth, Origin::Oxide]
+                } else {
+                    &[Origin::Horizon, Origin::Modrinth]
+                };
+                let width = ((w - 185.0) / origins.len() as f32).clamp(48.0, 120.0);
+                for (i, origin) in origins.iter().enumerate() {
+                    let rect = [
+                        w - 32.0 - (origins.len() - i) as f32 * width,
+                        134.0,
+                        width - 5.0,
+                        32.0,
+                    ];
                     button(
                         &mut ui,
                         &mut self.targets,
                         rect,
-                        origin.source().label(),
+                        origin.label(),
                         if page == Page::Mods {
-                            Action::ModSource(origin)
+                            Action::ModSource(*origin)
                         } else {
-                            Action::ShaderSource(origin)
+                            Action::ShaderSource(*origin)
                         },
                         false,
                         press,
@@ -550,7 +560,7 @@ impl Launcher {
                         self.catalog.config.mod_source
                     } else {
                         self.catalog.config.shader_source
-                    }) == origin
+                    }) == *origin
                     {
                         // The chosen source wears a green frame, like a
                         // selected inventory slot.
@@ -571,6 +581,12 @@ impl Launcher {
                         == crate::shader_catalog::Origin::Modrinth =>
                 {
                     "Modrinth Java mods are browse-only; Fabric/Forge/NeoForge cannot run here"
+                }
+                Page::Mods
+                    if self.catalog.config.mod_source
+                        == crate::shader_catalog::Origin::Oxide =>
+                {
+                    "Oxide first-party mods: Copper, the mobile performance suite"
                 }
                 Page::Mods => "Search Horizon mods or paste an HTTPS .hmod link",
                 Page::Shaders

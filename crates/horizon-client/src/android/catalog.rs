@@ -327,6 +327,68 @@ fn toml_field(text: &str, key: &str) -> Option<String> {
     None
 }
 
+/// Release assets of Oxide's first-party mods (Copper, the mobile
+/// performance suite): an index plus the validated `.hmod` packages.
+const OXIDE_RELEASE_BASE: &str =
+    "https://raw.githubusercontent.com/kushaladhikari982648-lgtm/Oxide/copper-v1/";
+
+/// The Oxide source's catalogue: first-party mods from this repository's
+/// release assets. The download URL rides in `Project::icon` because these
+/// mods have no shared browser source to resolve files through.
+fn oxide_search(text: &str, offset: usize) -> Result<Vec<Project>, String> {
+    use std::io::Read;
+    let mut raw = Vec::new();
+    ureq::AgentBuilder::new()
+        .https_only(true)
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout_read(std::time::Duration::from_secs(30))
+        .build()
+        .get(&format!("{OXIDE_RELEASE_BASE}index.json"))
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_reader()
+        .take(1024 * 1024)
+        .read_to_end(&mut raw)
+        .map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
+    let mut all: Vec<Project> = value
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let text = |key: &str| entry.get(key).and_then(|v| v.as_str());
+                    let file = text("file")?;
+                    let id = text("id")?;
+                    Some(Project {
+                        source: browser::SourceId::Horizon,
+                        id: id.to_owned(),
+                        slug: id.to_owned(),
+                        title: text("name")?.to_owned(),
+                        summary: text("summary").unwrap_or_default().to_owned(),
+                        author: text("author").unwrap_or("Oxide").to_owned(),
+                        downloads: entry.get("downloads").and_then(|v| v.as_u64()).unwrap_or(0),
+                        page: text("page").unwrap_or_default().to_owned(),
+                        icon: Some(format!("{OXIDE_RELEASE_BASE}{file}")),
+                        license: "MIT".into(),
+                        kind: Kind::Mod,
+                        game_versions: vec![browser::GAME.into()],
+                        loaders: vec!["horizon".into()],
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let needle = text.trim().to_lowercase();
+    if !needle.is_empty() {
+        all.retain(|project| {
+            project.title.to_lowercase().contains(&needle)
+                || project.summary.to_lowercase().contains(&needle)
+        });
+    }
+    Ok(all.into_iter().skip(offset).take(12).collect())
+}
+
 /// Explains, for a Java mod found on a mod source, that Oxide cannot run it
 /// and what the native equivalent of the popular ones is.
 fn java_mod_status(project: &browser::Project) -> String {
@@ -651,6 +713,9 @@ impl Catalog {
             {
                 query.everything = true;
                 browser::modrinth::Modrinth.search(&query)
+            } else if page == Page::Mods && source == browser::SourceId::CurseForge {
+                // The Oxide source sentinel: first-party mods, own index.
+                oxide_search(&text, offset)
             } else {
                 browser::horizon::Registry.search(&query)
             };
@@ -677,6 +742,41 @@ impl Catalog {
             let _=std::fs::remove_file(stage);result
         });
     }
+    /// Downloads a first-party Oxide mod (Copper) over HTTPS and validates
+    /// it exactly like an imported `.hmod` before it replaces an old copy.
+    fn oxide_install(&mut self, home: &Path, url: String) {
+        let game = self.config.game_home(home);
+        self.job("Downloading Oxide mod over HTTPS...", move || {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            ureq::AgentBuilder::new().https_only(true).timeout_connect(std::time::Duration::from_secs(20)).timeout_read(std::time::Duration::from_secs(90)).build().get(&url).call().map_err(|e|e.to_string())?.into_reader().take(32*1024*1024+1).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+            if bytes.len() > 32 * 1024 * 1024 {
+                return Err("Oxide mod exceeds 32 MiB".into());
+            }
+            let dir = game.join("horizon-mods");
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let stage = dir.join("import.partial");
+            std::fs::write(&stage, bytes).map_err(|e| e.to_string())?;
+            let result = (|| {
+                let package = horizon_mods::Package::read(&stage)?;
+                let destination = dir.join(format!("{}.hmod", package.manifest.id));
+                if destination.exists() {
+                    std::fs::copy(&destination, destination.with_extension("hmod.previous"))
+                        .map_err(|e| e.to_string())?;
+                }
+                std::fs::rename(&stage, destination).map_err(|e| e.to_string())?;
+                Ok(Reply::Done(
+                    format!(
+                        "Installed {}. Enable it in Installed, then Play: Copper paces chunk streaming from the next world load.",
+                        package.manifest.name
+                    ),
+                    horizon_client::content_files::Kind::Mods,
+                ))
+            })();
+            let _ = std::fs::remove_file(stage);
+            result
+        });
+    }
     pub fn install(&mut self, home: &Path, index: usize) {
         let Some(project) = self.results.get(index).cloned() else {
             return;
@@ -690,6 +790,16 @@ impl Catalog {
             return;
         }
         if self.busy() || self.download_label(&project).is_some() {
+            return;
+        }
+        // First-party Oxide mods (Copper): a direct HTTPS .hmod from this
+        // repository's release assets, validated like an imported one.
+        if let Some(url) = project
+            .icon
+            .clone()
+            .filter(|icon| icon.starts_with(OXIDE_RELEASE_BASE))
+        {
+            self.oxide_install(home, url);
             return;
         }
         let game = self.config.game_home(home);
@@ -758,8 +868,15 @@ impl Catalog {
         match item.kind {
             horizon_client::content_files::Kind::Mods => {
                 if !cfg!(target_pointer_width = "64") {
-                    self.status = "Sandboxed code mods require a 64-bit APK".into();
-                    return;
+                    // Content mods (api 0.2, no code) load in every build;
+                    // sandboxed code mods need wasmtime, which has no 32-bit
+                    // ARM target. Copper and friends are content packages.
+                    let content_only = horizon_mods::Package::read(&game.join(&item.file))
+                        .is_ok_and(|package| package.manifest.api == "0.2");
+                    if !content_only {
+                        self.status = "Sandboxed code mods require a 64-bit APK".into();
+                        return;
+                    }
                 }
                 let mut on = horizon_client::mod_list::ModList::load(&game);
                 if let Some(id) = item.file.strip_suffix(".hmod") {

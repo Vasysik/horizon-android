@@ -9,12 +9,26 @@ pub enum Origin {
     #[default]
     Horizon,
     Modrinth,
+    /// Oxide's own first-party mods (Copper, the mobile performance suite),
+    /// served from this repository's release assets.
+    Oxide,
 }
 impl Origin {
     pub fn source(self) -> SourceId {
         match self {
             Self::Horizon => SourceId::Horizon,
             Self::Modrinth => SourceId::Modrinth,
+            // Sentinel for the Mods search queue: first-party mods have no
+            // shared browser source, the android catalog fetches its own
+            // index when it sees this on the Mods page.
+            Self::Oxide => SourceId::CurseForge,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Horizon => "Horizon",
+            Self::Modrinth => "Modrinth",
+            Self::Oxide => "Oxide",
         }
     }
 }
