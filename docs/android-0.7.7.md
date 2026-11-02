@@ -2,6 +2,14 @@
 
 This version is in development; no device-wide performance improvement is established.
 
+Touch shield control defaults to Button for new or reset layouts. Aim layouts
+with a regular Use button raise the shield through Use and hide the redundant
+shield button automatically. Tap layouts retain a dedicated hold-to-raise button
+when a shield is equipped. An explicitly saved Sneak setting remains available.
+
+Contributor PR #105 restores golden horse armor rendering by using the vanilla
+`gold` equipment texture name; iron, diamond and leather remain unchanged.
+
 - Reuse menu blur bind groups until the target size changes, instead of recreating six per frame. Filtering, resolution and pass order are unchanged.
 - Skip the identity blur chain when the radius is zero.
 - Adreno 304 investigation: removing terrain fade discard alone did not fix transparent terrain. Removing alpha discard as an additional private probe did not restore correct rendering either. Neither shader experiment is retained.

@@ -230,6 +230,14 @@ impl TouchControls {
         if c == Control::Shield && !self.shield_available && self.editor.is_none() {
             return false;
         }
+        if c == Control::Shield
+            && self.force_crosshair
+            && self.settings.button_visibility[Control::Use as usize] == 0
+            && self.settings.button_visibility[c as usize] == 0
+        {
+            // A forced aim layout already provides the ordinary use/raise-shield button.
+            return false;
+        }
         if self.auxiliary_only && !Self::auxiliary_control(c) {
             return false;
         }
@@ -1200,6 +1208,7 @@ mod tests {
             ]
         );
         t.clear();
+        t.settings.mode = Mode::Tap;
         t.settings.shield_button = true;
         t.shield_available = true;
         let p = t.placement(Control::Shield).center;
@@ -1211,6 +1220,41 @@ mod tests {
         t.update(2, [0.5, 0.4], false, true);
         assert!(!t.shield_held());
         assert_eq!(t.poll_state().triggers[0], 0.0);
+    }
+
+    #[test]
+    fn shield_uses_the_existing_use_button_in_aim_layouts() {
+        let mut t = TouchControls::default();
+        t.shield_available = true;
+        assert!(!t.visible(Control::Shield));
+        let p = t.placement(Control::Use).center;
+        t.update(1, p, true, false);
+        assert!(t.poll_state().triggers[0] > 0.0);
+        t.update(1, p, false, true);
+        assert_eq!(t.poll_state().triggers[0], 0.0);
+
+        for mode in [Mode::Tap, Mode::Dpad] {
+            t.clear();
+            t.settings.mode = mode;
+            assert!(t.visible(Control::Shield));
+            let p = t.placement(Control::Shield).center;
+            t.update(2, p, true, false);
+            assert!(t.shield_held());
+            assert!(t.poll_state().triggers[0] > 0.0);
+            t.update(2, p, false, true);
+            assert!(!t.shield_held());
+
+            t.force_crosshair = true;
+            assert!(!t.visible(Control::Shield));
+            t.force_crosshair = false;
+            t.settings.shield_button = false;
+            assert!(!t.visible(Control::Shield));
+            t.settings.shield_button = true;
+        }
+        // A player hiding the normal use button can retain the dedicated shield button.
+        t.settings.mode = Mode::Crosshair;
+        t.settings.button_visibility[Control::Use as usize] = 2;
+        assert!(t.visible(Control::Shield));
     }
 
     #[test]

@@ -219,7 +219,7 @@ impl Default for Settings {
             sensitivity_horizontal: 1.0,
             sensitivity_vertical: 1.0,
             offhand_button: false,
-            shield_button: false,
+            shield_button: true,
             circle_size: 32.0,
             button_scale: 1.0,
             custom_buttons: Vec::new(),
@@ -360,7 +360,7 @@ impl Settings {
         }
         match c {
             Control::Offhand => self.offhand_button,
-            Control::Shield => self.shield_button,
+            Control::Shield => self.shield_button && !self.visible(Control::Use),
             Control::Attack | Control::Use => self.crosshair(),
             Control::Sprint => {
                 self.sprint_button && self.mode != Mode::Dpad && !self.sprint_with_joystick
