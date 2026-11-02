@@ -994,6 +994,8 @@ enum Act {
     OpenShaderPackFolder,
     /// The next of the resolutions the Shader Packs page offers.
     ShaderResolution,
+    /// The next of the frame limits the Shader Packs page offers.
+    ShaderFpsLimit,
     /// Open the Shader Options page.
     ShaderOptions,
     /// A pack's option, its next value.
@@ -2218,6 +2220,20 @@ impl OptionsUi {
                     };
                     rows.push(Row::Buttons(
                         button(0.0, 0.0, 310.0, Text::literal(label), Act::ShaderResolution),
+                        None,
+                    ));
+                    let limit = match s.max_fps {
+                        fps if fps >= 260 => "Off".to_owned(),
+                        fps => fps.to_string(),
+                    };
+                    rows.push(Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            310.0,
+                            Text::literal(format!("FPS Limit: {limit}")),
+                            Act::ShaderFpsLimit,
+                        ),
                         None,
                     ));
                 }
@@ -3445,6 +3461,15 @@ impl OptionsUi {
                             let next = STEPS.iter().position(|&v| v == now).map_or(2, |i| i + 1);
                             s.horizon.resolution_scale = STEPS[next % STEPS.len()];
                             events.push(Event::ShaderPack);
+                            events.push(Event::Changed);
+                        }
+                        Act::ShaderFpsLimit => {
+                            const STEPS: [u32; 4] = [30, 40, 60, 260];
+                            let next = STEPS
+                                .iter()
+                                .position(|&v| v == s.max_fps)
+                                .map_or(0, |i| i + 1);
+                            s.max_fps = STEPS[next % STEPS.len()];
                             events.push(Event::Changed);
                         }
                         Act::ShaderOptions => {

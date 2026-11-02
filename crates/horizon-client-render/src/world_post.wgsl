@@ -22,6 +22,38 @@ struct PostOut {
     return textureSampleLevel(world, world_sampler, in.uv, 0.0);
 }
 
+// The world drawn below the screen's size: Catmull-Rom in five bilinear taps (the four corners
+// of its 4x4 weigh too little to matter), clamped to what the taps saw so edges don't ring.
+@fragment fn fs_upscale(in: PostOut) -> @location(0) vec4<f32> {
+    let size = vec2<f32>(textureDimensions(world));
+    let pos = in.uv * size;
+    let centre = floor(pos - 0.5) + 0.5;
+    let f = pos - centre;
+    let w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    let w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    let w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    let w3 = f * f * (-0.5 + 0.5 * f);
+    let w12 = w1 + w2;
+    let t0 = (centre - 1.0) / size;
+    let t12 = (centre + w2 / w12) / size;
+    let t3 = (centre + 2.0) / size;
+    let middle = textureSampleLevel(world, world_sampler, t12, 0.0);
+    let up = textureSampleLevel(world, world_sampler, vec2(t12.x, t0.y), 0.0).rgb;
+    let left = textureSampleLevel(world, world_sampler, vec2(t0.x, t12.y), 0.0).rgb;
+    let right = textureSampleLevel(world, world_sampler, vec2(t3.x, t12.y), 0.0).rgb;
+    let down = textureSampleLevel(world, world_sampler, vec2(t12.x, t3.y), 0.0).rgb;
+    let wc = w12.x * w12.y;
+    let wu = w12.x * w0.y;
+    let wl = w0.x * w12.y;
+    let wr = w3.x * w12.y;
+    let wd = w12.x * w3.y;
+    let sum = middle.rgb * wc + up * wu + left * wl + right * wr + down * wd;
+    let low = min(min(min(min(middle.rgb, up), left), right), down);
+    let high = max(max(max(max(middle.rgb, up), left), right), down);
+    // The alpha carries the emissive mark through to HDR output (hdr.wgsl).
+    return vec4(clamp(sum / (wc + wu + wl + wr + wd), low, high), middle.a);
+}
+
 fn luma(c: vec3<f32>) -> f32 {
     return dot(c, vec3(0.299, 0.587, 0.114));
 }

@@ -15,6 +15,9 @@ pub struct Post {
     sampler: wgpu::Sampler,
     copy: wgpu::RenderPipeline,
     fxaa: wgpu::RenderPipeline,
+    /// The world drawn below the screen's size, sharper than the bilinear copy.
+    /// `HORIZON_WORLD_UPSCALE=off` keeps the copy.
+    upscale: Option<wgpu::RenderPipeline>,
     format: wgpu::TextureFormat,
     /// World resolution relative to the window (0.5..=2.0).
     pub scale: f32,
@@ -90,6 +93,8 @@ impl Post {
         Self {
             copy: pipeline("fs_copy"),
             fxaa: pipeline("fs_fxaa"),
+            upscale: (std::env::var("HORIZON_WORLD_UPSCALE").as_deref() != Ok("off"))
+                .then(|| pipeline("fs_upscale")),
             layout,
             sampler,
             format,
@@ -210,7 +215,10 @@ impl Post {
         pass.set_pipeline(if self.antialias {
             &self.fxaa
         } else {
-            &self.copy
+            self.upscale
+                .as_ref()
+                .filter(|_| self.scale < 1.0)
+                .unwrap_or(&self.copy)
         });
         pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
