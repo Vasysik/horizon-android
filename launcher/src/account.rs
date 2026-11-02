@@ -1539,6 +1539,14 @@ impl Accounts {
     /// play only once an account that owns the game is back.
     pub fn remove(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
         let _operation = session::lock(store)?;
+        self.forget_sign_in(store, uuid)
+    }
+    /// Native UI actions must not wait on a background network renewal.
+    pub fn remove_when_idle(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
+        let _operation = session::lock_within(store, Some(Duration::ZERO))?;
+        self.forget_sign_in(store, uuid)
+    }
+    fn forget_sign_in(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
         store.delete(uuid)?;
         self.accounts.retain(|a| a.key() != uuid);
         if self.selected.as_deref() == Some(uuid) {

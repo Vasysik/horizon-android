@@ -110,7 +110,10 @@ impl Login {
         self.task = Some(SignIn::start_with_client_id(Some(id.into())));
         self.state = Some(SignInState::Starting);
     }
-    pub fn poll(&mut self) {
+    /// Reports completion so views can switch their provider-scoped selection,
+    /// including when the account panel was closed during browser sign-in.
+    pub fn poll(&mut self) -> bool {
+        let mut completed = false;
         if let Some(task) = &self.task {
             self.state = Some(task.state());
             if let Some(SignInState::Done(result)) = &self.state {
@@ -120,12 +123,14 @@ impl Login {
                 };
                 self.task = None;
                 self.refresh_status();
+                completed = true;
             }
         }
         if self.auto_open_device && matches!(self.state, Some(SignInState::Code(_))) {
             self.auto_open_device = false;
             self.open_link();
         }
+        completed
     }
     pub fn start_ely(&mut self) {
         if let Some(task) = self.task.take() {
@@ -171,7 +176,7 @@ impl Login {
         let mut accounts = Accounts::load();
         if let Some(a) = accounts.selected().cloned() {
             self.message = match accounts
-                .remove(account::store(), &a.key())
+                .remove_when_idle(account::store(), &a.key())
                 .and_then(|_| accounts.save())
             {
                 Ok(()) => "Signed out. Offline play is available.".into(),
@@ -210,18 +215,7 @@ impl Login {
         }
     }
     pub fn session(id: &str) -> Result<Option<(Account, Secrets)>, String> {
-        let mut accounts = Accounts::load();
-        let Some(a) = accounts.selected().cloned() else {
-            return Ok(None);
-        };
-        let secrets = account::store()
-            .get(&a.key())?
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .ok_or("Session ended. Sign in again, or sign out to play offline.")?;
-        let (a, secrets) = account::fresh(&account::Endpoints::live(), id.trim(), &a, secrets)?;
-        accounts.add(account::store(), a.clone(), &secrets)?;
-        accounts.save()?;
-        Ok(Some((a, secrets)))
+        account::session::selected_session(id.trim())
     }
     pub fn draw(
         &self,

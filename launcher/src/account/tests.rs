@@ -1698,3 +1698,63 @@ fn cancelled_and_expired_flows_stop_without_polling() {
         0
     );
 }
+
+#[test]
+fn a_late_selected_session_does_not_restore_an_account_the_ui_switched_away_from() {
+    struct SwitchOnRead {
+        inner: MemoryStore,
+        path: std::path::PathBuf,
+    }
+    impl SecretStore for SwitchOnRead {
+        fn persistent(&self) -> bool {
+            false
+        }
+        fn get(&self, key: &str) -> Result<Option<String>, String> {
+            let mut accounts = Accounts::load_from(&self.path);
+            accounts.selected = None;
+            accounts.save_to(&self.path)?;
+            self.inner.get(key)
+        }
+        fn set(&self, key: &str, secret: &str) -> Result<(), String> {
+            self.inner.set(key, secret)
+        }
+        fn delete(&self, key: &str) -> Result<(), String> {
+            self.inner.delete(key)
+        }
+    }
+    let root =
+        std::env::temp_dir().join(format!("horizon-selected-session-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("accounts.json");
+    let inner = MemoryStore::default();
+    let accounts = signed_in(&inner, &secrets("kept-token", true));
+    accounts.save_to(&path).unwrap();
+    let before = inner.get(UUID).unwrap();
+    let store = SwitchOnRead {
+        inner,
+        path: path.clone(),
+    };
+    let (_, ep) = mock(|_| {});
+    assert!(
+        session::selected_session_with(&ep, "test-client", &store, &path)
+            .unwrap_err()
+            .contains("account changed")
+    );
+    assert!(Accounts::load_from(&path).selected().is_none());
+    assert_eq!(store.inner.get(UUID).unwrap(), before);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_sign_out_reports_busy_without_blocking_or_forgetting_the_account() {
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("kept", true));
+    let guard = session::lock(&store).unwrap();
+    assert!(accounts.remove_when_idle(&store, UUID).is_err());
+    assert!(accounts.selected().is_some());
+    assert!(store.get(UUID).unwrap().is_some());
+    drop(guard);
+    accounts.remove_when_idle(&store, UUID).unwrap();
+    assert!(accounts.selected().is_none());
+    assert!(store.get(UUID).unwrap().is_none());
+}

@@ -1477,6 +1477,7 @@ impl Launcher {
                 }
                 self.session_ready = false;
                 self.prepared_session = None;
+                self.session_worker = None;
                 self.login.choosing = false;
                 self.login.refresh_status();
                 if self.catalog.page == Page::Skins {
@@ -1492,6 +1493,7 @@ impl Launcher {
                 accounts.save()?;
                 self.session_ready = false;
                 self.prepared_session = None;
+                self.session_worker = None;
                 self.login.choosing = false;
                 self.login.refresh_status();
                 if self.catalog.page == Page::Skins {
@@ -1511,6 +1513,7 @@ impl Launcher {
                 crate::platform::hide();
                 self.session_ready = false;
                 self.prepared_session = None;
+                self.session_worker = None;
                 if !self.login.pending() {
                     self.login.start_ely();
                 }
@@ -1519,10 +1522,12 @@ impl Launcher {
                 self.login.hide();
                 crate::platform::hide();
                 self.catalog.editing = None;
+                self.refresh_wardrobe_account();
             }
             Some(Action::DeviceSignIn) => {
                 self.session_ready = false;
                 self.prepared_session = None;
+                self.session_worker = None;
                 self.login
                     .start_device(&self.catalog.config.microsoft_client_id);
             }
@@ -1535,12 +1540,15 @@ impl Launcher {
             Some(Action::SignIn) => {
                 self.session_ready = false;
                 self.prepared_session = None;
+                self.session_worker = None;
                 self.login.start(&self.catalog.config.microsoft_client_id);
             }
             Some(Action::SignOut) => {
                 self.session_ready = false;
                 self.prepared_session = None;
+                self.session_worker = None;
                 self.login.sign_out();
+                self.refresh_wardrobe_account();
             }
             Some(Action::LoginLink) => self.login.open_link(),
             Some(Action::Page(page)) => {
@@ -1597,6 +1605,9 @@ impl Launcher {
                 self.catalog.search(&self.home);
             }
             Some(Action::FinishNameEdit) => {
+                if self.catalog.editing == Some("name") {
+                    self.refresh_wardrobe_account();
+                }
                 self.catalog.editing = None;
                 crate::platform::hide();
                 self.catalog.config.save(&self.home)?;
@@ -1682,6 +1693,7 @@ impl Launcher {
                 if self.session_worker.is_none() {
                     self.session_ready = false;
                     self.prepared_session = None;
+                    self.session_worker = None;
                 }
             }
             Some(Action::Logs) => {

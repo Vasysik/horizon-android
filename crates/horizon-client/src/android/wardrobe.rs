@@ -72,12 +72,18 @@ impl Wardrobe {
             .map(|a| a.key())
             .unwrap_or_else(|| format!("offline:{}", offline.to_ascii_lowercase()));
         if self.key != key {
+            // A previous provider's in-flight result must not delay this profile's cloud load.
+            self.worker = None;
+            self.fingers.clear();
             self.key = key;
             self.provider = account.map(|a| a.provider);
             self.cache = Default::default();
         }
         self.reload();
-        if !self.damaged && self.library.entries.iter().all(|e| e.kind != Kind::Cape) {
+        if !self.damaged
+            && !crate::documents::busy()
+            && self.library.entries.iter().all(|e| e.kind != Kind::Cape)
+        {
             for (index, title) in [
                 "Violet stripes",
                 "Tidal weave",

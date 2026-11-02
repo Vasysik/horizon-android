@@ -55,7 +55,12 @@ Legacy desktop offline-skin environment variables remain available as fallbacks.
 Local metadata lives in `wardrobe/wardrobe.json`; images use digest-based names
 under `wardrobe/images`, cloud cache images under `wardrobe/cloud`. Account
 selections are provider-qualified, so an offline name and signed-in UUID cannot
-overwrite each other's choices. Unsupported schemas are refused without replacing
+overwrite each other's choices. Account completion, sign-out and offline-name
+changes refresh an already-open gallery, including background browser sign-in;
+responses for the previous account are discarded. A session worker publishes the
+game appearance only after checking the current selection on the UI thread.
+Renewal never selects an account or rewrites the account list; busy sign-out
+returns a retry message without blocking native UI. Unsupported schemas are refused without replacing
 the stored index.
 
 ## Verification
@@ -72,7 +77,7 @@ Protocol references: [Ely.by Minecraft authentication](https://docs.ely.by/en/mi
 
 ### Verification on 2026-11-02
 
-- Shared account/wardrobe harness: 63 passed, one existing ignored test. Includes
+- Shared account/wardrobe harness: 65 passed, one existing ignored test. Includes
   Microsoft/Offline regression tests, provider isolation, Ely.by 2FA/refresh HTTP
   fixtures, Microsoft PNG upload/owned-cape HTTP fixtures and game-handoff reset.
 - Android API 35 x86_64 VM: 24 engine tests passed (auth, skin processing, handoff).
@@ -103,3 +108,8 @@ The full desktop `pr_ready --quick --base android` is not green: Python discover
 collides on the existing `test_basic_feature_parity` module, and strict workspace
 Clippy reports existing findings in `horizon-world`. Android checks above are
 separate; these desktop failures must not be represented as passing.
+
+A final APK retest also produced one native fault in the emulator's
+`vulkan.ranchu.so` while naming a swapchain texture view. The same APK opened the
+gallery normally on retry. This VM driver observation is separate from PNG
+validation and does not establish stability on physical Android GPUs.
