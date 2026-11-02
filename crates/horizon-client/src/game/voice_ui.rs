@@ -4,10 +4,10 @@
 //! and bottom-left HUD indicators.
 
 use super::{Game, Screen};
-use horizon_client::voice::ui::VoiceHudStatus;
-use horizon_client::voice::udp_worker::UdpConnectionState;
 use horizon_client::hud::HudBatch;
 use horizon_client::ui;
+use horizon_client::voice::udp_worker::UdpConnectionState;
+use horizon_client::voice::ui::VoiceHudStatus;
 use horizon_protocol::packets::configuration::CustomPayload;
 use horizon_protocol::packets::play::Serverbound as S;
 
@@ -31,7 +31,14 @@ impl<'a> Game<'a> {
                     let tw = HudBatch::text_width(&self.gui.atlas, &s);
                     let x = 6.0;
                     let y = batch.height - 16.0;
-                    batch.fill(&self.gui.atlas, x - 2.0, y - 2.0, tw + 4.0, 13.0, 0x88000000);
+                    batch.fill(
+                        &self.gui.atlas,
+                        x - 2.0,
+                        y - 2.0,
+                        tw + 4.0,
+                        13.0,
+                        0x88000000,
+                    );
                     batch.text(&self.gui.atlas, &s, x, y, 0xFFFFFFFF, true);
                     return;
                 } else {
@@ -44,14 +51,28 @@ impl<'a> Game<'a> {
         let x = 6.0;
         let y = batch.height - 16.0;
 
-        batch.fill(&self.gui.atlas, x - 2.0, y - 2.0, tw + 4.0, 13.0, 0x88000000);
+        batch.fill(
+            &self.gui.atlas,
+            x - 2.0,
+            y - 2.0,
+            tw + 4.0,
+            13.0,
+            0x88000000,
+        );
         batch.text(&self.gui.atlas, label, x, y, color, true);
     }
 
     /// Renders the Voice Chat modal screen (when Screen::VoiceChat).
     pub(super) fn draw_voice_chat_screen(&mut self, batch: &mut HudBatch) {
         // Semi-transparent overlay over the whole screen
-        batch.fill(&self.gui.atlas, 0.0, 0.0, batch.width, batch.height, 0x99000000);
+        batch.fill(
+            &self.gui.atlas,
+            0.0,
+            0.0,
+            batch.width,
+            batch.height,
+            0x99000000,
+        );
 
         let modal_w = 280.0;
         let modal_h = 210.0;
@@ -61,14 +82,35 @@ impl<'a> Game<'a> {
         // Main modal container box
         batch.fill(&self.gui.atlas, x, y, modal_w, modal_h, 0xEE1E1E1E);
         batch.fill(&self.gui.atlas, x, y, modal_w, 2.0, 0xFF555555);
-        batch.fill(&self.gui.atlas, x, y + modal_h - 2.0, modal_w, 2.0, 0xFF555555);
+        batch.fill(
+            &self.gui.atlas,
+            x,
+            y + modal_h - 2.0,
+            modal_w,
+            2.0,
+            0xFF555555,
+        );
         batch.fill(&self.gui.atlas, x, y, 2.0, modal_h, 0xFF555555);
-        batch.fill(&self.gui.atlas, x + modal_w - 2.0, y, 2.0, modal_h, 0xFF555555);
+        batch.fill(
+            &self.gui.atlas,
+            x + modal_w - 2.0,
+            y,
+            2.0,
+            modal_h,
+            0xFF555555,
+        );
 
         // Title
         let title = "Simple Voice Chat";
         let tw = HudBatch::text_width(&self.gui.atlas, title);
-        batch.text(&self.gui.atlas, title, x + (modal_w - tw) / 2.0, y + 10.0, 0xFFFFFFFF, true);
+        batch.text(
+            &self.gui.atlas,
+            title,
+            x + (modal_w - tw) / 2.0,
+            y + 10.0,
+            0xFFFFFFFF,
+            true,
+        );
 
         // Connection status line
         let status_str = match self.voice.connection_state() {
@@ -80,10 +122,27 @@ impl<'a> Game<'a> {
             }
             UdpConnectionState::Failed(msg) => format!("Status: Error ({msg})"),
         };
-        batch.text(&self.gui.atlas, &status_str, x + 15.0, y + 28.0, 0xFFAAAAAA, true);
+        batch.text(
+            &self.gui.atlas,
+            &status_str,
+            x + 15.0,
+            y + 28.0,
+            0xFFAAAAAA,
+            true,
+        );
 
-        let ver_str = format!("Protocol Version: {}", self.voice.config.compatibility_version);
-        batch.text(&self.gui.atlas, &ver_str, x + 15.0, y + 42.0, 0xFFAAAAAA, true);
+        let ver_str = format!(
+            "Protocol Version: {}",
+            self.voice.config.compatibility_version
+        );
+        batch.text(
+            &self.gui.atlas,
+            &ver_str,
+            x + 15.0,
+            y + 42.0,
+            0xFFAAAAAA,
+            true,
+        );
 
         // Buttons
         let btn_w = 250.0;
@@ -141,14 +200,13 @@ impl<'a> Game<'a> {
             ),
             (
                 y + 160.0,
-                "Cycle Fallback Version (21, 20, 19, 18, 22)".to_string(),
+                format!(
+                    "Cycle Version (v{}, list: 20, 21, 19, 18, 22)",
+                    self.voice.config.compatibility_version
+                ),
                 false,
             ),
-            (
-                y + 185.0,
-                "Done (Esc / V)".to_string(),
-                false,
-            ),
+            (y + 185.0, "Done (Esc / V)".to_string(), false),
         ];
 
         for (by, text, warn) in &buttons {
@@ -164,7 +222,14 @@ impl<'a> Game<'a> {
             let tw = HudBatch::text_width(&self.gui.atlas, text);
             let tx = btn_x + (btn_w - tw) / 2.0;
             let ty = by + 5.0;
-            batch.text(&self.gui.atlas, text, tx, ty, if hovered { 0xFFFFFF55 } else { 0xFFFFFFFF }, true);
+            batch.text(
+                &self.gui.atlas,
+                text,
+                tx,
+                ty,
+                if hovered { 0xFFFFFF55 } else { 0xFFFFFFFF },
+                true,
+            );
         }
     }
 
@@ -203,6 +268,10 @@ impl<'a> Game<'a> {
             let next = self.voice.config.next_fallback_version();
             let _ = self.voice.config.save_to_dir(&self.voice.config_dir);
             log::info!("SVC: Manually cycled compatibility version to {next}");
+            self.voice.secret = None;
+            if let Some(h) = self.voice.udp_handle.take() {
+                h.stop();
+            }
             if self.remote.is_some() {
                 self.initiate_voice_handshake();
             }
@@ -225,10 +294,7 @@ impl<'a> Game<'a> {
         }
         let (ch, data) = self.voice.toggle_mute();
         if self.remote.is_some() {
-            self.send(S::CustomPayload(CustomPayload {
-                channel: ch,
-                data,
-            }));
+            self.send(S::CustomPayload(CustomPayload { channel: ch, data }));
         }
     }
 
@@ -236,10 +302,7 @@ impl<'a> Game<'a> {
     pub(super) fn voice_toggle_disable(&mut self) {
         let (ch, data) = self.voice.toggle_disable();
         if self.remote.is_some() {
-            self.send(S::CustomPayload(CustomPayload {
-                channel: ch,
-                data,
-            }));
+            self.send(S::CustomPayload(CustomPayload { channel: ch, data }));
         }
     }
 

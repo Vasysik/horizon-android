@@ -6,8 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-pub const DEFAULT_COMPATIBILITY_VERSION: i32 = 21;
-pub const DEFAULT_FALLBACK_VERSIONS: [i32; 5] = [21, 20, 19, 18, 22];
+pub const DEFAULT_COMPATIBILITY_VERSION: i32 = 20;
+pub const DEFAULT_FALLBACK_VERSIONS: [i32; 5] = [20, 21, 19, 18, 22];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SvcProtocolConfig {
@@ -64,10 +64,11 @@ impl SvcProtocolConfig {
     }
 
     pub fn load_from_path(path: &Path) -> Self {
-        if let Ok(bytes) = std::fs::read(path) {
-            if let Ok(config) = serde_json::from_slice::<Self>(&bytes) {
-                return config;
-            }
+        if let Some(config) = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Self>(&bytes).ok())
+        {
+            return config;
         }
         let config = Self::default();
         let _ = config.save_to_path(path);
