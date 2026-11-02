@@ -863,6 +863,10 @@ impl Game<'_> {
         self.potions = Default::default();
         self.inventory = vec![None; 36];
         self.armor = [None, None, None, None];
+        // This connection creates a new local player. The previous world's
+        // offhand must not survive until (or in lieu of) server slot updates.
+        self.offhand = None;
+        self.shield_cooldown = 0;
         self.craft_grid = vec![None; 9];
         self.craft_size = 2;
         self.player = None;
