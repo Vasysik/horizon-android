@@ -13952,12 +13952,30 @@ impl Game<'_> {
         let mut hud = horizon_client::spans::time("hud", || self.hud(size));
         #[cfg(target_os = "android")]
         {
-            self.pad.touch.auxiliary_only =
-                self.settings.keypad.enabled && self.pad.touch.editor.is_none();
+            if (crate::touch_visible() || self.settings.keypad.enabled)
+                && self.pad.touch.editor.is_none()
+            {
+                self.pad.touch_ui.ensure_control_runtime(
+                    &crate::backend::data_dir(),
+                    &self.settings.touch.active_control_layout,
+                );
+                if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
+                    runtime.set_screen_dimensions(hud.width, hud.height, hud.scale);
+                    let releases = runtime.set_in_menu(self.pad_in_menu());
+                    if !releases.is_empty() {
+                        self.dispatch_layout_output_events(releases);
+                    }
+                }
+            }
+            self.pad.touch.auxiliary_only = (self.settings.keypad.enabled
+                || self.pad.touch_ui.control_runtime.is_some())
+                && self.pad.touch.editor.is_none();
         }
         #[cfg(target_os = "android")]
         if self.pad.touch.editor.is_some()
-            || ((crate::touch_visible() || self.settings.keypad.enabled)
+            || (self.pad.touch_ui.control_runtime.is_none()
+                && self.pad.touch_ui.editor.is_none()
+                && (crate::touch_visible() || self.settings.keypad.enabled)
                 && (!self.pad_in_menu() || self.android_inventory_controls()))
         {
             self.pad.touch.context_use =
@@ -13975,17 +13993,6 @@ impl Game<'_> {
             if (crate::touch_visible() || self.settings.keypad.enabled)
                 && self.pad.touch.editor.is_none()
             {
-                self.pad.touch_ui.ensure_control_runtime(
-                    &crate::backend::data_dir(),
-                    &self.settings.touch.active_control_layout,
-                );
-                if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
-                    runtime.set_screen_dimensions(hud.width, hud.height, hud.scale);
-                    let releases = runtime.set_in_menu(self.pad_in_menu());
-                    if !releases.is_empty() {
-                        self.dispatch_layout_output_events(releases);
-                    }
-                }
                 self.pad
                     .touch_ui
                     .draw(&mut hud, &self.gui.atlas, self.pad_in_menu());
