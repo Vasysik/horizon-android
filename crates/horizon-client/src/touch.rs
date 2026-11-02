@@ -15,6 +15,7 @@
 //! This is the state machine only: positions are window pixels, and the game turns the
 //! [`Action`]s into its virtual pad, mouse motion and hotbar (game/touch.rs). Off the playing
 //! screen the first finger is the pointer ([`TouchPointer`]).
+use crate::settings::{CustomAction, CustomButton};
 use serde_json::{Map, Value, json};
 use std::time::{Duration, Instant};
 use winit::{
@@ -322,6 +323,9 @@ impl Shape {
     }
 }
 
+/// The name of the player's own buttons among the mods' in the layout: `<this>:<id>`.
+pub const CUSTOM_BUTTONS: &str = "starling.custom";
+
 /// A button a mod put on the touch controls (one of its keybinds, or its own).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extra {
@@ -359,6 +363,8 @@ pub struct LayoutConfig {
     /// Three fingers landing together show or hide the Stats overlay. Off by default: many
     /// play with three fingers.
     pub three_fingers: bool,
+    /// Buttons of the player's own; their places are among `extra`.
+    pub custom: Vec<CustomButton>,
 }
 
 /// The view's turn, in degrees right and down, for what the gyroscope turned (radians about
@@ -409,6 +415,7 @@ impl Default for LayoutConfig {
             vibrate: true,
             gyro: false,
             three_fingers: false,
+            custom: Vec::new(),
         }
     }
 }
@@ -473,6 +480,17 @@ impl LayoutConfig {
                 read(&value["buttons"][button.id()], place, MIN_SIZE);
             }
         }
+        for v in value["custom"].as_array().into_iter().flatten().take(64) {
+            let action = match (v["key"].as_str(), v["send"].as_str()) {
+                (Some(key), _) => CustomAction::Key(key.to_owned()),
+                (None, Some(line)) => CustomAction::Send(line.to_owned()),
+                (None, None) => continue,
+            };
+            config.custom.push(CustomButton {
+                id: v["id"].as_u64().unwrap_or(0) as u32,
+                action,
+            });
+        }
         // The mods' buttons, those of mods not running now too (they keep their places).
         if let Some(mods) = value["mods"].as_object() {
             for (key, v) in mods.iter().filter(|(_, v)| v.is_object()).take(256) {
@@ -489,6 +507,18 @@ impl LayoutConfig {
         config
     }
 
+    /// The player's own buttons change: those that went take their places with them.
+    pub fn set_custom(&mut self, buttons: Vec<CustomButton>) {
+        self.extra.retain(|e| {
+            let id = e
+                .key
+                .strip_prefix(CUSTOM_BUTTONS)
+                .and_then(|k| k.strip_prefix(':'));
+            id.is_none_or(|id| buttons.iter().any(|b| b.id.to_string() == id))
+        });
+        self.custom = buttons;
+    }
+
     pub fn to_json(&self) -> String {
         let entry = |p: &Place| json!({ "x": p.x, "y": p.y, "size": p.size, "show": p.show.id(), "opacity": p.opacity });
         let buttons: Map<String, Value> = self
@@ -500,6 +530,14 @@ impl LayoutConfig {
             .extra
             .iter()
             .map(|e| (e.key.clone(), entry(&e.place)))
+            .collect();
+        let custom: Vec<Value> = self
+            .custom
+            .iter()
+            .map(|b| match &b.action {
+                CustomAction::Key(key) => json!({ "id": b.id, "key": key }),
+                CustomAction::Send(line) => json!({ "id": b.id, "send": line }),
+            })
             .collect();
         let value = json!({
             "version": 2,
@@ -518,6 +556,7 @@ impl LayoutConfig {
             "stick": entry(&self.stick),
             "buttons": buttons,
             "mods": mods,
+            "custom": custom,
         });
         serde_json::to_string_pretty(&value).unwrap_or_default()
     }
@@ -1459,7 +1498,10 @@ impl LayoutEditor {
                     .find(|(_, c, r)| hit(*c, *r))
                 {
                     if action == EditorAction::Reset {
+                        // The places go back; the player's own buttons are not a place.
+                        let custom = std::mem::take(&mut config.custom);
                         *config = LayoutConfig::default();
+                        config.custom = custom;
                     }
                     if action == EditorAction::Movement {
                         config.dpad = match config.dpad {
@@ -1857,6 +1899,49 @@ mod tests {
         t.event(&l, 5, TouchPhase::Started, [2200.0, 600.0], now + CHORD * 2);
         let late = t.event(&l, 6, TouchPhase::Started, [2400.0, 600.0], now + CHORD * 4);
         assert!(late.is_empty());
+    }
+
+    #[test]
+    fn custom_buttons_are_saved_and_outlast_a_reset() {
+        let (w, h) = (3200.0, 1440.0);
+        let mut config = LayoutConfig {
+            custom: vec![
+                CustomButton {
+                    id: 1,
+                    action: CustomAction::Key("key.sprint".into()),
+                },
+                CustomButton {
+                    id: 2,
+                    action: CustomAction::Send("/home".into()),
+                },
+            ],
+            ..LayoutConfig::default()
+        };
+        assert_eq!(LayoutConfig::from_json(&config.to_json()), config);
+        let custom = config.custom.clone();
+        let reset = LayoutEditor::bar(w, h)
+            .into_iter()
+            .find(|(a, ..)| *a == EditorAction::Reset)
+            .unwrap()
+            .1;
+        let mut editor = LayoutEditor::default();
+        editor.event(&mut config, w, h, 1, TouchPhase::Started, reset);
+        assert_eq!(config.custom, custom);
+        // One that goes takes its place along; a mod's stays.
+        let extra = |key: &str| Extra {
+            key: key.to_owned(),
+            place: place(0.5, 0.5, 0.5),
+            shape: Shape::Round,
+            live: false,
+        };
+        config.extra = vec![
+            extra(&format!("{CUSTOM_BUTTONS}:1")),
+            extra(&format!("{CUSTOM_BUTTONS}:2")),
+            extra("some_mod:key"),
+        ];
+        config.set_custom(vec![custom[1].clone()]);
+        let kept: Vec<&str> = config.extra.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(kept, [&format!("{CUSTOM_BUTTONS}:2"), "some_mod:key"]);
     }
 
     #[test]

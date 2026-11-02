@@ -45,6 +45,26 @@ const SPLIT_BUZZ: u32 = 15;
 /// The layout's file, beside options.txt.
 pub(super) const LAYOUT_FILE: &str = "touch-layout.json";
 
+/// The layout in its file, for the title's options (no game yet).
+fn saved_layout() -> LayoutConfig {
+    std::fs::read_to_string(LAYOUT_FILE)
+        .map_or_else(|_| LayoutConfig::default(), |t| LayoutConfig::from_json(&t))
+}
+
+/// The player's own buttons in the layout's file.
+pub(super) fn saved_custom_buttons() -> Vec<horizon_client::settings::CustomButton> {
+    saved_layout().custom
+}
+
+/// The player's own buttons into the layout's file.
+pub(super) fn save_custom_buttons(buttons: Vec<horizon_client::settings::CustomButton>) {
+    let mut layout = saved_layout();
+    layout.set_custom(buttons);
+    if let Err(e) = std::fs::write(LAYOUT_FILE, layout.to_json()) {
+        log::warn!("Horizon: the touch layout was not saved: {e}");
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Touch {
     controls: TouchControls,
@@ -79,7 +99,7 @@ pub(super) struct Touch {
     /// The keyboard's editor on Android (text_mirror.rs).
     mirror: text_mirror::Mirror,
     /// The player's layout, read from touch-layout.json on the first frame.
-    config: Option<LayoutConfig>,
+    pub(super) config: Option<LayoutConfig>,
     /// The layout editor, while it is open.
     editor: Option<LayoutEditor>,
     /// The chat bar's button last tapped and when (it lights up a moment).
@@ -655,13 +675,13 @@ impl Game<'_> {
             && let Some((id, bind)) = self.mod_button_at(p)
         {
             self.touch.mod_keys.push((t.id, id.clone(), bind.clone()));
-            self.mod_bind(&id, &bind, true);
+            self.extra_button(&id, &bind, true);
             return true;
         }
         if let Some(i) = self.touch.mod_keys.iter().position(|(f, ..)| *f == t.id) {
             if matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
                 let (_, id, bind) = self.touch.mod_keys.remove(i);
-                self.mod_bind(&id, &bind, false);
+                self.extra_button(&id, &bind, false);
             }
             return true;
         }
@@ -762,6 +782,7 @@ impl Game<'_> {
             let (faces, offered): (Vec<_>, Vec<_>) = self
                 .mod_touch_buttons()
                 .into_iter()
+                .chain(self.custom_touch_buttons())
                 .map(|(face, place)| {
                     let offer = (face.key.clone(), place, face.shape);
                     (face, offer)
@@ -1486,6 +1507,51 @@ impl Game<'_> {
             }),
             "layout": layout,
         })))
+    }
+
+    /// A finger landed on or lifted from one of the layout's extra buttons: a mod's keybind, or
+    /// one of the player's own.
+    fn extra_button(&mut self, id: &str, bind: &str, pressed: bool) {
+        use horizon_client::settings::CustomAction;
+        if id != touch::CUSTOM_BUTTONS {
+            self.mod_bind(id, bind, pressed);
+            return;
+        }
+        let action = self
+            .touch
+            .config
+            .as_ref()
+            .and_then(|c| c.custom.iter().find(|b| b.id.to_string() == bind))
+            .map(|b| b.action.clone());
+        match action {
+            Some(CustomAction::Send(line)) if pressed => self.handle_chat_input(&line),
+            Some(CustomAction::Key(name)) => {
+                let key = horizon_client::keybinds::key_code(self.settings.keys.get(&name));
+                let Some(key) = key else { return };
+                if pressed {
+                    let _ = self.control_key_down(key);
+                } else {
+                    self.keys.remove(&key);
+                    self.physical_keys.remove(&key);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The Custom Buttons page opened: it shows what the layout has.
+    pub(super) fn open_custom_buttons(&mut self) {
+        let config = self.touch.config.as_ref();
+        self.settings.custom_buttons = config.map(|c| c.custom.clone()).unwrap_or_default();
+    }
+
+    /// The page changed the player's buttons: the layout takes them, and forgets the places of
+    /// those that went.
+    pub(super) fn save_custom_buttons(&mut self) {
+        let buttons = self.settings.custom_buttons.clone();
+        let config = self.touch.config.get_or_insert_with(LayoutConfig::default);
+        config.set_custom(buttons);
+        self.save_touch_layout();
     }
 
     /// A key press and release from the touch side (the back key, the close button).

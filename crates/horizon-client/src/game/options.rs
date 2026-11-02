@@ -323,6 +323,8 @@ impl Game<'_> {
                 }
                 // Saved; the next frame's `shader_pack_inputs` loads the pick.
                 Event::ShaderPack => self.settings.save(&Self::options_path()),
+                Event::OpenCustomButtons => self.open_custom_buttons(),
+                Event::CustomButtons => self.save_custom_buttons(),
                 Event::OpenShaderOptions => self.open_shader_options(),
                 Event::ShaderOptions => self.save_shader_options(),
                 Event::OpenShaderPackFolder => self.open_game_folder(&Self::shader_packs_dir()),

@@ -952,6 +952,9 @@ pub enum Page {
     ShaderPacks,
     /// The picked `shaders/` pack's options (`shader_options`), one of its screens at a time.
     ShaderOptions,
+    /// The player's own touch buttons (`Settings::custom_buttons`), and what one of them does.
+    CustomButtons,
+    CustomButton(u32),
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
@@ -996,6 +999,12 @@ enum Act {
     ShaderResolution,
     /// The next of the frame limits the Shader Packs page offers.
     ShaderFpsLimit,
+    /// The Custom Buttons page, a new button there, one to change or take away, and a key for it.
+    CustomButtons,
+    CustomAdd,
+    CustomEdit(u32),
+    CustomDelete(u32),
+    CustomKey(u32, &'static str),
     /// Open the Shader Options page.
     ShaderOptions,
     /// A pack's option, its next value.
@@ -1100,6 +1109,10 @@ pub enum Event {
     NativeButton(usize, usize),
     /// Close the options and edit the touch controls' layout over the world.
     TouchLayout,
+    /// The Custom Buttons page opened: `Settings::custom_buttons` takes what the layout has.
+    OpenCustomButtons,
+    /// The player's own touch buttons changed: the layout takes them.
+    CustomButtons,
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
     /// Copy how an agent connects (the AI Agent page).
@@ -1162,6 +1175,8 @@ pub struct OptionsUi {
     language_choice: Option<String>,
     language_search: ui::EditBox,
     pub(crate) settings_search: ui::EditBox,
+    /// What the custom button on its page sends.
+    custom_send: ui::EditBox,
     /// Packs: the packs found and the selection the screen opens with.
     pub pack_infos: Vec<crate::pack_screen::PackInfo>,
     pub pack_selection: Vec<String>,
@@ -1225,6 +1240,9 @@ impl Default for OptionsUi {
         search.max_length = 32;
         let mut settings_search = ui::EditBox::new(0.0, 0.0, 200.0, 15.0);
         settings_search.focused = false;
+        let mut custom_send = ui::EditBox::new(0.0, 0.0, 310.0, 20.0);
+        custom_send.max_length = 256;
+        custom_send.focused = false;
         Self {
             stack: vec![Page::Main],
             scroll: 0.0,
@@ -1240,6 +1258,7 @@ impl Default for OptionsUi {
             language_choice: None,
             language_search: search,
             settings_search,
+            custom_send,
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
@@ -1410,6 +1429,8 @@ enum Row {
     About(String),
     /// Skin Customization's name box, after its label.
     Field,
+    /// What a custom button sends.
+    SendField,
     /// A line of red text: what was refused.
     Warning(String),
 }
@@ -1438,6 +1459,7 @@ impl OptionsUi {
                 .as_ref()
                 .is_some_and(|p| p.search_focused()),
             Page::Skin => self.skin.name.focused,
+            Page::CustomButton(_) => self.custom_send.focused,
             _ => self.settings_search_active(),
         }
     }
@@ -1450,6 +1472,7 @@ impl OptionsUi {
             Page::Language => on(&self.language_search),
             Page::Packs => self.pack_screen.as_ref().is_some_and(|p| p.search_at(x, y)),
             Page::Skin => on(&self.skin.name),
+            Page::CustomButton(_) => on(&self.custom_send),
             _ => self.settings_search_active() && on(&self.settings_search),
         }
     }
@@ -1567,6 +1590,7 @@ impl OptionsUi {
             Page::NativeMod(_) => "Mod Settings",
             Page::ShaderPacks => "Shader Packs",
             Page::ShaderOptions => "Shader Options",
+            Page::CustomButtons | Page::CustomButton(_) => "Custom Buttons",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
@@ -2007,6 +2031,16 @@ impl OptionsUi {
                         ),
                         None,
                     ));
+                    rows.push(Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            310.0,
+                            Text::literal("Custom Buttons..."),
+                            Act::CustomButtons,
+                        ),
+                        None,
+                    ));
                 }
                 self.filter_option_rows(rows)
             }
@@ -2238,6 +2272,76 @@ impl OptionsUi {
                 rows
             }
             Page::ShaderOptions => shader_option_rows(s),
+            Page::CustomButtons => {
+                let mut rows = vec![Row::Note(
+                    "Buttons of your own: place them in Touch Controls".into(),
+                )];
+                for b in &s.custom_buttons {
+                    rows.push(Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            150.0,
+                            Text::literal(b.label()),
+                            Act::CustomEdit(b.id),
+                        ),
+                        Some(button(
+                            0.0,
+                            0.0,
+                            150.0,
+                            Text::literal("Delete"),
+                            Act::CustomDelete(b.id),
+                        )),
+                    ));
+                }
+                rows.push(Row::Buttons(
+                    button(0.0, 0.0, 310.0, Text::literal("Add Button"), Act::CustomAdd),
+                    None,
+                ));
+                rows
+            }
+            Page::CustomButton(id) => {
+                let held =
+                    s.custom_buttons
+                        .iter()
+                        .find(|b| b.id == id)
+                        .and_then(|b| match &b.action {
+                            crate::settings::CustomAction::Key(name) => Some(name.as_str()),
+                            crate::settings::CustomAction::Send(_) => None,
+                        });
+                let mut rows = vec![
+                    Row::Note("Sends a /command or a chat line when pressed".into()),
+                    Row::SendField,
+                    Row::Note("Or holds one of the keys of the game".into()),
+                ];
+                let mut mappings: Vec<(&'static str, &'static str)> =
+                    MAPPINGS.iter().map(|(n, _, c)| (*n, *c)).collect();
+                mappings.retain(|(name, _)| keybinds::key_code(s.keys.get(name)).is_some());
+                mappings.sort_by(|a, b| {
+                    let ca = CATEGORIES.iter().position(|c| *c == a.1).unwrap_or(99);
+                    let cb = CATEGORIES.iter().position(|c| *c == b.1).unwrap_or(99);
+                    ca.cmp(&cb)
+                        .then_with(|| lang::get(a.0).cmp(&lang::get(b.0)))
+                });
+                for (name, _) in mappings {
+                    let label = if held == Some(name) {
+                        format!("> {} <", lang::get(name))
+                    } else {
+                        lang::get(name)
+                    };
+                    rows.push(Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            310.0,
+                            Text::literal(label),
+                            Act::CustomKey(id, name),
+                        ),
+                        None,
+                    ));
+                }
+                rows
+            }
             _ => {
                 let _ = s;
                 Vec::new()
@@ -2780,6 +2884,13 @@ impl OptionsUi {
                             (field.width, field.height) = (270.0, 20.0);
                             y += 25.0;
                         }
+                        Row::SendField => {
+                            // Drawn and edited by the page itself.
+                            let field = &mut self.custom_send;
+                            (field.x, field.y) = (cx - 155.0, y + 2.0);
+                            (field.width, field.height) = (310.0, 20.0);
+                            y += 25.0;
+                        }
                         Row::Warning(text) => {
                             out.push(Widget {
                                 x: 0.0,
@@ -3161,6 +3272,13 @@ impl OptionsUi {
             }
             self.skin.name = name;
         }
+        if matches!(self.page(), Page::CustomButton(_)) {
+            let mut field = self.custom_send.clone();
+            if field.y >= top && field.y + field.height <= bottom {
+                field.draw(batch, atlas, None);
+            }
+            self.custom_send = field;
+        }
         if let Some(lines) = tooltip {
             ui::tooltip(batch, atlas, &lines, cursor);
         }
@@ -3268,6 +3386,21 @@ impl OptionsUi {
             if field.focused {
                 self.commit_name();
             }
+        }
+        if !drag && !right && matches!(self.page(), Page::CustomButton(_)) {
+            let field = &mut self.custom_send;
+            if ui::hovered((x, y), field.x, field.y, field.width, field.height)
+                && y >= top
+                && y < bottom
+            {
+                if !field.focused {
+                    field.reset_blink();
+                }
+                field.focused = true;
+                field.click(atlas, x, false, false);
+                return events;
+            }
+            field.focused = false;
         }
         if drag {
             if let Some(previous_y) = self.scrollbar_drag_y {
@@ -3470,6 +3603,43 @@ impl OptionsUi {
                             s.max_fps = STEPS[next % STEPS.len()];
                             events.push(Event::Changed);
                         }
+                        Act::CustomButtons => {
+                            self.push(Page::CustomButtons);
+                            events.push(Event::OpenCustomButtons);
+                        }
+                        Act::CustomAdd => {
+                            let id = s.custom_buttons.iter().map(|b| b.id + 1).max().unwrap_or(1);
+                            s.custom_buttons.push(crate::settings::CustomButton {
+                                id,
+                                action: crate::settings::CustomAction::Send(String::new()),
+                            });
+                            self.custom_send.set_value("");
+                            self.custom_send.focused = false;
+                            self.push(Page::CustomButton(id));
+                        }
+                        Act::CustomEdit(id) => {
+                            let line =
+                                s.custom_buttons.iter().find(|b| b.id == id).map(|b| {
+                                    match &b.action {
+                                        crate::settings::CustomAction::Send(line) => line.as_str(),
+                                        crate::settings::CustomAction::Key(_) => "",
+                                    }
+                                });
+                            self.custom_send.set_value(line.unwrap_or_default());
+                            self.custom_send.focused = false;
+                            self.push(Page::CustomButton(id));
+                        }
+                        Act::CustomDelete(id) => {
+                            s.custom_buttons.retain(|b| b.id != id);
+                            events.push(Event::CustomButtons);
+                        }
+                        Act::CustomKey(id, name) => {
+                            if let Some(b) = s.custom_buttons.iter_mut().find(|b| b.id == id) {
+                                b.action = crate::settings::CustomAction::Key(name.to_owned());
+                            }
+                            self.custom_send.set_value("");
+                            self.custom_send.focused = false;
+                        }
                         Act::ShaderOptions => {
                             s.shader_options = None;
                             self.push(Page::ShaderOptions);
@@ -3663,6 +3833,20 @@ impl OptionsUi {
             }
             // Done or Escape with the name box focused keeps what it holds, as leaving it does.
             Page::Skin if self.skin.name.focused => self.commit_name(),
+            // What the box holds is what it sends; one that does nothing goes.
+            Page::CustomButton(id) => {
+                let line = self.custom_send.value.trim().to_owned();
+                self.custom_send.focused = false;
+                if let Some(b) = s.custom_buttons.iter_mut().find(|b| b.id == id)
+                    && (!line.is_empty()
+                        || matches!(b.action, crate::settings::CustomAction::Send(_)))
+                {
+                    b.action = crate::settings::CustomAction::Send(line);
+                }
+                s.custom_buttons
+                    .retain(|b| b.action != crate::settings::CustomAction::Send(String::new()));
+                events.push(Event::CustomButtons);
+            }
             _ => {}
         }
         events.push(Event::Changed);
@@ -3690,6 +3874,8 @@ impl OptionsUi {
             self.scroll = 0.0;
         } else if self.page() == Page::Skin && self.skin.name.focused {
             self.skin.name.insert_text(text);
+        } else if matches!(self.page(), Page::CustomButton(_)) && self.custom_send.focused {
+            self.custom_send.insert_text(text);
         }
     }
     /// Ctrl+A/C/V/X in the language or pack search box; false when neither
@@ -3723,6 +3909,10 @@ impl OptionsUi {
         }
         if self.page() == Page::Skin && self.skin.name.focused {
             self.skin.name.shortcut(shortcut, clipboard);
+            return true;
+        }
+        if matches!(self.page(), Page::CustomButton(_)) && self.custom_send.focused {
+            self.custom_send.shortcut(shortcut, clipboard);
             return true;
         }
         false
@@ -3837,6 +4027,22 @@ impl OptionsUi {
                 return Vec::new();
             }
             let field = &mut self.skin.name;
+            if !field.key(key, false, false)
+                && let Some(t) = text
+            {
+                let typed: String = t.chars().filter(|c| !c.is_control()).collect();
+                if !typed.is_empty() {
+                    field.insert_text(&typed);
+                }
+            }
+            field.reset_blink();
+        } else if matches!(self.page(), Page::CustomButton(_)) && self.custom_send.focused {
+            // Enter (the on-screen keyboard's Done) leaves the box; Done on the page keeps it.
+            let field = &mut self.custom_send;
+            if matches!(key, K::Enter | K::NumpadEnter) {
+                field.focused = false;
+                return Vec::new();
+            }
             if !field.key(key, false, false)
                 && let Some(t) = text
             {
@@ -5251,6 +5457,70 @@ mod tests {
         }
         ui.stack = vec![Page::Main, Page::Controls];
         assert!(pushes(&mut ui).contains(&Page::Controller));
+    }
+
+    #[test]
+    fn custom_buttons_take_a_line_or_a_key_and_empty_ones_go() {
+        use crate::settings::CustomAction;
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi {
+            stack: vec![Page::Main, Page::CustomButtons],
+            ..Default::default()
+        };
+        let size = (427.0, 480.0);
+        let press = |ui: &mut OptionsUi, s: &mut Settings, wanted: Act| {
+            let (widgets, ..) = ui.layout(s, size.0, size.1);
+            let at = widgets
+                .iter()
+                .find_map(|w| match &w.kind {
+                    WKind::Button { act, .. } if *act == wanted => Some((w.x + 2.0, w.y + 2.0)),
+                    _ => None,
+                })
+                .expect("the button shows");
+            ui.click(s, &atlas, at.0, at.1, size, [1281, 960], false, false)
+        };
+        // Added and left empty, it goes.
+        press(&mut ui, &mut s, Act::CustomAdd);
+        assert_eq!(ui.page(), Page::CustomButton(1));
+        ui.layout(&s, size.0, size.1);
+        assert!(ui.back(&mut s).contains(&Event::CustomButtons));
+        assert!(s.custom_buttons.is_empty());
+        // What the box holds, it sends.
+        press(&mut ui, &mut s, Act::CustomAdd);
+        ui.layout(&s, size.0, size.1);
+        let field = (ui.custom_send.x + 10.0, ui.custom_send.y + 4.0);
+        ui.click(
+            &mut s,
+            &atlas,
+            field.0,
+            field.1,
+            size,
+            [1281, 960],
+            false,
+            false,
+        );
+        assert!(ui.text_focused() && ui.text_field_at(field.0, field.1));
+        ui.type_text(&atlas, "/home");
+        ui.back(&mut s);
+        assert_eq!(
+            s.custom_buttons[0].action,
+            CustomAction::Send("/home".into())
+        );
+        assert_eq!(s.custom_buttons[0].label(), "/home");
+        // A key takes its place, and stays without a line.
+        let id = s.custom_buttons[0].id;
+        press(&mut ui, &mut s, Act::CustomEdit(id));
+        assert_eq!(ui.custom_send.value, "/home");
+        press(&mut ui, &mut s, Act::CustomKey(id, "key.sprint"));
+        ui.back(&mut s);
+        assert_eq!(
+            s.custom_buttons[0].action,
+            CustomAction::Key("key.sprint".into())
+        );
+        // And it can be taken away.
+        assert!(press(&mut ui, &mut s, Act::CustomDelete(id)).contains(&Event::CustomButtons));
+        assert!(s.custom_buttons.is_empty());
     }
 
     #[test]

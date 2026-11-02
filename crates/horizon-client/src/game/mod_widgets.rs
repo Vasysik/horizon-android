@@ -540,6 +540,41 @@ impl Game<'_> {
         out
     }
 
+    /// The player's own buttons on the touch controls: wide, what they do on them, in a column
+    /// until they are placed.
+    pub(super) fn custom_touch_buttons(&self) -> Vec<(ModFace, Place)> {
+        let Some(config) = &self.touch.config else {
+            return Vec::new();
+        };
+        let [w, h] = self.touch_size();
+        let (w, h) = (w as f32, h as f32);
+        let scale = HudBatch::new([w as u32, h as u32]).scale;
+        let size = WIDE_HEIGHT / 2.0 * scale / horizon_client::touch::unit(w, h);
+        config
+            .custom
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let label: String = b.label().chars().take(14).collect();
+                let width = HudBatch::text_width(&self.gui.atlas, &label) + 10.0;
+                let face = ModFace {
+                    key: format!("{}:{}", horizon_client::touch::CUSTOM_BUTTONS, b.id),
+                    label,
+                    icon: None,
+                    shape: Shape::Wide(width / WIDE_HEIGHT),
+                };
+                let place = Place {
+                    x: 0.5,
+                    y: 0.25 + 0.1 * (i % 5) as f32,
+                    size,
+                    show: horizon_client::touch::Show::On,
+                    opacity: 1.0,
+                };
+                (face, place)
+            })
+            .collect()
+    }
+
     /// How one of the game's touch buttons looks now.
     pub(super) fn control_face(&self, button: Button) -> ControlFace {
         let name = button.id();

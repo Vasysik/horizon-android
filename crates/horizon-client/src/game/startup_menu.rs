@@ -529,6 +529,12 @@ impl Loading {
                         horizon_client::shader_pack_list::scan(&Game::shader_packs_dir());
                 }
                 Event::ShaderPack => self.save_menu_settings(),
+                Event::OpenCustomButtons => {
+                    self.settings.custom_buttons = super::touch::saved_custom_buttons();
+                }
+                Event::CustomButtons => {
+                    super::touch::save_custom_buttons(self.settings.custom_buttons.clone());
+                }
                 Event::OpenShaderOptions => {
                     if let Some((name, profile)) = self.settings.horizon.shader_choice() {
                         self.settings.shader_options = super::shader_packs::read_shader_options(

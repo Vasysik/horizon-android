@@ -87,6 +87,32 @@ pub fn source_volume(i: usize) -> f32 {
     }
 }
 
+/// What a button of the player's own on the touch controls does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CustomAction {
+    /// Holds one of the game's keys (`key.sprint`) while a finger is on it.
+    Key(String),
+    /// Sends a command or a chat line when pressed.
+    Send(String),
+}
+
+/// A button of the player's own on the touch controls (its place is the layout's).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomButton {
+    pub id: u32,
+    pub action: CustomAction,
+}
+
+impl CustomButton {
+    /// What it shows on it.
+    pub fn label(&self) -> String {
+        match &self.action {
+            CustomAction::Key(name) => crate::lang::get(name),
+            CustomAction::Send(line) => line.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     /// Degrees, 30..=110 (options.txt stores (fov - 70) / 40).
@@ -187,6 +213,8 @@ pub struct Settings {
     pub shader_packs: Vec<crate::shader_pack_list::Entry>,
     /// The Shader Options page's pack, while it is open.
     pub shader_options: Option<crate::shader_options::ShaderOptions>,
+    /// The touch layout's own buttons while the Custom Buttons page shows them.
+    pub custom_buttons: Vec<CustomButton>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -264,6 +292,7 @@ impl Default for Settings {
             mods: Default::default(),
             shader_packs: Vec::new(),
             shader_options: None,
+            custom_buttons: Vec::new(),
         }
     }
 }
@@ -427,6 +456,7 @@ impl Settings {
             mods: Default::default(),
             shader_packs: Vec::new(),
             shader_options: None,
+            custom_buttons: Vec::new(),
             auto_jump: f.bool("autoJump"),
             language: f.string("lang"),
             force_unicode: f.bool("forceUnicodeFont"),
