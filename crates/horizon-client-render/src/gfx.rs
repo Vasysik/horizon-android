@@ -8420,8 +8420,8 @@ mod tests {
             max_texture_array_layers: 1024,
             ..Default::default()
         };
-        assert!(super::check_layers(&limits, 1291).is_ok());
-        assert!(super::check_layers(&limits, 8193).is_err());
+        assert!(super::layer_split(limits.max_texture_array_layers, true, None, 1291).is_ok());
+        assert!(super::layer_split(limits.max_texture_array_layers, true, None, 8193).is_err());
         let layers = 1291;
         let pixels: Vec<u8> = (0..layers)
             .flat_map(|i| [i as u8, (i >> 8) as u8, 128, 255].repeat(16))
