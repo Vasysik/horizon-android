@@ -271,7 +271,7 @@ impl Game<'_> {
                 && if self.settings.touch.shield_button {
                     self.pad.touch.shield_held()
                 } else {
-                    self.pad.touch.sneaking || touch.held(Button::RightStick)
+                    touch.held(Button::RightStick)
                 };
             if self.pad.touch_shield {
                 touch.triggers[0] = 1.0;
