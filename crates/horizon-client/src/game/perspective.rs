@@ -548,11 +548,12 @@ impl Game<'_> {
     ) {
         if let Some(m) = self.player_model.as_ref() {
             let data = self.res.mob_data();
-            self.mob_preview(m, data, batch, rect, size, offset_y, cursor, spin);
+            self.mob_preview(m, data, batch, rect, size, offset_y, cursor, spin, true);
         }
     }
     /// `m` as the inventory draws the player, with `data` (the title screen's player too, which
-    /// may come before the world's mob data).
+    /// may come before the world's mob data). `in_world`: as the player is now, with what they
+    /// wear and hold; the title screen's has no world to bring any of it from.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn mob_preview(
         &self,
@@ -564,11 +565,13 @@ impl Game<'_> {
         offset_y: f32,
         cursor: (f32, f32),
         spin: f32,
+        in_world: bool,
     ) {
-        if self
-            .player
-            .as_ref()
-            .is_some_and(|p| p.health.dead_or_dying())
+        if in_world
+            && self
+                .player
+                .as_ref()
+                .is_some_and(|p| p.health.dead_or_dying())
         {
             return;
         }
@@ -597,11 +600,17 @@ impl Game<'_> {
             &lookup,
             240 | 240 << 8,
             data,
-            &self.player_armor_layers(),
+            &if in_world {
+                self.player_armor_layers()
+            } else {
+                Vec::new()
+            },
             &mut verts,
         );
-        self.own_elytra_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
-        self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
+        if in_world {
+            self.own_elytra_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
+            self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
+        }
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
         // then the translation and Rz(pi) * Rx(y_angle * 20 degrees).

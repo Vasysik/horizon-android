@@ -444,7 +444,7 @@ impl Game<'_> {
         );
         let turn = TITLE_TURN + self.own_skin.title_turn;
         let (rect, size) = (layout.model, layout.size);
-        self.mob_preview(&mob, data, batch, rect, size, 0.0625, centre, turn);
+        self.mob_preview(&mob, data, batch, rect, size, 0.0625, centre, turn, false);
         let atlas = &self.gui.atlas;
         let name_x = (mid - HudBatch::text_width(atlas, &player.name) / 2.0).floor();
         batch.text(atlas, &player.name, name_x, y0 - 8.0, u32::MAX, true);
