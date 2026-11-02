@@ -88,6 +88,13 @@ impl Game<'_> {
         if *device_id == DeviceId::dummy() {
             return false;
         }
+        let in_menu = self.screen == Screen::Inventory
+            || self.screen == Screen::Creative
+            || self.screen == Screen::Options
+            || self.screen == Screen::Paused;
+        if !in_menu {
+            return false;
+        }
         let Some(batch) = self.gui_scale() else {
             return false;
         };
