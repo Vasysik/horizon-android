@@ -809,8 +809,7 @@ impl Catalog {
                     project.source,
                     browser::SourceId::Horizon | browser::SourceId::Modrinth
                 ))
-            && !(cfg!(target_pointer_width = "64")
-                && project.kind == Kind::Mod
+            && !(project.kind == Kind::Mod
                 && project.source == browser::SourceId::Horizon)
         {
             return;
@@ -867,17 +866,10 @@ impl Catalog {
         let mut settings = horizon_client::settings::Settings::load(&path);
         match item.kind {
             horizon_client::content_files::Kind::Mods => {
-                if !cfg!(target_pointer_width = "64") {
-                    // Content mods (api 0.2, no code) load in every build;
-                    // sandboxed code mods need wasmtime, which has no 32-bit
-                    // ARM target. Copper and friends are content packages.
-                    let content_only = horizon_mods::Package::read(&game.join(&item.file))
-                        .is_ok_and(|package| package.manifest.api == "0.2");
-                    if !content_only {
-                        self.status = "Sandboxed code mods require a 64-bit APK".into();
-                        return;
-                    }
-                }
+                // No bit-width gate: Android builds never link the mod
+                // runtime, so sandboxed code mods are inert here on both
+                // ABIs while content mods (Copper included) load in every
+                // build. Toggling is the player's choice on any device.
                 let mut on = horizon_client::mod_list::ModList::load(&game);
                 if let Some(id) = item.file.strip_suffix(".hmod") {
                     if item.enabled {

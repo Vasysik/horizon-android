@@ -695,16 +695,6 @@ impl Launcher {
                         color::MUTED,
                         ".hnmod: later",
                     );
-                } else if p.kind == crate::browser::Kind::Mod && !cfg!(target_pointer_width = "64")
-                {
-                    ui.text(
-                        Face::Regular,
-                        14.0,
-                        w - 150.0,
-                        y + 12.0,
-                        color::MUTED,
-                        "64-bit required",
-                    );
                 } else {
                     button(
                         &mut ui,
@@ -849,15 +839,6 @@ impl Launcher {
                             y + if compact { 62.0 } else { 12.0 },
                             color::MUTED,
                             "Java mod: cannot run",
-                        );
-                    } else if kind == Kind::Mods && !cfg!(target_pointer_width = "64") {
-                        ui.text(
-                            Face::Regular,
-                            14.0,
-                            if compact { 32.0 } else { w - 300.0 },
-                            y + if compact { 62.0 } else { 12.0 },
-                            color::MUTED,
-                            "64-bit required",
                         );
                     } else {
                         toggle(

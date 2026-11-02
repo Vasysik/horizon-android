@@ -46,6 +46,9 @@ the mod is what turns it on for a play session. With Copper enabled, Oxide:
 Copper is off by default (parity first): install it from the Oxide source, enable it in Installed, then Play.
 Its state is recorded in the `play_requested` diagnostic heartbeat.
 
+Android builds never link the mod runtime (wasmtime): sandboxed **code** mods are inert there on both ABIs,
+while content mods and Copper install, toggle and work on 32-bit and 64-bit alike.
+
 ## Playing with mods
 
 1. Install a mod from the launcher's Mods page ([mod-browser.md](mod-browser.md)), or put its files by hand in the

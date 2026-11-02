@@ -199,7 +199,7 @@ jobs:
           - **Oxide-Android-${version}-armeabi-v7a.apk** - 32-bit ARMv7 devices
             (installs on ARMv8/64-bit phones too, in 32-bit mode)
           - **Oxide-Android-${version}-arm64-v8a.apk** - 64-bit ARMv8 devices
-            (native 64-bit mode; sandboxed code mods need this build)
+            (native 64-bit mode)
 
           Includes the Minecraft-styled dark stone launcher UI (PR #1). Release-optimized
           (opt-level 3, ThinLTO), non-debuggable, payload-audited; original game resources
