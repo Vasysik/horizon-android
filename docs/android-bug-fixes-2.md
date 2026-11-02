@@ -1,18 +1,20 @@
-<!-- Opened by an AI agent? First line: "> 🤖 Opened by <your GitHub login>'s AI agent (<tool, model>), not by <your GitHub login> personally." Use your own login, not someone else's. -->
+<!-- Opened by an AI agent? First line: "> 🤖 Opened by gabgab1209's AI agent (Auto), not by gabgab1209 personally." Use your own login, not someone else's. -->
 
 ## What and why
 
-On Android, pressing the sneak button to crouch would also accidentally raise the shield, matching a Bedrock behavior that doesn't exist in Java Edition.
+On Android, several issues were identified and fixed:
 
-**Issue:** When a player crouched on Android, the shield would activate automatically. This is Bedrock behavior; in Java Edition, crouching and raising a shield are separate actions.
+### 1. Shield activating on crouch (#98)
+Pressing the sneak button to crouch would also accidentally raise the shield, matching a Bedrock behavior that doesn't exist in Java Edition.
 
-**Fix:** Removed the `self.pad.touch.sneaking` condition from the touch shield check in `pad.rs`. The shield now only activates when:
-- The shield button is explicitly pressed (`shield_button` setting is true)
-- Or the RightStick is held (for controller users)
+**Fix:** Removed the `self.pad.touch.sneaking` condition from the touch shield check in `pad.rs`. The shield now only activates when the shield button is explicitly pressed or the RightStick is held.
 
-This matches Java Edition behavior where crouching does not raise the shield.
+### 2. Missing villager particles (#81)
+Villagers were missing certain particles, specifically the "cloud" particle when they are angry or fail to find a bed/POI.
 
-Fixes #98
+**Fix:** Added mapping for entity event 11 to the "cloud" particle in `particles.rs` for villagers. Verified that other particles (heart for love, happy_villager for job gained) were already mapped.
+
+Fixes #98, Fixes #81
 
 ## Kind
 
@@ -34,8 +36,8 @@ cargo test -p horizon-client --lib
 
 ## Screenshots
 
-- Before: Shield would raise when crouching on Android
-- After: Crouching no longer raises the shield; only explicit shield button or RightStick works
+- Before: Shield would raise when crouching; villagers missing cloud particles.
+- After: Crouching no longer raises the shield; villagers correctly show cloud particles for event 11.
 
 <!-- Please tick "Allow edits by maintainers": we push small fixups ourselves instead of a round trip.
      See CONTRIBUTING.md. -->
