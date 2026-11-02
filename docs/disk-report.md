@@ -58,6 +58,7 @@ Waktu: 2026-11-02
 | `/home/saryu/horizon-android/target` | 4.3 GiB | `cargo clean` | Berhasil dihapus (5421 file) |
 | `~/.cargo/registry/cache/*` | 29 MB | `rm -rf` | Berhasil dibersihkan |
 | `~/.cargo/registry/src/*` | 308 MB | `rm -rf` | Berhasil dibersihkan |
+| `/tmp/zl2-ref` (analisis ZL2 sementara) | 947 MB | `rm -rf` | Selesai analisis spesifikasi, berhasil dihapus |
 
 ---
 
