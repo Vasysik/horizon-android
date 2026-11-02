@@ -22,7 +22,7 @@ use horizon_client::{
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
-    time::{Duration, Instant},
+    time::Instant,
 };
 use winit::{
     application::ApplicationHandler,
@@ -56,10 +56,9 @@ pub(super) struct Launcher {
     login: login::Login,
     session_worker: Option<mpsc::Receiver<std::result::Result<Option<PathBuf>, String>>>,
     session_ready: bool,
-    // Idle redraw pacing: real events ask for an immediate frame; an
-    // unchanged launcher repaints at 2 Hz instead of 10 Hz.
+    // Redraw pacing: real events and visible animation ask for a frame at
+    // the display rate; an idle launcher sleeps until the next event.
     redraw_now: bool,
-    idle_ticks: u32,
     focus: Option<usize>,
     diagnostic_export: Option<mpsc::Receiver<std::result::Result<String, String>>>,
 }
@@ -128,7 +127,6 @@ impl Launcher {
             session_worker: None,
             session_ready: false,
             redraw_now: true,
-            idle_ticks: 0,
             focus: None,
             diagnostic_export: None,
         }
@@ -607,20 +605,19 @@ impl ApplicationHandler for Launcher {
             || self.diagnostic_export.is_some()
             || self.login.visible
             || crate::documents::busy();
+        // No frame cap: while anything animates, or right after a real
+        // event, the launcher repaints at the display's own rate. Every
+        // background poll source (downloads, sessions, imports, login) is
+        // in `animating`, so their frames keep arriving too; with nothing
+        // moving the loop sleeps until the next event instead of
+        // repainting on a clock.
         if animating || self.redraw_now {
-            self.idle_ticks = 0;
-        } else {
-            self.idle_ticks = self.idle_ticks.wrapping_add(1);
-        }
-        if animating || self.redraw_now || self.idle_ticks % 5 == 0 {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
         }
         self.redraw_now = false;
-        events.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + Duration::from_millis(100),
-        ));
+        events.set_control_flow(ControlFlow::Wait);
     }
     fn exiting(&mut self, events: &ActiveEventLoop) {
         if let Some(game) = &mut self.game {

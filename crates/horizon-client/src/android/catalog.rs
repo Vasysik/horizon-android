@@ -337,48 +337,68 @@ const OXIDE_RELEASE_BASE: &str =
 /// mods have no shared browser source to resolve files through.
 fn oxide_search(text: &str, offset: usize) -> Result<Vec<Project>, String> {
     use std::io::Read;
-    let mut raw = Vec::new();
-    ureq::AgentBuilder::new()
-        .https_only(true)
-        .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout_read(std::time::Duration::from_secs(30))
-        .build()
-        .get(&format!("{OXIDE_RELEASE_BASE}index.json"))
-        .call()
-        .map_err(|e| e.to_string())?
-        .into_reader()
-        .take(1024 * 1024)
-        .read_to_end(&mut raw)
-        .map_err(|e| e.to_string())?;
-    let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
-    let mut all: Vec<Project> = value
-        .as_array()
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| {
-                    let text = |key: &str| entry.get(key).and_then(|v| v.as_str());
-                    let file = text("file")?;
-                    let id = text("id")?;
-                    Some(Project {
-                        source: browser::SourceId::Horizon,
-                        id: id.to_owned(),
-                        slug: id.to_owned(),
-                        title: text("name")?.to_owned(),
-                        summary: text("summary").unwrap_or_default().to_owned(),
-                        author: text("author").unwrap_or("Oxide").to_owned(),
-                        downloads: entry.get("downloads").and_then(|v| v.as_u64()).unwrap_or(0),
-                        page: text("page").unwrap_or_default().to_owned(),
-                        icon: Some(format!("{OXIDE_RELEASE_BASE}{file}")),
-                        license: "MIT".into(),
-                        kind: Kind::Mod,
-                        game_versions: vec![browser::GAME.into()],
-                        loaders: vec!["horizon".into()],
+    // The built-in catalogue: Copper stays listed and installable even when
+    // the index fetch fails (offline, DNS, proxy), because the download URL
+    // is a constant release asset.
+    let bundled = serde_json::json!([{
+        "id": "copper",
+        "name": "Copper",
+        "summary": "Mobile performance suite: paces chunk streaming, gives the render thread an extra core, skips occlusion passes on tiled phone GPUs.",
+        "version": "1.0.0",
+        "file": "copper.hmod",
+        "page": "https://github.com/kushaladhikari982648-lgtm/Oxide/tree/copper-v1",
+        "author": "Oxide",
+        "downloads": 0
+    }]);
+    let fetched = (|| {
+        let mut raw = Vec::new();
+        ureq::AgentBuilder::new()
+            .https_only(true)
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .timeout_read(std::time::Duration::from_secs(30))
+            .build()
+            .get(&format!("{OXIDE_RELEASE_BASE}index.json"))
+            .call()?
+            .into_reader()
+            .take(1024 * 1024)
+            .read_to_end(&mut raw)?;
+        serde_json::from_slice::<serde_json::Value>(&raw)
+    })();
+    let map = |value: &serde_json::Value| -> Vec<Project> {
+        value
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| {
+                        let text = |key: &str| entry.get(key).and_then(|v| v.as_str());
+                        let file = text("file")?;
+                        let id = text("id")?;
+                        Some(Project {
+                            source: browser::SourceId::Horizon,
+                            id: id.to_owned(),
+                            slug: id.to_owned(),
+                            title: text("name")?.to_owned(),
+                            summary: text("summary").unwrap_or_default().to_owned(),
+                            author: text("author").unwrap_or("Oxide").to_owned(),
+                            downloads: entry.get("downloads").and_then(|v| v.as_u64()).unwrap_or(0),
+                            page: text("page").unwrap_or_default().to_owned(),
+                            icon: Some(format!("{OXIDE_RELEASE_BASE}{file}")),
+                            license: "MIT".into(),
+                            kind: Kind::Mod,
+                            game_versions: vec![browser::GAME.into()],
+                            loaders: vec!["horizon".into()],
+                        })
                     })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut all = map(&fetched.unwrap_or_else(|_| bundled.clone()));
+    if all.is_empty() {
+        // A broken or empty index must never hide the first-party mods.
+        all = map(&bundled);
+    }
     let needle = text.trim().to_lowercase();
     if !needle.is_empty() {
         all.retain(|project| {
