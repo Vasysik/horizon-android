@@ -157,7 +157,7 @@ impl Values {
 
     /// What the declaration of `name`, now saying `old`, should say: the picked value, kept under
     /// its cap. None leaves the line as it is.
-    fn declared(&self, name: &str, old: &str) -> Option<String> {
+    pub fn declared(&self, name: &str, old: &str) -> Option<String> {
         let picked = self.values.get(name);
         let now = picked.map_or(old, String::as_str);
         if let Some(&cap) = self.caps.get(name)

@@ -6,13 +6,14 @@
 
 use horizon_client::camera::CameraFluid;
 use horizon_client::gfx::pack_uniforms::PackInputs;
-use horizon_client::graphics::AUTO_PROFILE;
+use horizon_client::graphics::{AUTO_PROFILE, light_shader_pack};
+use horizon_client::shader_options::ShaderOptions;
 use horizon_shaders::{BlockIds, Macros, Pack, Properties, dimension_folder, load_post};
 
 use super::{Dim, Game};
 use horizon_client::gfx::pack_draw::EntitySpan;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// The ids a pack gives entities and block entities (4.1, 5.3), for the spans of the entity
 /// geometry.
@@ -49,8 +50,6 @@ struct AutoProfile {
     profiles: &'static [&'static str],
     shadow_resolution: f64,
     shadow_distance: f64,
-    /// The most of the screen's resolution the world draws at (`light_pack`s aside).
-    scale: f32,
 }
 
 impl AutoProfile {
@@ -61,34 +60,89 @@ impl AutoProfile {
                 profiles: &["verylow", "low", "potato"],
                 shadow_resolution: 1024.0,
                 shadow_distance: 64.0,
-                scale: 0.5,
             },
             Tier::Mid => Self {
                 profiles: &["potato", "verylow", "shadowlesslow", "low"],
                 shadow_resolution: 1024.0,
                 shadow_distance: 64.0,
-                scale: 0.4,
             },
             Tier::Low => Self {
                 profiles: &["potato", "verylow", "shadowlesslow", "low"],
                 shadow_resolution: 512.0,
                 shadow_distance: 64.0,
-                scale: 0.3,
             },
         }
     }
 }
 
-/// A pack made to be cheap, which Auto leaves at the player's resolution: Starling Visuals and
-/// MakeUp Ultra Fast.
-fn light_pack(name: &str) -> bool {
-    let name = name.replace(['-', '_', ' '], "").to_ascii_lowercase();
-    name.starts_with("starlingvisuals") || name.starts_with("makeup")
+/// The values the player chose for pack `name`'s options (`shaderpacks/<name>.txt`).
+fn chosen_shader_options(name: &str) -> BTreeMap<String, String> {
+    let file = Game::shader_packs_dir().join(horizon_shaders::chosen_file(name));
+    std::fs::read_to_string(file)
+        .map(|text| horizon_shaders::parse_chosen(&text))
+        .unwrap_or_default()
 }
 
-/// The pack's option values: the chosen `profile` (`LOW`), then `HORIZON_SHADER_OPTIONS` lists
+/// Pack `name`'s options, screens and names in `language`, with the values the player chose. An
+/// option's default is what `profile` runs it at, so the page shows what runs.
+pub(super) fn read_shader_options(
+    name: &str,
+    profile: &str,
+    language: &str,
+) -> Option<ShaderOptions> {
+    let pack = match Pack::open(&Game::shader_packs_dir().join(name)) {
+        Ok(pack) => pack,
+        Err(e) => {
+            log::warn!("shader pack {name}: {e}");
+            return None;
+        }
+    };
+    let mut options = horizon_shaders::options(&pack);
+    let lang = horizon_shaders::Lang::load(&pack, language);
+    let text = pack.read_text("shaders.properties").unwrap_or_default();
+    let macros = horizon_shaders::with_options(&pack, &Macros::standard());
+    let properties = Properties::parse(&text, &macros);
+    let screens = horizon_shaders::Screens::parse(&properties, &options);
+    let running = picked_values(&properties, name, profile, &BTreeMap::new());
+    for option in options.values_mut() {
+        if let Some(value) = running.declared(&option.name, &option.default) {
+            option.default = value;
+        }
+    }
+    Some(ShaderOptions::new(
+        name.to_owned(),
+        options,
+        screens,
+        lang,
+        chosen_shader_options(name),
+    ))
+}
+
+/// Saves the values chosen on the Shader Options page; none chosen removes the file.
+pub(super) fn write_shader_options(options: &ShaderOptions) {
+    let file = Game::shader_packs_dir().join(horizon_shaders::chosen_file(&options.pack));
+    let saved = if options.chosen.is_empty() {
+        std::fs::remove_file(&file).or_else(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err(e),
+        })
+    } else {
+        std::fs::write(&file, horizon_shaders::chosen_text(&options.chosen))
+    };
+    if let Err(e) = saved {
+        log::warn!("shader pack {}: {}: {e}", options.pack, file.display());
+    }
+}
+
+/// The pack's option values: the chosen `profile` (`LOW`), then what the player chose on the
+/// Shader Options page, which Auto's limits leave alone, then `HORIZON_SHADER_OPTIONS` lists
 /// values over it (`shadowDistance=64.0 SHADOW_QUALITY=0 !BLOOM`).
-fn picked_values(properties: &Properties, name: &str, profile: &str) -> horizon_shaders::Values {
+fn picked_values(
+    properties: &Properties,
+    name: &str,
+    profile: &str,
+    chosen: &BTreeMap<String, String>,
+) -> horizon_shaders::Values {
     let mut values = horizon_shaders::Values::default();
     if profile == AUTO_PROFILE {
         let auto = AutoProfile::here();
@@ -99,13 +153,22 @@ fn picked_values(properties: &Properties, name: &str, profile: &str) -> horizon_
             }
             None => log::info!("shader pack {name}: Auto finds no light profile"),
         }
-        values.cap("shadowMapResolution", auto.shadow_resolution);
-        values.cap("shadowDistance", auto.shadow_distance);
+        for (option, limit) in [
+            ("shadowMapResolution", auto.shadow_resolution),
+            ("shadowDistance", auto.shadow_distance),
+        ] {
+            if !chosen.contains_key(option) {
+                values.cap(option, limit);
+            }
+        }
     } else if !profile.is_empty() {
         match horizon_shaders::Values::profile(properties, profile) {
             Some(p) => values = p,
             None => log::warn!("shader pack {name}: no profile `{profile}`"),
         }
+    }
+    for (option, value) in chosen {
+        values.set(option, value);
     }
     if let Ok(list) = std::env::var("HORIZON_SHADER_OPTIONS") {
         values.parse_list(&list);
@@ -159,7 +222,8 @@ impl Game<'_> {
                     let macros = Macros::standard();
                     let text = pack.read_text("shaders.properties").unwrap_or_default();
                     let properties = Properties::parse(&text, &macros);
-                    let values = picked_values(&properties, name, &profile);
+                    let chosen = chosen_shader_options(name);
+                    let values = picked_values(&properties, name, &profile, &chosen);
                     if !values.is_empty() {
                         pack.set_values(values);
                     }
@@ -171,7 +235,12 @@ impl Game<'_> {
                         );
                     }
                     let folder = dimension_folder(&pack, dimension);
-                    renderer.set_pack_prepass(profile == AUTO_PROFILE && !light_pack(name));
+                    // On a phone whatever the profile: it pays for itself even on a pack's
+                    // highest settings, and the player picks a profile for how it looks.
+                    renderer.set_pack_prepass(
+                        (cfg!(target_os = "android") || profile == AUTO_PROFILE)
+                            && !light_shader_pack(name),
+                    );
                     let inputs = renderer.pack_inputs();
                     let biomes: Vec<String> = self
                         .res
@@ -315,14 +384,36 @@ impl Game<'_> {
         match &self.shader_choice {
             Some((name, profile))
                 if profile == AUTO_PROFILE
-                    && !light_pack(name)
+                    && !light_shader_pack(name)
                     && !horizon_shader_api::package::is_pack(
                         &Self::shader_packs_dir().join(name),
                     ) =>
             {
-                chosen.min(AutoProfile::here().scale)
+                chosen.min(horizon_client::graphics::auto_shader_scale())
             }
             _ => chosen,
+        }
+    }
+
+    /// The Shader Options page opened: the picked pack's options, screens and names.
+    pub(super) fn open_shader_options(&mut self) {
+        let Some((name, profile)) = self.settings.horizon.shader_choice() else {
+            return;
+        };
+        self.settings.shader_options =
+            read_shader_options(&name, &profile, &self.settings.language);
+    }
+
+    /// The Shader Options page closed with changes: they are saved, and the pack loads again.
+    pub(super) fn save_shader_options(&mut self) {
+        let Some(options) = self.settings.shader_options.take() else {
+            return;
+        };
+        write_shader_options(&options);
+        self.pack_ids = None;
+        self.pack_making = None;
+        if let Some(renderer) = &mut self.renderer {
+            renderer.drop_shader_packs();
         }
     }
 

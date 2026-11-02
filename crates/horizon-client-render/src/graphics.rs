@@ -289,6 +289,24 @@ pub struct Graphics {
 /// player picks another.
 pub const AUTO_PROFILE: &str = "auto";
 
+/// The most of the screen's resolution Auto draws the world at on this device.
+pub fn auto_shader_scale() -> f32 {
+    use crate::system_stats::Tier;
+    static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| match Tier::here().unwrap_or(Tier::High) {
+        Tier::High => 0.5,
+        Tier::Mid => 0.4,
+        Tier::Low => 0.3,
+    })
+}
+
+/// A pack made to be cheap, which keeps the player's resolution and draws no depth first:
+/// Starling Visuals and MakeUp Ultra Fast.
+pub fn light_shader_pack(name: &str) -> bool {
+    let name = name.replace(['-', '_', ' '], "").to_ascii_lowercase();
+    name.starts_with("starlingvisuals") || name.starts_with("makeup")
+}
+
 impl Graphics {
     /// The shader pack and profile chosen: `HORIZON_SHADER_PACK`'s, for development, else the
     /// Shader Packs page's.

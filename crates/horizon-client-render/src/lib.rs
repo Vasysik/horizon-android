@@ -67,6 +67,7 @@ pub mod screen_draw;
 pub mod screen_effects;
 pub mod sculk;
 pub mod settings;
+pub mod shader_options;
 pub mod shader_pack_list;
 pub mod signs;
 pub mod skins;

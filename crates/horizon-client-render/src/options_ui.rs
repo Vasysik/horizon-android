@@ -950,6 +950,8 @@ pub enum Page {
     /// Horizon's shader packs, either kind (`shader_pack_list`): one on or none, and a
     /// `shaders/` pack's profile.
     ShaderPacks,
+    /// The picked `shaders/` pack's options (`shader_options`), one of its screens at a time.
+    ShaderOptions,
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
@@ -990,6 +992,18 @@ enum Act {
     /// The next profile of the chosen pack.
     ShaderProfile,
     OpenShaderPackFolder,
+    /// The next of the resolutions the Shader Packs page offers.
+    ShaderResolution,
+    /// Open the Shader Options page.
+    ShaderOptions,
+    /// A pack's option, its next value.
+    ShaderOption(String),
+    /// One of the pack's screens.
+    ShaderScreen(String),
+    /// The next of the profiles on the pack's own screen.
+    ShaderOptionsProfile,
+    /// All the pack's options back at what the profile says.
+    ShaderReset,
     /// The mod's settings screen (`screens.set-config`, Mod Menu's config button).
     ModConfig(usize),
     /// The installed mod's own settings page (capability `ui`), shown as a
@@ -1064,6 +1078,10 @@ pub enum Event {
     ListShaderPacks,
     /// A shader pack or its profile was picked, or the pack turned off: save and apply it.
     ShaderPack,
+    /// The Shader Options page opened: read the picked pack's options into `shader_options`.
+    OpenShaderOptions,
+    /// The Shader Options page closed with changes: save them and load the pack again.
+    ShaderOptions,
     /// The Shader Packs page's folder (on a phone without the Starling folder, its offer).
     OpenShaderPackFolder,
     /// Open the mod's own settings page (capability `ui`): the installed
@@ -1288,6 +1306,72 @@ fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
         _ => return None,
     })
 }
+/// The open screen of the picked pack: its title, then its items, one to a row on a phone, where
+/// long names fit and a finger finds them, else as the pack lays them out.
+fn shader_option_rows(s: &Settings) -> Vec<Row> {
+    let Some(options) = &s.shader_options else {
+        return vec![Row::Header("Reading the shader pack's options...")];
+    };
+    let columns = if cfg!(target_os = "android") {
+        1
+    } else {
+        options
+            .screens
+            .screen(options.screen())
+            .map_or(2, |(_, c)| c)
+    };
+    let width = if columns == 1 { 310.0 } else { 150.0 };
+    let widget = |item: &horizon_shaders::ScreenItem| -> Option<Widget> {
+        use horizon_shaders::ScreenItem;
+        Some(match item {
+            ScreenItem::Empty if columns != 2 => return None,
+            ScreenItem::Empty => Widget {
+                x: 0.0,
+                y: 0.0,
+                w: 150.0,
+                h: 20.0,
+                kind: WKind::Text {
+                    text: Text::literal(""),
+                    color: 0,
+                    centered: false,
+                },
+                list: false,
+            },
+            ScreenItem::Profile => button(
+                0.0,
+                0.0,
+                width,
+                options.profile_label(),
+                Act::ShaderOptionsProfile,
+            ),
+            ScreenItem::Screen(name) => button(
+                0.0,
+                0.0,
+                width,
+                options.screen_label(name),
+                Act::ShaderScreen(name.clone()),
+            ),
+            ScreenItem::Option(name) => button(
+                0.0,
+                0.0,
+                width,
+                options.option_label(name),
+                Act::ShaderOption(name.clone()),
+            ),
+        })
+    };
+    let widgets: Vec<Widget> = options.items().iter().filter_map(widget).collect();
+    let mut rows = vec![Row::Note(options.title().strip_legacy().plain())];
+    if columns == 1 {
+        rows.extend(widgets.into_iter().map(|w| Row::Buttons(w, None)));
+        return rows;
+    }
+    let mut widgets = widgets.into_iter();
+    while let Some(a) = widgets.next() {
+        rows.push(Row::Buttons(a, widgets.next()));
+    }
+    rows
+}
 /// Rows of an OptionsList: (big?, options) or a header.
 enum Row {
     Big(Opt),
@@ -1457,6 +1541,7 @@ impl OptionsUi {
             Page::Mods => "Mods",
             Page::NativeMod(_) => "Mod Settings",
             Page::ShaderPacks => "Shader Packs",
+            Page::ShaderOptions => "Shader Options",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
@@ -2084,9 +2169,37 @@ impl OptionsUi {
                         ),
                         None,
                     ));
+                    rows.push(Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            310.0,
+                            Text::literal("Shader Options..."),
+                            Act::ShaderOptions,
+                        ),
+                        None,
+                    ));
+                }
+                // Packs cost per pixel: the setting that matters most, where they are picked.
+                if let Some((pack, profile)) = &choice {
+                    let scale = s.horizon.resolution_scale;
+                    let limit = (crate::graphics::auto_shader_scale() * 100.0).round() as u32;
+                    let limited = profile == crate::graphics::AUTO_PROFILE
+                        && !crate::graphics::light_shader_pack(pack)
+                        && scale > limit;
+                    let label = if limited {
+                        format!("Resolution: {scale}% (Auto draws {limit}%)")
+                    } else {
+                        format!("Resolution: {scale}%")
+                    };
+                    rows.push(Row::Buttons(
+                        button(0.0, 0.0, 310.0, Text::literal(label), Act::ShaderResolution),
+                        None,
+                    ));
                 }
                 rows
             }
+            Page::ShaderOptions => shader_option_rows(s),
             _ => {
                 let _ = s;
                 Vec::new()
@@ -2651,6 +2764,7 @@ impl OptionsUi {
                 let folder = match page {
                     Page::Mods => Some(("Open Mod Folder", Act::OpenModFolder)),
                     Page::ShaderPacks => Some(("Open Pack Folder", Act::OpenShaderPackFolder)),
+                    Page::ShaderOptions => Some(("controls.reset", Act::ShaderReset)),
                     Page::Skin if self.skin_page => Some(("Open Skin Folder", Act::OpenSkinFolder)),
                     _ => None,
                 };
@@ -3254,6 +3368,40 @@ impl OptionsUi {
                         Act::NativeButton(i, b) => events.push(Event::NativeButton(i, b)),
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::OpenShaderPackFolder => events.push(Event::OpenShaderPackFolder),
+                        Act::ShaderResolution => {
+                            const STEPS: [u32; 6] = [100, 75, 50, 40, 30, 25];
+                            let now = s.horizon.resolution_scale;
+                            let next = STEPS.iter().position(|&v| v == now).map_or(2, |i| i + 1);
+                            s.horizon.resolution_scale = STEPS[next % STEPS.len()];
+                            events.push(Event::ShaderPack);
+                            events.push(Event::Changed);
+                        }
+                        Act::ShaderOptions => {
+                            s.shader_options = None;
+                            self.push(Page::ShaderOptions);
+                            events.push(Event::OpenShaderOptions);
+                        }
+                        Act::ShaderOption(name) => {
+                            if let Some(options) = &mut s.shader_options {
+                                options.cycle(&name, right);
+                            }
+                        }
+                        Act::ShaderScreen(screen) => {
+                            if let Some(options) = &mut s.shader_options {
+                                options.path.push(screen);
+                                self.scroll = 0.0;
+                            }
+                        }
+                        Act::ShaderOptionsProfile => {
+                            if let Some(options) = &mut s.shader_options {
+                                options.next_profile();
+                            }
+                        }
+                        Act::ShaderReset => {
+                            if let Some(options) = &mut s.shader_options {
+                                options.reset();
+                            }
+                        }
                         Act::TouchLayout => events.push(Event::TouchLayout),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
@@ -3370,6 +3518,14 @@ impl OptionsUi {
     /// Escape or Done: leave the current page, applying page results.
     pub fn back(&mut self, s: &mut Settings) -> Vec<Event> {
         let mut events = Vec::new();
+        // A pack's screen goes back to the one that opened it.
+        if self.page() == Page::ShaderOptions
+            && let Some(options) = &mut s.shader_options
+            && options.path.pop().is_some()
+        {
+            self.scroll = 0.0;
+            return events;
+        }
         let page = self.stack.pop().unwrap_or(Page::Main);
         self.scroll = 0.0;
         self.scrollbar_drag_y = None;
@@ -3395,6 +3551,13 @@ impl OptionsUi {
                     s.resource_packs = ids.clone();
                     self.pack_selection = ids.clone();
                     events.push(Event::Packs(ids));
+                }
+            }
+            Page::ShaderOptions => {
+                if s.shader_options.as_ref().is_some_and(|o| o.changed) {
+                    events.push(Event::ShaderOptions);
+                } else {
+                    s.shader_options = None;
                 }
             }
             // Done or Escape with the name box focused keeps what it holds, as leaving it does.

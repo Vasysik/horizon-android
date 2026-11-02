@@ -1,4 +1,5 @@
 {
+  "horizon.shader_options.profile": "Profile",
   "horizon.options.controller": "Controller",
   "horizon.options.vibration": "Vibration",
   "horizon.options.adaptive_triggers": "Adaptive Triggers",
