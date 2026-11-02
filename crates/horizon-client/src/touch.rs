@@ -57,13 +57,12 @@ pub enum Button {
 
 /// F3's combinations offered while the F3 button is held: the key binding pressed with it and
 /// what the chip says.
-pub const DEBUG_COMBOS: [(&str, &str); 8] = [
+pub const DEBUG_COMBOS: [(&str, &str); 7] = [
     ("key.debug.showChunkBorders", "Chunks"),
     ("key.debug.showHitboxes", "Hitboxes"),
     ("key.debug.showAdvancedTooltips", "Tooltips"),
     ("key.debug.copyLocation", "Copy pos"),
     ("key.debug.reloadResourcePacks", "Packs"),
-    ("key.debug.clearChat", "Clear chat"),
     ("key.debug.spectate", "Spectate"),
     ("key.debug.switchGameMode", "Modes"),
 ];
