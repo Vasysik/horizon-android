@@ -569,6 +569,8 @@ pub struct Renderer {
     /// No-discard opaque and alpha-cutout pipelines for Android Vulkan.
     opaque_terrain: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     opaque_terrain_on: bool,
+    static_cutout: Option<wgpu::RenderPipeline>,
+    static_cutout_on: bool,
     /// Android Vulkan only; packs keep their original sky/material ordering.
     late_sky: Option<LateSky>,
     late_sky_on: bool,
@@ -2045,6 +2047,27 @@ impl Renderer {
                 }
             })
             .flatten();
+        let static_cutout = opaque_terrain.as_ref().and_then(|_| {
+            let checks = GpuChecks::push(&device);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let candidate = pipeline(
+                "Terrain cutout without LOD fade",
+                "vs_terrain_cutout",
+                "fs_cutout_static",
+                &terrain_buffers,
+                tri,
+                Some(wgpu::Face::Back),
+                true,
+                true,
+                None,
+            );
+            if let Some(error) = pollster::block_on(internal.pop()).or(checks.pop()) {
+                log::warn!("Static cutout pipeline unavailable; retaining fade shader: {error}");
+                None
+            } else {
+                Some(candidate)
+            }
+        });
         crate::mesher::group_parts(opaque_terrain.is_some());
         // The water mirror's camera sees the world from the other side of the plane, which
         // flips the winding: its solid terrain culls the front.
@@ -3474,6 +3497,8 @@ impl Renderer {
             solid,
             opaque_terrain,
             opaque_terrain_on: true,
+            static_cutout,
+            static_cutout_on: true,
             late_sky,
             late_sky_on: true,
             terrain_pass_draws: None,
@@ -3911,6 +3936,13 @@ impl Renderer {
         Ok(())
     }
     /// Developer A/B control; unavailable backends retain their ordinary pipeline.
+    pub fn set_static_cutout(&mut self, on: bool) -> Result<()> {
+        if on && self.static_cutout.is_none() {
+            return Err("static cutout unavailable".into());
+        }
+        self.static_cutout_on = on;
+        Ok(())
+    }
     pub fn set_opaque_terrain(&mut self, on: bool) -> Result<()> {
         if on && self.opaque_terrain.is_none() {
             return Err("split opaque terrain is unavailable on this backend".into());
@@ -5688,6 +5720,10 @@ impl Renderer {
             && visible_lods.is_empty()
             && self.native.is_none()
             && self.pack_post.is_none();
+        // Negative origins encode LOD crossfades; preserve their original shader.
+        let static_cutout = self.static_cutout_on
+            && split_terrain
+            && self.origins.iter().all(|origin| origin[3] >= 0.0);
         let mut opaque_draws = 0u32;
         let mut cutout_end = 0u32;
         if split_terrain {
@@ -6979,7 +7015,11 @@ impl Renderer {
                             {
                                 pass.set_pipeline(opaque);
                                 self.draw_sections(&mut pass, &self.indirect, 0, 0, opaque_draws);
-                                pass.set_pipeline(cutout);
+                                pass.set_pipeline(if static_cutout {
+                                    self.static_cutout.as_ref().unwrap_or(cutout)
+                                } else {
+                                    cutout
+                                });
                                 // All three material ranges share the complete
                                 // indirect buffer; its draw zero stays draw zero.
                                 self.draw_sections(

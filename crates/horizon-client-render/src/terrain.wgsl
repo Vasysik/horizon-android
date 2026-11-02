@@ -394,6 +394,15 @@ fn brightness(c: vec3<f32>) -> f32 {
     if in.height < globals.fog_ends.w { discard; }
     return solid_color(in);
 }
+// Identical alpha cutout, HDR and fog for sections with fade_code == 0.
+// Selecting this entrypoint is a CPU-side proof, never a quality option.
+@fragment fn fs_cutout_static(in: TerrainOut) -> @location(0) vec4<f32> {
+    let texel = sprite(in.uv, in.layer & 0x7fffu);
+    var color = texel * in.color;
+    color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
+    if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
+    return solid_finish(in, texel, color);
+}
 fn solid_color(in: TerrainOut) -> vec4<f32> {
     let dx = dpdx(in.local);
     let dy = dpdy(in.local);

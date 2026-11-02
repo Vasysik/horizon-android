@@ -63,6 +63,47 @@ would be inappropriate. No wholesale synchronization was performed in this pass.
 
 ## Remaining checks
 
+### Follow-up: include the 0.7.4 baseline
+
+The owner reports that the first slowdown predates 0.7.5. A comparison against
+0.7.6 alone therefore cannot exclude the original regression. Exact public native
+libraries of 0.7.4 (`53a1235f0917`), 0.7.5 (`74657bb648a4`) and the 0.7.7 candidate
+(`9285d1a249ed`) were exercised in an isolated tablet host on copies of the same
+heavy world, seed `-4240118709374351666`: position `-24.5 102 -47.5`, yaw/pitch
+zero, 16 render chunks, 12 simulation chunks, 100% 2560×1600, Vulkan Compatibility,
+no shader pack or LOD, clear daylight and frozen ticks. All had 8,625 resident
+sections and empty streaming queues. Recording and GPU profiling were enabled.
+
+| Version | Mean FPS | Mean GPU frame time |
+| --- | ---: | ---: |
+| 0.7.4 | 46.09 | 19.38 ms |
+| 0.7.5 | 42.34 | 21.00 ms |
+| Candidate 0.7.7 | 39.61 | 21.72 ms |
+
+Each row averages ten eligible one-second report samples after geometry settled.
+These short stationary tablet observations establish the need to investigate the
+earlier interval; they do not reproduce or explain the full reported Poco loss,
+nor certify movement, multiplayer, UI or thermally sustained performance.
+
+Between 0.7.4 and 0.7.5, upstream added the LOD fade/dither path to the ordinary
+terrain shader (`ada4e6567`, `94f48bbf6`, `963b7d8bd`). The later texture-sampling
+rewrite (`b56f94b2b`) cannot explain the first interval by itself. Both require
+separate causal comparisons rather than an indiscriminate quality rollback.
+
+A narrow cutout entrypoint skips the LOD dither calculation only when the CPU
+proves every origin has a nonnegative fade encoding. It retains alpha cutout,
+visibility, lighting, HDR and fog. Native/classic packs, visible LODs, GPU
+culling, fading origins and unsupported pipelines retain their existing paths.
+Pixel comparisons cover alpha-threshold edges, fog and HDR; unsupported pipeline
+creation falls back to the original shader. An initial isolated nightly-based
+ABAB measured GPU 23.263/23.271 ms with the original path and 22.587/22.598 ms
+with the specialization. That approximately 3% result is not a fix for the full
+regression and is not a production-build comparison against 0.7.4.
+On the existing Android baseline, an optimized fast-build ABAB subsequently
+measured 21.770/22.101 ms with the original cutout and 20.988/21.247 ms with the
+specialization. All 31 tests in the Android GPU harness and ARM64 Clippy passed.
+Flat-index frames retain their existing shader; this result is for Compatibility.
+
 - Matched production-profile GPU/CPU comparisons and causal isolation of the slowdown.
 - ARMv7 device recheck after the ARM64 GLES fix; other drivers and x86 ABIs.
 - Mixed physical/touch toggle inputs, suspend/resume and resource reloads.

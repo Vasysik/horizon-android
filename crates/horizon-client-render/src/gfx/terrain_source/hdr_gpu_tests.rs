@@ -381,3 +381,25 @@ fn split_opaque_cutout_preserves_pixels_for_alpha_fog_fade_and_emission() {
         }
     }
 }
+
+#[test]
+fn static_cutout_preserves_alpha_threshold_fog_and_hdr_without_fading() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let source = super::terrain_shader(false);
+    let specialized = source.replace("return solid_color(in);", "return fs_cutout_static(in);");
+    // Calling a fragment entry point as a helper is forbidden by WGSL; rename
+    // only its declaration in this independently rendered comparison module.
+    let specialized = specialized.replace(
+        "@fragment fn fs_cutout_static(in: TerrainOut) -> @location(0) vec4<f32>",
+        "fn fs_cutout_static(in: TerrainOut) -> vec4<f32>",
+    );
+    for alpha in [0, 64, 127, 128, 255] {
+        for variant in [0, 1] {
+            let original = render_paths(&device, &queue, &source, variant, false, alpha, true);
+            let actual = render_paths(&device, &queue, &specialized, variant, false, alpha, true);
+            assert_eq!(original, actual, "scene {variant}, alpha {alpha}");
+        }
+    }
+}
