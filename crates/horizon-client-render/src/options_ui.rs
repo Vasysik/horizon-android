@@ -5280,6 +5280,7 @@ impl OptionsUi {
                             self.selected_key = None;
                             events.push(Event::Changed);
                         }
+                        #[cfg(target_os = "android")]
                         Act::TouchControls => events.push(Event::TouchControls),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),

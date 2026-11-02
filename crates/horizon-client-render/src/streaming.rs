@@ -306,7 +306,7 @@ impl MeshPool {
         #[cfg(target_os = "android")]
         let budget = crate::android_runtime::mesh_cache_budget();
         #[cfg(not(target_os = "android"))]
-        let budget = 16 << 20;
+        let budget: usize = 16 << 20;
         if bytes == 0
             || self.meshes.len() == Self::COUNT
             || bytes > budget.saturating_sub(self.bytes)
