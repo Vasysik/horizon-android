@@ -132,6 +132,41 @@ pub(super) struct Part {
     pub range: Range<u32>,
 }
 
+/// Iris's horizon (`HorizonRenderer`), from the Iris Features mod (MIT): an octagonal prism around
+/// the camera from 16 below it to 16 above, and a plane 16 below, drawn with the sky disc. The disc
+/// ends 1.8 degrees above the horizon; without this the space under it keeps colortex0's clear
+/// colour where packs colour their sky by direction, a band with a hard edge seen from up high.
+fn horizon(out: &mut Vec<Vertex>) {
+    const TOP: f32 = 16.0;
+    const BOTTOM: f32 = -16.0;
+    /// Iris's radius is the render distance; 256 keeps the prism's top (3.6 degrees) over the
+    /// disc's rim whatever the distance.
+    const RADIUS: f32 = 256.0;
+    let v = |x: f32, y: f32, z: f32| Vertex {
+        pos: [x, y, z],
+        kind: SKY,
+    };
+    let corner = |i: i32| {
+        let a = (22.5 + 45.0 * i as f32).to_radians();
+        [RADIUS * a.cos(), RADIUS * a.sin()]
+    };
+    for i in 0..8 {
+        let ([x1, z1], [x2, z2]) = (corner(i), corner(i + 1));
+        let (a, b) = (v(x1, BOTTOM, z1), v(x1, TOP, z1));
+        let (c, d) = (v(x2, TOP, z2), v(x2, BOTTOM, z2));
+        out.extend([a, b, c, a, c, d]);
+    }
+    // The plane below, in tiles of 64 out to 384, as Iris's.
+    for x in (-384..384).step_by(64) {
+        for z in (-384..384).step_by(64) {
+            let (x, z) = (x as f32, z as f32);
+            let (a, b) = (v(x, BOTTOM, z), v(x + 64.0, BOTTOM, z));
+            let (c, d) = (v(x + 64.0, BOTTOM, z + 64.0), v(x, BOTTOM, z + 64.0));
+            out.extend([a, b, c, a, c, d]);
+        }
+    }
+}
+
 /// A disc fan at height `y`, radius 512, as triangles (SkyRenderer's sky and void discs).
 fn disc(y: f32, kind: u32, out: &mut Vec<Vertex>) {
     let sign = y.signum();
@@ -164,6 +199,7 @@ pub(super) struct PackSky {
 impl PackSky {
     pub fn new(device: &wgpu::Device) -> Self {
         let mut v = Vec::new();
+        horizon(&mut v);
         disc(16.0, SKY, &mut v);
         let sky = 0..v.len() as u32;
         let apex = Vertex {

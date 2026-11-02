@@ -28,6 +28,12 @@ ArmInteractionPoint, ArmAngleTarget and their renderers), with `horizon_client::
 (`licenses/create-MIT.txt`). Create's assets are All Rights Reserved; none are in this
 repository: a shared port fetches them from Modrinth on the player's device.
 
+## Iris Features
+
+The shape of the horizon a shader pack's sky draws (`gfx/pack_sky.rs`) comes from
+[Iris Features](https://github.com/FatulDev/Horizon-Iris-Compatibility-Mod), a native mod for
+Horizon, Copyright (c) 2026 Riley-Neeb, under the MIT license (`licenses/iris-features-MIT.txt`).
+
 ## Pixelify Sans
 
 `crates/horizon-theme/fonts/PixelifySans-*.ttf` is [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans)
