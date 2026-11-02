@@ -95,18 +95,35 @@ impl LayoutRuntime {
     }
 
     pub fn set_in_menu(&mut self, in_menu: bool) -> Vec<LayoutOutputEvent> {
+        if self.state.is_in_menu == in_menu {
+            return Vec::new();
+        }
         self.state.is_in_menu = in_menu;
         self.state.evaluate_layer_visibility_changes(&self.layout)
     }
 
     pub fn set_physical_mouse_active(&mut self, active: bool) -> Vec<LayoutOutputEvent> {
+        if self.state.physical_mouse_active == active {
+            return Vec::new();
+        }
         self.state.physical_mouse_active = active;
         self.state.evaluate_layer_visibility_changes(&self.layout)
     }
 
     pub fn set_gamepad_active(&mut self, active: bool) -> Vec<LayoutOutputEvent> {
+        if self.state.gamepad_active == active {
+            return Vec::new();
+        }
         self.state.gamepad_active = active;
         self.state.evaluate_layer_visibility_changes(&self.layout)
+    }
+
+    pub fn owns_pointer(&self, pointer_id: u64) -> bool {
+        self.state.owns_pointer(pointer_id)
+    }
+
+    pub fn is_pointer_penetrable(&self, pointer_id: u64) -> bool {
+        self.state.is_pointer_penetrable(&self.layout, pointer_id)
     }
 
     pub fn screen_width(&self) -> f32 {
@@ -180,6 +197,33 @@ impl RuntimeState {
             }
         }
         events
+    }
+
+    /// Checks if a pointer ID is currently held by any active control (button or joystick).
+    pub fn owns_pointer(&self, pointer_id: u64) -> bool {
+        self.joysticks_state.values().any(|s| s.active_pointer == Some(pointer_id))
+            || self.buttons_state.values().any(|s| s.active_pointers.contains(&pointer_id))
+    }
+
+    /// Checks if a held pointer is only on penetrable controls.
+    pub fn is_pointer_penetrable(&self, layout: &ControlLayout, pointer_id: u64) -> bool {
+        if self.joysticks_state.values().any(|s| s.active_pointer == Some(pointer_id)) {
+            return false;
+        }
+        let mut has_button = false;
+        for layer in &layout.layers {
+            for btn in &layer.normal_buttons {
+                if let Some(state) = self.buttons_state.get(&btn.uuid) {
+                    if state.active_pointers.contains(&pointer_id) {
+                        has_button = true;
+                        if !btn.is_penetrable {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        has_button
     }
 
     /// Handles a touch input event against the layout geometry.
@@ -258,6 +302,9 @@ impl RuntimeState {
                     if captured {
                         break;
                     }
+                }
+                if !self.owns_pointer(pointer_id) {
+                    self.pointer_positions.remove(&pointer_id);
                 }
             }
             TouchPhase::Moved => {

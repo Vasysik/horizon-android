@@ -269,6 +269,62 @@ mod tests {
     }
 
     #[test]
+    fn test_runtime_owns_pointer_and_penetrable() {
+        let mut layout = ControlLayout::default();
+        let mut layer = ControlLayer::new("Main");
+
+        let mut btn_solid = NormalButton::new("SOLID", 1000, 1000);
+        btn_solid.button_size = ButtonSize {
+            size_type: SizeType::Percentage,
+            width_percentage: 1000,
+            height_percentage: 1000,
+            ..Default::default()
+        };
+        btn_solid.click_events.push(ClickEvent::key("GLFW_KEY_A"));
+
+        let mut btn_pen = NormalButton::new("PEN", 3000, 3000);
+        btn_pen.button_size = ButtonSize {
+            size_type: SizeType::Percentage,
+            width_percentage: 1000,
+            height_percentage: 1000,
+            ..Default::default()
+        };
+        btn_pen.is_penetrable = true;
+        btn_pen.click_events.push(ClickEvent::key("GLFW_KEY_B"));
+
+        layer.normal_buttons.push(btn_solid);
+        layer.normal_buttons.push(btn_pen);
+        layout.layers.push(layer);
+
+        let mut runtime = LayoutRuntime::new(layout);
+        runtime.set_screen_dimensions(1000.0, 1000.0, 1.0);
+
+        // Touch on empty space
+        let _ = runtime.handle_touch(1, TouchPhase::Started, (800.0, 800.0));
+        assert!(!runtime.owns_pointer(1));
+        assert!(!runtime.is_pointer_penetrable(1));
+
+        // Touch on solid button
+        let evs = runtime.handle_touch(2, TouchPhase::Started, (150.0, 150.0));
+        assert_eq!(evs, vec![LayoutOutputEvent::KeyDown(KeyCode::KeyA)]);
+        assert!(runtime.owns_pointer(2));
+        assert!(!runtime.is_pointer_penetrable(2));
+
+        // Touch on penetrable button
+        let evs = runtime.handle_touch(3, TouchPhase::Started, (350.0, 350.0));
+        assert_eq!(evs, vec![LayoutOutputEvent::KeyDown(KeyCode::KeyB)]);
+        assert!(runtime.owns_pointer(3));
+        assert!(runtime.is_pointer_penetrable(3));
+
+        // Release all
+        let releases = runtime.release_all_inputs();
+        assert!(releases.contains(&LayoutOutputEvent::KeyUp(KeyCode::KeyA)));
+        assert!(releases.contains(&LayoutOutputEvent::KeyUp(KeyCode::KeyB)));
+        assert!(!runtime.owns_pointer(2));
+        assert!(!runtime.owns_pointer(3));
+    }
+
+    #[test]
     fn test_editor_selection_drag_snap_and_resize() {
         let layout = LayoutStorage::default_layout();
         let mut editor = LayoutEditor::new(layout, "default");

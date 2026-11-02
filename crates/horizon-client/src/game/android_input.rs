@@ -213,6 +213,85 @@ impl Game<'_> {
         }
     }
 
+    pub(super) fn dispatch_layout_output_events(
+        &mut self,
+        events: impl IntoIterator<Item = horizon_client_input::control_layout::LayoutOutputEvent>,
+    ) {
+        use horizon_client_input::control_layout::LayoutOutputEvent;
+        for event in events {
+            match event {
+                LayoutOutputEvent::KeyDown(key) => {
+                    self.pad.custom_keys.insert(key);
+                    self.physical_keys.insert(key);
+                    self.mod_key(key, true, false);
+                    self.native_key_event(key, true, false);
+                    if !self.debug_key(key, KeyAction::Press) {
+                        for mapped in self.settings.keys.translate_all(key) {
+                            let result = match mapped {
+                                Ok(code) => self.mapped_key(code, true, false),
+                                Err(button) => self.android_custom_mouse(button, true),
+                            };
+                            if let Err(error) = result {
+                                log::warn!("Custom control key down: {error}");
+                            }
+                        }
+                    }
+                    if matches!(key, KeyCode::KeyT | KeyCode::Slash) && self.screen == Screen::Chat {
+                        self.android_show_keyboard();
+                    }
+                }
+                LayoutOutputEvent::KeyUp(key) => {
+                    self.pad.custom_keys.remove(&key);
+                    self.physical_keys.remove(&key);
+                    self.keys.remove(&key);
+                    self.mod_key(key, false, false);
+                    self.native_key_event(key, false, false);
+                    if !self.debug_key(key, KeyAction::Release) {
+                        for mapped in self.settings.keys.translate_all(key) {
+                            let result = match mapped {
+                                Ok(code) => self.mapped_key(code, false, false),
+                                Err(button) => self.android_custom_mouse(button, false),
+                            };
+                            if let Err(error) = result {
+                                log::warn!("Custom control key up: {error}");
+                            }
+                        }
+                    }
+                }
+                LayoutOutputEvent::MouseButton(down, is_left) => {
+                    let button = if is_left {
+                        MouseButton::Left
+                    } else {
+                        MouseButton::Right
+                    };
+                    if let Err(error) = self.android_custom_mouse(button, down) {
+                        log::warn!("Custom control mouse button: {error}");
+                    }
+                }
+                LayoutOutputEvent::Scroll(delta) => {
+                    if self.screen == Screen::Playing && self.player.is_some() {
+                        let step = if delta > 0.0 { -1 } else { 1 };
+                        self.selected = (self.selected as i32 + step).rem_euclid(9) as usize;
+                    }
+                }
+                LayoutOutputEvent::Launcher(name) => {
+                    if name == "KEYBOARD" {
+                        self.android_show_keyboard();
+                    } else if name == "CHAT" {
+                        self.open_chat("");
+                    }
+                }
+                LayoutOutputEvent::SendText(text) => {
+                    if self.screen == Screen::Chat {
+                        if let Some(cs) = self.ui.chat_screen.as_mut() {
+                            cs.insert(&text);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn android_custom_mouse(&mut self, button: MouseButton, down: bool) -> Result<()> {
         if !matches!(self.screen, Screen::Inventory | Screen::Creative) {
             return self.play_mouse(button, down);
@@ -416,7 +495,8 @@ impl Game<'_> {
                         );
                         if let Ok(layout) = storage.load_layout(&slug) {
                             if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
-                                runtime.set_layout(layout);
+                                let releases = runtime.set_layout(layout);
+                                self.dispatch_layout_output_events(releases);
                             }
                             self.settings.touch.active_control_layout = slug.clone();
                             let _ = self.save_options();
@@ -436,6 +516,10 @@ impl Game<'_> {
                     Action::OpenControlEditor => {
                         let data_dir = crate::backend::data_dir();
                         let active = self.settings.touch.active_control_layout.as_str();
+                        if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
+                            let releases = runtime.release_all_inputs();
+                            self.dispatch_layout_output_events(releases);
+                        }
                         self.pad.touch_ui.open_editor(&data_dir, active);
                     }
                     Action::CloseControlEditor => {
@@ -453,7 +537,8 @@ impl Game<'_> {
                             } else {
                                 log::info!("Control layout saved successfully");
                                 if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
-                                    runtime.set_layout(editor.layout.clone());
+                                    let releases = runtime.set_layout(editor.layout.clone());
+                                    self.dispatch_layout_output_events(releases);
                                 }
                             }
                         }
@@ -536,6 +621,34 @@ impl Game<'_> {
             }
             return Ok(true);
         }
+
+        if self.pad.touch_ui.replacement_dialog.is_none() {
+            if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
+                runtime.set_screen_dimensions(b.width, b.height, b.scale);
+                let menu_releases = runtime.set_in_menu(self.pad_in_menu());
+                if !menu_releases.is_empty() {
+                    self.dispatch_layout_output_events(menu_releases);
+                }
+                let was_owned = runtime.owns_pointer(t.id);
+                let out_events = runtime.handle_touch(t.id, t.phase, (p[0], p[1]));
+                let is_owned = runtime.owns_pointer(t.id);
+                let has_events = !out_events.is_empty();
+
+                if has_events {
+                    self.dispatch_layout_output_events(out_events);
+                }
+
+                if was_owned || is_owned {
+                    if !runtime.is_pointer_penetrable(t.id) {
+                        self.pad.touch.ignore(t.id);
+                        return Ok(true);
+                    } else if has_events {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
         let _ = (events, id);
         Ok(false)
     }
@@ -706,6 +819,10 @@ impl Game<'_> {
             }
         }
         self.android_custom_events();
+        if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
+            let releases = runtime.release_all_inputs();
+            self.dispatch_layout_output_events(releases);
+        }
         for key in self.pad.touch_ui.release_keys() {
             if cancelled && key == KeyCode::F3 {
                 self.physical_keys.remove(&key);
