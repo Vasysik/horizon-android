@@ -188,6 +188,11 @@ pub struct FrameUniforms {
     eye_smooth: [f32; 2],
     /// The pack's shadow settings (7.1).
     pub shadow: Shadow,
+    /// Where the shadow map was last drawn from: the camera, the view and the projection.
+    shadow_drawn: Option<(DVec3, Mat4, Mat4)>,
+    /// This frame keeps the shadow map (`PackPost::shadow_view`): nothing draws into it, and the
+    /// shadow matrices go on describing it.
+    pub keep_shadow: bool,
 }
 
 impl Default for FrameUniforms {
@@ -202,6 +207,8 @@ impl Default for FrameUniforms {
             wetness: 0.0,
             eye_smooth: [0.0; 2],
             shadow: Shadow::default(),
+            shadow_drawn: None,
+            keep_shadow: false,
         }
     }
 }
@@ -291,6 +298,12 @@ pub fn shadow_camera(light: Vec3, camera: DVec3, shadow: &Shadow) -> (Mat4, Mat4
     (view, projection)
 }
 
+/// The view of a shadow map drawn with `view` from `drawn`, seen from `camera`. A pack gives it
+/// player space, which moves with the camera; the map stays where it was drawn.
+fn kept_shadow_view(view: Mat4, drawn: DVec3, camera: DVec3) -> Mat4 {
+    view * Mat4::from_translation((camera - drawn).as_vec3())
+}
+
 /// `value` moved toward `target` with a half-life of `half_life` seconds over `dt` (5.6).
 fn smooth(value: f32, target: f32, half_life: f32, dt: f32) -> f32 {
     target + (value - target) * 0.5f32.powf(dt / half_life)
@@ -352,7 +365,17 @@ impl FrameUniforms {
             None => (frame.sky.fog_color, frame.distance * 0.9, frame.distance),
         };
         let light = shadow_light(frame, &self.shadow);
-        let (shadow_view, shadow_projection) = shadow_camera(light, frame.camera, &self.shadow);
+        let (shadow_view, shadow_projection) = match self.shadow_drawn.filter(|_| self.keep_shadow)
+        {
+            Some((drawn, view, projection)) => {
+                (kept_shadow_view(view, drawn, frame.camera), projection)
+            }
+            None => {
+                let (view, projection) = shadow_camera(light, frame.camera, &self.shadow);
+                self.shadow_drawn = Some((frame.camera, view, projection));
+                (view, projection)
+            }
+        };
         let day_time = inputs.day_time.rem_euclid(24000) as i32;
         let world_day = inputs.day_time.div_euclid(24000);
         let seconds = (now - self.start).as_secs_f32() % 3600.0;
@@ -462,6 +485,13 @@ impl FrameUniforms {
 }
 
 impl FrameUniforms {
+    /// Whether the shadow map was drawn near `camera`, so a frame may keep it: a teleport draws
+    /// it again at once.
+    pub fn shadow_near(&self, camera: DVec3) -> bool {
+        self.shadow_drawn
+            .is_some_and(|(drawn, ..)| drawn.distance_squared(camera) < 16.0 * 16.0)
+    }
+
     /// Evaluates the pack's custom uniforms with this frame's values and puts them after
     /// `NAMES`' values, in `custom.uniforms()` order.
     pub fn eval_custom(&mut self, custom: &mut horizon_shaders::Custom) {
@@ -515,6 +545,20 @@ pub fn index(name: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_kept_shadow_map_stays_where_it_was_drawn() {
+        let view = Mat4::from_translation(Vec3::new(1.0, 2.0, -128.0));
+        let (drawn, camera) = (
+            DVec3::new(3500.25, 70.0, -12.5),
+            DVec3::new(3501.0, 70.5, -11.0),
+        );
+        let world = DVec3::new(3510.0, 64.0, -20.0);
+        let then = view.transform_point3((world - drawn).as_vec3());
+        let now =
+            kept_shadow_view(view, drawn, camera).transform_point3((world - camera).as_vec3());
+        assert!((then - now).length() < 1e-3, "{then} {now}");
+    }
 
     #[test]
     fn values_follow_the_declared_type() {

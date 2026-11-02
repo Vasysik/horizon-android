@@ -4009,8 +4009,8 @@ impl Renderer {
         // occlusion graph follows the eye, not the light), within shadowDistanceRenderMul.
         let shadow_view = self
             .pack_post
-            .as_ref()
-            .and_then(|p| p.1.as_ref())
+            .as_mut()
+            .and_then(|p| p.1.as_mut())
             .filter(|_| !frame.title)
             .and_then(|p| p.shadow_view(frame));
         let mut shadow_visible = std::mem::take(&mut self.shadow_visible);

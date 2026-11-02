@@ -300,6 +300,9 @@ pub struct PackPost {
     shadow_terrain: Option<Pass>,
     shadow_water: Option<Pass>,
     shadow_comp: Vec<Pass>,
+    /// How many frames one shadow map serves (`shadow_every`), and how many more this one will.
+    shadow_every: u32,
+    shadow_wait: u32,
     /// Buffers with mipmaps (filterable ones a program asks them for).
     mipped: u16,
     /// Buffers whose mip chain matches their first level, this frame.
@@ -703,6 +706,16 @@ pub(super) struct Geometry<'a> {
     pub cull: bool,
     /// Drawn twice (`prepass`): depth only first, then the program over what stays in front.
     pub prepass: bool,
+}
+
+/// How many frames one shadow map serves: `HORIZON_SHADER_SHADOW_EVERY`, else two on a phone. The
+/// map costs the same wherever the player looks, and what casts shadows barely moves in a frame.
+fn shadow_every() -> u32 {
+    std::env::var("HORIZON_SHADER_SHADOW_EVERY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(if cfg!(target_os = "android") { 2 } else { 1 })
+        .max(1)
 }
 
 /// Whether the next pack draws terrain's depth first (`set_prepass`).
@@ -1629,6 +1642,8 @@ impl PackPost {
             nearest_repeat: sampler(device, wgpu::FilterMode::Nearest, wgpu::AddressMode::Repeat),
             blit,
             copy,
+            shadow_every: shadow_every(),
+            shadow_wait: 0,
             uniforms: {
                 let mut u = FrameUniforms::default();
                 u.atlas = world.atlas.map_or([0; 2], |a| a.1);
@@ -2296,12 +2311,19 @@ impl PackPost {
         }
     }
 
-    /// What the shadow camera draws of the terrain this frame, when the pack draws it.
-    pub fn shadow_view(&self, frame: &super::Frame) -> Option<ShadowView> {
+    /// What the shadow camera draws of the terrain this frame, when the pack draws it and this
+    /// frame doesn't keep the last shadow map.
+    pub fn shadow_view(&mut self, frame: &super::Frame) -> Option<ShadowView> {
         self.shadow_targets.as_ref()?;
         if self.shadow_terrain.is_none() && self.shadow_water.is_none() {
             return None;
         }
+        self.uniforms.keep_shadow = self.shadow_wait > 0 && self.uniforms.shadow_near(frame.camera);
+        if self.uniforms.keep_shadow {
+            self.shadow_wait -= 1;
+            return None;
+        }
+        self.shadow_wait = self.shadow_every - 1;
         let shadow = &self.uniforms.shadow;
         Some(ShadowView {
             cull: pack_uniforms::shadow_culling(frame, shadow),
@@ -2557,7 +2579,9 @@ impl PackPost {
         if self.targets.is_none() {
             return;
         }
-        self.run_shadow(device, queue, encoder, terrain);
+        if !self.uniforms.keep_shadow {
+            self.run_shadow(device, queue, encoder, terrain);
+        }
         let Some(targets) = &self.targets else { return };
         let main = |m: u16, i: usize| usize::from(m & 1 << i != 0);
         let view = |m: u16, i: usize, alt: bool| {
