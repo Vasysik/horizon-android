@@ -304,7 +304,8 @@ impl Upscaling {
 pub use crate::device_tier::DeviceTier;
 
 static DETECTED_TIER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-static RECOMMENDED_RENDER_DISTANCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static RECOMMENDED_RENDER_DISTANCE: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
 
 /// Configures device tier and recommended render distance using GPU info and limits.
 pub fn configure_device_tier_with_gpu(info: &wgpu::AdapterInfo, limits: &wgpu::Limits) {

@@ -226,9 +226,7 @@ impl Game<'_> {
         } else if let Some(i) = self.interactions.get(&(id as i32)) {
             // Modern Paper/Spigot GSit Interaction seat entity (+0.5 above stair base)
             Some(Vec3::new(i.position.x, i.position.y + 0.5, i.position.z))
-        } else if let Some((kind, pos)) =
-            self.remote.as_ref().and_then(|r| r.tracked(id as i32))
-        {
+        } else if let Some((kind, pos)) = self.remote.as_ref().and_then(|r| r.tracked(id as i32)) {
             // AreaEffectCloud or other tracked non-living seat entity
             let lift = if kind == "minecraft:area_effect_cloud" {
                 0.5
@@ -289,8 +287,10 @@ impl Game<'_> {
                     .position
                     .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
                 self.armor_stands[i].position = pos;
-            } else if let Some((_, tracked_pos)) =
-                self.remote.as_ref().and_then(|r| r.tracked(vehicle_id as i32))
+            } else if let Some((_, tracked_pos)) = self
+                .remote
+                .as_ref()
+                .and_then(|r| r.tracked(vehicle_id as i32))
             {
                 pos = Vec3::new(tracked_pos[0], tracked_pos[1], tracked_pos[2]);
                 self.armor_stands[i].position = pos;

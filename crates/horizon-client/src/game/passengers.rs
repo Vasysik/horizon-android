@@ -280,7 +280,11 @@ impl Game<'_> {
         }
         if let Some(i) = self.interactions.get(&(vehicle as i32)) {
             // Modern Paper/Spigot GSit Interaction seat entity (+0.5 above stair base)
-            return Some(glam::DVec3::new(i.position.x, i.position.y + 0.5, i.position.z));
+            return Some(glam::DVec3::new(
+                i.position.x,
+                i.position.y + 0.5,
+                i.position.z,
+            ));
         }
         // Any other tracked entity sits on its feet; an area effect cloud is
         // 0.5 tall, and ModelEngine parks a model's pivot half a block below

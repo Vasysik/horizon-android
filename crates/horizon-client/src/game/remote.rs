@@ -9123,10 +9123,12 @@ impl Game<'_> {
     pub(super) fn remote_voicechat_payload(&mut self, channel: &str, data: &[u8]) {
         match self.voice.handle_custom_payload(channel, data) {
             Ok(Some((resp_channel, resp_data))) => {
-                self.send(S::CustomPayload(horizon_protocol::packets::configuration::CustomPayload {
-                    channel: resp_channel,
-                    data: resp_data,
-                }));
+                self.send(S::CustomPayload(
+                    horizon_protocol::packets::configuration::CustomPayload {
+                        channel: resp_channel,
+                        data: resp_data,
+                    },
+                ));
             }
             Ok(None) => {}
             Err(e) => {
@@ -9142,18 +9144,16 @@ impl Game<'_> {
             self.voice.set_server_host(host);
         }
         let (ch, data) = self.voice.initiate_handshake();
-        self.send(S::CustomPayload(horizon_protocol::packets::configuration::CustomPayload {
-            channel: ch,
-            data,
-        }));
+        self.send(S::CustomPayload(
+            horizon_protocol::packets::configuration::CustomPayload { channel: ch, data },
+        ));
     }
 
     pub(super) fn tick_voice_chat(&mut self) {
         if let Some((ch, data)) = self.voice.check_handshake_timeout() {
-            self.send(S::CustomPayload(horizon_protocol::packets::configuration::CustomPayload {
-                channel: ch,
-                data,
-            }));
+            self.send(S::CustomPayload(
+                horizon_protocol::packets::configuration::CustomPayload { channel: ch, data },
+            ));
         }
     }
 }

@@ -104,7 +104,6 @@ mod debug_keys;
 mod debug_lines;
 mod debug_options;
 mod debug_renderers;
-mod voice_ui;
 mod debug_stick;
 mod decorated_pot;
 mod dedicated;
@@ -203,6 +202,7 @@ mod native_entities;
 mod native_explosions;
 mod native_falling;
 mod native_hooks;
+mod voice_ui;
 #[cfg(target_os = "android")]
 use android_bundled::{
     official_minimap, official_recipes, official_recipes_glue, official_zoom, smartf3,
@@ -18067,7 +18067,9 @@ impl<'a> Game<'a> {
             pause: false,
             debug: false,
             screen: Screen::Playing,
-            voice: horizon_client::voice::VoiceChatClient::new(&std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))),
+            voice: horizon_client::voice::VoiceChatClient::new(
+                &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            ),
             window: None,
             renderer: None,
             entity_vertices: Vec::new(),
