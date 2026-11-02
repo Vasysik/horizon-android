@@ -11,12 +11,20 @@
   "merged_upstream_commits": 8887,
   "last_reviewed_date": "2026-11-02",
   "last_update_commits": 1846,
-  "latest_fetched_commit": "e99e1018a3348e564b9f71cc5d75dde2f6d85f23",
+  "latest_fetched_commit": "549d6b9cd53e4ea0c9eb388f4e99fad8175deda1",
   "review": "Integrated the published 2026-11-01 nightly, not the moving main branch. Reconciled 26 conflict files across rendering, EventLoopCtl/splitscreen wrappers, keyboard focus, native content hooks, sandboxed hmod runtime and account session recovery. Preserved Android system DNS, IME/SAF/DocumentsProvider, launcher-selected graphics, lifecycle return, optional worker/cache limits and fixed opt-in mod bundle. GLES terrain packs all current varying fields and lowers colored-light nested arrays without changing uniform bytes; Vulkan now additionally adapts the reviewed opaque/cutout terrain optimization, with ordering guards and shader/LOD/culling fallbacks; the merged upstream baseline is unchanged. Kept deployment workflows disabled. ARM64 Clippy, optimized ARM64/ARMv7 builds and targeted input/content/account/GPU tests passed. Tablet Vulkan Compatibility world, inventory, Home/resume, launcher return and provider root were exercised. Final F-03L GLES retest is recorded in docs/android-0.7.7-testing.md; other ABIs and final release APKs still need validation. No blanket resolution of low-end crashes or performance reports is claimed.",
-  "pending_review_commits": 1357,
+  "pending_review_commits": 3680,
   "selected_upstream_release": "nightly-2026-11-01",
   "reviewed_render_optimizations": [
     "aa4622805",
     "de59ab97c568168d14718a1b27880cead8134997"
-  ]
+  ],
+  "render_review_document": "docs/android-upstream-render-review.md",
+  "candidate_upstream_release": {
+    "source_tag": "nightly-source/2026-11-01-c9d474d",
+    "commit": "c9d474dd9116e84c243f8992d75c11314df56f06",
+    "commits_beyond_merged_baseline": 482,
+    "merge_preview_conflicting_files": 12,
+    "status": "Reviewed candidate only; not merged or Android-validated"
+  }
 }
