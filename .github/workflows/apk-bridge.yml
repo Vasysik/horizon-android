@@ -19,6 +19,8 @@ jobs:
         with:
           name: apk-armeabi-v7a
           path: incoming
+          run-id: 41381440536
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: apk-arm64-v8a
