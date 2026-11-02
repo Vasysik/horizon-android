@@ -18,6 +18,7 @@ use horizon_shaders::{Format, Group, Kind, Post, Val};
 use super::pack_draw::DrawUniforms;
 use super::pack_entities::{PROGRAMS, PackEntities};
 use super::pack_sky::PackSky;
+use super::pack_textures;
 use super::pack_uniforms::{self, FrameUniforms, PackInputs};
 
 const BUFFERS: usize = horizon_shaders::BUFFERS;
@@ -41,6 +42,12 @@ enum Source {
     ShadowDepth(usize, bool),
     /// `shadowcolor0/1` read outside the shadow programs (in them they are `Color`).
     ShadowColor(usize),
+    /// A `texture.*` image of the pack, with its `.mcmeta`'s filtering and wrapping.
+    Custom {
+        index: usize,
+        blur: bool,
+        clamp: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -75,6 +82,12 @@ impl SamplerKind {
             Source::Shadow | Source::ShadowDepth(_, true) => Self::Comparison,
             // Blocks look as the game draws them: nearest texels.
             Source::Atlas => Self::NearestRepeat,
+            Source::Custom { blur, clamp, .. } => match (blur && filtering, clamp) {
+                (true, true) => Self::Linear,
+                (false, true) => Self::Nearest,
+                (true, false) => Self::Repeat,
+                (false, false) => Self::NearestRepeat,
+            },
             Source::Color(_) | Source::ShadowColor(_) | Source::Dummy | Source::Lightmap => {
                 Self::Linear
             }
@@ -314,6 +327,7 @@ pub struct PackPost {
     main: u16,
     targets: Option<Targets>,
     noise: wgpu::TextureView,
+    textures: Vec<pack_textures::PackTexture>,
     dummy: wgpu::TextureView,
     /// The stand-in shadow map and its comparison sampler; cleared on the first frame.
     shadow: (wgpu::TextureView, wgpu::Sampler),
@@ -717,6 +731,7 @@ fn build_pass(
     geometry: Option<&Geometry<'_>>,
     custom: &[String],
     draws: &wgpu::BindGroupLayout,
+    textures: &[pack_textures::PackTexture],
 ) -> Option<Pass> {
     let features = device.features();
     // The shadow pass clamps depth where it can: casters between the light and the shadow
@@ -753,7 +768,18 @@ fn build_pass(
         None => 0,
     };
     for s in &interface.samplers {
-        let mut src = source(&s.name, p.group.shadow(), shadow.is_some(), watershadow);
+        let mut src = match pack_textures::find(textures, p.group, &s.ty, &s.name) {
+            Some(i) => match textures[i].image {
+                pack_textures::Image::Lightmap => Source::Lightmap,
+                pack_textures::Image::Atlas => Source::Atlas,
+                pack_textures::Image::View(_) => Source::Custom {
+                    index: i,
+                    blur: textures[i].blur,
+                    clamp: textures[i].clamp,
+                },
+            },
+            None => source(&s.name, p.group.shadow(), shadow.is_some(), watershadow),
+        };
         let blank = match src {
             // The shadow pass writes the shadow map.
             Source::ShadowDepth(..) => p.group == Group::Shadow,
@@ -775,6 +801,7 @@ fn build_pass(
             Source::Depth | Source::Depth1 | Source::ShadowDepth(..) => {
                 wgpu::TextureSampleType::Float { filterable: false }
             }
+            Source::Custom { index, .. } => textures[index].sample_type,
             // Unfilterable on WebGPU-level devices; the lightmap is sampled at texel centres.
             Source::Lightmap => float,
             _ => float,
@@ -1064,6 +1091,7 @@ impl PackPost {
             })
         });
         let mut notes = post.notes;
+        let textures = pack_textures::upload(device, queue, post.textures, &mut notes);
         notes.extend(post.config.notes);
         let shadow_config = post.config.shadow.clone();
         let mut custom = post.custom;
@@ -1100,6 +1128,7 @@ impl PackPost {
                 geometry,
                 &custom_names,
                 &draws.layout,
+                &textures,
             )?;
             if !in_shadow {
                 used |= pass.reads | pass.written | pass.flip;
@@ -1547,7 +1576,10 @@ impl PackPost {
             blit_group: None,
             main: 0,
             targets: None,
-            noise: noise(device, queue),
+            noise: pack_textures::noise(&textures)
+                .cloned()
+                .unwrap_or_else(|| noise(device, queue)),
+            textures,
             dummy: texture(device, queue, "Shader pack stand-in", 1, &white),
             shadow: (
                 device
@@ -1690,6 +1722,10 @@ impl PackPost {
                     },
                     Source::Noise => &self.noise,
                     Source::Dummy => &self.dummy,
+                    Source::Custom { index, .. } => match &self.textures[index].image {
+                        pack_textures::Image::View(v) => v,
+                        _ => &self.dummy,
+                    },
                     Source::Shadow => &self.shadow.0,
                     Source::Atlas => pass
                         .atlas

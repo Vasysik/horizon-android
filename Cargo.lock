@@ -1539,6 +1539,7 @@ dependencies = [
  "cpal",
  "flate2",
  "glam",
+ "half",
  "horizon-assets",
  "horizon-bench",
  "horizon-client-core",
@@ -1776,8 +1777,10 @@ dependencies = [
 name = "horizon-shaders"
 version = "0.1.0"
 dependencies = [
+ "half",
  "horizon-core",
  "naga",
+ "png",
  "zip",
 ]
 

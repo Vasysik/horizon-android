@@ -26,6 +26,7 @@ mod pack;
 mod post;
 mod preprocess;
 mod properties;
+mod textures;
 mod translate;
 mod values;
 
@@ -45,6 +46,9 @@ pub use post::{
 };
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties};
+pub use textures::{
+    CustomTexture, Dim as TextureDim, Texels, Texture, TextureSource, decode_png, load_textures,
+};
 pub use translate::{
     AlphaTest, DRAW_UNIFORMS, Error, GbuffersInputs, Interface, Program, Sampler, Target, Uniform,
     translate_composite, translate_gbuffers, translate_shadow,

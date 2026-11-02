@@ -265,6 +265,8 @@ pub struct Post {
     pub particles_late: bool,
     /// The custom uniforms of `shaders.properties` (3.4).
     pub custom: Custom,
+    /// `texture.*`: the textures the pack binds to sampler names.
+    pub textures: Vec<crate::CustomTexture>,
     pub config: Config,
     /// Programs skipped and why, as `program: message` or `file:line: message`.
     pub notes: Vec<String>,
@@ -334,9 +336,13 @@ pub fn load_post(
         translucent_late: false,
         particles_late: false,
         custom: Custom::parse(properties),
+        textures: Vec::new(),
         config: Config::default(),
         notes: Vec::new(),
     };
+    let (textures, notes) = crate::load_textures(pack, properties);
+    post.textures = textures;
+    post.notes.extend(notes);
     let mut loader = Loader {
         pack,
         folder,
