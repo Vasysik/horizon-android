@@ -77,6 +77,7 @@ impl PackWorld {
                 ids: None,
                 cull: true,
                 prepass: false,
+                decal: false,
             }),
             block_ids,
             celestial: self.celestial,
@@ -4428,6 +4429,7 @@ impl Renderer {
                 &self.queue,
                 frame.entities,
                 frame.entity_spans,
+                [frame.crumbling_sprite[2], frame.crumbling_sprite[3]],
                 &mut self.pack_entity_rest,
             );
             entities = &self.pack_entity_rest;

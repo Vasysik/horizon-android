@@ -713,6 +713,9 @@ pub(super) struct Geometry<'a> {
     pub cull: bool,
     /// Drawn twice (`prepass`): depth only first, then the program over what stays in front.
     pub prepass: bool,
+    /// Lies on what is already drawn (a crack): pulled a little in front of it, as vanilla's
+    /// polygon offset of the same.
+    pub decal: bool,
 }
 
 /// How many frames one shadow map serves: `HORIZON_SHADER_SHADOW_EVERY`, else two on a phone. The
@@ -1053,7 +1056,15 @@ fn build_pass(
                 depth_write_enabled: Some(g.depth_write && prepass.is_none()),
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: Default::default(),
-                bias: Default::default(),
+                bias: if g.decal {
+                    wgpu::DepthBiasState {
+                        constant: -10,
+                        slope_scale: -1.0,
+                        clamp: 0.0,
+                    }
+                } else {
+                    Default::default()
+                },
             }),
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
@@ -1194,6 +1205,7 @@ impl PackPost {
             ids: block_ids.as_ref().map(|i| &i.0),
             cull: g.cull,
             prepass: false,
+            decal: false,
         });
         let solid_geometry = world.terrain.as_ref().map(|g| Geometry {
             buffers: g.buffers,
@@ -1203,6 +1215,7 @@ impl PackPost {
             ids: block_ids.as_ref().map(|i| &i.0),
             cull: g.cull,
             prepass: prepass_wanted(),
+            decal: false,
         });
         let terrain = post
             .terrain
@@ -1230,6 +1243,7 @@ impl PackPost {
                 ids: None,
                 cull: false,
                 prepass: false,
+                decal: false,
             };
             let basic = post.sky.and_then(|p| build(p, Some(&basic)));
             let textured = Geometry {
@@ -1240,6 +1254,7 @@ impl PackPost {
                 ids: None,
                 cull: false,
                 prepass: false,
+                decal: false,
             };
             let textured = post.sky_textured.and_then(|p| build(p, Some(&textured)));
             Sky {
@@ -1254,8 +1269,15 @@ impl PackPost {
             post.block,
             post.entities_translucent,
             post.particles,
+            post.damaged_block,
         ];
-        let late = [false, false, post.translucent_late, post.particles_late];
+        let late = [
+            false,
+            false,
+            post.translucent_late,
+            post.particles_late,
+            false,
+        ];
         let shadow_only = (post.shadow_only_player, post.shadow_only_lit_blocks);
         let shadow_programs = [post.shadow_entities, post.shadow_block];
         let entity_vertices = (programs.iter().chain(&shadow_programs))
@@ -1270,10 +1292,28 @@ impl PackPost {
             ids: None,
             cull: false,
             prepass: false,
+            decal: false,
         });
+        // Cracks lie on the terrain and leave its depth alone.
+        let crack_geometry = entity_vertices.as_ref().map(|e| Geometry {
+            buffers: &entity_buffers,
+            table: Some(&e.table),
+            depth_write: false,
+            atlas: world.celestial.clone(),
+            ids: None,
+            cull: false,
+            prepass: false,
+            decal: true,
+        });
+        let mut program = 0;
         let entity_passes = programs.map(|p| {
-            p.zip(entity_geometry.as_ref())
-                .and_then(|(p, g)| build(p, Some(g)))
+            let geometry = if program == super::pack_entities::CRACKS {
+                crack_geometry.as_ref()
+            } else {
+                entity_geometry.as_ref()
+            };
+            program += 1;
+            p.zip(geometry).and_then(|(p, g)| build(p, Some(g)))
         });
         let shadow_entities = shadow_programs.map(|p| {
             p.zip(entity_geometry.as_ref())
@@ -1296,6 +1336,7 @@ impl PackPost {
             ids: None,
             cull: false,
             prepass: false,
+            decal: false,
         });
         let hides_clouds = post.clouds.is_some() && cloud_geometry.is_some();
         let weather_geometry = world.weather.then(|| Geometry {
@@ -1306,6 +1347,7 @@ impl PackPost {
             ids: None,
             cull: false,
             prepass: false,
+            decal: false,
         });
         let hand_geometry = world.hand.then(|| super::pack_hand::PackHand::new(device));
         let hand = post.hand.zip(hand_geometry).and_then(|(p, geometry)| {
@@ -1317,6 +1359,7 @@ impl PackPost {
                 ids: None,
                 cull: false,
                 prepass: false,
+                decal: false,
             };
             build(p, Some(&g)).map(|pass| (pass, geometry))
         });
@@ -2100,6 +2143,7 @@ impl PackPost {
         queue: &wgpu::Queue,
         entities: &[super::Vertex],
         spans: &[super::pack_draw::EntitySpan],
+        crack_size: [f32; 2],
         rest: &mut Vec<super::Vertex>,
     ) {
         let shadow = self.shadow_casters();
@@ -2117,6 +2161,7 @@ impl PackPost {
             spans,
             drawn,
             shadow,
+            crack_size,
             rest,
         );
     }

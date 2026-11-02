@@ -320,6 +320,7 @@ impl PackEntities {
         spans: &[EntitySpan],
         drawn: [bool; PROGRAMS],
         shadow: Casters,
+        crack_size: [f32; 2],
         rest: &mut Vec<Vertex>,
     ) {
         self.draws.clear();
@@ -330,7 +331,7 @@ impl PackEntities {
         rest.extend_from_slice(&entities[..first.min(entities.len())]);
         for (span, range) in runs(entities.len(), spans) {
             let run = &entities[range];
-            let program = program_of(&span).filter(|_| plain(run));
+            let program = program_of(&span).filter(|&p| p == CRACKS || plain(run));
             let pack = program.is_some_and(|p| drawn[p]) && !span.hidden;
             let casts = program.is_some_and(|p| shadow.cast(&span, p));
             if !pack && !span.hidden {
@@ -341,6 +342,11 @@ impl PackEntities {
             };
             let start = self.scratch.len() as u32;
             self.scratch.extend_from_slice(run);
+            if program == CRACKS {
+                for quad in self.scratch[start as usize..].as_chunks_mut::<4>().0 {
+                    crack_on_atlas(quad, crack_size);
+                }
+            }
             let (entity_id, block_id) = match program {
                 BLOCK => (0, span.id),
                 _ => (span.id, 0),
@@ -404,6 +410,26 @@ pub(super) fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
     )
 }
 
+/// A crack's quad for a gbuffers program: Horizon's entity shader repeats its projected UVs in the
+/// stage's sprite, whose origin the light bytes carry (`breaking::stage_light`). A pack's program
+/// reads plain atlas UVs, and a crack is lit by what it lies on.
+fn crack_on_atlas(quad: &mut [Vertex], size: [f32; 2]) {
+    let low = |axis: usize| {
+        let lowest = quad.iter().map(|v| v.uv[axis]).fold(f32::MAX, f32::min);
+        // A corner can land a rounding error below a whole number.
+        (lowest + 1e-3).floor()
+    };
+    let base = [low(0), low(1)];
+    for v in quad {
+        let origin = [
+            (v.light & 0xffff) as f32 / 65535.0,
+            (v.light >> 16) as f32 / 65535.0,
+        ];
+        v.uv = std::array::from_fn(|i| origin[i] + (v.uv[i] - base[i]).clamp(0.0, 1.0) * size[i]);
+        v.light = 240 | (240 << 8);
+    }
+}
+
 /// Whether a run holds only geometry a gbuffers program can draw from the shared atlas: no
 /// celestial body, cloud, beam, End portal, crack or energy swirl (overlay codes Horizon's entity
 /// shader draws in its own way; entity.wgsl).
@@ -418,7 +444,8 @@ pub const ENTITY: usize = 0;
 pub const BLOCK: usize = 1;
 pub const TRANSLUCENT: usize = 2;
 pub const PARTICLE: usize = 3;
-pub const PROGRAMS: usize = 4;
+pub const CRACKS: usize = 4;
+pub const PROGRAMS: usize = 5;
 
 /// Which program draws `span`'s run, given which of them (or their fallbacks) the pack has;
 /// `None`: Horizon draws it.
@@ -439,6 +466,8 @@ pub fn program_of(span: &EntitySpan) -> Option<usize> {
         BLOCK
     } else if span.stage == render_stage("PARTICLES") {
         PARTICLE
+    } else if span.stage == render_stage("DESTROY") {
+        CRACKS
     } else {
         return None;
     })
@@ -459,6 +488,42 @@ pub fn runs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cracks_go_from_their_projected_uvs_to_the_stage_on_the_atlas() {
+        let origin = crate::breaking::stage_light([0.25, 0.5]);
+        let corner = |u, v| Vertex {
+            uv: [u, v],
+            layer: 11,
+            light: origin,
+            ..bytemuck::Zeroable::zeroed()
+        };
+        // A south face's decal runs below zero.
+        let mut quad = [
+            corner(-1.0, 0.0),
+            corner(0.0, 0.0),
+            corner(0.0, 1.0),
+            corner(-1.0, 1.0),
+        ];
+        crack_on_atlas(&mut quad, [0.125, 0.0625]);
+        let near =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4;
+        assert!(near(quad[0].uv, [0.25, 0.5]), "{:?}", quad[0].uv);
+        assert!(near(quad[1].uv, [0.375, 0.5]), "{:?}", quad[1].uv);
+        assert!(near(quad[2].uv, [0.375, 0.5625]), "{:?}", quad[2].uv);
+        // A corner a rounding error below zero still spans the sprite.
+        let mut quad = [
+            corner(1.0, -1.0),
+            corner(1.0, 0.0),
+            corner(-8.7e-8, 0.0),
+            corner(-8.7e-8, -1.0),
+        ];
+        crack_on_atlas(&mut quad, [0.125, 0.0625]);
+        assert!(near(quad[0].uv, [0.375, 0.5]), "{:?}", quad[0].uv);
+        assert!(near(quad[2].uv, [0.25, 0.5625]), "{:?}", quad[2].uv);
+        // Full light in the bytes the shader reads, not the sprite's origin.
+        assert_eq!(quad[0].light & 0xffff, 240 | (240 << 8));
+    }
 
     #[test]
     fn runs_split_the_list_between_pack_and_horizon() {
@@ -482,15 +547,21 @@ mod tests {
         let all = [true; PROGRAMS];
         assert_eq!(drawn_by_pack(&spans[0], all), Some(ENTITY));
         assert_eq!(drawn_by_pack(&spans[1], all), Some(PARTICLE));
-        assert_eq!(drawn_by_pack(&spans[1], [true, true, true, false]), None);
-        assert_eq!(drawn_by_pack(&spans[2], [true, false, true, true]), None);
+        assert_eq!(
+            drawn_by_pack(&spans[1], [true, true, true, false, true]),
+            None
+        );
+        assert_eq!(
+            drawn_by_pack(&spans[2], [true, false, true, true, true]),
+            None
+        );
         assert_eq!(drawn_by_pack(&spans[2], all), Some(BLOCK));
         let shadow = EntitySpan {
             translucent: true,
             ..spans[0]
         };
         assert_eq!(drawn_by_pack(&shadow, all), Some(TRANSLUCENT));
-        assert_eq!(drawn_by_pack(&span(0, "DESTROY", 0), all), None);
+        assert_eq!(drawn_by_pack(&span(0, "DESTROY", 0), all), Some(CRACKS));
         // A beacon beam's quads stay Horizon's.
         assert!(plain(&[v(0), v(0), v(0), v(0), v(1)]));
         assert!(!plain(&[v(0), v(0), v(0), v(0), v(6)]));
