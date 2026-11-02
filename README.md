@@ -6,7 +6,8 @@ Rust engine for Minecraft Java 26.3. Unofficial and in active development.
 **Android 9+ · Vulkan · Four touch schemes · Sandboxed `.hmod` mods**
 
 [Download APK](https://github.com/Vasysik/horizon-android/releases) · [Build & play](docs/android.md) · [Contribute](CONTRIBUTING_ANDROID.md) ·
-[Report an Android bug](https://github.com/Vasysik/horizon-android/issues/new?template=android-bug.yml)
+[Report an Android bug](https://github.com/Vasysik/horizon-android/issues/new?template=android-bug.yml) ·
+[Discord community](https://discord.gg/GGwGWhHZT)
 
 ## What works
 
