@@ -5236,21 +5236,31 @@ impl Renderer {
                 indices: self.indices.clone(),
                 quads: cloud_quads,
             }));
+            // Below the screen's size `final` works at the world's size too (a program reading
+            // the buffers by pixel lines up), and the picture goes up sharper than a stretch.
+            let upscale = self.world_post.upscales_pack();
             post.run(
                 &self.device,
                 &self.queue,
                 &mut encoder,
                 color,
                 depth,
-                &view_target,
+                if upscale { color } else { &view_target },
                 frame,
                 &frame.pack,
                 size,
-                [self.config.width, self.config.height],
+                if upscale {
+                    size
+                } else {
+                    [self.config.width, self.config.height]
+                },
                 &pages,
                 &mut terrain,
             );
             self.pack_post = Some((dimension, Some(post)));
+            if upscale {
+                self.world_post.finish_pack(&mut encoder, &view_target);
+            }
         } else if let Some((color, depth)) = &scaled
             && native_post
             && let Some(native) = &mut self.native

@@ -191,12 +191,42 @@ impl Post {
         self.finish_with(encoder, screen, &target.group);
     }
 
+    /// A shader pack's `final` goes into the world's target, to go up with [`Self::finish_pack`].
+    pub fn upscales_pack(&self) -> bool {
+        self.upscale.is_some() && self.scale < 1.0
+    }
+
+    /// Draw a shader pack's `final`, made in the world's target, onto `screen`.
+    pub fn finish_pack(&self, encoder: &mut wgpu::CommandEncoder, screen: &wgpu::TextureView) {
+        if let (Some(target), Some(upscale)) = (&self.target, &self.upscale) {
+            self.draw(encoder, screen, &target.group, upscale);
+        }
+    }
+
     /// Draw what `group` binds (`bind`) onto `screen`.
     pub fn finish_with(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         screen: &wgpu::TextureView,
         group: &wgpu::BindGroup,
+    ) {
+        let pipeline = if self.antialias {
+            &self.fxaa
+        } else {
+            self.upscale
+                .as_ref()
+                .filter(|_| self.scale < 1.0)
+                .unwrap_or(&self.copy)
+        };
+        self.draw(encoder, screen, group, pipeline);
+    }
+
+    fn draw(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        screen: &wgpu::TextureView,
+        group: &wgpu::BindGroup,
+        pipeline: &wgpu::RenderPipeline,
     ) {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: screen,
@@ -212,14 +242,7 @@ impl Post {
             color_attachments: &attachments,
             ..Default::default()
         });
-        pass.set_pipeline(if self.antialias {
-            &self.fxaa
-        } else {
-            self.upscale
-                .as_ref()
-                .filter(|_| self.scale < 1.0)
-                .unwrap_or(&self.copy)
-        });
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
