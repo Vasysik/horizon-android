@@ -1302,6 +1302,9 @@ impl Loading {
                 }
                 return Ok(());
             }
+            if touch.phase == TouchPhase::Started && self.menu.options_open {
+                self.menu.options.touch_start();
+            }
             self.menu_event(
                 event_loop,
                 WindowEvent::CursorMoved {
@@ -1355,6 +1358,14 @@ impl Loading {
                             .unwrap_or_default();
                         crate::platform::show(&initial);
                     }
+                }
+                Gesture::Scroll(y) if self.menu.options_open => {
+                    self.menu.options.touch_scroll(
+                        &self.settings,
+                        (b.width, b.height),
+                        (p[0], p[1]),
+                        y,
+                    );
                 }
                 Gesture::Scroll(y) => self.menu_event(
                     event_loop,

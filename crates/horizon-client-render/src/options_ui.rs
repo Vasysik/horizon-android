@@ -4572,6 +4572,24 @@ impl OptionsUi {
             }
         }
     }
+    /// Touch uses direct manipulation rather than sticky keyboard selection.
+    /// Text-editor focus is independent and is retained for the IME.
+    pub fn touch_start(&mut self) {
+        self.focus = None;
+        self.graphics.focus = None;
+    }
+    /// A touchscreen scroll moves the list, never the last focused or hovered
+    /// option. Keep physical wheel handling in `wheel` separate.
+    pub fn touch_scroll(
+        &mut self,
+        s: &Settings,
+        size: (f32, f32),
+        cursor: (f32, f32),
+        amount: f32,
+    ) {
+        self.touch_start();
+        self.scroll_at(s, size, cursor, amount);
+    }
     /// The mouse wheel at the cursor.
     pub fn scroll_at(&mut self, s: &Settings, size: (f32, f32), cursor: (f32, f32), amount: f32) {
         if self.resource_error.is_some() {
@@ -5280,6 +5298,7 @@ impl OptionsUi {
                             self.selected_key = None;
                             events.push(Event::Changed);
                         }
+                        #[cfg(target_os = "android")]
                         Act::TouchControls => events.push(Event::TouchControls),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
@@ -5867,6 +5886,7 @@ mod tests {
             description: String::new(),
             problem: None,
             dev: false,
+            has_settings: false,
             native: Some(crate::mod_list::NativePage::default()),
         });
         ui.show(Page::Mods);
@@ -6904,6 +6924,51 @@ mod tests {
                 vec![Event::ButtonClick]
             );
             assert_eq!(ui.selected_key, Some(key));
+        }
+    }
+
+    #[test]
+    fn touch_scroll_after_click_moves_list_without_changing_options() {
+        let atlas = atlas();
+        let size = (480.0, 160.0);
+        for slider in [false, true] {
+            let mut settings = Settings::default();
+            let mut ui = OptionsUi::default();
+            ui.show(Page::Chat);
+            let (widgets, _, _, _) = ui.layout(&settings, size.0, size.1);
+            let widget = widgets
+                .iter()
+                .find(|w| {
+                    if slider {
+                        matches!(w.kind, WKind::Slider { .. })
+                    } else {
+                        matches!(
+                            w.kind,
+                            WKind::Button {
+                                act: Act::Cycle(_),
+                                ..
+                            }
+                        )
+                    }
+                })
+                .unwrap();
+            let cursor = (widget.x + widget.w / 2.0, widget.y + widget.h / 2.0);
+            ui.click(
+                &mut settings,
+                &atlas,
+                cursor.0,
+                cursor.1,
+                size,
+                [960, 320],
+                false,
+                false,
+            );
+            ui.release();
+            let before = (settings.chat_visibility, settings.chat_opacity);
+            ui.touch_scroll(&settings, size, cursor, -2.0);
+            assert_eq!(ui.scroll, 36.0);
+            assert_eq!((settings.chat_visibility, settings.chat_opacity), before);
+            assert!(ui.focus.is_none());
         }
     }
 

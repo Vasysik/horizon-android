@@ -597,6 +597,9 @@ impl Game<'_> {
             return;
         };
         let p = [t.location.x as f32 / b.scale, t.location.y as f32 / b.scale];
+        if t.phase == TouchPhase::Started && self.screen == Screen::Options {
+            self.ui.options.touch_start();
+        }
         let direct = self.pad.touch_ui.direct_pointer(t.id, p, t.phase);
         self.handle_window_event(
             events,
@@ -645,6 +648,11 @@ impl Game<'_> {
                 if field || self.sign_edit.is_some() {
                     self.android_show_keyboard();
                 }
+            }
+            Gesture::Scroll(y) if self.screen == Screen::Options => {
+                self.ui
+                    .options
+                    .touch_scroll(&self.settings, (b.width, b.height), (p[0], p[1]), y);
             }
             Gesture::Scroll(y) => self.handle_window_event(
                 events,
