@@ -290,6 +290,130 @@ fn namespaced_gui_sprites(root: &Path) -> Vec<PackedImage> {
 /// `_pressed`, the D-pad's cells and the stick's, as `starling:touch/<name>`.
 const TOUCH_SPRITES: &[(&str, &[u8])] = &[
     (
+        "custom_blank",
+        include_bytes!("../../horizon-client/assets/touch/custom_blank.png"),
+    ),
+    (
+        "custom_star",
+        include_bytes!("../../horizon-client/assets/touch/custom_star.png"),
+    ),
+    (
+        "custom_star_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_star_pressed.png"),
+    ),
+    (
+        "custom_heart",
+        include_bytes!("../../horizon-client/assets/touch/custom_heart.png"),
+    ),
+    (
+        "custom_heart_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_heart_pressed.png"),
+    ),
+    (
+        "custom_shield",
+        include_bytes!("../../horizon-client/assets/touch/custom_shield.png"),
+    ),
+    (
+        "custom_shield_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_shield_pressed.png"),
+    ),
+    (
+        "custom_pickaxe",
+        include_bytes!("../../horizon-client/assets/touch/custom_pickaxe.png"),
+    ),
+    (
+        "custom_pickaxe_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_pickaxe_pressed.png"),
+    ),
+    (
+        "custom_potion",
+        include_bytes!("../../horizon-client/assets/touch/custom_potion.png"),
+    ),
+    (
+        "custom_potion_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_potion_pressed.png"),
+    ),
+    (
+        "custom_apple",
+        include_bytes!("../../horizon-client/assets/touch/custom_apple.png"),
+    ),
+    (
+        "custom_apple_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_apple_pressed.png"),
+    ),
+    (
+        "custom_home",
+        include_bytes!("../../horizon-client/assets/touch/custom_home.png"),
+    ),
+    (
+        "custom_home_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_home_pressed.png"),
+    ),
+    (
+        "custom_flag",
+        include_bytes!("../../horizon-client/assets/touch/custom_flag.png"),
+    ),
+    (
+        "custom_flag_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_flag_pressed.png"),
+    ),
+    (
+        "custom_fire",
+        include_bytes!("../../horizon-client/assets/touch/custom_fire.png"),
+    ),
+    (
+        "custom_fire_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_fire_pressed.png"),
+    ),
+    (
+        "custom_skull",
+        include_bytes!("../../horizon-client/assets/touch/custom_skull.png"),
+    ),
+    (
+        "custom_skull_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_skull_pressed.png"),
+    ),
+    (
+        "custom_crown",
+        include_bytes!("../../horizon-client/assets/touch/custom_crown.png"),
+    ),
+    (
+        "custom_crown_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_crown_pressed.png"),
+    ),
+    (
+        "custom_plus",
+        include_bytes!("../../horizon-client/assets/touch/custom_plus.png"),
+    ),
+    (
+        "custom_plus_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_plus_pressed.png"),
+    ),
+    (
+        "custom_check",
+        include_bytes!("../../horizon-client/assets/touch/custom_check.png"),
+    ),
+    (
+        "custom_check_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_check_pressed.png"),
+    ),
+    (
+        "custom_cross",
+        include_bytes!("../../horizon-client/assets/touch/custom_cross.png"),
+    ),
+    (
+        "custom_cross_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_cross_pressed.png"),
+    ),
+    (
+        "custom_music",
+        include_bytes!("../../horizon-client/assets/touch/custom_music.png"),
+    ),
+    (
+        "custom_music_pressed",
+        include_bytes!("../../horizon-client/assets/touch/custom_music_pressed.png"),
+    ),
+    (
         "attack",
         include_bytes!("../../horizon-client/assets/touch/attack.png"),
     ),
@@ -464,7 +588,20 @@ fn builtin_touch_sprites(images: &[PackedImage]) -> Vec<PackedImage> {
             let (w, h, pixels) = decode_bytes(png).ok()?;
             Some((key, w, h, pixels))
         })
+        // A slot for each custom button's own image, whichever it has now.
+        .chain((0..crate::own_buttons::SLOTS).map(|id| {
+            let side = crate::own_buttons::SIZE;
+            let blank = || vec![0; (side * side * 4) as usize];
+            let pixels = crate::own_buttons::load(id).unwrap_or_else(blank);
+            (crate::own_buttons::sprite(id), side, side, pixels)
+        }))
         .collect()
+}
+
+/// One of [`TOUCH_SPRITES`], as RGBA pixels: a place for a custom button's image to start from.
+pub fn touch_sprite(name: &str) -> Option<Vec<u8>> {
+    let (_, png) = TOUCH_SPRITES.iter().find(|(n, _)| *n == name)?;
+    decode_bytes(png).ok().map(|(_, _, pixels)| pixels)
 }
 
 /// The equipment layer textures of every namespace but vanilla's (a server's custom armour), as

@@ -325,6 +325,13 @@ impl Game<'_> {
                 Event::ShaderPack => self.settings.save(&Self::options_path()),
                 Event::OpenCustomButtons => self.open_custom_buttons(),
                 Event::CustomButtons => self.save_custom_buttons(),
+                Event::CustomImage(id, pixels) => {
+                    if let Err(e) = horizon_client::own_buttons::save(id, &pixels) {
+                        log::warn!("Horizon: the button image was not saved: {e}");
+                    }
+                    self.save_custom_buttons();
+                }
+                Event::ImportButtonImage(id) => self.pick_button_image(id),
                 Event::OpenShaderOptions => self.open_shader_options(),
                 Event::ShaderOptions => self.save_shader_options(),
                 Event::OpenShaderPackFolder => self.open_game_folder(&Self::shader_packs_dir()),

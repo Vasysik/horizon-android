@@ -11,6 +11,7 @@ use crate::{
     hud::{HudAtlas, HudBatch, rgba},
     keybinds::{self, CATEGORIES, KeyBinds, MAPPINGS},
     lang::{self, LanguageInfo},
+    own_buttons,
     settings::{SOUND_SOURCES, Settings},
     text::{self, Style, Text},
     ui,
@@ -931,6 +932,200 @@ pub fn apply_preset(s: &mut Settings) {
 /// `selected_key` while a native mod's key waits (`selected_native_key`).
 const NATIVE_KEY: &str = "horizon.nativeModKey";
 
+/// Which long list a custom button's page opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomPick {
+    Control,
+    Keyboard,
+    Icon,
+}
+
+/// What a finger paints with, on a custom button's canvas; the last clears.
+const PALETTE: [[u8; 4]; 16] = [
+    [255, 255, 255, 255],
+    [190, 190, 190, 255],
+    [120, 120, 120, 255],
+    [38, 38, 38, 255],
+    [214, 60, 60, 255],
+    [240, 140, 40, 255],
+    [245, 215, 70, 255],
+    [90, 190, 70, 255],
+    [40, 120, 60, 255],
+    [70, 200, 210, 255],
+    [60, 110, 220, 255],
+    [130, 70, 200, 255],
+    [230, 110, 190, 255],
+    [130, 85, 50, 255],
+    [245, 210, 170, 255],
+    [0, 0, 0, 0],
+];
+
+/// The canvas of a custom button's own image.
+#[derive(Default)]
+struct Painter {
+    pixels: Vec<u8>,
+    /// Its place on the page: x, y and how many GUI pixels a pixel is.
+    at: [f32; 3],
+    color: usize,
+    /// The pixel the finger was last on, to fill in between when it moves fast.
+    last: Option<(i32, i32)>,
+    /// It changed since it opened: Done keeps it.
+    dirty: bool,
+    /// A kept image the atlas's slot has yet to get.
+    upload: Option<(u32, Vec<u8>)>,
+}
+
+impl Painter {
+    /// A touch sprite as the atlas has it (Bedrock's look where the phone fetched it), a button's
+    /// size; else the game's own.
+    fn sprite(atlas: &HudAtlas, name: &str) -> Option<Vec<u8>> {
+        let rect = atlas
+            .sprites
+            .get(&format!("starling:gui/sprites/touch/{name}"));
+        let cut = rect.and_then(|r| {
+            let (x0, y0) = (
+                (r.u0 * atlas.width as f32).round() as u32,
+                (r.v0 * atlas.height as f32).round() as u32,
+            );
+            let mut pixels = Vec::with_capacity((r.w * r.h * 4) as usize);
+            for y in y0..y0 + r.h {
+                let at = ((y * atlas.width + x0) * 4) as usize;
+                pixels.extend_from_slice(atlas.pixels.get(at..at + (r.w * 4) as usize)?);
+            }
+            Some(own_buttons::fit(r.w, r.h, &pixels))
+        });
+        cut.or_else(|| crate::hud::touch_sprite(name))
+    }
+
+    /// A button's own image, or the icon it wears, else a blank button, to draw on.
+    fn open(&mut self, atlas: &HudAtlas, button: Option<&crate::settings::CustomButton>) {
+        self.dirty = false;
+        self.last = None;
+        let side = own_buttons::SIZE as usize;
+        let own = button
+            .filter(|b| b.image)
+            .and_then(|b| own_buttons::load(b.id));
+        let icon = button
+            .and_then(|b| b.icon.as_deref())
+            .and_then(|icon| Self::sprite(atlas, &format!("custom_{icon}")));
+        self.pixels = own
+            .or(icon)
+            .or_else(|| Self::sprite(atlas, "custom_blank"))
+            .filter(|p| p.len() == side * side * 4)
+            .unwrap_or_else(|| vec![0; side * side * 4]);
+    }
+
+    fn clear(&mut self) {
+        self.pixels.fill(0);
+        self.dirty = true;
+    }
+
+    /// Back to the plate of the game's own buttons.
+    fn plate(&mut self, atlas: &HudAtlas) {
+        if let Some(plate) = Self::sprite(atlas, "custom_blank") {
+            self.pixels = plate;
+            self.dirty = true;
+        }
+    }
+
+    /// A picture the system handed over.
+    fn import(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.pixels = own_buttons::fit(width, height, rgba);
+        self.dirty = true;
+    }
+
+    /// The swatch at `i`: x and y on the page, beside the canvas.
+    fn swatch(&self, i: usize) -> (f32, f32) {
+        let [x, y, cell] = self.at;
+        let right = x + own_buttons::SIZE as f32 * cell + 8.0;
+        (right + (i % 2) as f32 * 16.0, y + (i / 2) as f32 * 16.0)
+    }
+
+    fn paint(&mut self, x: i32, y: i32) {
+        let side = own_buttons::SIZE as i32;
+        if (0..side).contains(&x) && (0..side).contains(&y) {
+            let at = ((y * side + x) * 4) as usize;
+            if let Some(pixel) = self.pixels.get_mut(at..at + 4) {
+                pixel.copy_from_slice(&PALETTE[self.color]);
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// A press or a drag on the page; true when it landed on the canvas or a swatch.
+    fn press(&mut self, x: f32, y: f32, drag: bool) -> bool {
+        let [left, top, cell] = self.at;
+        let side = own_buttons::SIZE as f32;
+        if !drag {
+            self.last = None;
+            for i in 0..PALETTE.len() {
+                let (sx, sy) = self.swatch(i);
+                if ui::hovered((x, y), sx, sy, 14.0, 14.0) {
+                    self.color = i;
+                    return true;
+                }
+            }
+        }
+        if !ui::hovered((x, y), left, top, side * cell, side * cell) {
+            // A finger sliding off lifts the stroke, and comes back without a line across.
+            self.last = None;
+            return drag;
+        }
+        let now = (((x - left) / cell) as i32, ((y - top) / cell) as i32);
+        // Every pixel between the finger's last place and this.
+        let (x0, y0) = self.last.unwrap_or(now);
+        let steps = (now.0 - x0).abs().max((now.1 - y0).abs()).max(1);
+        for t in 0..=steps {
+            self.paint(x0 + (now.0 - x0) * t / steps, y0 + (now.1 - y0) * t / steps);
+        }
+        self.last = Some(now);
+        true
+    }
+
+    fn draw(&self, batch: &mut HudBatch, atlas: &HudAtlas) {
+        let [left, top, cell] = self.at;
+        let side = own_buttons::SIZE as usize;
+        let span = side as f32 * cell;
+        batch.fill(
+            atlas,
+            left - 1.0,
+            top - 1.0,
+            span + 2.0,
+            span + 2.0,
+            rgba(16, 16, 16, 255),
+        );
+        for y in 0..side {
+            for x in 0..side {
+                let (px, py) = (left + x as f32 * cell, top + y as f32 * cell);
+                // Squares under what is clear, so it shows as clear.
+                let g = if (x + y) % 2 == 0 { 96 } else { 72 };
+                batch.fill(atlas, px, py, cell, cell, rgba(g, g, g, 255));
+                let p = self.pixels.get((y * side + x) * 4..(y * side + x) * 4 + 4);
+                if let Some(&[r, g, b, a]) = p
+                    && a > 0
+                {
+                    batch.fill(atlas, px, py, cell, cell, rgba(r, g, b, a));
+                }
+            }
+        }
+        for (i, [r, g, b, a]) in PALETTE.iter().copied().enumerate() {
+            let (x, y) = self.swatch(i);
+            let edge = if i == self.color {
+                u32::MAX
+            } else {
+                rgba(16, 16, 16, 255)
+            };
+            batch.fill(atlas, x - 1.0, y - 1.0, 16.0, 16.0, edge);
+            let face = if a == 0 {
+                rgba(84, 84, 84, 255)
+            } else {
+                rgba(r, g, b, a)
+            };
+            batch.fill(atlas, x, y, 14.0, 14.0, face);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Main,
@@ -955,6 +1150,9 @@ pub enum Page {
     /// The player's own touch buttons (`Settings::custom_buttons`), and what one of them does.
     CustomButtons,
     CustomButton(u32),
+    CustomPick(u32, CustomPick),
+    /// Drawing a custom button's own image.
+    CustomDraw(u32),
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
@@ -999,12 +1197,20 @@ enum Act {
     ShaderResolution,
     /// The next of the frame limits the Shader Packs page offers.
     ShaderFpsLimit,
-    /// The Custom Buttons page, a new button there, one to change or take away, and a key for it.
+    /// The Custom Buttons page, a new button there, one to change or take away, a control or a
+    /// keyboard key for it, and its icon.
     CustomButtons,
     CustomAdd,
     CustomEdit(u32),
     CustomDelete(u32),
     CustomKey(u32, &'static str),
+    CustomInput(u32, &'static str),
+    CustomIcon(u32, Option<&'static str>),
+    /// Its own image, and what the drawing page does to the canvas.
+    CustomDraw(u32),
+    CanvasClear,
+    CanvasPlate,
+    CanvasImport(u32),
     /// Open the Shader Options page.
     ShaderOptions,
     /// A pack's option, its next value.
@@ -1042,6 +1248,8 @@ enum WKind {
         label: Text,
         active: bool,
         act: Act,
+        /// A sprite drawn over it, filling it (an icon to pick).
+        icon: Option<String>,
     },
     Slider {
         label: Text,
@@ -1113,6 +1321,10 @@ pub enum Event {
     OpenCustomButtons,
     /// The player's own touch buttons changed: the layout takes them.
     CustomButtons,
+    /// A custom button's image was drawn: its file takes it.
+    CustomImage(u32, Vec<u8>),
+    /// Ask the system for a picture for a custom button.
+    ImportButtonImage(u32),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
     /// Copy how an agent connects (the AI Agent page).
@@ -1177,6 +1389,8 @@ pub struct OptionsUi {
     pub(crate) settings_search: ui::EditBox,
     /// What the custom button on its page sends.
     custom_send: ui::EditBox,
+    /// The canvas of a custom button's image.
+    painter: Painter,
     /// Packs: the packs found and the selection the screen opens with.
     pub pack_infos: Vec<crate::pack_screen::PackInfo>,
     pub pack_selection: Vec<String>,
@@ -1259,6 +1473,7 @@ impl Default for OptionsUi {
             language_search: search,
             settings_search,
             custom_send,
+            painter: Painter::default(),
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
@@ -1284,6 +1499,7 @@ fn button(x: f32, y: f32, w: f32, label: Text, act: Act) -> Widget {
             label,
             active: true,
             act,
+            icon: None,
         },
         list: false,
     }
@@ -1431,6 +1647,10 @@ enum Row {
     Field,
     /// What a custom button sends.
     SendField,
+    /// A row of icons to pick.
+    Icons(Vec<Widget>),
+    /// A custom button's canvas, drawn by the page itself (`painter`).
+    Canvas(u32),
     /// A line of red text: what was refused.
     Warning(String),
 }
@@ -1590,7 +1810,10 @@ impl OptionsUi {
             Page::NativeMod(_) => "Mod Settings",
             Page::ShaderPacks => "Shader Packs",
             Page::ShaderOptions => "Shader Options",
-            Page::CustomButtons | Page::CustomButton(_) => "Custom Buttons",
+            Page::CustomButtons
+            | Page::CustomButton(_)
+            | Page::CustomPick(..)
+            | Page::CustomDraw(_) => "Custom Buttons",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
@@ -2301,19 +2524,60 @@ impl OptionsUi {
                 rows
             }
             Page::CustomButton(id) => {
-                let held =
-                    s.custom_buttons
-                        .iter()
-                        .find(|b| b.id == id)
-                        .and_then(|b| match &b.action {
-                            crate::settings::CustomAction::Key(name) => Some(name.as_str()),
-                            crate::settings::CustomAction::Send(_) => None,
-                        });
-                let mut rows = vec![
+                use crate::settings::CustomAction as A;
+                let b = s.custom_buttons.iter().find(|b| b.id == id);
+                let held = |pick: CustomPick| match b.map(|b| &b.action) {
+                    Some(A::Key(_)) if pick == CustomPick::Control => b.map(|b| b.label()),
+                    Some(A::Input(_)) if pick == CustomPick::Keyboard => b.map(|b| b.label()),
+                    _ => None,
+                };
+                let choice = |caption: &str, pick: CustomPick| {
+                    let label = match held(pick) {
+                        Some(now) => format!("{caption}: {now}"),
+                        None => format!("{caption}..."),
+                    };
+                    button(
+                        0.0,
+                        0.0,
+                        150.0,
+                        Text::literal(label),
+                        Act::Push(Page::CustomPick(id, pick)),
+                    )
+                };
+                let look = match b {
+                    Some(b) if b.image => "Yours",
+                    Some(b) => b.icon.as_deref().unwrap_or("Its Name"),
+                    None => "Its Name",
+                };
+                vec![
                     Row::Note("Sends a /command or a chat line when pressed".into()),
                     Row::SendField,
-                    Row::Note("Or holds one of the keys of the game".into()),
-                ];
+                    Row::Note("Or holds a key while pressed".into()),
+                    Row::Buttons(
+                        choice("Game Control", CustomPick::Control),
+                        Some(choice("Keyboard Key", CustomPick::Keyboard)),
+                    ),
+                    Row::Note("How it looks".into()),
+                    Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            150.0,
+                            Text::literal(format!("Icon: {look}")),
+                            Act::Push(Page::CustomPick(id, CustomPick::Icon)),
+                        ),
+                        Some(button(
+                            0.0,
+                            0.0,
+                            150.0,
+                            Text::literal("Draw or Import..."),
+                            Act::CustomDraw(id),
+                        )),
+                    ),
+                ]
+            }
+            Page::CustomDraw(id) => vec![Row::Canvas(id)],
+            Page::CustomPick(id, CustomPick::Control) => {
                 let mut mappings: Vec<(&'static str, &'static str)> =
                     MAPPINGS.iter().map(|(n, _, c)| (*n, *c)).collect();
                 mappings.retain(|(name, _)| keybinds::key_code(s.keys.get(name)).is_some());
@@ -2323,22 +2587,57 @@ impl OptionsUi {
                     ca.cmp(&cb)
                         .then_with(|| lang::get(a.0).cmp(&lang::get(b.0)))
                 });
-                for (name, _) in mappings {
-                    let label = if held == Some(name) {
-                        format!("> {} <", lang::get(name))
-                    } else {
-                        lang::get(name)
+                mappings
+                    .into_iter()
+                    .map(|(name, _)| {
+                        let label = Text::literal(lang::get(name));
+                        Row::Buttons(
+                            button(0.0, 0.0, 310.0, label, Act::CustomKey(id, name)),
+                            None,
+                        )
+                    })
+                    .collect()
+            }
+            Page::CustomPick(id, CustomPick::Keyboard) => keybinds::keyboard_keys()
+                .chunks(2)
+                .map(|pair| {
+                    let key = |name: &'static str| {
+                        let label = keybinds::display_name(name);
+                        button(0.0, 0.0, 150.0, label, Act::CustomInput(id, name))
                     };
-                    rows.push(Row::Buttons(
-                        button(
-                            0.0,
-                            0.0,
-                            310.0,
-                            Text::literal(label),
-                            Act::CustomKey(id, name),
-                        ),
-                        None,
-                    ));
+                    Row::Buttons(key(pair[0]), pair.get(1).map(|name| key(name)))
+                })
+                .collect(),
+            Page::CustomPick(id, CustomPick::Icon) => {
+                let mut rows = vec![Row::Buttons(
+                    button(
+                        0.0,
+                        0.0,
+                        310.0,
+                        Text::literal("No Icon: Its Name"),
+                        Act::CustomIcon(id, None),
+                    ),
+                    None,
+                )];
+                for icons in crate::settings::CUSTOM_ICONS.chunks(7) {
+                    let widgets = icons
+                        .iter()
+                        .map(|name| {
+                            let mut w = button(
+                                0.0,
+                                0.0,
+                                36.0,
+                                Text::literal(*name),
+                                Act::CustomIcon(id, Some(name)),
+                            );
+                            w.h = 36.0;
+                            if let WKind::Button { icon, .. } = &mut w.kind {
+                                *icon = Some(format!("starling:gui/sprites/touch/custom_{name}"));
+                            }
+                            w
+                        })
+                        .collect();
+                    rows.push(Row::Icons(widgets));
                 }
                 rows
             }
@@ -2891,6 +3190,43 @@ impl OptionsUi {
                             (field.width, field.height) = (310.0, 20.0);
                             y += 25.0;
                         }
+                        Row::Icons(icons) => {
+                            let mut x = cx - 155.0;
+                            for mut icon in icons {
+                                (icon.x, icon.y) = (x, y + 2.0);
+                                icon.list = true;
+                                x += 44.0;
+                                out.push(icon);
+                            }
+                            y += 42.0;
+                        }
+                        Row::Canvas(id) => {
+                            // As big as the page has room for, its tools beside it.
+                            let side = own_buttons::SIZE as f32;
+                            let cell = ((h - 72.0) / side).floor().clamp(3.0, 8.0);
+                            let x = cx - 155.0;
+                            self.painter.at = [x, y + 2.0, cell];
+                            let tools = x + side * cell + 46.0;
+                            for (i, (label, act)) in [
+                                ("Clear", Act::CanvasClear),
+                                ("Plate", Act::CanvasPlate),
+                                ("Import PNG", Act::CanvasImport(id)),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            {
+                                let mut tool = button(
+                                    tools,
+                                    y + 2.0 + i as f32 * 24.0,
+                                    80.0,
+                                    Text::literal(label),
+                                    act,
+                                );
+                                tool.list = true;
+                                out.push(tool);
+                            }
+                            y += side * cell + 6.0;
+                        }
                         Row::Warning(text) => {
                             out.push(Widget {
                                 x: 0.0,
@@ -3111,8 +3447,20 @@ impl OptionsUi {
                 }
             }
             match &wd.kind {
-                WKind::Button { label, active, act } => {
-                    ui::button(batch, atlas, wd.x, wd.y, wd.w, wd.h, label, *active, hover);
+                WKind::Button {
+                    label,
+                    active,
+                    act,
+                    icon,
+                } => {
+                    match icon.as_deref().filter(|i| atlas.sprites.contains_key(*i)) {
+                        Some(icon) => {
+                            ui::sprite_sized(batch, atlas, icon, wd.x, wd.y, wd.w, wd.h, u32::MAX)
+                        }
+                        None => {
+                            ui::button(batch, atlas, wd.x, wd.y, wd.w, wd.h, label, *active, hover);
+                        }
+                    }
                     if hover && let Act::Key(name) = act {
                         let conflicts = s.keys.conflicts(name);
                         if !conflicts.is_empty() {
@@ -3279,6 +3627,21 @@ impl OptionsUi {
             }
             self.custom_send = field;
         }
+        if matches!(self.page(), Page::CustomDraw(_)) {
+            self.painter.draw(batch, atlas);
+        }
+        // An image just kept, into its slot of the atlas: the button wears it at once.
+        if let Some((id, pixels)) = self.painter.upload.take()
+            && let Some(r) = atlas.sprites.get(&own_buttons::sprite(id))
+        {
+            batch.patches.push(crate::font::Patch {
+                x: (r.u0 * atlas.width as f32).round() as u32,
+                y: (r.v0 * atlas.height as f32).round() as u32,
+                width: own_buttons::SIZE,
+                height: own_buttons::SIZE,
+                rgba: pixels,
+            });
+        }
         if let Some(lines) = tooltip {
             ui::tooltip(batch, atlas, &lines, cursor);
         }
@@ -3359,6 +3722,9 @@ impl OptionsUi {
         }
         let (widgets, top, bottom, content) = self.layout(s, size.0, size.1);
         let mut events = Vec::new();
+        if !right && self.painting() && self.painter.press(x, y, drag) {
+            return events;
+        }
         if !drag && matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds) {
             let search = &mut self.settings_search;
             search.focused = ui::hovered((x, y), search.x, search.y, search.width, search.height);
@@ -3608,10 +3974,17 @@ impl OptionsUi {
                             events.push(Event::OpenCustomButtons);
                         }
                         Act::CustomAdd => {
-                            let id = s.custom_buttons.iter().map(|b| b.id + 1).max().unwrap_or(1);
+                            // A button's id is the slot of its image: the first one free.
+                            let free = (0..own_buttons::SLOTS)
+                                .find(|id| !s.custom_buttons.iter().any(|b| b.id == *id));
+                            let Some(id) = free else {
+                                return events;
+                            };
                             s.custom_buttons.push(crate::settings::CustomButton {
                                 id,
                                 action: crate::settings::CustomAction::Send(String::new()),
+                                icon: None,
+                                image: false,
                             });
                             self.custom_send.set_value("");
                             self.custom_send.focused = false;
@@ -3622,7 +3995,8 @@ impl OptionsUi {
                                 s.custom_buttons.iter().find(|b| b.id == id).map(|b| {
                                     match &b.action {
                                         crate::settings::CustomAction::Send(line) => line.as_str(),
-                                        crate::settings::CustomAction::Key(_) => "",
+                                        crate::settings::CustomAction::Key(_)
+                                        | crate::settings::CustomAction::Input(_) => "",
                                     }
                                 });
                             self.custom_send.set_value(line.unwrap_or_default());
@@ -3630,6 +4004,7 @@ impl OptionsUi {
                             self.push(Page::CustomButton(id));
                         }
                         Act::CustomDelete(id) => {
+                            own_buttons::remove(id);
                             s.custom_buttons.retain(|b| b.id != id);
                             events.push(Event::CustomButtons);
                         }
@@ -3639,7 +4014,34 @@ impl OptionsUi {
                             }
                             self.custom_send.set_value("");
                             self.custom_send.focused = false;
+                            events.extend(self.back(s));
                         }
+                        Act::CustomInput(id, name) => {
+                            if let Some(b) = s.custom_buttons.iter_mut().find(|b| b.id == id) {
+                                b.action = crate::settings::CustomAction::Input(name.to_owned());
+                            }
+                            self.custom_send.set_value("");
+                            self.custom_send.focused = false;
+                            events.extend(self.back(s));
+                        }
+                        Act::CustomIcon(id, icon) => {
+                            if let Some(b) = s.custom_buttons.iter_mut().find(|b| b.id == id) {
+                                b.icon = icon.map(str::to_owned);
+                                if b.image {
+                                    b.image = false;
+                                    own_buttons::remove(id);
+                                }
+                            }
+                            events.extend(self.back(s));
+                        }
+                        Act::CustomDraw(id) => {
+                            self.painter
+                                .open(atlas, s.custom_buttons.iter().find(|b| b.id == id));
+                            self.push(Page::CustomDraw(id));
+                        }
+                        Act::CanvasClear => self.painter.clear(),
+                        Act::CanvasPlate => self.painter.plate(atlas),
+                        Act::CanvasImport(id) => events.push(Event::ImportButtonImage(id)),
                         Act::ShaderOptions => {
                             s.shader_options = None;
                             self.push(Page::ShaderOptions);
@@ -3833,6 +4235,18 @@ impl OptionsUi {
             }
             // Done or Escape with the name box focused keeps what it holds, as leaving it does.
             Page::Skin if self.skin.name.focused => self.commit_name(),
+            // Done keeps a canvas that changed: the file, the atlas's slot, and the button's look.
+            Page::CustomDraw(id) => {
+                if std::mem::take(&mut self.painter.dirty) {
+                    let pixels = self.painter.pixels.clone();
+                    self.painter.upload = Some((id, pixels.clone()));
+                    if let Some(b) = s.custom_buttons.iter_mut().find(|b| b.id == id) {
+                        b.image = true;
+                        b.icon = None;
+                    }
+                    events.push(Event::CustomImage(id, pixels));
+                }
+            }
             // What the box holds is what it sends; one that does nothing goes.
             Page::CustomButton(id) => {
                 let line = self.custom_send.value.trim().to_owned();
@@ -3854,6 +4268,16 @@ impl OptionsUi {
             events.push(Event::Close);
         }
         events
+    }
+    /// Whether a custom button's canvas shows: a finger on the page drags, it never scrolls.
+    pub fn painting(&self) -> bool {
+        matches!(self.page(), Page::CustomDraw(_))
+    }
+    /// A picture for the canvas showing now.
+    pub fn import_button_image(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        if self.painting() {
+            self.painter.import(width, height, rgba);
+        }
     }
     /// Typed text (the language search box).
     pub fn type_text(&mut self, atlas: &HudAtlas, text: &str) {
@@ -5482,7 +5906,7 @@ mod tests {
         };
         // Added and left empty, it goes.
         press(&mut ui, &mut s, Act::CustomAdd);
-        assert_eq!(ui.page(), Page::CustomButton(1));
+        assert_eq!(ui.page(), Page::CustomButton(0));
         ui.layout(&s, size.0, size.1);
         assert!(ui.back(&mut s).contains(&Event::CustomButtons));
         assert!(s.custom_buttons.is_empty());
@@ -5512,11 +5936,73 @@ mod tests {
         let id = s.custom_buttons[0].id;
         press(&mut ui, &mut s, Act::CustomEdit(id));
         assert_eq!(ui.custom_send.value, "/home");
+        ui.push(Page::CustomPick(id, CustomPick::Control));
         press(&mut ui, &mut s, Act::CustomKey(id, "key.sprint"));
-        ui.back(&mut s);
+        assert_eq!(ui.page(), Page::CustomButton(id));
         assert_eq!(
             s.custom_buttons[0].action,
             CustomAction::Key("key.sprint".into())
+        );
+        // Any key of the keyboard, F1 first among them.
+        ui.push(Page::CustomPick(id, CustomPick::Keyboard));
+        press(&mut ui, &mut s, Act::CustomInput(id, "key.keyboard.f1"));
+        assert_eq!(
+            s.custom_buttons[0].action,
+            CustomAction::Input("key.keyboard.f1".into())
+        );
+        assert_eq!(
+            s.custom_buttons[0].label(),
+            keybinds::display_name("key.keyboard.f1").plain()
+        );
+        // An icon, and back to none.
+        ui.push(Page::CustomPick(id, CustomPick::Icon));
+        press(&mut ui, &mut s, Act::CustomIcon(id, Some("star")));
+        assert_eq!(s.custom_buttons[0].icon.as_deref(), Some("star"));
+        ui.push(Page::CustomPick(id, CustomPick::Icon));
+        press(&mut ui, &mut s, Act::CustomIcon(id, None));
+        assert_eq!(s.custom_buttons[0].icon, None);
+        // Its own image: a stroke across the canvas, with the swatch picked first, is kept by
+        // Done; a canvas nobody touched changes nothing.
+        press(&mut ui, &mut s, Act::CustomDraw(id));
+        assert!(ui.painting());
+        assert!(
+            !ui.back(&mut s)
+                .iter()
+                .any(|e| matches!(e, Event::CustomImage(..)))
+        );
+        assert!(!s.custom_buttons[0].image);
+        press(&mut ui, &mut s, Act::CustomDraw(id));
+        ui.layout(&s, size.0, size.1);
+        let [left, top, cell] = ui.painter.at;
+        let (sx, sy) = ui.painter.swatch(4);
+        let tap = |ui: &mut OptionsUi, s: &mut Settings, x: f32, y: f32, drag: bool| {
+            ui.click(s, &atlas, x, y, size, [1281, 960], drag, false)
+        };
+        tap(&mut ui, &mut s, sx + 2.0, sy + 2.0, false);
+        assert_eq!(ui.painter.color, 4);
+        let at = |c: f32| c * cell + cell / 2.0;
+        tap(&mut ui, &mut s, left + at(1.0), top + at(1.0), false);
+        // Fast: the pixels between are painted too.
+        tap(&mut ui, &mut s, left + at(9.0), top + at(1.0), true);
+        let pixel = |ui: &OptionsUi, x: usize, y: usize| {
+            let at = (y * own_buttons::SIZE as usize + x) * 4;
+            [ui.painter.pixels[at], ui.painter.pixels[at + 3]]
+        };
+        assert_eq!(pixel(&ui, 5, 1), [PALETTE[4][0], 255]);
+        let kept = ui.back(&mut s);
+        assert!(
+            kept.iter()
+                .any(|e| matches!(e, Event::CustomImage(i, p) if *i == id && !p.is_empty()))
+        );
+        assert!(s.custom_buttons[0].image);
+        // An icon picked after it takes its place.
+        ui.push(Page::CustomPick(id, CustomPick::Icon));
+        press(&mut ui, &mut s, Act::CustomIcon(id, Some("star")));
+        assert!(!s.custom_buttons[0].image);
+        ui.back(&mut s);
+        assert_eq!(
+            s.custom_buttons[0].action,
+            CustomAction::Input("key.keyboard.f1".into())
         );
         // And it can be taken away.
         assert!(press(&mut ui, &mut s, Act::CustomDelete(id)).contains(&Event::CustomButtons));

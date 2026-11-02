@@ -256,6 +256,18 @@ const KEYS: &[(&str, KeyCode)] = &[
     ("key.keyboard.right.alt", KeyCode::AltRight),
     ("key.keyboard.right.win", KeyCode::SuperRight),
 ];
+/// Every keyboard key by name, the function keys first.
+pub fn keyboard_keys() -> Vec<&'static str> {
+    let function = |name: &str| {
+        name.strip_prefix("key.keyboard.f")
+            .is_some_and(|n| n.parse::<u32>().is_ok())
+    };
+    let names = || KEYS.iter().map(|(name, _)| *name);
+    names()
+        .filter(|n| function(n))
+        .chain(names().filter(|n| !function(n)))
+        .collect()
+}
 pub fn key_code(name: &str) -> Option<KeyCode> {
     KEYS.iter().find(|(n, _)| *n == name).map(|(_, k)| *k)
 }

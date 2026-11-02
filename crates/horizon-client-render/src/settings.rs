@@ -90,8 +90,10 @@ pub fn source_volume(i: usize) -> f32 {
 /// What a button of the player's own on the touch controls does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CustomAction {
-    /// Holds one of the game's keys (`key.sprint`) while a finger is on it.
+    /// Holds one of the game's controls (`key.sprint`) while a finger is on it.
     Key(String),
+    /// Holds a key of the keyboard (`key.keyboard.f1`) while a finger is on it.
+    Input(String),
     /// Sends a command or a chat line when pressed.
     Send(String),
 }
@@ -101,13 +103,25 @@ pub enum CustomAction {
 pub struct CustomButton {
     pub id: u32,
     pub action: CustomAction,
+    /// One of [`CUSTOM_ICONS`]; none shows what it does in words.
+    pub icon: Option<String>,
+    /// Wears the player's own image instead (`own_buttons`).
+    pub image: bool,
 }
+
+/// What a custom button can wear: `starling:touch/custom_<name>` and its `_pressed`
+/// (packaging/touch/make.py draws them).
+pub const CUSTOM_ICONS: [&str; 15] = [
+    "star", "heart", "shield", "skull", "home", "crown", "flag", "plus", "check", "cross",
+    "potion", "pickaxe", "apple", "fire", "music",
+];
 
 impl CustomButton {
     /// What it shows on it.
     pub fn label(&self) -> String {
         match &self.action {
             CustomAction::Key(name) => crate::lang::get(name),
+            CustomAction::Input(name) => crate::keybinds::display_name(name).plain(),
             CustomAction::Send(line) => line.clone(),
         }
     }

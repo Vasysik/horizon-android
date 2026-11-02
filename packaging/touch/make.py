@@ -260,6 +260,153 @@ ICONS = {
     """,
 }
 
+# What a custom button can wear (settings.rs `CUSTOM_ICONS`): `custom_<name>` and its `_pressed`.
+# Drawn on a coarse grid and doubled: strokes two pixels wide, as the F3 button's letters.
+CUSTOM_ICONS = {
+    "star": """
+        ...#...
+        ...#...
+        #######
+        .#####.
+        ..###..
+        .##.##.
+        .#...#.
+    """,
+    "heart": """
+        .##.##.
+        #######
+        #######
+        .#####.
+        ..###..
+        ...#...
+    """,
+    "shield": """
+        #######
+        #######
+        #######
+        #######
+        .#####.
+        ..###..
+        ...#...
+    """,
+    "pickaxe": """
+        .#####..
+        #....##.
+        .....###
+        ....##.#
+        ...##..#
+        ..##...#
+        .##.....
+        ##......
+    """,
+    "potion": """
+        ..###..
+        ...#...
+        ...#...
+        ..###..
+        .#####.
+        #######
+        #######
+        .#####.
+    """,
+    "apple": """
+        ....#..
+        ...#...
+        .##.##.
+        #######
+        #######
+        #######
+        .#####.
+    """,
+    "home": """
+        ...##...
+        ..####..
+        .######.
+        ########
+        .##..##.
+        .##..##.
+        .##..##.
+    """,
+    "flag": """
+        ##.....
+        #######
+        #######
+        #######
+        ##.....
+        ##.....
+        ##.....
+        ##.....
+    """,
+    "fire": """
+        ...#...
+        ..##...
+        ..###.#
+        .#####.
+        #######
+        ###.###
+        ##...##
+        .#####.
+    """,
+    "skull": """
+        .#####.
+        #######
+        #..#..#
+        #..#..#
+        #######
+        .#####.
+        .#.#.#.
+    """,
+    "crown": """
+        #..##..#
+        #..##..#
+        ##.##.##
+        ########
+        ########
+        ########
+    """,
+    "plus": """
+        ..##..
+        ..##..
+        ######
+        ######
+        ..##..
+        ..##..
+    """,
+    "check": """
+        ......##
+        .....##.
+        ##..##..
+        .####...
+        ..##....
+        ..#.....
+    """,
+    "cross": """
+        ##..##
+        .####.
+        ..##..
+        ..##..
+        .####.
+        ##..##
+    """,
+    "music": """
+        ..#####
+        ..#####
+        ..#...#
+        ..#...#
+        ###.###
+        ###.###
+        ###.###
+    """,
+}
+
+
+def doubled(art):
+    rows = [r.strip() for r in art.strip("\n").splitlines() if r.strip()]
+    return "\n".join("".join(c * 2 for c in row) + "\n" + "".join(c * 2 for c in row) for row in rows)
+
+
+ICONS.update({f"custom_{k}": doubled(v) for k, v in CUSTOM_ICONS.items()})
+
 
 def bitmap(name):
     rows = [r.strip() for r in ICONS[name].strip("\n").splitlines() if r.strip()]
@@ -313,12 +460,16 @@ def build():
                  "camera", "command", "debug", "pick", "players"]:
         sprites[name] = tile(name, False)
         sprites[name + "_pressed"] = tile(name, True)
+    for name in CUSTOM_ICONS:
+        sprites[f"custom_{name}"] = tile(f"custom_{name}", False)
+        sprites[f"custom_{name}_pressed"] = tile(f"custom_{name}", True)
     turns = {"up": None, "down": Image.Transpose.ROTATE_180,
              "left": Image.Transpose.ROTATE_90, "right": Image.Transpose.ROTATE_270}
     for d, turn in turns.items():
         sprites["dpad_" + d] = tile("up", False, turn) if turn else tile("up", False)
         sprites["dpad_" + d + "_pressed"] = tile("up", True, turn) if turn else tile("up", True)
     sprites["dpad_middle"] = tile(None, False)
+    sprites["custom_blank"] = tile(None, False)
     sprites["stick"] = stick_base()
     sprites["stick_knob"] = tile(None, False)
     for name, img in sprites.items():

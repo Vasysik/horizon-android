@@ -108,6 +108,10 @@ pub(super) struct Touch {
     chat_finger: Option<u64>,
     /// Fingers on the mods' buttons: (finger, mod id, button id).
     mod_keys: Vec<(u64, String, String)>,
+    /// The player's own buttons held now, by their name in the layout.
+    custom_down: Vec<String>,
+    /// The custom button a picture was asked for: the next one the inbox gets is its.
+    import_image: Option<u32>,
     /// The mods' buttons as last offered to the layout.
     faces: Vec<ModFace>,
     /// The Sneak button holds sneak now (`touch_sync_sneak`).
@@ -943,6 +947,10 @@ impl Game<'_> {
     fn on_scrollbar(&self, p: [f32; 2]) -> bool {
         let batch = HudBatch::new(self.touch_size());
         let (x, y) = (p[0] / batch.scale, p[1] / batch.scale);
+        // A custom button's canvas: a finger paints, it doesn't scroll.
+        if self.screen == Screen::Options && self.ui.options.painting() {
+            return true;
+        }
         // The title screen's player turns under the finger whichever way it moves.
         if self.on_title_player((x, y)) {
             return true;
@@ -1154,7 +1162,11 @@ impl Game<'_> {
             let skin = |target: Target| match target {
                 Target::Button(b) => self.control_face(b).skin.map(|(sprite, _)| sprite),
                 Target::Stick if !layout.dpad => self.mod_sprite("starling:touch/stick"),
-                Target::Stick | Target::Extra(_) => None,
+                Target::Extra(i) => {
+                    let skin = face_of(&config.extra[i].key).and_then(|f| f.skin.as_ref());
+                    skin.map(|(sprite, _)| sprite.clone())
+                }
+                Target::Stick => None,
             };
             draw_editor(&mut ui, &layout, config, editor, &face, &shape, &skin);
         } else {
@@ -1293,7 +1305,14 @@ impl Game<'_> {
                 let Some(face) = face_of(&extra) else {
                     continue;
                 };
-                let on = self.mods.keys_down.contains(&extra);
+                let on =
+                    self.mods.keys_down.contains(&extra) || self.touch.custom_down.contains(&extra);
+                if let Some((skin, lit)) = &face.skin {
+                    // One image for both: dimmed while held.
+                    let held = if on && skin == lit { *a * 0.6 } else { *a };
+                    icon(&mut ui, if on { lit } else { skin }, *c, *r, 1.0, held);
+                    continue;
+                }
                 let fill = if on { pressed(*a) } else { plate(*a) };
                 plate_of(&mut ui, *shape, *c, *r, fill);
                 match (&face.icon, shape) {
@@ -1517,26 +1536,74 @@ impl Game<'_> {
             self.mod_bind(id, bind, pressed);
             return;
         }
+        let held = format!("{id}:{bind}");
+        self.touch.custom_down.retain(|k| *k != held);
+        if pressed {
+            self.touch.custom_down.push(held);
+        }
         let action = self
             .touch
             .config
             .as_ref()
             .and_then(|c| c.custom.iter().find(|b| b.id.to_string() == bind))
             .map(|b| b.action.clone());
-        match action {
-            Some(CustomAction::Send(line)) if pressed => self.handle_chat_input(&line),
-            Some(CustomAction::Key(name)) => {
-                let key = horizon_client::keybinds::key_code(self.settings.keys.get(&name));
-                let Some(key) = key else { return };
+        let key = match action {
+            Some(CustomAction::Send(line)) => {
                 if pressed {
-                    let _ = self.control_key_down(key);
-                } else {
-                    self.keys.remove(&key);
-                    self.physical_keys.remove(&key);
+                    self.handle_chat_input(&line);
                 }
+                return;
             }
-            _ => {}
+            Some(CustomAction::Key(name)) => {
+                horizon_client::keybinds::key_code(self.settings.keys.get(&name))
+            }
+            Some(CustomAction::Input(name)) => horizon_client::keybinds::key_code(&name),
+            None => None,
+        };
+        let Some(key) = key else { return };
+        // F3 acts on its release, through its own handler (the game's F3 button too).
+        if key == KeyCode::F3 {
+            let state = if pressed {
+                self.physical_keys.insert(key);
+                KeyAction::Press
+            } else {
+                self.physical_keys.remove(&key);
+                KeyAction::Release
+            };
+            self.debug_key(key, state);
+        } else if pressed {
+            let _ = self.control_key_down(key);
+        } else {
+            self.keys.remove(&key);
+            self.physical_keys.remove(&key);
         }
+    }
+
+    /// The drawing page's Import PNG: the system's picker, whose file comes through the inbox.
+    pub(super) fn pick_button_image(&mut self, id: u32) {
+        if horizon_client::platform::pick_file() {
+            self.touch.import_image = Some(id);
+        } else {
+            self.imports.say("No file picker opened".into());
+        }
+    }
+
+    /// A picture the inbox put in `skins/`, when a custom button asked for it: it goes on the
+    /// canvas, not on the player. True when it was taken.
+    pub(super) fn button_image_imported(&mut self, path: &std::path::Path) -> bool {
+        if self.touch.import_image.take().is_none() {
+            return false;
+        }
+        match horizon_client::hud::decode(path) {
+            Ok((w, h, pixels)) => {
+                self.ui.options.import_button_image(w, h, &pixels);
+                self.imports
+                    .say("Picture on the canvas: Done keeps it".into());
+            }
+            Err(e) => self.imports.say(format!("Could not read the picture: {e}")),
+        }
+        let _ = std::fs::remove_file(path);
+        true
     }
 
     /// The Custom Buttons page opened: it shows what the layout has.

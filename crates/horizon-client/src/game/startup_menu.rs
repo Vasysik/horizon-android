@@ -535,6 +535,14 @@ impl Loading {
                 Event::CustomButtons => {
                     super::touch::save_custom_buttons(self.settings.custom_buttons.clone());
                 }
+                Event::CustomImage(id, pixels) => {
+                    if let Err(e) = horizon_client::own_buttons::save(id, &pixels) {
+                        log::warn!("Horizon: the button image was not saved: {e}");
+                    }
+                    super::touch::save_custom_buttons(self.settings.custom_buttons.clone());
+                }
+                // No inbox before a game: this menu draws, and imports in the game's.
+                Event::ImportButtonImage(_) => {}
                 Event::OpenShaderOptions => {
                     if let Some((name, profile)) = self.settings.horizon.shader_choice() {
                         self.settings.shader_options = super::shader_packs::read_shader_options(

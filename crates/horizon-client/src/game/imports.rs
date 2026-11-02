@@ -147,7 +147,9 @@ impl super::Game<'_> {
             Some(Kind::Mod) => self.start_mods(),
             // A skin is worn at once (Skin Customization's Choose a File...).
             Some(Kind::Skin) => {
-                if let Some(path) = self.imports.skin.take() {
+                if let Some(path) = self.imports.skin.take()
+                    && !self.button_image_imported(&path)
+                {
                     self.own_skin_imported(&path);
                 }
             }

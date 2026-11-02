@@ -56,6 +56,7 @@ pub mod options_file;
 pub mod options_fixes;
 pub mod options_ui;
 pub mod overlay;
+pub mod own_buttons;
 pub mod own_skin;
 pub mod pack_screen;
 pub mod packs;

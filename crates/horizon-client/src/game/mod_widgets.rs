@@ -20,6 +20,8 @@ pub(super) struct ModFace {
     pub(super) label: String,
     /// The atlas sprite drawn on it instead of the label.
     pub(super) icon: Option<String>,
+    /// A sprite that is the whole button, and its pressed one (a custom button's look).
+    pub(super) skin: Option<(String, String)>,
     pub(super) shape: Shape,
 }
 
@@ -506,6 +508,7 @@ impl Game<'_> {
                     key: format!("{id}:{}", bind.id),
                     label,
                     icon: None,
+                    skin: None,
                     shape,
                 },
                 place(centre[0] / w, centre[1] / h, wide_size),
@@ -531,6 +534,7 @@ impl Game<'_> {
                         key: format!("{id}:{}", b.id),
                         label: b.label.clone(),
                         icon,
+                        skin: None,
                         shape,
                     },
                     place(b.x, b.y, size),
@@ -557,16 +561,31 @@ impl Game<'_> {
             .map(|(i, b)| {
                 let label: String = b.label().chars().take(14).collect();
                 let width = HudBatch::text_width(&self.gui.atlas, &label) + 10.0;
+                let sprite = |name: &str| self.mod_sprite(&format!("starling:touch/{name}"));
+                // Its own image goes dim while pressed; an icon has a pressed sprite.
+                let skin = if b.image {
+                    sprite(&format!("own_{}", b.id)).map(|own| (own.clone(), own))
+                } else {
+                    b.icon.as_deref().and_then(|icon| {
+                        let up = sprite(&format!("custom_{icon}"))?;
+                        Some((up, sprite(&format!("custom_{icon}_pressed"))?))
+                    })
+                };
                 let face = ModFace {
                     key: format!("{}:{}", horizon_client::touch::CUSTOM_BUTTONS, b.id),
                     label,
                     icon: None,
-                    shape: Shape::Wide(width / WIDE_HEIGHT),
+                    shape: if skin.is_some() {
+                        Shape::Square
+                    } else {
+                        Shape::Wide(width / WIDE_HEIGHT)
+                    },
+                    skin,
                 };
                 let place = Place {
                     x: 0.5,
                     y: 0.25 + 0.1 * (i % 5) as f32,
-                    size,
+                    size: if face.skin.is_some() { 0.5 } else { size },
                     show: horizon_client::touch::Show::On,
                     opacity: 1.0,
                 };

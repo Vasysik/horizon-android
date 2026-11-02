@@ -481,14 +481,19 @@ impl LayoutConfig {
             }
         }
         for v in value["custom"].as_array().into_iter().flatten().take(64) {
-            let action = match (v["key"].as_str(), v["send"].as_str()) {
-                (Some(key), _) => CustomAction::Key(key.to_owned()),
-                (None, Some(line)) => CustomAction::Send(line.to_owned()),
-                (None, None) => continue,
+            let text = |key: &str| v[key].as_str().map(str::to_owned);
+            let Some(action) = text("key")
+                .map(CustomAction::Key)
+                .or_else(|| text("input").map(CustomAction::Input))
+                .or_else(|| text("send").map(CustomAction::Send))
+            else {
+                continue;
             };
             config.custom.push(CustomButton {
                 id: v["id"].as_u64().unwrap_or(0) as u32,
                 action,
+                icon: text("icon"),
+                image: v["image"].as_bool().unwrap_or(false),
             });
         }
         // The mods' buttons, those of mods not running now too (they keep their places).
@@ -534,9 +539,19 @@ impl LayoutConfig {
         let custom: Vec<Value> = self
             .custom
             .iter()
-            .map(|b| match &b.action {
-                CustomAction::Key(key) => json!({ "id": b.id, "key": key }),
-                CustomAction::Send(line) => json!({ "id": b.id, "send": line }),
+            .map(|b| {
+                let mut entry = match &b.action {
+                    CustomAction::Key(key) => json!({ "id": b.id, "key": key }),
+                    CustomAction::Input(key) => json!({ "id": b.id, "input": key }),
+                    CustomAction::Send(line) => json!({ "id": b.id, "send": line }),
+                };
+                if let Some(icon) = &b.icon {
+                    entry["icon"] = json!(icon);
+                }
+                if b.image {
+                    entry["image"] = json!(true);
+                }
+                entry
             })
             .collect();
         let value = json!({
@@ -1909,10 +1924,20 @@ mod tests {
                 CustomButton {
                     id: 1,
                     action: CustomAction::Key("key.sprint".into()),
+                    icon: Some("star".into()),
+                    image: false,
                 },
                 CustomButton {
                     id: 2,
                     action: CustomAction::Send("/home".into()),
+                    icon: None,
+                    image: true,
+                },
+                CustomButton {
+                    id: 3,
+                    action: CustomAction::Input("key.keyboard.f1".into()),
+                    icon: None,
+                    image: false,
                 },
             ],
             ..LayoutConfig::default()
