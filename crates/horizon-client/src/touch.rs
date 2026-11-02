@@ -356,6 +356,9 @@ pub struct LayoutConfig {
     pub vibrate: bool,
     /// Turning the phone turns the view too ([`gyro_turn`]), as PojavLauncher's gyroscope.
     pub gyro: bool,
+    /// Three fingers landing together show or hide the Stats overlay. Off by default: many
+    /// play with three fingers.
+    pub three_fingers: bool,
 }
 
 /// The view's turn, in degrees right and down, for what the gyroscope turned (radians about
@@ -405,6 +408,7 @@ impl Default for LayoutConfig {
             fixed_stick: false,
             vibrate: true,
             gyro: false,
+            three_fingers: false,
         }
     }
 }
@@ -457,6 +461,7 @@ impl LayoutConfig {
         config.fixed_stick = value["anchor"].as_str() == Some("fixed");
         config.vibrate = value["vibrate"].as_bool().unwrap_or(true);
         config.gyro = value["gyro"].as_bool().unwrap_or(false);
+        config.three_fingers = value["three_fingers"].as_bool().unwrap_or(false);
         if value["stick"].is_object() {
             read(&value["stick"], &mut config.stick, MIN_SIZE);
             if config.stick.show == Show::Off {
@@ -509,6 +514,7 @@ impl LayoutConfig {
             "anchor": if self.fixed_stick { "fixed" } else { "floating" },
             "vibrate": self.vibrate,
             "gyro": self.gyro,
+            "three_fingers": self.three_fingers,
             "stick": entry(&self.stick),
             "buttons": buttons,
             "mods": mods,
@@ -593,7 +599,7 @@ pub enum Action {
     HoldStop,
     /// Select hotbar slot 0..8.
     Slot(usize),
-    /// Three fingers landing together: show or hide the Stats overlay.
+    /// Three fingers landing together, where that is on: show or hide the Stats overlay.
     ToggleStats,
     /// A chip beside the held F3 button: F3 with that combination ([`DEBUG_COMBOS`]).
     DebugCombo(usize),
@@ -901,6 +907,8 @@ pub struct TouchControls {
     fingers: Vec<(u64, Role)>,
     /// The held F3 button shows the other F keys, not its combinations.
     pub function_keys: bool,
+    /// The three-finger tap is on ([`LayoutConfig::three_fingers`]).
+    pub three_fingers: bool,
     /// When the fingers down now landed, the latest last (for the three-finger tap).
     landed: Vec<Instant>,
     /// Where the stick is drawn and how far it is pushed.
@@ -1037,7 +1045,7 @@ impl TouchControls {
                 self.fingers.push((id, role));
                 self.landed.retain(|t| now.duration_since(*t) < CHORD);
                 self.landed.push(now);
-                if self.landed.len() >= 3 && self.fingers.len() >= 3 {
+                if self.three_fingers && self.landed.len() >= 3 && self.fingers.len() >= 3 {
                     // The three fingers stop whatever they began.
                     self.landed.clear();
                     // A Sneak pressed by this finger is taken back with its toggle.
@@ -1291,6 +1299,8 @@ pub enum EditorAction {
     Vibrate,
     /// Aiming by turning the phone or not ([`LayoutConfig::gyro`]).
     Gyro,
+    /// The three-finger tap or not ([`LayoutConfig::three_fingers`]).
+    ThreeFingers,
 }
 
 /// The layout editor: drag a control to move it; the one last touched gets chips to make it
@@ -1309,18 +1319,20 @@ pub struct LayoutEditor {
 const SIZE_STEP: f32 = 0.1;
 
 impl LayoutEditor {
-    /// Done, the movement control, the interaction mode, vibration, the gyroscope and Reset,
-    /// near the top centre, under the row of buttons the default layout puts there.
-    pub fn bar(width: f32, height: f32) -> [(EditorAction, [f32; 2], f32); 6] {
+    /// Done, the movement control, the interaction mode, vibration, the gyroscope, the
+    /// three-finger tap and Reset, near the top centre, under the row of buttons the default
+    /// layout puts there.
+    pub fn bar(width: f32, height: f32) -> [(EditorAction, [f32; 2], f32); 7] {
         let u = unit(width, height);
         let at = |x: f32| [width / 2.0 + x * u, 2.6 * u];
         [
-            (EditorAction::Done, at(-3.35), 0.6 * u),
-            (EditorAction::Movement, at(-2.01), 0.6 * u),
-            (EditorAction::Interact, at(-0.67), 0.6 * u),
-            (EditorAction::Vibrate, at(0.67), 0.6 * u),
-            (EditorAction::Gyro, at(2.01), 0.6 * u),
-            (EditorAction::Reset, at(3.35), 0.6 * u),
+            (EditorAction::Done, at(-4.02), 0.6 * u),
+            (EditorAction::Movement, at(-2.68), 0.6 * u),
+            (EditorAction::Interact, at(-1.34), 0.6 * u),
+            (EditorAction::Vibrate, at(0.0), 0.6 * u),
+            (EditorAction::Gyro, at(1.34), 0.6 * u),
+            (EditorAction::ThreeFingers, at(2.68), 0.6 * u),
+            (EditorAction::Reset, at(4.02), 0.6 * u),
         ]
     }
 
@@ -1461,6 +1473,9 @@ impl LayoutEditor {
                     }
                     if action == EditorAction::Gyro {
                         config.gyro = !config.gyro;
+                    }
+                    if action == EditorAction::ThreeFingers {
+                        config.three_fingers = !config.three_fingers;
                     }
                     if action == EditorAction::Interact {
                         config.interact = config.interact.next();
@@ -1821,7 +1836,10 @@ mod tests {
     #[test]
     fn three_fingers_together_toggle_the_stats_and_take_nothing_else() {
         let (l, now) = (layout(), Instant::now());
-        let mut t = TouchControls::default();
+        let mut t = TouchControls {
+            three_fingers: true,
+            ..TouchControls::default()
+        };
         t.event(&l, 1, TouchPhase::Started, [2000.0, 600.0], now);
         t.event(&l, 2, TouchPhase::Started, [2200.0, 600.0], now + CHORD / 4);
         let third = t.event(&l, 3, TouchPhase::Started, [2400.0, 600.0], now + CHORD / 2);
@@ -1839,6 +1857,25 @@ mod tests {
         t.event(&l, 5, TouchPhase::Started, [2200.0, 600.0], now + CHORD * 2);
         let late = t.event(&l, 6, TouchPhase::Started, [2400.0, 600.0], now + CHORD * 4);
         assert!(late.is_empty());
+    }
+
+    #[test]
+    fn three_fingers_are_just_fingers_unless_turned_on() {
+        let (l, now) = (layout(), Instant::now());
+        let mut t = TouchControls::default();
+        t.event(&l, 1, TouchPhase::Started, [2000.0, 600.0], now);
+        t.event(&l, 2, TouchPhase::Started, [2200.0, 600.0], now);
+        let third = t.event(&l, 3, TouchPhase::Started, [2400.0, 600.0], now);
+        assert!(!third.contains(&Action::ToggleStats));
+        // What they began goes on.
+        assert!(t.fingers.iter().all(|(_, r)| !matches!(r, Role::Spent)));
+        // Off for a layout from before the choice, and kept once picked.
+        assert!(!LayoutConfig::default().three_fingers);
+        let on = LayoutConfig {
+            three_fingers: true,
+            ..LayoutConfig::default()
+        };
+        assert_eq!(LayoutConfig::from_json(&on.to_json()), on);
     }
 
     #[test]
@@ -2125,6 +2162,7 @@ mod tests {
         t.clear_sneak();
         assert!(!t.sneaking());
         // A Sneak press that is one of a three-finger tap is taken back.
+        t.three_fingers = true;
         t.event(&l, 8, TouchPhase::Started, [2000.0, 600.0], now);
         t.event(&l, 9, TouchPhase::Started, [2200.0, 600.0], now);
         let chord = t.event(&l, 10, TouchPhase::Started, sneak, now);

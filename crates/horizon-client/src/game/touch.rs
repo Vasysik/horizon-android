@@ -367,7 +367,8 @@ pub(super) fn draw_editor(
             | EditorAction::Movement
             | EditorAction::Interact
             | EditorAction::Vibrate
-            | EditorAction::Gyro => color::with_alpha(color::BG, 0.85),
+            | EditorAction::Gyro
+            | EditorAction::ThreeFingers => color::with_alpha(color::BG, 0.85),
         };
         circle(ui, c, r, fill);
         let text = match action {
@@ -386,6 +387,8 @@ pub(super) fn draw_editor(
             EditorAction::Vibrate => "Vib off",
             EditorAction::Gyro if config.gyro => "Gyro on",
             EditorAction::Gyro => "Gyro off",
+            EditorAction::ThreeFingers if config.three_fingers => "3-tap on",
+            EditorAction::ThreeFingers => "3-tap off",
         };
         label(ui, c, r, text, ink(1.0));
     }
@@ -719,6 +722,8 @@ impl Game<'_> {
             }
             return true;
         }
+        self.touch.controls.three_fingers =
+            self.touch.config.as_ref().is_some_and(|c| c.three_fingers);
         let actions = self
             .touch
             .controls
