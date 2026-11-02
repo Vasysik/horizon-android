@@ -14,6 +14,7 @@ const HELP: &[&str] = &[
     "sky-order early|late           A/B vanilla sky ordering on supported Android Vulkan devices",
     "terrain-passes single|split    A/B terrain pipelines; split requires a supported backend",
     "static-cutout on|off           A/B skipping unused LOD dithering in proven unfaded cutouts",
+    "settled-terrain on|off         A/B specialization for fully visible non-RGSS terrain",
     "status                         game, player, streaming and renderer state",
     "simulation                     authoritative projectiles in the owner's level",
     "server-hold on|off             hold simulation and player packets at a control-fixture barrier",
@@ -324,6 +325,18 @@ impl Game<'_> {
                     .as_mut()
                     .ok_or("no renderer")?
                     .set_late_sky(on)?;
+                ok()
+            }
+            "settled-terrain" => {
+                let on = match arg(1)? {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("settled-terrain on|off".into()),
+                };
+                self.renderer
+                    .as_mut()
+                    .ok_or("no renderer")?
+                    .set_settled_terrain(on)?;
                 ok()
             }
             "static-cutout" => {

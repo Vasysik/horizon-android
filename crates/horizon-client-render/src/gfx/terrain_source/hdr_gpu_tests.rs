@@ -14,6 +14,18 @@ fn render_paths(
     alpha: u8,
     mixed: bool,
 ) -> Vec<u8> {
+    render_specialized(device, queue, source, variant, split, alpha, mixed, 0)
+}
+fn render_specialized(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    source: &str,
+    variant: u8,
+    split: bool,
+    alpha: u8,
+    mixed: bool,
+    settled: u8,
+) -> Vec<u8> {
     let module = naga::front::wgsl::parse_str(source).unwrap();
     let (_, globals) = module
         .types
@@ -174,6 +186,11 @@ fn render_paths(
     let attributes =
         wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
     let instance_attributes = wgpu::vertex_attr_array![5=>Float32x4];
+    let constants: &[(&str, f64)] = if settled == 2 {
+        &[("TERRAIN_FILTERING", 0.0), ("TERRAIN_FULLY_VISIBLE", 1.0)]
+    } else {
+        &[]
+    };
     let make_pipeline = |vertex, fragment| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
@@ -181,7 +198,10 @@ fn render_paths(
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some(vertex),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..Default::default()
+                },
                 buffers: &[
                     Some(wgpu::VertexBufferLayout {
                         array_stride: 24,
@@ -198,7 +218,10 @@ fn render_paths(
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some(fragment),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..Default::default()
+                },
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: None,
@@ -215,7 +238,14 @@ fn render_paths(
     let pipelines = if split {
         vec![
             make_pipeline("vs_terrain_opaque", "fs_opaque"),
-            make_pipeline("vs_terrain_cutout", "fs_solid"),
+            make_pipeline(
+                "vs_terrain_cutout",
+                if settled == 2 {
+                    "fs_cutout_static"
+                } else {
+                    "fs_solid"
+                },
+            ),
         ]
     } else {
         vec![make_pipeline("vs_terrain", "fs_solid")]
@@ -249,7 +279,7 @@ fn render_paths(
         contents: &vertices,
         usage: wgpu::BufferUsages::VERTEX,
     });
-    let step = if variant == 0 {
+    let step = if variant == 0 || settled != 0 {
         1.0 / 32768.0
     } else if variant == 1 {
         1.5 / 32768.0
@@ -326,6 +356,23 @@ fn render_paths(
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
     read.slice(..).get_mapped_range().unwrap().to_vec()
+}
+
+#[test]
+fn settled_terrain_preserves_fog_lighting_alpha_and_emissive_masks() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let source = super::terrain_shader(false);
+    for alpha in [0, 64, 127, 128, 255] {
+        for variant in 0..36 {
+            let expected =
+                render_specialized(&device, &queue, &source, variant, false, alpha, true, 1);
+            let actual =
+                render_specialized(&device, &queue, &source, variant, true, alpha, true, 2);
+            assert_eq!(expected, actual, "scene {variant}, alpha {alpha}");
+        }
+    }
 }
 
 #[test]

@@ -571,6 +571,8 @@ pub struct Renderer {
     opaque_terrain_on: bool,
     static_cutout: Option<wgpu::RenderPipeline>,
     static_cutout_on: bool,
+    settled_terrain: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    settled_terrain_on: bool,
     /// Android Vulkan only; packs keep their original sky/material ordering.
     late_sky: Option<LateSky>,
     late_sky_on: bool,
@@ -1914,23 +1916,31 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &debug_line_attributes,
         })];
-        let pipeline_in = |layout: &wgpu::PipelineLayout,
-                           label: &str,
-                           vertex: &str,
-                           fragment: &str,
-                           buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
-                           topology: wgpu::PrimitiveTopology,
-                           cull: Option<wgpu::Face>,
-                           depth_write: bool,
-                           depth_test: bool,
-                           blend: Option<wgpu::BlendState>| {
+        let specialized_pipeline = |layout: &wgpu::PipelineLayout,
+                                    label: &str,
+                                    vertex: &str,
+                                    fragment: &str,
+                                    buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                                    topology: wgpu::PrimitiveTopology,
+                                    cull: Option<wgpu::Face>,
+                                    depth_write: bool,
+                                    depth_test: bool,
+                                    blend: Option<wgpu::BlendState>,
+                                    settled: bool| {
+            let mut constants = sprite_constants.to_vec();
+            if settled {
+                constants.extend([("TERRAIN_FILTERING", 0.0), ("TERRAIN_FULLY_VISIBLE", 1.0)]);
+            }
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some(vertex),
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &constants,
+                        ..Default::default()
+                    },
                     buffers,
                 },
                 primitive: wgpu::PrimitiveState {
@@ -1954,7 +1964,7 @@ impl Renderer {
                     module: &shader,
                     entry_point: Some(fragment),
                     compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &sprite_constants,
+                        constants: &constants,
                         ..Default::default()
                     },
                     targets: &[Some(wgpu::ColorTargetState {
@@ -1966,6 +1976,30 @@ impl Renderer {
                 multiview_mask: None,
                 cache: None,
             })
+        };
+        let pipeline_in = |layout: &wgpu::PipelineLayout,
+                           label: &str,
+                           vertex: &str,
+                           fragment: &str,
+                           buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                           topology: wgpu::PrimitiveTopology,
+                           cull: Option<wgpu::Face>,
+                           depth_write: bool,
+                           depth_test: bool,
+                           blend: Option<wgpu::BlendState>| {
+            specialized_pipeline(
+                layout,
+                label,
+                vertex,
+                fragment,
+                buffers,
+                topology,
+                cull,
+                depth_write,
+                depth_test,
+                blend,
+                false,
+            )
         };
         let pipeline = |label: &str,
                         vertex: &str,
@@ -2066,6 +2100,39 @@ impl Renderer {
                 None
             } else {
                 Some(candidate)
+            }
+        });
+        let settled_terrain = opaque_terrain.as_ref().and_then(|_| {
+            let checks = GpuChecks::push(&device);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let make = |label, vertex, fragment| {
+                specialized_pipeline(
+                    &layout,
+                    label,
+                    vertex,
+                    fragment,
+                    &terrain_buffers,
+                    tri,
+                    Some(wgpu::Face::Back),
+                    true,
+                    true,
+                    None,
+                    true,
+                )
+            };
+            let pair = (
+                make("Settled opaque terrain", "vs_terrain_opaque", "fs_opaque"),
+                make(
+                    "Settled cutout terrain",
+                    "vs_terrain_cutout",
+                    "fs_cutout_static",
+                ),
+            );
+            if let Some(error) = pollster::block_on(internal.pop()).or(checks.pop()) {
+                log::warn!("Settled terrain unavailable; retaining ordinary shader: {error}");
+                None
+            } else {
+                Some(pair)
             }
         });
         crate::mesher::group_parts(opaque_terrain.is_some());
@@ -3499,6 +3566,8 @@ impl Renderer {
             opaque_terrain_on: true,
             static_cutout,
             static_cutout_on: true,
+            settled_terrain,
+            settled_terrain_on: true,
             late_sky,
             late_sky_on: true,
             terrain_pass_draws: None,
@@ -3941,6 +4010,13 @@ impl Renderer {
             return Err("static cutout unavailable".into());
         }
         self.static_cutout_on = on;
+        Ok(())
+    }
+    pub fn set_settled_terrain(&mut self, on: bool) -> Result<()> {
+        if on && self.settled_terrain.is_none() {
+            return Err("settled terrain unavailable".into());
+        }
+        self.settled_terrain_on = on;
         Ok(())
     }
     pub fn set_opaque_terrain(&mut self, on: bool) -> Result<()> {
@@ -5724,6 +5800,12 @@ impl Renderer {
         let static_cutout = self.static_cutout_on
             && split_terrain
             && self.origins.iter().all(|origin| origin[3] >= 0.0);
+        let settled_terrain = self.settled_terrain_on
+            && static_cutout
+            && self.texture_filtering != 1
+            // The bare section UV step encodes fully visible, ordinary terrain.
+            // Upload fades, LOD instances and other encodings keep the general path.
+            && self.origins.iter().all(|origin| origin[3] == 1.0 / crate::mesher::UV_STEPS);
         let mut opaque_draws = 0u32;
         let mut cutout_end = 0u32;
         if split_terrain {
@@ -7013,9 +7095,19 @@ impl Renderer {
                                 && material.is_none()
                                 && let Some((opaque, cutout)) = &self.opaque_terrain
                             {
+                                let (opaque, settled_cutout) = if settled_terrain {
+                                    self.settled_terrain
+                                        .as_ref()
+                                        .map(|(a, b)| (a, Some(b)))
+                                        .unwrap_or((opaque, None))
+                                } else {
+                                    (opaque, None)
+                                };
                                 pass.set_pipeline(opaque);
                                 self.draw_sections(&mut pass, &self.indirect, 0, 0, opaque_draws);
-                                pass.set_pipeline(if static_cutout {
+                                pass.set_pipeline(if let Some(cutout) = settled_cutout {
+                                    cutout
+                                } else if static_cutout {
                                     self.static_cutout.as_ref().unwrap_or(cutout)
                                 } else {
                                     cutout

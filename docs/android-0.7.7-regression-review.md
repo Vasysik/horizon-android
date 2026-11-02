@@ -104,6 +104,36 @@ measured 21.770/22.101 ms with the original cutout and 20.988/21.247 ms with the
 specialization. All 31 tests in the Android GPU harness and ARM64 Clippy passed.
 Flat-index frames retain their existing shader; this result is for Compatibility.
 
+### Fully visible terrain specialization
+
+A second guarded Vulkan path specializes the existing reconstructed sampler's
+non-RGSS branch and omits section-appearance calculations after every instance
+has reached full visibility. It preserves the sampler, gradients, mip selection,
+alpha cutout, lighting, emissive masks, HDR and distance fog. It does not restore
+the older raw-nearest sampler or reduce quality settings. The CPU requires the
+bare ordinary section UV-step encoding for every instance. Partial visibility,
+LOD encodings, RGSS, shader packs and GPU-culling paths retain the general shader;
+pipeline-creation failure also falls back. Flat-index Batching is unchanged.
+
+An optimized fast-build ABAB in the same isolated 16-chunk tablet scene measured:
+
+| Path | Mean FPS | Mean GPU frame time |
+| --- | ---: | ---: |
+| Existing static cutout | 39.51 | 21.576 ms |
+| Fully visible specialization | 42.02 | 20.154 ms |
+| Existing path, repeat | 39.53 | 21.567 ms |
+| Specialization, repeat | 41.95 | 20.168 ms |
+
+Each run lasted ten seconds. This is a causal comparison within one process,
+not a production release comparison against 0.7.4 or a Poco result. Camera
+rotation and a teleport triggering chunk work completed without a validation
+failure. With RGSS selected, toggling the specialization gave 33.282/33.355 ms
+GPU time, consistent with retaining the original path. Anisotropic filtering
+also rendered successfully. All 32 Android GPU tests passed, including comparison
+of fog, alpha thresholds, colored light and all emissive-mask slots. ARM64 fast
+compilation and Clippy passed. These gains remain partial; the full reported
+performance regression is not resolved.
+
 - Matched production-profile GPU/CPU comparisons and causal isolation of the slowdown.
 - ARMv7 device recheck after the ARM64 GLES fix; other drivers and x86 ABIs.
 - Mixed physical/touch toggle inputs, suspend/resume and resource reloads.
