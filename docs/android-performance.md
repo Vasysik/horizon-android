@@ -44,3 +44,38 @@ chat, server addresses, world names, seeds or player coordinates.
 Developer regression check: `python tools/test_android_performance.py`. It runs
 the actual recorder/statistics/timing code in a host harness and substitutes only
 Android publication. The isolated storage probe tests provider access separately.
+
+## Vulkan terrain validation
+
+Android Vulkan separates proven opaque terrain from alpha-cutout terrain within
+the same render pass. The opaque shader does not discard fragments. This lets
+mobile GPUs reject more hidden pixels before shading them; see the
+[Khronos tile-rendering guidance](https://docs.vulkan.org/guide/latest/tile_based_rendering_best_practices.html).
+Resolution, textures, fog, lighting and render distance are unchanged.
+
+Meshes with order-sensitive overlapping surfaces retain the ordinary shader and
+ordering. Fading sections use the cutout path. Shader packs, visible distant
+terrain and GPU occlusion culling retain their existing render path. OpenGL ES
+retains its previous mesh order and shaders.
+
+On a 2405CPCFBG tablet with Adreno 710, Vulkan Compatibility at 2560×1600 and
+16 chunks was measured in a stationary, frozen test world with recording,
+extended GPU profiling and ADPF disabled. Alternating runs used the same camera
+and resident geometry, without pending chunk work:
+
+| Lighting | Ordinary terrain | Split terrain | GPU time reduction |
+| --- | ---: | ---: | ---: |
+| Night, three runs per path | 18.79 ms | 13.63 ms | 27% |
+| Day, two runs per path | 19.79 ms | 14.77 ms | 25% |
+
+These results describe this fixture and device, not a general FPS guarantee.
+VSync limited the faster night runs to 60 FPS. The authenticated developer
+control command `terrain-passes single|split` switches the pipeline for A/B
+measurement; it does not change graphics settings or rebuild meshes. Status and
+performance reports expose `terrain_pass_draws` as opaque/cutout/order-sensitive
+draw counts, or null when the ordinary path is active.
+
+The terrain shader regression tests compare the output of both paths over alpha
+thresholds, fog, section fading and emission tiers. Geometry tests preserve the
+ordering of overlapping cutout/opaque faces. This does not replace testing on
+other GPUs, shader packs and resource packs.
