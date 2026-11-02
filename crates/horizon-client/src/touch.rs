@@ -68,6 +68,21 @@ pub const DEBUG_COMBOS: [(&str, &str); 8] = [
     ("key.debug.switchGameMode", "Modes"),
 ];
 
+/// The other F keys, shown when a finger reaches the chip after F3's combinations.
+pub const FUNCTION_KEYS: [&str; 11] = [
+    "F1 HUD",
+    "F2 Print",
+    "F4",
+    "F5 Camera",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+];
+
 impl Button {
     pub const ALL: [Button; 14] = [
         Button::Jump,
@@ -583,6 +598,10 @@ pub enum Action {
     ToggleStats,
     /// A chip beside the held F3 button: F3 with that combination ([`DEBUG_COMBOS`]).
     DebugCombo(usize),
+    /// A finger reached the chip of the other F keys: F3 was used, and shows them now.
+    FunctionKeys,
+    /// One of the other F keys ([`FUNCTION_KEYS`]).
+    FunctionKey(usize),
 }
 
 /// Fingers landing within this of each other count as one three-finger tap.
@@ -723,21 +742,43 @@ impl Layout {
         let k = len.min(r) / len;
         ([x + dx * k, y + dy * k], [dx * k / r, -dy * k / r], len)
     }
-    /// The chips of F3's combinations ([`DEBUG_COMBOS`]), shown while the F3 button is held:
-    /// two rows of pills under it (over it near the bottom), kept on the screen. Each: its
-    /// combination, centre, and half width and height.
+    /// The chips of F3's combinations ([`DEBUG_COMBOS`]) and, last, the one of the other F keys,
+    /// shown while the F3 button is held. Each: its index, centre, and half width and height.
     pub fn debug_chips(&self) -> Vec<(usize, [f32; 2], [f32; 2])> {
+        let u = self.unit;
+        self.chips(
+            DEBUG_COMBOS.len() + 1,
+            [0.95 * u, 0.34 * u],
+            [2.05 * u, 0.85 * u],
+        )
+    }
+    /// The chips of the other F keys ([`FUNCTION_KEYS`]), in place of F3's combinations.
+    pub fn function_chips(&self) -> Vec<(usize, [f32; 2], [f32; 2])> {
+        let u = self.unit;
+        self.chips(
+            FUNCTION_KEYS.len(),
+            [0.7 * u, 0.34 * u],
+            [1.5 * u, 0.85 * u],
+        )
+    }
+    /// `count` pills in two rows under the F3 button (over it near the bottom), kept on the
+    /// screen.
+    fn chips(
+        &self,
+        count: usize,
+        half: [f32; 2],
+        step: [f32; 2],
+    ) -> Vec<(usize, [f32; 2], [f32; 2])> {
         let Some(&(_, c, r, _)) = self.buttons.iter().find(|(b, ..)| *b == Button::Debug) else {
             return Vec::new();
         };
         let u = self.unit;
-        let (half, step) = ([0.95 * u, 0.34 * u], [2.05 * u, 0.85 * u]);
-        let columns = DEBUG_COMBOS.len().div_ceil(2);
+        let columns = count.div_ceil(2);
         let width = step[0] * columns as f32;
         let left = (c[0] - width / 2.0).clamp(0.0, (self.width - width).max(0.0)) + step[0] / 2.0;
         let below = c[1] + r + 0.25 * u + half[1];
         let downward = below + step[1] + half[1] <= self.height;
-        (0..DEBUG_COMBOS.len())
+        (0..count)
             .map(|i| {
                 let (col, row) = ((i % columns) as f32, (i / columns) as f32);
                 let y = if downward {
@@ -750,10 +791,10 @@ impl Layout {
             .collect()
     }
     fn debug_chip_at(&self, p: [f32; 2]) -> Option<usize> {
-        self.debug_chips()
-            .into_iter()
-            .find(|(_, c, h)| (p[0] - c[0]).abs() <= h[0] && (p[1] - c[1]).abs() <= h[1] * 1.2)
-            .map(|(i, ..)| i)
+        chip_at(&self.debug_chips(), p)
+    }
+    fn function_chip_at(&self, p: [f32; 2]) -> Option<usize> {
+        chip_at(&self.function_chips(), p)
     }
     /// Whether `p` presses the close button.
     pub fn close_at(&self, p: [f32; 2]) -> bool {
@@ -848,9 +889,19 @@ fn dpad_step(from: Option<[i8; 2]>, to: Option<[i8; 2]>) -> Vec<Action> {
     out
 }
 
+/// The chip of `chips` under `p`.
+fn chip_at(chips: &[(usize, [f32; 2], [f32; 2])], p: [f32; 2]) -> Option<usize> {
+    chips
+        .iter()
+        .find(|(_, c, h)| (p[0] - c[0]).abs() <= h[0] && (p[1] - c[1]).abs() <= h[1] * 1.2)
+        .map(|(i, ..)| *i)
+}
+
 #[derive(Default)]
 pub struct TouchControls {
     fingers: Vec<(u64, Role)>,
+    /// The held F3 button shows the other F keys, not its combinations.
+    pub function_keys: bool,
     /// When the fingers down now landed, the latest last (for the three-finger tap).
     landed: Vec<Instant>,
     /// Where the stick is drawn and how far it is pushed.
@@ -909,8 +960,21 @@ impl TouchControls {
         let mut out = Vec::new();
         match phase {
             TouchPhase::Started => {
-                let combo = layout.debug_chip_at(p).filter(|_| self.held(Button::Debug));
-                let role = if let Some(i) = combo {
+                let held = self.held(Button::Debug);
+                let other = layout
+                    .function_chip_at(p)
+                    .filter(|_| held && self.function_keys);
+                let combo = layout
+                    .debug_chip_at(p)
+                    .filter(|_| held && !self.function_keys);
+                let role = if let Some(i) = other {
+                    out.push(Action::FunctionKey(i));
+                    Role::Spent
+                } else if combo == Some(DEBUG_COMBOS.len()) {
+                    self.function_keys = true;
+                    out.push(Action::FunctionKeys);
+                    Role::Spent
+                } else if let Some(i) = combo {
                     // Another finger on a combination while F3 is held.
                     out.push(Action::DebugCombo(i));
                     Role::Spent
@@ -1038,6 +1102,15 @@ impl TouchControls {
                             out.push(Action::Sprint(false));
                         }
                     }
+                    // The F3 finger reached the chip of the other F keys.
+                    Role::Button(Button::Debug, _) => {
+                        if !self.function_keys
+                            && layout.debug_chip_at(p) == Some(DEBUG_COMBOS.len())
+                        {
+                            self.function_keys = true;
+                            out.push(Action::FunctionKeys);
+                        }
+                    }
                     Role::Button(..) | Role::Spent => {}
                 }
             }
@@ -1046,12 +1119,21 @@ impl TouchControls {
                     return out;
                 };
                 let (_, role) = self.fingers.remove(i);
-                // The F3 finger slid onto a combination: it is pressed before F3 lets go.
-                if matches!(role, Role::Button(Button::Debug, _))
-                    && phase == TouchPhase::Ended
-                    && let Some(combo) = layout.debug_chip_at(p)
-                {
-                    out.push(Action::DebugCombo(combo));
+                // The F3 finger slid onto a chip: it is pressed before F3 lets go.
+                if matches!(role, Role::Button(Button::Debug, _)) {
+                    if phase == TouchPhase::Ended {
+                        if self.function_keys {
+                            out.extend(layout.function_chip_at(p).map(Action::FunctionKey));
+                        } else {
+                            let combo = layout.debug_chip_at(p);
+                            out.extend(
+                                combo
+                                    .filter(|c| *c < DEBUG_COMBOS.len())
+                                    .map(Action::DebugCombo),
+                            );
+                        }
+                    }
+                    self.function_keys = false;
                 }
                 out.extend(self.lift(role, phase == TouchPhase::Ended, now));
             }
@@ -1154,6 +1236,7 @@ impl TouchControls {
 
     /// Lift every finger (a menu opened, the app went to the background).
     pub fn reset(&mut self) -> Vec<Action> {
+        self.function_keys = false;
         let now = Instant::now();
         std::mem::take(&mut self.fingers)
             .into_iter()
@@ -2334,7 +2417,7 @@ mod tests {
             .unwrap()
             .1;
         let chips = l.debug_chips();
-        assert_eq!(chips.len(), DEBUG_COMBOS.len());
+        assert_eq!(chips.len(), DEBUG_COMBOS.len() + 1);
         // Under the button (it is at the top), on the screen, none over another.
         assert!(
             chips
@@ -2365,6 +2448,46 @@ mod tests {
         assert_eq!(
             t.event(&l, 2, TouchPhase::Ended, chunks, now),
             vec![Action::DebugCombo(0), Action::Release(Button::Debug)]
+        );
+    }
+
+    #[test]
+    fn the_f3_finger_slides_on_to_the_other_f_keys() {
+        let (l, now) = (layout(), Instant::now());
+        let f3 = l
+            .buttons
+            .iter()
+            .find(|(b, ..)| *b == Button::Debug)
+            .unwrap()
+            .1;
+        let keys = l.function_chips();
+        assert_eq!(keys.len(), FUNCTION_KEYS.len());
+        assert!(
+            keys.iter()
+                .all(|(_, c, h)| c[0] - h[0] >= 0.0 && c[0] + h[0] <= l.width)
+        );
+        let more = l.debug_chips()[DEBUG_COMBOS.len()].1;
+        let camera = keys[3].1;
+        let mut t = TouchControls::default();
+        t.event(&l, 1, TouchPhase::Started, f3, now);
+        assert_eq!(
+            t.event(&l, 1, TouchPhase::Moved, more, now),
+            vec![Action::FunctionKeys]
+        );
+        assert!(t.event(&l, 1, TouchPhase::Moved, camera, now).is_empty());
+        assert_eq!(
+            t.event(&l, 1, TouchPhase::Ended, camera, now),
+            vec![Action::FunctionKey(3), Action::Release(Button::Debug)]
+        );
+        // Back to the combinations the next time F3 is held.
+        assert!(!t.function_keys);
+        // Let go on the chip itself: nothing but F3's release.
+        t.event(&l, 2, TouchPhase::Started, f3, now);
+        t.event(&l, 2, TouchPhase::Moved, more, now);
+        t.event(&l, 2, TouchPhase::Moved, [0.0, 0.0], now);
+        assert_eq!(
+            t.event(&l, 2, TouchPhase::Ended, [0.0, 0.0], now),
+            vec![Action::Release(Button::Debug)]
         );
     }
 

@@ -1001,6 +1001,24 @@ impl Game<'_> {
                         self.debug_key(key, KeyAction::Release);
                     }
                 }
+                // F3 is used now: its release leaves the debug screen as it was.
+                Action::FunctionKeys => self.debug_keys.used_debug_key_as_modifier = true,
+                Action::FunctionKey(i) => {
+                    const KEYS: [KeyCode; touch::FUNCTION_KEYS.len()] = [
+                        KeyCode::F1,
+                        KeyCode::F2,
+                        KeyCode::F4,
+                        KeyCode::F5,
+                        KeyCode::F6,
+                        KeyCode::F7,
+                        KeyCode::F8,
+                        KeyCode::F9,
+                        KeyCode::F10,
+                        KeyCode::F11,
+                        KeyCode::F12,
+                    ];
+                    let _ = self.touch_key_tap(KEYS[i]);
+                }
                 Action::Press(Button::Pick) => self.pad.touch_tap(Pad::DPadLeft),
                 // Held as the pad's View (key.playerlist) while the finger is on it.
                 Action::Press(Button::Players) => self.pad.touch_hold(Pad::Select, true),
@@ -1077,6 +1095,10 @@ impl Game<'_> {
             return;
         }
         let (playing, closable) = (self.touch_playing(), self.touch_closable());
+        // F1 hides the buttons with the HUD; they still work, and F3 held shows them again.
+        if playing && self.ui.hide_gui && !self.touch.controls.held(Button::Debug) {
+            return;
+        }
         // The editor also over the title, before a world.
         if !playing && !closable && self.touch.editor.is_none() {
             return;
@@ -1208,7 +1230,13 @@ impl Game<'_> {
             }
             // F3 held: its combinations, for another finger or the F3 finger sliding onto one.
             if self.touch.controls.held(Button::Debug) {
-                for (i, c, half) in layout.debug_chips() {
+                let other = self.touch.controls.function_keys;
+                let chips = if other {
+                    layout.function_chips()
+                } else {
+                    layout.debug_chips()
+                };
+                for (i, c, half) in chips {
                     let shape = Shape::Wide(half[0] / half[1]);
                     plate_of(
                         &mut ui,
@@ -1221,7 +1249,11 @@ impl Game<'_> {
                         &mut ui,
                         c,
                         half[1] * 1.6,
-                        touch::DEBUG_COMBOS[i].1,
+                        if other {
+                            touch::FUNCTION_KEYS[i]
+                        } else {
+                            touch::DEBUG_COMBOS.get(i).map_or("F keys", |c| c.1)
+                        },
                         ink(1.0),
                     );
                 }
