@@ -1,4 +1,4 @@
-# The source exporter installs this as the fork's only active workflow.
+# The source exporter restores the Android checks and dev APK workflows.
 name: Android source checks
 on:
   push:
@@ -32,7 +32,9 @@ jobs:
       - run: python3 tools/test_android_performance.py
       - run: python3 tools/test_android_content.py
       - name: Check workflow export matches the active workflow
-        run: cmp .github/workflows/android-source.yml packaging/android/source-checks.yml
+        run: |
+          cmp .github/workflows/android-source.yml packaging/android/source-checks.yml
+          cmp .github/workflows/android-dev.yml packaging/android/dev-builds.yml
   native:
     if: github.event_name == 'workflow_dispatch' && inputs.native_checks
     needs: source

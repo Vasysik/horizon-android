@@ -70,12 +70,13 @@ def export(root, output):
     required = {'LICENSE', 'THIRD_PARTY_NOTICES.md', 'Cargo.toml', 'README.md'}
     if not required.issubset({e['path'] for e in entries}):
         raise ValueError('Missing source/license files')
-    workflow = root / 'packaging/android/source-checks.yml'
-    if workflow.is_file():
-        data = workflow.read_bytes()
-        name = '.github/workflows/android-source.yml'
-        payload.append((name, data))
-        entries.append({'path': name, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+    for template, destination in [('packaging/android/source-checks.yml', '.github/workflows/android-source.yml'),
+                                  ('packaging/android/dev-builds.yml', '.github/workflows/android-dev.yml')]:
+        workflow = root / template
+        if workflow.is_file():
+            data = workflow.read_bytes()
+            payload.append((destination, data))
+            entries.append({'path': destination, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
     provenance = root / 'docs/android-upstream.json'
     revisions = json.loads(provenance.read_text(encoding='utf-8')) if provenance.is_file() else {}
     base = revisions.get('merged_upstream_commit') or revisions.get('base_commit')

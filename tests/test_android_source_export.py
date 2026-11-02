@@ -47,6 +47,22 @@ class SourceExportTests(unittest.TestCase):
             self.assertNotIn(token, str(error.exception))
             self.assertFalse((root / '.local/source.zip').exists())
 
+    def test_export_restores_only_allowlisted_android_workflows(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.source(root)
+            template = root / 'packaging/android/dev-builds.yml'
+            template.parent.mkdir(parents=True)
+            template.write_text('name: Android dev APKs\n', encoding='utf-8')
+            unrelated = root / '.github/workflows/release.yml'
+            unrelated.parent.mkdir(parents=True)
+            unrelated.write_text('name: Upstream release\n', encoding='utf-8')
+            output = root / '.local/source.zip'
+            export.export(root, output)
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.read('.github/workflows/android-dev.yml'), template.read_bytes())
+                self.assertNotIn('.github/workflows/release.yml', archive.namelist())
+
     def test_public_tree_guard_rejects_android_private_paths(self):
         for name in ['app.apk', 'signing/release.jks', 'control.json', '.env.production', 'a/.gradle/state',
                      'packaging/android/java/net/minecraft/Client.java',
