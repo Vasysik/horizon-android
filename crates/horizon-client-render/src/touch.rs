@@ -707,6 +707,14 @@ impl TouchControls {
             return [0.0; 2];
         }
         let aspect = self.aspect();
+        // A button that lets touches through turns the view instead, so decide that
+        // before borrowing the finger mutably: both reads are of the whole of self.
+        let passthrough = matches!(
+            self.fingers.get(&id).map(|(role, _)| role),
+            Some(Role::Button(_) | Role::Shield)
+        ) && self
+            .control_at(point)
+            .is_some_and(|c| self.placement(c).passthrough);
         if let Some((role, previous)) = self.fingers.get_mut(&id) {
             let delta = if let Role::Look {
                 start,
@@ -727,11 +735,7 @@ impl TouchControls {
                 } else {
                     [0.0; 2]
                 }
-            } else if matches!(role, Role::Button(_) | Role::Shield)
-                && self
-                    .control_at(point)
-                    .is_some_and(|c| self.placement(c).passthrough)
-            {
+            } else if passthrough {
                 let d = [point[0] - previous[0], point[1] - previous[1]];
                 *previous = point;
                 d
