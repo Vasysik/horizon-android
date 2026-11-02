@@ -73,12 +73,8 @@ impl UdpWorker {
         let (sound_tx, sound_rx) = std::sync::mpsc::channel::<IncomingSound>();
         let stop_signal = Arc::new(AtomicBool::new(false));
 
-        let host = if secret.voice_host.trim().is_empty() {
-            fallback_host.trim().to_string()
-        } else {
-            secret.voice_host.trim().to_string()
-        };
-        let port = secret.server_port as u16;
+        let (host, port) =
+            parse_voice_host(&secret.voice_host, fallback_host, secret.server_port as u16);
 
         let thread_state = Arc::clone(&state);
         let thread_stop = Arc::clone(&stop_signal);
@@ -121,23 +117,31 @@ impl UdpWorker {
             }
         };
 
-        let target_addr_str = format!("{}:{}", host, port);
-        let remote_addr = match target_addr_str.to_socket_addrs() {
+        log::info!("SVC: Resolving voice target address ({host}, {port})...");
+        let remote_addr = match (&host[..], port).to_socket_addrs() {
             Ok(mut addrs) => match addrs.next() {
-                Some(addr) => addr,
+                Some(addr) => {
+                    log::info!("SVC: Resolved voice UDP target address to {addr}");
+                    addr
+                }
                 None => {
-                    set_failed(format!("Failed to resolve voice host: {target_addr_str}"));
+                    set_failed(format!(
+                        "Failed to resolve voice target address ({host}, {port})"
+                    ));
                     return;
                 }
             },
             Err(e) => {
-                set_failed(format!("DNS resolution failed for {target_addr_str}: {e}"));
+                set_failed(format!("DNS resolution failed for ({host}, {port}): {e}"));
                 return;
             }
         };
 
         let socket = match UdpSocket::bind("0.0.0.0:0") {
-            Ok(s) => s,
+            Ok(s) => {
+                log::info!("SVC: Bound local UDP socket to {:?}", s.local_addr());
+                s
+            }
             Err(e) => {
                 set_failed(format!("Failed to bind UDP socket: {e}"));
                 return;
@@ -145,9 +149,12 @@ impl UdpWorker {
         };
 
         if let Err(e) = socket.connect(remote_addr) {
-            set_failed(format!("Failed to connect UDP socket to {remote_addr}: {e}"));
+            set_failed(format!(
+                "Failed to connect UDP socket to {remote_addr}: {e}"
+            ));
             return;
         }
+        log::info!("SVC: Connected UDP socket to {remote_addr}");
 
         // Set short timeout to keep loop responsive
         let _ = socket.set_read_timeout(Some(Duration::from_millis(20)));
@@ -181,10 +188,15 @@ impl UdpWorker {
         let mut last_send = Instant::now() - Duration::from_secs(10);
         let mut saved_nonce: Option<[u8; 16]> = None;
         let mut check_pkt: Option<Vec<u8>> = None;
+        let mut auth_retry_count = 0u32;
+        let mut check_retry_count = 0u32;
         let mut recv_buf = [0u8; 2048];
+
+        log::info!("SVC: Starting UDP 4-step handshake with remote {remote_addr}");
 
         while handshake_start.elapsed() < Duration::from_secs(6) {
             if stop_signal.load(Ordering::Relaxed) {
+                log::info!("SVC: UDP handshake aborted by stop signal");
                 return;
             }
 
@@ -192,19 +204,24 @@ impl UdpWorker {
             if last_send.elapsed() >= Duration::from_millis(500) {
                 if let Some(ref nonce) = saved_nonce {
                     // Nonce is known, retry ConnectionCheck (Step 3) with saved nonce
+                    check_retry_count += 1;
+                    log::info!(
+                        "SVC: [Handshake Step 3] Sending ConnectionCheck (attempt {check_retry_count})..."
+                    );
                     if let Some(ref pkt) = check_pkt {
                         let _ = socket.send(pkt);
-                    } else if let Ok(pkt) = build_client_udp_packet(
-                        conn_id,
-                        &cipher,
-                        PACKET_ID_CONNECTION_CHECK,
-                        nonce,
-                    ) {
+                    } else if let Ok(pkt) =
+                        build_client_udp_packet(conn_id, &cipher, PACKET_ID_CONNECTION_CHECK, nonce)
+                    {
                         let _ = socket.send(&pkt);
                         check_pkt = Some(pkt);
                     }
                 } else {
                     // Nonce not yet received, retry Authenticate (Step 1)
+                    auth_retry_count += 1;
+                    log::info!(
+                        "SVC: [Handshake Step 1] Sending Authenticate (attempt {auth_retry_count})..."
+                    );
                     let _ = socket.send(&auth_pkt);
                 }
                 last_send = Instant::now();
@@ -217,8 +234,16 @@ impl UdpWorker {
                             PACKET_ID_AUTHENTICATE_ACK => {
                                 if let Ok(ack) = AuthenticateAckPacket::from_body(&body) {
                                     // Step 2: Extract and save 16-byte nonce
+                                    log::info!(
+                                        "SVC: [Handshake Step 2] Received AuthenticateAck with nonce (elapsed: {:.1?})",
+                                        handshake_start.elapsed()
+                                    );
                                     saved_nonce = Some(ack.nonce);
                                     // Step 3: Send ConnectionCheck (0x09) with nonce
+                                    check_retry_count += 1;
+                                    log::info!(
+                                        "SVC: [Handshake Step 3] Sending initial ConnectionCheck (attempt {check_retry_count})..."
+                                    );
                                     match build_client_udp_packet(
                                         conn_id,
                                         &cipher,
@@ -231,14 +256,19 @@ impl UdpWorker {
                                             last_send = Instant::now();
                                         }
                                         Err(e) => {
-                                            log::warn!("SVC: Failed to build ConnectionCheck packet: {e}");
+                                            log::warn!(
+                                                "SVC: Failed to build ConnectionCheck packet: {e}"
+                                            );
                                         }
                                     }
                                 }
                             }
                             PACKET_ID_CONNECTION_CHECK_ACK => {
                                 // Step 4: ConnectionCheckAck received
-                                log::info!("SVC: UDP 4-step handshake completed successfully");
+                                log::info!(
+                                    "SVC: [Handshake Step 4] Received ConnectionCheckAck. UDP 4-step handshake completed successfully! (elapsed: {:.1?})",
+                                    handshake_start.elapsed()
+                                );
                                 handshake_success = true;
                                 break;
                             }
@@ -252,14 +282,19 @@ impl UdpWorker {
                 {
                     // Non-blocking / short read timeout, continue loop
                 }
-                Err(_) => {
-                    // Socket error, continue until retry or timeout
+                Err(e) => {
+                    log::debug!("SVC: UDP socket receive error during handshake: {e}");
                 }
             }
         }
 
         if !handshake_success {
-            set_failed("UDP handshake timed out (no Authenticate/ConnectionCheck Ack)".to_string());
+            log::warn!(
+                "SVC: UDP handshake timed out after 6s (sent {} Authenticate, {} ConnectionCheck)",
+                auth_retry_count,
+                check_retry_count
+            );
+            set_failed("UDP handshake timed out after 6 seconds".to_string());
             return;
         }
 
@@ -272,8 +307,7 @@ impl UdpWorker {
         // -------------------------------------------------------------------
         let mut last_keep_alive = Instant::now();
         let mut last_ping_sent = Instant::now();
-        let keep_alive_interval =
-            Duration::from_millis(secret.keep_alive.max(500).min(5000) as u64);
+        let keep_alive_interval = Duration::from_millis(secret.keep_alive.clamp(500, 5000) as u64);
         let ping_interval = Duration::from_millis(1000);
         let mut current_ping_id: u128 = 0;
         let mut current_ping_time = Instant::now();

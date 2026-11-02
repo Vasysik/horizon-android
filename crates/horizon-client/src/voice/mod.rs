@@ -11,7 +11,9 @@ pub mod protocol;
 pub mod udp_worker;
 pub mod ui;
 
-use audio_pipeline::{VoiceCapturePipeline, VoicePlaybackPipeline, FRAME_SIZE};
+pub use protocol::parse_voice_host;
+
+use audio_pipeline::{FRAME_SIZE, VoiceCapturePipeline, VoicePlaybackPipeline};
 use config::SvcProtocolConfig;
 use protocol::*;
 use std::collections::HashMap;
@@ -72,15 +74,18 @@ impl VoiceChatClient {
 
     /// Check for 4-second timeout during initial handshake and cycle fallback version if needed.
     pub fn check_handshake_timeout(&mut self) -> Option<(String, Vec<u8>)> {
-        if let Some(timer) = self.fallback_timer {
-            if self.secret.is_none() && timer.elapsed() >= std::time::Duration::from_secs(4) {
-                let next_version = self.config.next_fallback_version();
-                let _ = self.config.save_to_dir(&self.config_dir);
-                self.fallback_timer = Some(std::time::Instant::now());
-                log::info!("SVC: Handshake timed out, retrying with fallback compatibility version {next_version}");
-                let pkt = RequestSecretPacket::new(next_version);
-                return Some((CHANNEL_REQUEST_SECRET.to_string(), pkt.to_bytes()));
-            }
+        if let Some(timer) = self.fallback_timer
+            && self.secret.is_none()
+            && timer.elapsed() >= std::time::Duration::from_secs(4)
+        {
+            let next_version = self.config.next_fallback_version();
+            let _ = self.config.save_to_dir(&self.config_dir);
+            self.fallback_timer = Some(std::time::Instant::now());
+            log::info!(
+                "SVC: Handshake timed out, retrying with fallback compatibility version {next_version}"
+            );
+            let pkt = RequestSecretPacket::new(next_version);
+            return Some((CHANNEL_REQUEST_SECRET.to_string(), pkt.to_bytes()));
         }
         None
     }
@@ -93,7 +98,7 @@ impl VoiceChatClient {
     ) -> Result<Option<(String, Vec<u8>)>, String> {
         match channel {
             CHANNEL_SECRET => {
-                log::info!("SVC: Raw secret payload ({} bytes): {:02x?}", data.len(), data);
+                log::info!("SVC: Received SecretPacket payload ({} bytes)", data.len());
                 let secret = SecretPacket::from_bytes(data)
                     .map_err(|e| format!("Failed to parse SecretPacket: {e}"))?;
                 if !(1..=65535).contains(&secret.server_port) {

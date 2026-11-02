@@ -17,13 +17,19 @@ pub struct VoiceCapturePipeline {
     last_vad_probability: f32,
 }
 
-impl VoiceCapturePipeline {
-    pub fn new() -> Self {
+impl Default for VoiceCapturePipeline {
+    fn default() -> Self {
         Self {
             denoiser: DenoiseState::new(),
             sequence_number: 0,
             last_vad_probability: 0.0,
         }
+    }
+}
+
+impl VoiceCapturePipeline {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Process a 960-sample PCM frame (-1.0 .. 1.0).
@@ -105,13 +111,14 @@ impl VoiceCapturePipeline {
 }
 
 /// Decodes received Opus packet and calculates 3D spatial audio gains.
+#[derive(Default)]
 pub struct VoicePlaybackPipeline {
     // Pipeline state for playback decoding
 }
 
 impl VoicePlaybackPipeline {
     pub fn new() -> Self {
-        Self {}
+        Self::default()
     }
 
     /// Decodes an Opus packet into 960 mono f32 samples.
@@ -225,34 +232,22 @@ mod tests {
 
         // Sound directly ahead at 24 blocks (half of 48m max distance)
         let sound_ahead = [0.0, 64.0, 24.0];
-        let (left, right) = VoicePlaybackPipeline::calculate_spatial_gain(
-            listener,
-            yaw,
-            sound_ahead,
-            48.0,
-        );
+        let (left, right) =
+            VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_ahead, 48.0);
         assert!((left - 0.5).abs() < 0.05);
         assert!((right - 0.5).abs() < 0.05);
 
         // Sound far away (> 48m)
         let sound_far = [0.0, 64.0, 100.0];
-        let (left_far, right_far) = VoicePlaybackPipeline::calculate_spatial_gain(
-            listener,
-            yaw,
-            sound_far,
-            48.0,
-        );
+        let (left_far, right_far) =
+            VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_far, 48.0);
         assert_eq!(left_far, 0.0);
         assert_eq!(right_far, 0.0);
 
         // Sound directly to the right (+X)
         let sound_right = [20.0, 64.0, 0.0];
-        let (left_r, right_r) = VoicePlaybackPipeline::calculate_spatial_gain(
-            listener,
-            yaw,
-            sound_right,
-            48.0,
-        );
+        let (left_r, right_r) =
+            VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_right, 48.0);
         assert!(right_r > left_r);
     }
 
@@ -278,8 +273,7 @@ mod tests {
 
         // Should return a payload when PTT is pressed
         let result = capture.process_frame(
-            &input,
-            true,  // rnnoise
+            &input, true,  // rnnoise
             1.0,   // mic_gain
             false, // PTT mode
             0.5,   // vad threshold
