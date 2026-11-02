@@ -146,6 +146,9 @@ pub struct PhysicalDeviceFeatures {
     vulkan_memory_model: Option<vk::PhysicalDeviceVulkanMemoryModelFeaturesKHR<'static>>,
 
     shader_draw_parameters: Option<vk::PhysicalDeviceShaderDrawParametersFeatures<'static>>,
+
+    /// Starling: features provided by `VK_KHR_fragment_shading_rate`.
+    fragment_shading_rate: Option<vk::PhysicalDeviceFragmentShadingRateFeaturesKHR<'static>>,
 }
 
 impl PhysicalDeviceFeatures {
@@ -235,6 +238,9 @@ impl PhysicalDeviceFeatures {
             info = info.push_next(feature);
         }
         if let Some(ref mut feature) = self.shader_draw_parameters {
+            info = info.push_next(feature);
+        }
+        if let Some(ref mut feature) = self.fragment_shading_rate {
             info = info.push_next(feature);
         }
         info
@@ -607,6 +613,19 @@ impl PhysicalDeviceFeatures {
                 Some(
                     vk::PhysicalDevicePortabilitySubsetFeaturesKHR::default()
                         .multisample_array_image(multisample_array_needed),
+                )
+            } else {
+                None
+            },
+            fragment_shading_rate: if enabled_extensions
+                .contains(&khr::fragment_shading_rate::NAME)
+                && phd_features
+                    .fragment_shading_rate
+                    .is_some_and(|f| f.pipeline_fragment_shading_rate != 0)
+            {
+                Some(
+                    vk::PhysicalDeviceFragmentShadingRateFeaturesKHR::default()
+                        .pipeline_fragment_shading_rate(true),
                 )
             } else {
                 None
@@ -1302,6 +1321,14 @@ impl PhysicalDeviceProperties {
 
             //extensions.push(khr::sampler_mirror_clamp_to_edge::NAME);
             //extensions.push(ext::sampler_filter_minmax::NAME);
+        }
+
+        // Starling: only when asked, while it is being measured.
+        if self.device_api_version >= vk::API_VERSION_1_2
+            && std::env::var_os("HORIZON_PACK_VRS").is_some()
+            && self.supports_extension(khr::fragment_shading_rate::NAME)
+        {
+            extensions.push(khr::fragment_shading_rate::NAME);
         }
 
         if self.device_api_version < vk::API_VERSION_1_3 {
@@ -2101,6 +2128,13 @@ impl super::InstanceShared {
                 features2 = features2.push_next(next);
             }
 
+            if capabilities.supports_extension(khr::fragment_shading_rate::NAME) {
+                let next = features
+                    .fragment_shading_rate
+                    .insert(vk::PhysicalDeviceFragmentShadingRateFeaturesKHR::default());
+                features2 = features2.push_next(next);
+            }
+
             if capabilities.supports_extension(khr::_16bit_storage::NAME) {
                 let next = features
                     ._16bit_storage
@@ -2453,6 +2487,11 @@ impl super::Instance {
             shader_int8: phd_features
                 .shader_float16_int8
                 .is_some_and(|features| features.shader_int8 != 0),
+            pipeline_fragment_shading_rate: std::env::var_os("HORIZON_PACK_VRS").is_some()
+                && phd_capabilities.device_api_version >= vk::API_VERSION_1_2
+                && phd_features
+                    .fragment_shading_rate
+                    .is_some_and(|f| f.pipeline_fragment_shading_rate != 0),
             multiview_instance_index_limit: phd_capabilities
                 .multiview
                 .map(|a| a.max_multiview_instance_index)

@@ -981,6 +981,17 @@ impl super::Device {
     }
 }
 
+/// Starling: the shading rate a pipeline's label asks for, as in `gbuffers_terrain#vrs2x2`.
+fn pipeline_shading_rate(label: &str) -> Option<vk::Extent2D> {
+    let (_, rate) = label.split_once("#vrs")?;
+    let (width, height) = rate.split_once('x')?;
+    let size = |v: &str| v.parse().ok().filter(|v| matches!(v, 1 | 2 | 4));
+    Some(vk::Extent2D {
+        width: size(width)?,
+        height: size(height)?,
+    })
+}
+
 impl crate::Device for super::Device {
     type A = super::Api;
 
@@ -1889,13 +1900,17 @@ impl crate::Device for super::Device {
                         binding_array: naga::proc::BoundsCheckPolicy::Unchecked,
                     };
                 }
-                let spv = naga::back::spv::write_vec(
+                let mut spv = naga::back::spv::write_vec(
                     &naga_shader.module,
                     &naga_shader.info,
                     &naga_options,
                     None,
                 )
                 .map_err(|e| crate::ShaderError::Compilation(format!("{e}")))?;
+                // Starling: a shader pack's program can ask for half precision.
+                if desc.label.is_some_and(|l| l.ends_with("#half")) {
+                    spv = super::relaxed::relax(&spv);
+                }
                 super::ShaderModule::Raw(self.create_shader_module_impl(&spv, &desc.label)?)
             }
             crate::ShaderInput::SpirV(data) => {
@@ -2146,8 +2161,18 @@ impl crate::Device for super::Device {
 
         let raw_pass = self.shared.make_render_pass(compatible_rp_key)?;
 
+        // Starling: a label ending in `#vrs2x2` asks for one shading per two by two pixels.
+        let mut vk_shading_rate = desc
+            .label
+            .and_then(pipeline_shading_rate)
+            .filter(|_| self.shared.private_caps.pipeline_fragment_shading_rate)
+            .map(|size| {
+                vk::PipelineFragmentShadingRateStateCreateInfoKHR::default()
+                    .fragment_size(size)
+                    .combiner_ops([vk::FragmentShadingRateCombinerOpKHR::KEEP; 2])
+            });
         let vk_infos = [{
-            vk::GraphicsPipelineCreateInfo::default()
+            let info = vk::GraphicsPipelineCreateInfo::default()
                 .layout(desc.layout.raw)
                 .stages(&stages)
                 .vertex_input_state(&vk_vertex_input)
@@ -2158,7 +2183,11 @@ impl crate::Device for super::Device {
                 .depth_stencil_state(&vk_depth_stencil)
                 .color_blend_state(&vk_color_blend)
                 .dynamic_state(&vk_dynamic_state)
-                .render_pass(raw_pass)
+                .render_pass(raw_pass);
+            match vk_shading_rate.as_mut() {
+                Some(rate) => info.push_next(rate),
+                None => info,
+            }
         }];
 
         let pipeline_cache = desc

@@ -31,6 +31,7 @@ mod descriptor;
 mod device;
 mod drm;
 mod instance;
+mod relaxed;
 mod sampler;
 mod semaphore_list;
 mod swapchain;
@@ -406,6 +407,8 @@ struct PrivateCapabilities {
     /// [`VK_KHR_shader_float16_int8`]: https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_shader_float16_int8.html
     /// [see spec]: https://registry.khronos.org/vulkan/specs/latest/man/html/VkPhysicalDeviceShaderFloat16Int8Features.html#extension-features-shaderInt8
     shader_int8: bool,
+    /// Starling: a pipeline can shade coarser (`HORIZON_PACK_VRS`, `#vrs2x2` in its label).
+    pipeline_fragment_shading_rate: bool,
 
     /// This is done to panic before undefined behavior, and is imperfect.
     /// Basically, to allow implementations to emulate mv using instancing, if you

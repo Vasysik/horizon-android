@@ -517,6 +517,13 @@ fn checked<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, St
     }
 }
 
+/// Developers' aid while it is measured: `HORIZON_PACK_SKY_LAST` draws the sky after the terrain.
+fn sky_last() -> bool {
+    static SKY_LAST: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| std::env::var_os("HORIZON_PACK_SKY_LAST").is_some());
+    *SKY_LAST
+}
+
 /// A full-screen helper pipeline of ours (`pack_post.wgsl`).
 fn helper(
     device: &wgpu::Device,
@@ -940,17 +947,33 @@ fn build_pass(
             ],
             ..Default::default()
         });
-        let module = |mut m: naga::Module| {
+        // Developers' aids while these are measured: `HORIZON_PACK_VRS=2x2` shades the terrain
+        // coarser, `HORIZON_PACK_HALF=terrain` (or `all`) gives programs half precision.
+        let is_terrain = p.name.starts_with("gbuffers_terrain");
+        let half = match std::env::var("HORIZON_PACK_HALF").as_deref() {
+            Ok("all") => true,
+            Ok("terrain") => is_terrain,
+            _ => false,
+        };
+        let fragment_label = format!("{}{}", p.name, if half { "#half" } else { "" });
+        let pipeline_label = match std::env::var("HORIZON_PACK_VRS") {
+            Ok(rate) if is_terrain => format!("{}#vrs{rate}", p.name),
+            _ => p.name.clone(),
+        };
+        let module = |mut m: naga::Module, label: &str| {
             share_samplers(&mut m, &slots);
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(&p.name),
+                label: Some(label),
                 source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(m)),
             })
         };
         // The depth pass keeps a little less than the program's own cut (Complementary's is 0.5,
         // vanilla's 0.1): a texel it kept and the program threw away would leave a hole.
         let cut = p.program.interface.alpha_cut.unwrap_or(0.0).max(0.5) + 0.01;
-        let (vs, fs) = (module(p.program.vertex), module(p.program.fragment));
+        let (vs, fs) = (
+            module(p.program.vertex, &p.name),
+            module(p.program.fragment, &fragment_label),
+        );
         // The depth pass: the atlas' alpha test at the texture's own binding and sampler.
         let atlas = samplers.iter().find(|b| b.source == Source::Atlas);
         let prepass = geometry
@@ -1009,7 +1032,7 @@ fn build_pass(
             })
             .map(|depth| (depth, cut));
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(&p.name),
+            label: Some(&pipeline_label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &vs,
@@ -1959,7 +1982,12 @@ impl PackPost {
                     .is_some_and(|p| p.writes == pass.writes);
                 if !same {
                     drop(open.take());
-                    open = Some((self.begin(encoder, pass).forget_lifetime(), i));
+                    let mut rp = self.begin(encoder, pass).forget_lifetime();
+                    if sky_last() {
+                        // At the far plane, it fills only what the terrain left.
+                        rp.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 1.0, 1.0);
+                    }
+                    open = Some((rp, i));
                 }
                 let rp = &mut open.as_mut().expect("open").0;
                 rp.set_pipeline(&pass.pipeline);
@@ -2125,10 +2153,13 @@ impl PackPost {
         frame: &super::Frame,
         terrain: &mut TerrainDraw<'_>,
     ) {
-        if super::sky_visible(frame) {
+        if !sky_last() && super::sky_visible(frame) {
             self.draw_sky(device, queue, encoder, size, frame);
         }
         self.draw_terrain(device, queue, encoder, size, TerrainList::Solid, terrain);
+        if sky_last() && super::sky_visible(frame) {
+            self.draw_sky(device, queue, encoder, size, frame);
+        }
         self.draw_entities(device, queue, encoder, size, false);
         self.draw_clouds(device, queue, encoder, size);
         self.draw_hand(device, queue, encoder, size, frame);
@@ -2802,9 +2833,90 @@ impl PackPost {
 }
 
 #[cfg(test)]
+#[path = "../../../../third_party/wgpu-hal/src/vulkan/relaxed.rs"]
+mod relaxed;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use wgpu::TextureFormat as T;
+
+    /// The decorations and arithmetic results half precision leaves on a fragment program.
+    fn relaxed_math(source: &str) -> (usize, usize) {
+        let module = naga::front::wgsl::parse_str(source).unwrap();
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+        let spv = naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
+        let out = relaxed::relax(&spv);
+        let walk = |words: &[u32], f: &mut dyn FnMut(u32, &[u32])| {
+            let mut at = 5;
+            while at < words.len() {
+                let count = (words[at] >> 16) as usize;
+                assert!(count > 0 && at + count <= words.len(), "cut at {at}");
+                f(words[at] & 0xffff, &words[at..at + count]);
+                at += count;
+            }
+        };
+        let mut decorated = std::collections::HashSet::new();
+        let mut types_started = false;
+        walk(&out, &mut |op, w| {
+            if (19..=33).contains(&op) {
+                types_started = true;
+            }
+            if op == 71 && w[2] == 0 {
+                assert!(!types_started, "a decoration among the types");
+                decorated.insert(w[1]);
+            }
+        });
+        let (mut math, mut relaxed_math) = (0, 0);
+        walk(&out, &mut |op, w| {
+            if matches!(op, 129 | 131 | 133 | 136 | 142) {
+                math += 1;
+                relaxed_math += usize::from(decorated.contains(&w[2]));
+            }
+        });
+        (math, relaxed_math)
+    }
+
+    #[test]
+    fn half_precision_goes_to_colours_only() {
+        let head = "@group(0) @binding(0) var t: texture_2d<f32>;\n\
+                    @group(0) @binding(1) var s: sampler;\n";
+        // Colour math.
+        let colour = format!(
+            "{head}@fragment fn main(@location(0) uv: vec2<f32>, @location(1) light: vec3<f32>) \
+             -> @location(0) vec4<f32> {{\n\
+             let albedo = textureSample(t, s, uv);\n\
+             return vec4(albedo.rgb * light * 1.5, 1.0);\n}}\n"
+        );
+        let (math, relaxed) = relaxed_math(&colour);
+        assert!(math >= 2 && relaxed == math, "{relaxed} of {math}");
+        // Where a texture is read.
+        let coordinates = format!(
+            "{head}@fragment fn main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {{\n\
+             return textureSample(t, s, uv * 2.0 + vec2(0.25));\n}}\n"
+        );
+        let (math, relaxed) = relaxed_math(&coordinates);
+        assert!(math >= 2 && relaxed == 0, "{relaxed} of {math}");
+        // The pixel's place on the screen, as dithering uses it.
+        let screen = "@fragment fn main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {\n\
+                      return vec4(p.x * 0.067 + 0.5);\n}\n";
+        let (math, relaxed) = relaxed_math(screen);
+        assert!(math >= 2 && relaxed == 0, "{relaxed} of {math}");
+        // What is compared.
+        let compared = format!(
+            "{head}@fragment fn main(@location(0) a: f32) -> @location(0) vec4<f32> {{\n\
+             let b = a * 2.0 + 1.0;\n\
+             if b > 0.5 {{ discard; }}\n\
+             return vec4(1.0);\n}}\n"
+        );
+        let (math, relaxed) = relaxed_math(&compared);
+        assert!(math >= 2 && relaxed == 0, "{relaxed} of {math}");
+    }
 
     /// Two textures with a sampler each become two textures sharing one sampler variable.
     #[test]
