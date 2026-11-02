@@ -100,11 +100,13 @@ fn render_specialized(
         contents: &bytes,
         usage: wgpu::BufferUsages::UNIFORM,
     });
+    let textured = variant == 36;
+    let edge = if textured { 16 } else { 1 };
     let white = device.create_texture(&wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d {
-            width: 1,
-            height: 1,
+            width: edge,
+            height: edge,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -114,13 +116,27 @@ fn render_specialized(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
+    let texels: Vec<u8> = if textured {
+        (0..256u32)
+            .flat_map(|i| {
+                [
+                    i.wrapping_mul(37) as u8,
+                    i.wrapping_mul(91) as u8,
+                    i.wrapping_mul(17) as u8,
+                    if i % 4 == 0 { 0 } else { alpha },
+                ]
+            })
+            .collect()
+    } else {
+        vec![255, 255, 255, alpha]
+    };
     queue.write_texture(
         white.as_image_copy(),
-        &[255, 255, 255, alpha],
+        &texels,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(4),
-            rows_per_image: Some(1),
+            bytes_per_row: Some(edge * 4),
+            rows_per_image: Some(edge),
         },
         white.size(),
     );
@@ -263,8 +279,16 @@ fn render_specialized(
         ] {
             vertices.extend_from_slice(bytemuck::cast_slice(&[px, py, 0.5f32]));
             vertices.extend_from_slice(bytemuck::cast_slice(&[
-                16384u16,
-                16384,
+                if textured {
+                    ((px - x) * 8.0 * 32768.0) as u16
+                } else {
+                    16384u16
+                },
+                if textured {
+                    ((py + 1.0) * 0.5 * 32768.0) as u16
+                } else {
+                    16384
+                },
                 if mixed && emission % 2 == 0 {
                     0x8000
                 } else {
@@ -373,6 +397,21 @@ fn settled_terrain_preserves_fog_lighting_alpha_and_emissive_masks() {
             assert_eq!(expected, actual, "scene {variant}, alpha {alpha}");
         }
     }
+}
+
+#[test]
+fn specialized_sampling_preserves_textured_edges_and_cutouts() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let source = super::terrain_shader(false);
+    let expected = render_specialized(&device, &queue, &source, 36, false, 255, true, 1);
+    let actual = render_specialized(&device, &queue, &source, 36, true, 255, true, 2);
+    assert!(
+        expected.iter().filter(|&&v| v != 0).count() > 32,
+        "Empty test image"
+    );
+    assert_eq!(expected, actual, "Textured sampling/cutout pixels changed");
 }
 
 #[test]

@@ -134,6 +134,15 @@ of fog, alpha thresholds, colored light and all emissive-mask slots. ARM64 fast
 compilation and Clippy passed. These gains remain partial; the full reported
 performance regression is not resolved.
 
+The specialized non-RGSS sampler also replaces a square-root followed by
+division with an inverse-square-root multiplication, retaining the same
+denominator floor and all texture coordinates/gradients. The generic sampler
+and shader-pack paths are unchanged. A textured GPU comparison was added; all
+33 GPU tests passed. Separate optimized-fast APK comparisons in order A/B/B/A
+measured 20.038/19.841/19.814/20.030 ms GPU time (43.71/44.11/44.16/43.56 FPS),
+with the same 8,265 resident sections in each run. This additional approximately
+1% gain is small and remains a short tablet observation, not a Poco claim.
+
 - Matched production-profile GPU/CPU comparisons and causal isolation of the slowdown.
 - ARMv7 device recheck after the ARM64 GLES fix; other drivers and x86 ABIs.
 - Mixed physical/touch toggle inputs, suspend/resume and resource reloads.

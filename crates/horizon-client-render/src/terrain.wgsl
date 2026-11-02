@@ -101,7 +101,11 @@ fn sample_nearest(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>, dv
     let texel_coords = uv / pixel;
     let center = round(texel_coords) - 0.5;
     var offset = texel_coords - center;
-    offset = (offset - 0.5) * pixel / max(texel_screen, vec2(1e-12)) + 0.5;
+    if TERRAIN_FILTERING == 0u {
+        offset = (offset - 0.5) * (pixel * inverseSqrt(max(du * du + dv * dv, vec2(1e-24)))) + 0.5;
+    } else {
+        offset = (offset - 0.5) * pixel / max(texel_screen, vec2(1e-12)) + 0.5;
+    }
     offset = clamp(offset, vec2(0.0), vec2(1.0));
     return sprite_grad((center + offset) * pixel, layer, du, dv);
 }
