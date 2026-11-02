@@ -231,7 +231,7 @@ impl Launcher {
 
     fn request_back(&mut self) {
         crate::platform::hide();
-        if let Some(mut editor) = self.control_editor.take() {
+        if let Some(editor) = self.control_editor.take() {
             let game_home = self.catalog.config.game_home(&self.home);
             let _ = editor.settings.save_profile(&game_home, &editor.settings.active_profile.clone());
             self.catalog.status = "Saved HUD touch control layout.".into();

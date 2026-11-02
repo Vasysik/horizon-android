@@ -1,6 +1,7 @@
 use super::*;
 use crate::catalog::SettingsCategory;
 use horizon_client::{
+    gfx::Renderer,
     osk::Output,
     ui_theme::{Icon, color},
 };
@@ -624,9 +625,24 @@ impl Launcher {
     }
 
     pub(super) fn draw_pages(&mut self) -> Result<()> {
-        let (Some(r), Some(gui)) = (&mut self.renderer, &self.gui) else {
+        // Page drawing borrows `self` mutably (settings and the project modal do), so lend the
+        // renderer and its resources out as plain locals while the frame is built, and put them
+        // back whatever the result is.
+        let Some(mut r) = self.renderer.take() else {
             return Ok(());
         };
+        let Some(gui) = self.gui.take() else {
+            self.renderer = Some(r);
+            return Ok(());
+        };
+        let result = self.draw_pages_with(&mut r, &gui);
+        self.renderer = Some(r);
+        self.gui = Some(gui);
+        result
+    }
+
+    /// Draws one launcher frame with the renderer lent out (see `draw_pages`).
+    fn draw_pages_with(&mut self, r: &mut Renderer, gui: &game::UiResources) -> Result<()> {
         if r.suspended {
             return Ok(());
         }
@@ -1779,6 +1795,27 @@ impl Launcher {
     /// Material You 3 Project Detail Dialog showing Modrinth PFP, Description,
     /// Gallery Screenshots, and selectable Versions to Download.
     fn draw_project_modal(&mut self, ui: &mut Ui, w: f32, h: f32) {
+        // The install label asks the catalog about the project the modal is showing, so work it out
+        // before the modal is borrowed mutably for drawing.
+        let Some(install_label) = self.catalog.project_modal.as_ref().map(|modal| {
+            let version = modal
+                .versions
+                .get(modal.selected_version)
+                .map_or_else(|| "Latest".to_owned(), |v| v.number.clone());
+            if let Some(bundled) = modal.bundled_id {
+                if self.catalog.bundled_enabled.contains(bundled) {
+                    "Installed (Tap to Disable)".to_owned()
+                } else {
+                    format!("Enable Built-in ({version})")
+                }
+            } else if let Some(state) = self.catalog.download_label(&modal.project) {
+                state
+            } else {
+                format!("Download {} ({version})", modal.project.kind.label())
+            }
+        }) else {
+            return;
+        };
         let Some(modal) = &mut self.catalog.project_modal else {
             return;
         };
@@ -1983,21 +2020,6 @@ impl Launcher {
 
         // Modal Bottom Action Bar
         ui.rounded(mx + 16.0, my + mh - 56.0, mw - 32.0, 1.0, 0.0, MY3_BORDER);
-        let sel_ver_num = modal
-            .versions
-            .get(modal.selected_version)
-            .map_or("Latest", |v| v.number.as_str());
-        let install_label = if let Some(bid) = modal.bundled_id {
-            if self.catalog.bundled_enabled.contains(bid) {
-                "Installed (Tap to Disable)".to_owned()
-            } else {
-                format!("Enable Built-in ({sel_ver_num})")
-            }
-        } else if let Some(state) = self.catalog.download_label(&modal.project) {
-            state
-        } else {
-            format!("Download {} ({sel_ver_num})", modal.project.kind.label())
-        };
 
         button(
             ui,
@@ -2602,7 +2624,8 @@ impl Launcher {
                     );
                 }
             }
-            SettingsCategory::Overview => {}
+            // Not reachable from the category grid yet.
+            SettingsCategory::Overview | SettingsCategory::Account => {}
         }
     }
 
