@@ -134,6 +134,7 @@ fn main() -> Result<(), Error> {
     for _ in 0..rounds.max(1) {
         let mut mesher = Mesher {
             nether_shading: false,
+            pack_shades_faces: false,
             zoom: BiomeZoom::new(obfuscate_seed(seed)),
             blend_radius: 2,
             smooth_lighting: true,

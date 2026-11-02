@@ -706,6 +706,8 @@ fn pack_coords(coords: u32) -> u16 {
 pub struct Mesher<'a> {
     /// CardinalLighting.NETHER: brighter up/down faces.
     pub nether_shading: bool,
+    /// A shader pack shades the faces itself: none of the game's in the vertex colours.
+    pub pack_shades_faces: bool,
     pub assets: &'a Assets,
     pub render: &'a RenderAssets,
     pub tables: &'a MeshTables,
@@ -721,6 +723,12 @@ pub struct Mesher<'a> {
     pub cutout_leaves: bool,
 }
 impl Mesher<'_> {
+    fn shading(&self) -> lighting::Shading {
+        lighting::Shading {
+            nether: self.nether_shading,
+            off: self.pack_shades_faces,
+        }
+    }
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
     pub fn mesh(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> SectionMesh {
         let mut out = SectionMesh::default();
@@ -764,8 +772,8 @@ impl Mesher<'_> {
                     }
                     if state.fluid.kind() != FluidKind::Empty {
                         let water = tints.get(Resolver::Water, x, y, z);
-                        let nether = self.nether_shading;
-                        fluid::tesselate(self.tables, nether, &pad, water, &mut out, [x, y, z]);
+                        let shading = self.shading();
+                        fluid::tesselate(self.tables, shading, &pad, water, &mut out, [x, y, z]);
                     }
                     if !state.model {
                         continue;
@@ -865,7 +873,7 @@ impl Mesher<'_> {
     ) {
         let q = &face.quad;
         let shade_face = q.shade_direction_override.unwrap_or(q.facing);
-        let directional = lighting::cardinal(self.nether_shading, shade_face);
+        let directional = lighting::cardinal(self.shading(), shade_face);
         // Grey level per vertex before tinting, and vanilla light coords.
         let (gray, coords) = if ao {
             let info = &self.tables.info;

@@ -190,7 +190,7 @@ impl FluidFlowWorld for FlowView<'_> {
 /// Emits one fluid cell at section-relative `[x, y, z]`.
 pub(super) fn tesselate(
     tables: &MeshTables,
-    nether: bool,
+    shading: lighting::Shading,
     pad: &Padded,
     water_color: u32,
     out: &mut SectionMesh,
@@ -360,7 +360,7 @@ pub(super) fn tesselate(
                 ([fx + 1.0, fy + ne, fz], uv[3]),
             ],
             layer,
-            color(lighting::cardinal(nether, D::Up)),
+            color(lighting::cardinal(shading, D::Up)),
             light([x, y, z]),
             backward,
         );
@@ -375,13 +375,13 @@ pub(super) fn tesselate(
                 ([fx, y0, fz + 1.0], [0.0, 1.0]),
             ],
             still,
-            color(lighting::cardinal(nether, D::Down)),
+            color(lighting::cardinal(shading, D::Down)),
             light([x, y - 1, z]),
             false,
         );
     }
     let side_light = light([x, y, z]);
-    let up_shade = lighting::cardinal(nether, D::Up);
+    let up_shade = lighting::cardinal(shading, D::Up);
     for (i, d) in [
         Direction::North,
         Direction::South,
@@ -416,9 +416,9 @@ pub(super) fn tesselate(
             _ => (flow, false),
         };
         let side = if matches!(d, Direction::North | Direction::South) {
-            lighting::cardinal(nether, D::North)
+            lighting::cardinal(shading, D::North)
         } else {
-            lighting::cardinal(nether, D::West)
+            lighting::cardinal(shading, D::West)
         };
         let (v0, v1) = ((1.0 - h0) * 0.5, (1.0 - h1) * 0.5);
         quad(

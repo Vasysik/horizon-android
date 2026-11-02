@@ -31,6 +31,9 @@ pub(super) struct PackIds {
     missing_item: i32,
     /// `oldHandLight` (3.2): the first held item and light are those of the brighter hand.
     old_hand_light: bool,
+    /// `oldLighting`: the pack wants the game's face shades in the vertex colours. Without it
+    /// (Iris' default) it shades the faces itself, and twice is near black on those from the sun.
+    old_lighting: bool,
 }
 
 /// A pack the renderer is making on its own thread (`Renderer::start_shader_pack`): its ids,
@@ -198,6 +201,12 @@ impl Game<'_> {
                 renderer.set_world_post(scale, antialias);
             }
         }
+        // The world draws with the pack once its ids are here; the sections follow.
+        let shades_faces = self.pack_ids.as_ref().is_some_and(|p| !p.old_lighting);
+        if self.streaming.pack_shades_faces != shades_faces {
+            self.streaming.pack_shades_faces = shades_faces;
+            self.all_sections_changed();
+        }
         let Some((name, profile)) = self.shader_choice.clone() else {
             return PackInputs::default();
         };
@@ -271,6 +280,9 @@ impl Game<'_> {
                         old_hand_light: properties
                             .get("oldHandLight")
                             .is_none_or(|v| v.trim() != "false"),
+                        old_lighting: properties
+                            .get("oldLighting")
+                            .is_some_and(|v| v.trim() == "true"),
                         entities: entities.plain(),
                         missing_entity: if text.is_some() { 65535 } else { 0 },
                         missing_block: if ids.is_empty() { 0 } else { 65535 },
