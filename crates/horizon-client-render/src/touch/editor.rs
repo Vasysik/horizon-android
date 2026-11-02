@@ -2,6 +2,10 @@ use super::*;
 
 pub struct Editor {
     pub selected: Option<Control>,
+    /// The full-screen HUD editor's selection (built-in control or custom key).
+    pub target: Target,
+    /// `(Some(index))` rebinds custom button `index`; `None` adds a new one.
+    pub picking_for: Option<Option<usize>>,
     pub option: Option<usize>,
     pub apply_all: bool,
     pub original: Settings,
@@ -27,6 +31,8 @@ impl TouchControls {
         self.clear();
         self.editor = Some(Editor {
             selected: None,
+            target: Target::default(),
+            picking_for: None,
             option: None,
             apply_all: false,
             original: self.settings.clone(),

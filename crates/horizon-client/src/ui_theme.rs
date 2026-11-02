@@ -68,6 +68,32 @@ pub mod color {
     }
 }
 
+/// The HUD editor's semantic colours.
+pub struct Palette {
+    pub text: u32,
+    pub muted: u32,
+    pub accent: u32,
+    pub accent_soft: u32,
+    pub card_hi: u32,
+    pub border: u32,
+    pub border_light: u32,
+    pub warn: u32,
+    pub danger: u32,
+}
+pub fn palette() -> Palette {
+    Palette {
+        text: color::TEXT,
+        muted: color::MUTED,
+        accent: color::ACCENT,
+        accent_soft: color::hex(0x332854, 255),
+        card_hi: color::hex(0x232032, 255),
+        border: color::BORDER,
+        border_light: color::hex(0x3A3650, 255),
+        warn: color::hex(0xFFB74D, 255),
+        danger: color::hex(0xFF6B6B, 255),
+    }
+}
+
 /// The launcher's type scale and shapes (`horizon_theme`), in dp.
 pub(crate) const SMALL: f32 = horizon_theme::CAPTION.px;
 pub(crate) const BODY: f32 = horizon_theme::LABEL.px;
@@ -1091,6 +1117,88 @@ impl<'a> Ui<'a> {
     /// Text in a `1.45 × size` line box whose top is `y`.
     pub fn text(&mut self, face: Face, size: f32, x: f32, y: f32, color: u32, text: &str) -> f32 {
         self.text_line(face, size, (size * 1.45).round(), x, y, color, text)
+    }
+
+    // ---- the HUD editor's small drawing vocabulary ----
+
+    /// A sharp-cornered filled rectangle.
+    pub fn fill(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
+        self.rounded(x, y, w, h, 0.0, color);
+    }
+
+    /// A rounded outline `thickness` dp wide.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stroke_rounded(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        thickness: f32,
+        color: u32,
+    ) {
+        let rings = thickness.max(1.0).round() as i32;
+        for ring in 0..rings {
+            let inset = ring as f32;
+            self.border(
+                x + inset,
+                y + inset,
+                w - inset * 2.0,
+                h - inset * 2.0,
+                radius,
+                color,
+            );
+        }
+    }
+
+    /// Text at `(x, y)` in the HUD editor's argument order.
+    pub fn label(&mut self, text: &str, x: f32, y: f32, size: f32, color: u32, face: Face) {
+        self.text(face, size, x, y, color, text);
+    }
+
+    /// Text shortened to `width` before drawing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn label_fit(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+        size: f32,
+        color: u32,
+        face: Face,
+    ) {
+        let fitted = self.fit_text(face, size, text, width);
+        self.text(face, size, x, y, color, &fitted);
+    }
+
+    /// Text centred inside `rect`, shortened when it does not fit.
+    pub fn centered_fit(
+        &mut self,
+        text: &str,
+        rect: [f32; 4],
+        size: f32,
+        color: u32,
+        face: Face,
+    ) {
+        let [x, y, w, h] = rect;
+        let fitted = self.fit_text(face, size, text, w);
+        let text_w = self.measure(face, size, &fitted);
+        let text_h = size * 1.45;
+        self.text(
+            face,
+            size,
+            x + (w - text_w) / 2.0,
+            y + (h - text_h) / 2.0,
+            color,
+            &fitted,
+        );
+    }
+
+    /// The drawn width of `text`, in dp.
+    pub fn width(&self, text: &str, size: f32, face: Face) -> f32 {
+        self.measure(face, size, text)
     }
     pub(crate) fn text_centered(
         &mut self,

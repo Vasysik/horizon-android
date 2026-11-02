@@ -2904,8 +2904,7 @@ impl Launcher {
             Some(Action::OpenControlEditor) => {
                 let game_home = self.catalog.config.game_home(&self.home);
                 let mut tc = horizon_client::touch::TouchControls::default();
-                tc.path = game_home.join("horizon-touch.json");
-                tc.settings = horizon_client::touch::Settings::load_from(&tc.path);
+                tc.load_settings_from(&game_home.join("horizon-touch.json"));
                 tc.open_editor();
                 self.control_editor = Some(tc);
             }

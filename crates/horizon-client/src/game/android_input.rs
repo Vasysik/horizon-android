@@ -329,36 +329,28 @@ impl Game<'_> {
                 }
                 InGameMenuAction::ApplyPreset(name) => {
                     self.pad.touch.settings.apply_preset(name);
-                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::CycleMovementMode => {
-                    use horizon_client::touch::MovementMode;
-                    self.pad.touch.settings.movement_mode = match self.pad.touch.settings.movement_mode {
-                        MovementMode::Dpad => MovementMode::Thumbstick,
-                        MovementMode::Thumbstick => MovementMode::FloatingThumbstick,
-                        MovementMode::FloatingThumbstick => MovementMode::Dpad,
-                    };
-                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.pad.touch.settings.cycle_movement_mode();
+                    let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ToggleSplitTouch => {
-                    use horizon_client::touch::InteractionMode;
-                    self.pad.touch.settings.interaction_mode = match self.pad.touch.settings.interaction_mode {
-                        InteractionMode::Gesture => InteractionMode::SplitTouch,
-                        InteractionMode::SplitTouch => InteractionMode::Gesture,
-                    };
-                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.pad.touch.settings.split_controls =
+                        !self.pad.touch.settings.split_controls;
+                    let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ToggleLeftHanded => {
                     self.pad.touch.settings.left_handed = !self.pad.touch.settings.left_handed;
-                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ToggleGyro => {
-                    self.pad.touch.settings.gyro_enabled = !self.pad.touch.settings.gyro_enabled;
-                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.pad.touch.settings.gyroscope = !self.pad.touch.settings.gyroscope;
+                    let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ToggleVirtualMouse => {
@@ -367,19 +359,18 @@ impl Game<'_> {
                 InGameMenuAction::StepTouchSensitivity(dir) => {
                     self.pad.touch.settings.sensitivity =
                         (self.pad.touch.settings.sensitivity + dir as f32 * 0.10).clamp(0.2, 2.5);
-                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::StepButtonScale(dir) => {
                     self.pad.touch.settings.button_scale =
                         (self.pad.touch.settings.button_scale + dir as f32 * 0.10).clamp(0.5, 2.0);
-                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::StepButtonOpacity(dir) => {
-                    self.pad.touch.settings.opacity =
-                        (self.pad.touch.settings.opacity + dir as f32 * 0.10).clamp(0.2, 1.0);
-                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.pad.touch.settings.step_opacity(dir as f32 * 0.10);
+                    let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::TriggerKey(key) => {

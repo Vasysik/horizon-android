@@ -6,11 +6,11 @@ use std::{
     time::{Duration, Instant},
 };
 const HOLD_DELAY: Duration = Duration::from_millis(350);
-mod custom;
+pub mod custom;
 mod editor;
 pub use custom::CustomButton;
 pub mod layout;
-pub use layout::{Control, Mode, Settings};
+pub use layout::{Control, Mode, MovementMode, Settings, Target};
 /// Entity-placement items retain short-tap placement, like building blocks.
 pub fn item_places_entity_on_tap(item: &str) -> bool {
     let Some(id) = item.strip_prefix("minecraft:") else {
@@ -208,6 +208,11 @@ impl TouchControls {
             self.settings = Settings::load();
             self.loaded = true;
         }
+    }
+    /// Load a HUD layout from an explicit file instead of the working directory.
+    pub fn load_settings_from(&mut self, path: &std::path::Path) {
+        self.settings = Settings::load_from(path);
+        self.loaded = true;
     }
     pub fn aspect(&self) -> f32 {
         if self.aspect > 0.0 {

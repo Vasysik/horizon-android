@@ -149,7 +149,7 @@ impl TouchControls {
         false
     }
     pub fn fit_placement(&self, mut p: Placement) -> Placement {
-        p.size = (p.size * self.settings.button_scale)
+        p.size = (p.size * p.scale * self.settings.button_scale)
             .min(self.aspect())
             .min(1.0);
         let half = [p.size / self.aspect() / 2.0, p.size / 2.0];

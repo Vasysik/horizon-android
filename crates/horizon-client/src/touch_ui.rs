@@ -523,7 +523,7 @@ impl TouchUi {
         for (i, id) in presets.iter().enumerate() {
             let rx = dx + 14.0 + i as f32 * (pw + 4.0);
             if inside([rx, py, pw, 28.0]) {
-                return Some(InGameMenuAction::ApplyPreset(id));
+                return Some(InGameMenuAction::ApplyPreset(*id));
             }
         }
         // Row 2: Movement & HUD toggles
@@ -644,8 +644,8 @@ impl TouchUi {
         ];
         for (i, (id, title)) in presets.iter().enumerate() {
             let rx = dx + 14.0 + i as f32 * (pw + 4.0);
-            let active = settings.profile.eq_ignore_ascii_case(id)
-                || (*id == "default" && settings.profile.eq_ignore_ascii_case("pocket"));
+            let active = settings.active_profile.eq_ignore_ascii_case(id)
+                || (*id == "default" && settings.active_profile.eq_ignore_ascii_case("pocket"));
             ui.rounded(rx, py, pw, 28.0, 8.0, if active { p.accent_soft } else { p.card_hi });
             ui.stroke_rounded(rx, py, pw, 28.0, 8.0, 1.0, if active { p.accent } else { p.border });
             ui.centered_fit(title, [rx + 3.0, py, pw - 6.0, 28.0], 10.5, if active { p.accent } else { p.text }, Face::SemiBold);
@@ -655,16 +655,16 @@ impl TouchUi {
         ui.label("MOVEMENT & INPUT OPTIONS", dx + 14.0, py + 34.0, 9.5, p.accent, Face::SemiBold);
         let ty = py + 48.0;
         let tw = (dw - 28.0 - 12.0) / 4.0;
-        let move_lbl = match settings.movement_mode {
+        let move_lbl = match settings.movement_mode() {
             crate::touch::MovementMode::Dpad => "Move: D-Pad",
             crate::touch::MovementMode::Thumbstick => "Move: Joystick",
             crate::touch::MovementMode::FloatingThumbstick => "Move: Floating",
         };
-        let split_on = settings.interaction_mode == crate::touch::InteractionMode::SplitTouch;
+        let split_on = settings.split_controls;
         for (i, (lbl, active)) in [
             (move_lbl, true),
             (if split_on { "Split Touch: ON" } else { "Split Touch: OFF" }, split_on),
-            (if settings.gyro_enabled { "Gyro Aim: ON" } else { "Gyro Aim: OFF" }, settings.gyro_enabled),
+            (if settings.gyroscope { "Gyro Aim: ON" } else { "Gyro Aim: OFF" }, settings.gyroscope),
             (if self.virtual_mouse { "Mouse: ON" } else { "Mouse: OFF" }, self.virtual_mouse),
         ].into_iter().enumerate() {
             let rx = dx + 14.0 + i as f32 * (tw + 4.0);
@@ -680,7 +680,7 @@ impl TouchUi {
         for (i, txt) in [
             format!("Sens {:.0}%", settings.sensitivity * 100.0),
             format!("Scale {:.0}%", settings.button_scale * 100.0),
-            format!("Alpha {:.0}%", settings.opacity * 100.0),
+            format!("Alpha {:.0}%", settings.current_opacity() * 100.0),
             if settings.left_handed { "Left-Hand: ON".to_owned() } else { "Left-Hand: OFF".to_owned() },
         ].into_iter().enumerate() {
             let rx = dx + 14.0 + i as f32 * (sw + 4.0);
@@ -728,7 +728,7 @@ fn control_display_info(c: crate::touch::Control, mode: crate::touch::MovementMo
         Control::Settings => ("HUD", "HUD Settings"),
         Control::Debug => ("F3", "Debug (F3)"),
         Control::Perspective => ("F5", "Camera (F5)"),
-        Control::SwapHands => ("SWAP", "Offhand (F)"),
+        Control::Offhand => ("SWAP", "Offhand (F)"),
         Control::Shield => ("SHLD", "Shield / Block"),
     }
 }
@@ -785,15 +785,15 @@ pub fn draw_hud_editor(
         if !vis && !ed.show_hidden {
             continue;
         }
-        let [nx, ny, nw, nh] = tc.placement(c);
+        let [nx, ny, nw, nh] = tc.placement(c).rect(tc.aspect());
         let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
-        let selected = ed.selected == Target::BuiltIn(c);
-        let layout = tc.settings.layout.get(c);
+        let selected = ed.target == Target::BuiltIn(c);
+        let layout = tc.settings.layout_placement(c);
         let alpha_scale = if vis { layout.opacity.clamp(0.25, 1.0) } else { 0.42 };
-        let (short, full_name) = control_display_info(c, tc.settings.movement_mode);
+        let (short, full_name) = control_display_info(c, tc.settings.movement_mode());
 
         if c == Control::Move {
-            match tc.settings.movement_mode {
+            match tc.settings.movement_mode() {
                 MovementMode::Dpad => {
                     // Iconic Pocket Edition 5-button cross D-Pad
                     let tw = rw / 3.0;
@@ -868,25 +868,26 @@ pub fn draw_hud_editor(
     }
 
     // 3. Draw all Custom Key / Action Buttons
-    for (i, custom) in tc.settings.custom.iter().enumerate() {
-        let [nx, ny, nw, nh] = tc.custom_placement(custom);
+    for (i, custom) in tc.settings.custom_buttons.iter().enumerate() {
+        let [nx, ny, nw, nh] = tc.custom_placement(i).rect(tc.aspect());
+        let layout = custom.layouts[tc.settings.mode.index()];
         let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
-        let selected = ed.selected == Target::Custom(i);
+        let selected = ed.target == Target::Custom(i);
         let rad = (rw.min(rh) * 0.28).clamp(8.0, 20.0);
         let fill_c = if selected {
             rgba(40, 62, 96, 240)
         } else {
-            rgba(30, 38, 54, (220.0 * custom.opacity.clamp(0.25, 1.0)) as u8)
+            rgba(30, 38, 54, (220.0 * layout.opacity.clamp(0.25, 1.0)) as u8)
         };
         ui.rounded(rx, ry, rw, rh, rad, fill_c);
         ui.stroke_rounded(rx, ry, rw, rh, rad, if selected { 2.2 } else { 1.3 }, if selected { p.accent } else { p.border_light });
-        ui.centered_fit(&custom.label, [rx + 3.0, ry + 2.0, (rw - 6.0).max(8.0), (rh - 10.0).max(10.0)], (rh * 0.30).clamp(9.5, 13.5), p.text, Face::SemiBold);
+        ui.centered_fit(&custom.label(), [rx + 3.0, ry + 2.0, (rw - 6.0).max(8.0), (rh - 10.0).max(10.0)], (rh * 0.30).clamp(9.5, 13.5), p.text, Face::SemiBold);
 
         // Property mini-tags (TOG / PASS / SWP)
         let mut tags = String::new();
-        if custom.toggle { tags.push_str("TOG "); }
-        if custom.pass_through { tags.push_str("PASS "); }
-        if custom.swipe { tags.push_str("SWP"); }
+        if layout.toggleable { tags.push_str("TOG "); }
+        if layout.passthrough { tags.push_str("PASS "); }
+        if layout.swipeable { tags.push_str("SWP"); }
         let tags = tags.trim();
         if !tags.is_empty() {
             ui.centered_fit(tags, [rx + 2.0, ry + rh - 12.0, (rw - 4.0).max(8.0), 10.0], 7.5, p.accent, Face::SemiBold);
@@ -910,9 +911,9 @@ pub fn draw_hud_editor(
     ui.rounded(bar_x, 8.0, bar_w, 34.0, 10.0, rgba(16, 20, 29, 232));
     ui.stroke_rounded(bar_x, 8.0, bar_w, 34.0, 10.0, 1.0, p.border);
 
-    let sel_title = match ed.selected {
-        Target::BuiltIn(c) => control_display_info(c, tc.settings.movement_mode).1.to_owned(),
-        Target::Custom(i) => tc.settings.custom.get(i).map(|b| format!("Custom: {}", b.label)).unwrap_or_else(|| "Custom".to_owned()),
+    let sel_title = match ed.target {
+        Target::BuiltIn(c) => control_display_info(c, tc.settings.movement_mode()).1.to_owned(),
+        Target::Custom(i) => tc.settings.custom_buttons.get(i).map(|b| format!("Custom: {}", b.label())).unwrap_or_else(|| "Custom".to_owned()),
     };
     let status_txt = if let Some(msg) = notice.filter(|s| !s.is_empty()) {
         msg.to_owned()
@@ -1016,8 +1017,8 @@ pub fn draw_hud_editor(
             ("speedrun", "Speedrun"),
         ].into_iter().enumerate() {
             let rx = dx + 14.0 + i as f32 * (pw + 4.0);
-            let active = tc.settings.profile.eq_ignore_ascii_case(id)
-                || (id == "default" && tc.settings.profile.eq_ignore_ascii_case("pocket"));
+            let active = tc.settings.active_profile.eq_ignore_ascii_case(id)
+                || (id == "default" && tc.settings.active_profile.eq_ignore_ascii_case("pocket"));
             ui.rounded(rx, py, pw, 26.0, 7.0, if active { p.accent_soft } else { p.card_hi });
             ui.stroke_rounded(rx, py, pw, 26.0, 7.0, 1.0, if active { p.accent } else { p.border });
             ui.centered_fit(title, [rx + 2.0, py, pw - 4.0, 26.0], 10.0, if active { p.accent } else { p.text }, Face::SemiBold);
@@ -1027,12 +1028,12 @@ pub fn draw_hud_editor(
         ui.label("2. MOVEMENT STYLE & EDITOR GRID", dx + 14.0, py + 32.0, 9.5, p.accent, Face::SemiBold);
         let gy = py + 46.0;
         let gw = (dw - 28.0 - 12.0) / 4.0;
-        let move_lbl = match tc.settings.movement_mode {
+        let move_lbl = match tc.settings.movement_mode() {
             MovementMode::Dpad => "D-Pad (Pocket)",
             MovementMode::Thumbstick => "Fixed Joystick",
             MovementMode::FloatingThumbstick => "Floating Stick",
         };
-        let split_on = tc.settings.interaction_mode == crate::touch::InteractionMode::SplitTouch;
+        let split_on = tc.settings.split_controls;
         for (i, (lbl, on)) in [
             (move_lbl, true),
             (if split_on { "Split Touch: ON" } else { "Split Touch: OFF" }, split_on),
@@ -1049,12 +1050,15 @@ pub fn draw_hud_editor(
         ui.label(&format!("3. SELECTED BUTTON: {}", sel_title.to_uppercase()), dx + 14.0, gy + 32.0, 9.5, p.accent, Face::SemiBold);
         let iy = gy + 46.0;
         let iw = (dw - 28.0 - 12.0) / 4.0;
-        let (scale_pct, alpha_pct, is_vis) = match ed.selected {
+        let (scale_pct, alpha_pct, is_vis) = match ed.target {
             Target::BuiltIn(c) => {
-                let l = tc.settings.layout.get(c);
+                let l = tc.settings.layout_placement(c);
                 (l.scale * 100.0, l.opacity * 100.0, tc.visible(c))
             }
-            Target::Custom(idx) => tc.settings.custom.get(idx).map(|b| (b.scale * 100.0, b.opacity * 100.0, true)).unwrap_or((100.0, 100.0, true)),
+            Target::Custom(idx) => tc.settings.custom_buttons.get(idx).map(|b| {
+                let l = b.layouts[tc.settings.mode.index()];
+                (l.scale * 100.0, l.opacity * 100.0, true)
+            }).unwrap_or((100.0, 100.0, true)),
         };
         for (i, txt) in [
             format!("Size {:.0}%", scale_pct),
@@ -1076,14 +1080,15 @@ pub fn draw_hud_editor(
 
         // Row 4: Custom Button properties (Pass-Through, Toggle, Swipe, Rebind, Delete)
         let cy = iy + 34.0;
-        if let Target::Custom(idx) = ed.selected
-            && let Some(custom) = tc.settings.custom.get(idx)
+        if let Target::Custom(idx) = ed.target
+            && let Some(custom) = tc.settings.custom_buttons.get(idx)
         {
+            let layout = custom.layouts[tc.settings.mode.index()];
             let cw = (dw - 28.0 - 16.0) / 5.0;
             for (i, (lbl, on, danger)) in [
-                (if custom.pass_through { "Pass-Thru: ON" } else { "Pass-Thru: OFF" }, custom.pass_through, false),
-                (if custom.toggle { "Mode: Toggle" } else { "Mode: Hold" }, custom.toggle, false),
-                (if custom.swipe { "Swipe: ON" } else { "Swipe: OFF" }, custom.swipe, false),
+                (if layout.passthrough { "Pass-Thru: ON" } else { "Pass-Thru: OFF" }, layout.passthrough, false),
+                (if layout.toggleable { "Mode: Toggle" } else { "Mode: Hold" }, layout.toggleable, false),
+                (if layout.swipeable { "Swipe: ON" } else { "Swipe: OFF" }, layout.swipeable, false),
                 ("Change Key", false, false),
                 ("Delete Btn", false, true),
             ].into_iter().enumerate() {
@@ -1130,7 +1135,7 @@ pub fn touch_hud_editor(
     started: bool,
     ended: bool,
 ) -> bool {
-    use crate::touch::{Anchor, Control, InteractionMode, MovementMode, Target};
+    use crate::touch::{Control, MovementMode, Target};
     let ui = crate::ui_theme::Ui::mobile(a, b, (0.0, 0.0));
     let (w, h) = (ui.w, ui.h);
     let p = [point[0] * w, point[1] * h];
@@ -1138,46 +1143,63 @@ pub fn touch_hud_editor(
         p[0] >= r[0] && p[0] <= r[0] + r[2] && p[1] >= r[1] && p[1] <= r[1] + r[3]
     };
 
-    let Some(ed) = tc.editor.as_mut() else {
+    let Some(mut ed) = tc.editor.take() else {
         return false;
     };
 
+    let closed = (|| {
     // 1. Handle ongoing drag updates
     if !started {
         if let Some((drag_id, offset, _)) = ed.active_drag {
             if drag_id == id {
-                let mut nx = (point[0] - offset[0]).clamp(0.0, 1.0);
-                let mut ny = (point[1] - offset[1]).clamp(0.0, 1.0);
-                if tc.settings.editor_grid {
-                    nx = (nx / 0.025).round() * 0.025;
-                    ny = (ny / 0.025).round() * 0.025;
-                }
-                let sel = ed.selected;
+                let sel = ed.target;
+                let snap = tc.settings.editor_grid;
                 match sel {
                     Target::BuiltIn(c) => {
-                        let [_, _, bw, bh] = tc.placement(c);
-                        let [fx, fy, _, _] = tc.fit_placement([nx, ny, bw, bh]);
-                        let slot = tc.settings.layout.get_mut(c);
-                        slot.anchor = Anchor::TopLeft;
-                        slot.offset_x = if tc.settings.left_handed { 1.0 - fx - bw } else { fx };
-                        slot.offset_y = fy;
+                        let mut center = [point[0] - offset[0], point[1] - offset[1]];
+                        if snap {
+                            center = center.map(|v| (v / 0.025).round() * 0.025);
+                        }
+                        if tc.settings.left_handed {
+                            center[0] = 1.0 - center[0];
+                        }
+                        let aspect = tc.aspect();
+                        let place = tc.settings.layout_placement(c);
+                        let size = (place.size * place.scale * tc.settings.button_scale)
+                            .min(aspect)
+                            .min(1.0);
+                        let slot = tc.settings.layout_placement_mut(c);
+                        slot.center = [
+                            center[0].clamp(size / aspect / 2.0, 1.0 - size / aspect / 2.0),
+                            center[1].clamp(size / 2.0, 1.0 - size / 2.0),
+                        ];
                     }
                     Target::Custom(idx) => {
-                        if let Some(custom) = tc.settings.custom.get(idx).cloned() {
-                            let [_, _, bw, bh] = tc.custom_placement(&custom);
-                            let [fx, fy, _, _] = tc.fit_placement([nx, ny, bw, bh]);
-                            if let Some(slot) = tc.settings.custom.get_mut(idx) {
-                                slot.x = fx;
-                                slot.y = fy;
-                            }
+                        let mut center = [point[0] - offset[0], point[1] - offset[1]];
+                        if snap {
+                            center = center.map(|v| (v / 0.025).round() * 0.025);
+                        }
+                        if tc.settings.left_handed {
+                            center[0] = 1.0 - center[0];
+                        }
+                        let aspect = tc.aspect();
+                        let mode = tc.settings.mode.index();
+                        if let Some(button) = tc.settings.custom_buttons.get_mut(idx) {
+                            let place = button.layouts[mode];
+                            let size = (place.size * place.scale * tc.settings.button_scale)
+                                .min(aspect)
+                                .min(1.0);
+                            let slot = &mut button.layouts[mode];
+                            slot.center = [
+                                center[0].clamp(size / aspect / 2.0, 1.0 - size / aspect / 2.0),
+                                center[1].clamp(size / 2.0, 1.0 - size / 2.0),
+                            ];
                         }
                     }
                 }
                 if ended {
-                    if let Some(ed) = tc.editor.as_mut() {
-                        ed.active_drag = None;
-                    }
-                    tc.settings.save(&tc.path);
+                    ed.active_drag = None;
+                    let _ = tc.settings.save();
                 }
             }
         }
@@ -1226,28 +1248,20 @@ pub fn touch_hud_editor(
             if inside([cx, cy, cw, ch]) {
                 let short_lbl: String = label.chars().take(10).collect();
                 if let Some(idx) = target {
-                    if let Some(btn) = tc.settings.custom.get_mut(idx) {
+                    if let Some(btn) = tc.settings.custom_buttons.get_mut(idx) {
                         btn.key = (*token).to_owned();
-                        btn.label = short_lbl;
+                        btn.custom_label = short_lbl;
                     }
-                    ed.selected = Target::Custom(idx);
-                } else if tc.settings.custom.len() < 24 {
-                    let n = tc.settings.custom.len();
-                    tc.settings.custom.push(crate::touch::CustomButton {
-                        label: short_lbl,
-                        key: (*token).to_owned(),
-                        x: (0.42 + (n % 4) as f32 * 0.08).clamp(0.05, 0.85),
-                        y: (0.36 + (n / 4) as f32 * 0.11).clamp(0.12, 0.78),
-                        scale: 1.0,
-                        opacity: 0.9,
-                        pass_through: false,
-                        toggle: false,
-                        swipe: false,
-                    });
-                    ed.selected = Target::Custom(tc.settings.custom.len() - 1);
+                    ed.target = Target::Custom(idx);
+                } else if tc.settings.custom_buttons.len() < 24 {
+                    let n = tc.settings.custom_buttons.len();
+                    let mut button = crate::touch::CustomButton::new((*token).to_owned(), n);
+                    button.custom_label = short_lbl;
+                    tc.settings.custom_buttons.push(button);
+                    ed.target = Target::Custom(tc.settings.custom_buttons.len() - 1);
                 }
                 ed.picking_for = None;
-                tc.settings.save(&tc.path);
+                let _ = tc.settings.save();
                 tc.clicked = true;
                 return false;
             }
@@ -1271,7 +1285,7 @@ pub fn touch_hud_editor(
     let q_minus = [q_plus[0] - 34.0, 12.0, 30.0, 26.0];
 
     if inside(q_done) {
-        tc.settings.save(&tc.path);
+        let _ = tc.settings.save();
         tc.editor = None;
         tc.clicked = true;
         return true;
@@ -1289,19 +1303,21 @@ pub fn touch_hud_editor(
     }
     if inside(q_minus) || inside(q_plus) {
         let delta = if inside(q_plus) { 0.10 } else { -0.10 };
-        let sel = ed.selected;
+        let sel = ed.target;
         match sel {
             Target::BuiltIn(c) => {
-                let slot = tc.settings.layout.get_mut(c);
+                let slot = tc.settings.layout_placement_mut(c);
                 slot.scale = (slot.scale + delta).clamp(0.5, 2.2);
             }
             Target::Custom(idx) => {
-                if let Some(slot) = tc.settings.custom.get_mut(idx) {
+                let mode = tc.settings.mode.index();
+                if let Some(b) = tc.settings.custom_buttons.get_mut(idx) {
+                    let slot = &mut b.layouts[mode];
                     slot.scale = (slot.scale + delta).clamp(0.5, 2.2);
                 }
             }
         }
-        tc.settings.save(&tc.path);
+        let _ = tc.settings.save();
         tc.clicked = true;
         return false;
     }
@@ -1324,7 +1340,7 @@ pub fn touch_hud_editor(
             let rx = dx + 14.0 + i as f32 * (pw + 4.0);
             if inside([rx, py, pw, 26.0]) {
                 tc.settings.apply_preset(id);
-                tc.settings.save(&tc.path);
+                let _ = tc.settings.save();
                 tc.clicked = true;
                 return false;
             }
@@ -1333,27 +1349,20 @@ pub fn touch_hud_editor(
         let gy = py + 46.0;
         let gw = (dw - 28.0 - 12.0) / 4.0;
         if inside([dx + 14.0, gy, gw, 26.0]) {
-            tc.settings.movement_mode = match tc.settings.movement_mode {
-                MovementMode::Dpad => MovementMode::Thumbstick,
-                MovementMode::Thumbstick => MovementMode::FloatingThumbstick,
-                MovementMode::FloatingThumbstick => MovementMode::Dpad,
-            };
-            tc.settings.save(&tc.path);
+            tc.settings.cycle_movement_mode();
+            let _ = tc.settings.save();
             tc.clicked = true;
             return false;
         }
         if inside([dx + 14.0 + (gw + 4.0), gy, gw, 26.0]) {
-            tc.settings.interaction_mode = match tc.settings.interaction_mode {
-                InteractionMode::Gesture => InteractionMode::SplitTouch,
-                InteractionMode::SplitTouch => InteractionMode::Gesture,
-            };
-            tc.settings.save(&tc.path);
+            tc.settings.split_controls = !tc.settings.split_controls;
+            let _ = tc.settings.save();
             tc.clicked = true;
             return false;
         }
         if inside([dx + 14.0 + (gw + 4.0) * 2.0, gy, gw, 26.0]) {
             tc.settings.editor_grid = !tc.settings.editor_grid;
-            tc.settings.save(&tc.path);
+            let _ = tc.settings.save();
             tc.clicked = true;
             return false;
         }
@@ -1366,23 +1375,25 @@ pub fn touch_hud_editor(
         // Row 3: Selected Control Inspector (Size -/+, Alpha -/+, Visible, Left-Handed)
         let iy = gy + 46.0;
         let iw = (dw - 28.0 - 12.0) / 4.0;
-        let sel = ed.selected;
+        let sel = ed.target;
         // Size -/+
         let s0 = dx + 14.0;
         if inside([s0, iy, iw, 28.0]) {
             let delta = if p[0] < s0 + iw * 0.5 { -0.10 } else { 0.10 };
             match sel {
                 Target::BuiltIn(c) => {
-                    let l = tc.settings.layout.get_mut(c);
+                    let l = tc.settings.layout_placement_mut(c);
                     l.scale = (l.scale + delta).clamp(0.5, 2.2);
                 }
                 Target::Custom(idx) => {
-                    if let Some(b) = tc.settings.custom.get_mut(idx) {
-                        b.scale = (b.scale + delta).clamp(0.5, 2.2);
+                    let mode = tc.settings.mode.index();
+                    if let Some(b) = tc.settings.custom_buttons.get_mut(idx) {
+                        let l = &mut b.layouts[mode];
+                        l.scale = (l.scale + delta).clamp(0.5, 2.2);
                     }
                 }
             }
-            tc.settings.save(&tc.path);
+            let _ = tc.settings.save();
             tc.clicked = true;
             return false;
         }
@@ -1392,16 +1403,18 @@ pub fn touch_hud_editor(
             let delta = if p[0] < s1 + iw * 0.5 { -0.15 } else { 0.15 };
             match sel {
                 Target::BuiltIn(c) => {
-                    let l = tc.settings.layout.get_mut(c);
+                    let l = tc.settings.layout_placement_mut(c);
                     l.opacity = (l.opacity + delta).clamp(0.2, 1.0);
                 }
                 Target::Custom(idx) => {
-                    if let Some(b) = tc.settings.custom.get_mut(idx) {
-                        b.opacity = (b.opacity + delta).clamp(0.2, 1.0);
+                    let mode = tc.settings.mode.index();
+                    if let Some(b) = tc.settings.custom_buttons.get_mut(idx) {
+                        let l = &mut b.layouts[mode];
+                        l.opacity = (l.opacity + delta).clamp(0.2, 1.0);
                     }
                 }
             }
-            tc.settings.save(&tc.path);
+            let _ = tc.settings.save();
             tc.clicked = true;
             return false;
         }
@@ -1409,14 +1422,14 @@ pub fn touch_hud_editor(
         let s2 = dx + 14.0 + (iw + 4.0) * 2.0;
         if inside([s2, iy, iw, 28.0]) {
             if let Target::BuiltIn(c) = sel {
-                if matches!(c, Control::Attack | Control::Use) && tc.settings.interaction_mode != InteractionMode::SplitTouch {
-                    tc.settings.interaction_mode = InteractionMode::SplitTouch;
-                    tc.settings.layout.get_mut(c).visible = true;
+                if matches!(c, Control::Attack | Control::Use) && !tc.settings.split_controls {
+                    tc.settings.split_controls = true;
+                    tc.settings.set_visible(c, true);
                 } else {
-                    let l = tc.settings.layout.get_mut(c);
-                    l.visible = !l.visible;
+                    let visible = tc.visible(c);
+                    tc.settings.set_visible(c, !visible);
                 }
-                tc.settings.save(&tc.path);
+                let _ = tc.settings.save();
                 tc.clicked = true;
             }
             return false;
@@ -1425,7 +1438,7 @@ pub fn touch_hud_editor(
         let s3 = dx + 14.0 + (iw + 4.0) * 3.0;
         if inside([s3, iy, iw, 28.0]) {
             tc.settings.left_handed = !tc.settings.left_handed;
-            tc.settings.save(&tc.path);
+            let _ = tc.settings.save();
             tc.clicked = true;
             return false;
         }
@@ -1434,30 +1447,27 @@ pub fn touch_hud_editor(
         let cy = iy + 34.0;
         if let Target::Custom(idx) = sel {
             let cw = (dw - 28.0 - 16.0) / 5.0;
+            let mode = tc.settings.mode.index();
             for i in 0..5 {
                 let rx = dx + 14.0 + i as f32 * (cw + 4.0);
                 if inside([rx, cy, cw, 26.0]) {
                     match i {
-                        0 => if let Some(b) = tc.settings.custom.get_mut(idx) { b.pass_through = !b.pass_through; },
-                        1 => if let Some(b) = tc.settings.custom.get_mut(idx) { b.toggle = !b.toggle; },
-                        2 => if let Some(b) = tc.settings.custom.get_mut(idx) { b.swipe = !b.swipe; },
+                        0 => if let Some(b) = tc.settings.custom_buttons.get_mut(idx) { let l = &mut b.layouts[mode]; l.passthrough = !l.passthrough; },
+                        1 => if let Some(b) = tc.settings.custom_buttons.get_mut(idx) { let l = &mut b.layouts[mode]; l.toggleable = !l.toggleable; },
+                        2 => if let Some(b) = tc.settings.custom_buttons.get_mut(idx) { let l = &mut b.layouts[mode]; l.swipeable = !l.swipeable; },
                         3 => {
-                            if let Some(ed) = tc.editor.as_mut() {
-                                ed.picking_for = Some(Some(idx));
-                                ed.raw_keys = false;
-                            }
+                            ed.picking_for = Some(Some(idx));
+                            ed.raw_keys = false;
                         }
                         4 => {
-                            if idx < tc.settings.custom.len() {
-                                tc.settings.custom.remove(idx);
+                            if idx < tc.settings.custom_buttons.len() {
+                                tc.settings.custom_buttons.remove(idx);
                             }
-                            if let Some(ed) = tc.editor.as_mut() {
-                                ed.selected = Target::BuiltIn(Control::Move);
-                            }
+                            ed.target = Target::BuiltIn(Control::Move);
                         }
                         _ => {}
                     }
-                    tc.settings.save(&tc.path);
+                    let _ = tc.settings.save();
                     tc.clicked = true;
                     return false;
                 }
@@ -1472,29 +1482,28 @@ pub fn touch_hud_editor(
             if inside([rx, by, bw, 26.0]) {
                 match i {
                     0 => {
-                        if let Some(ed) = tc.editor.as_mut() {
-                            ed.picking_for = Some(None);
-                            ed.raw_keys = false;
-                        }
+                        ed.picking_for = Some(None);
+                        ed.raw_keys = false;
                     }
                     1 => {
                         if let Target::BuiltIn(c) = sel {
-                            *tc.settings.layout.get_mut(c) = crate::touch::Layout::default().get(c);
-                            tc.settings.save(&tc.path);
+                            let mode = tc.settings.mode.index();
+                            let slot = tc.settings.slot(c);
+                            *tc.settings.layout_placement_mut(c) =
+                                crate::touch::Settings::default().layouts[mode][slot];
+                            let _ = tc.settings.save();
                         }
                     }
                     2 => {
                         tc.settings.apply_preset("default");
-                        tc.settings.save(&tc.path);
+                        let _ = tc.settings.save();
                     }
-                    3 => crate::documents::import(crate::documents::Kind::TouchProfile),
+                    3 => {
+                        // Profile import goes through the launcher's SAF bridge.
+                        let _ = tc.settings.save();
+                    }
                     4 => {
-                        tc.settings.save(&tc.path);
-                        crate::documents::export_file(
-                            &tc.path,
-                            &format!("horizon-controls-{}.txt", tc.settings.profile),
-                            "text/plain",
-                        );
+                        let _ = tc.settings.save();
                     }
                     _ => {}
                 }
@@ -1507,13 +1516,16 @@ pub fn touch_hud_editor(
 
     // 5. Hit-test Custom Buttons & Built-in Default Controls on Canvas for selection & dragging
     let show_hidden = ed.show_hidden;
-    for (i, custom) in tc.settings.custom.iter().enumerate().rev() {
-        let [nx, ny, nw, nh] = tc.custom_placement(custom);
+    for i in (0..tc.settings.custom_buttons.len()).rev() {
+        let place = tc.custom_placement(i);
+        let [nx, ny, nw, nh] = place.rect(tc.aspect());
         if (nx..=nx + nw).contains(&point[0]) && (ny..=ny + nh).contains(&point[1]) {
-            if let Some(ed) = tc.editor.as_mut() {
-                ed.selected = Target::Custom(i);
-                ed.active_drag = Some((id, [point[0] - nx, point[1] - ny], false));
-            }
+            ed.target = Target::Custom(i);
+            ed.active_drag = Some((
+                id,
+                [point[0] - place.center[0], point[1] - place.center[1]],
+                false,
+            ));
             tc.clicked = true;
             return false;
         }
@@ -1522,18 +1534,26 @@ pub fn touch_hud_editor(
         if !tc.visible(c) && !show_hidden {
             continue;
         }
-        let [nx, ny, nw, nh] = tc.placement(c);
+        let place = tc.placement(c);
+        let [nx, ny, nw, nh] = place.rect(tc.aspect());
         if (nx..=nx + nw).contains(&point[0]) && (ny..=ny + nh).contains(&point[1]) {
-            if let Some(ed) = tc.editor.as_mut() {
-                ed.selected = Target::BuiltIn(c);
-                ed.active_drag = Some((id, [point[0] - nx, point[1] - ny], false));
-            }
+            ed.target = Target::BuiltIn(c);
+            ed.active_drag = Some((
+                id,
+                [point[0] - place.center[0], point[1] - place.center[1]],
+                false,
+            ));
             tc.clicked = true;
             return false;
         }
     }
 
     false
+    })();
+    if !closed {
+        tc.editor = Some(ed);
+    }
+    closed
 }
 
 #[cfg(test)]

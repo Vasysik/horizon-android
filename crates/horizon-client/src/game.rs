@@ -14909,7 +14909,7 @@ impl Game<'_> {
         }
         #[cfg(target_os = "android")]
         if self.pad.touch.editor.is_some() {
-            let profile_name = self.pad.touch.settings.profile.clone();
+            let profile_name = self.pad.touch.settings.active_profile.clone();
             horizon_client::touch_ui::draw_hud_editor(
                 &self.pad.touch,
                 &mut hud,

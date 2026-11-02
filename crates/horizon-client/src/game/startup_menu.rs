@@ -1634,7 +1634,7 @@ impl Loading {
         }
         #[cfg(target_os = "android")]
         if self.menu.controls.editor.is_some() {
-            let profile_name = self.menu.controls.settings.profile.clone();
+            let profile_name = self.menu.controls.settings.active_profile.clone();
             horizon_client::touch_ui::draw_hud_editor(
                 &self.menu.controls,
                 batch,

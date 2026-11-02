@@ -86,11 +86,34 @@ impl Control {
         }
     }
 }
+/// What the HUD editor has selected: a built-in control or a user-added key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    BuiltIn(Control),
+    Custom(usize),
+}
+impl Default for Target {
+    fn default() -> Self {
+        Self::BuiltIn(Control::Move)
+    }
+}
+
+/// The editor's movement style, mapped onto the existing interaction modes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MovementMode {
+    Dpad,
+    Thumbstick,
+    FloatingThumbstick,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Placement {
     pub center: [f32; 2],
     pub size: f32,
     pub opacity: f32,
+    /// Per-button size multiplier edited by the HUD editor (1.0 = unchanged).
+    #[serde(default = "default_scale")]
+    pub scale: f32,
     /// Pojav-style Pass-through: dragging on this button also turns the camera.
     #[serde(default)]
     pub passthrough: bool,
@@ -104,12 +127,16 @@ pub struct Placement {
     #[serde(default)]
     pub shape: u8,
 }
+fn default_scale() -> f32 {
+    1.0
+}
 impl Placement {
     pub(super) fn new(x: f32, y: f32, size: f32) -> Self {
         Self {
             center: [x, y],
             size,
             opacity: 0.65,
+            scale: 1.0,
             passthrough: false,
             toggleable: false,
             swipeable: false,
@@ -132,8 +159,12 @@ impl Placement {
         if !self.opacity.is_finite() {
             self.opacity = 0.65;
         }
+        if !self.scale.is_finite() {
+            self.scale = 1.0;
+        }
         self.size = self.size.clamp(0.045, 0.45);
         self.opacity = self.opacity.clamp(0.0, 1.0);
+        self.scale = self.scale.clamp(0.5, 2.2);
         self.shape = self.shape.min(2);
         for c in &mut self.center {
             *c = if c.is_finite() {
@@ -178,6 +209,9 @@ pub struct Settings {
     pub active_profile: String,
     #[serde(default)]
     pub snap_to_grid: bool,
+    /// The HUD editor's 5% alignment grid.
+    #[serde(default)]
+    pub editor_grid: bool,
     #[serde(deserialize_with = "deserialize_layouts")]
     pub layouts: [[Placement; 14]; 3],
 }
@@ -261,6 +295,7 @@ impl Default for Settings {
             vertical_margin: 0.0,
             active_profile: default_profile_name(),
             snap_to_grid: false,
+            editor_grid: false,
             layouts,
         }
     }
@@ -624,6 +659,11 @@ impl Settings {
     pub fn crosshair(&self) -> bool {
         self.mode == Mode::Crosshair || self.split_controls
     }
+    /// The editor's visibility switch: pin a button shown or hidden regardless
+    /// of the current scheme.
+    pub fn set_visible(&mut self, c: Control, visible: bool) {
+        self.button_visibility[c as usize] = if visible { 1 } else { 2 };
+    }
     pub fn visible(&self, c: Control) -> bool {
         match self.button_visibility[c as usize] {
             1 => return true,
@@ -650,6 +690,45 @@ impl Settings {
             }
             _ => c as usize,
         }
+    }
+    /// The stored placement for `c`, without the left-handed mirror.
+    pub fn layout_placement(&self, c: Control) -> Placement {
+        self.layouts[self.mode.index()][self.slot(c)]
+    }
+    pub fn layout_placement_mut(&mut self, c: Control) -> &mut Placement {
+        let index = self.mode.index();
+        let slot = self.slot(c);
+        &mut self.layouts[index][slot]
+    }
+    /// The HUD editor's movement style, derived from the interaction mode.
+    pub fn movement_mode(&self) -> MovementMode {
+        match self.mode {
+            Mode::Dpad => MovementMode::Dpad,
+            Mode::Tap => MovementMode::FloatingThumbstick,
+            Mode::Crosshair => MovementMode::Thumbstick,
+        }
+    }
+    pub fn cycle_movement_mode(&mut self) {
+        self.mode = match self.mode {
+            Mode::Dpad => Mode::Crosshair,
+            Mode::Crosshair => Mode::Tap,
+            Mode::Tap => Mode::Dpad,
+        };
+    }
+    /// The floating menu's opacity stepper: every button at once.
+    pub fn step_opacity(&mut self, delta: f32) {
+        for p in self.layouts.iter_mut().flatten() {
+            p.opacity = (p.opacity + delta).clamp(0.2, 1.0);
+        }
+        for b in &mut self.custom_buttons {
+            for p in &mut b.layouts {
+                p.opacity = (p.opacity + delta).clamp(0.2, 1.0);
+            }
+        }
+    }
+    pub fn current_opacity(&self) -> f32 {
+        let layout = &self.layouts[self.mode.index()];
+        layout.iter().map(|p| p.opacity).sum::<f32>() / layout.len() as f32
     }
     pub fn placement(&self, c: Control) -> Placement {
         let mut p = self.layouts[self.mode.index()][self.slot(c)];
