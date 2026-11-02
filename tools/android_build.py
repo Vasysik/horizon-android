@@ -124,7 +124,10 @@ def main():
     compiler_target = 'armv7a-linux-androideabi' if args.abi == 'armeabi-v7a' else target
     legacy = args.abi in ('armeabi-v7a', 'x86')
     min_sdk = 27 if legacy else 28
-    features = ['--no-default-features', '--features', 'audio'] if legacy else []
+    # Phones drive gamepads through Android input (horizon-client-input), not
+    # gilrs, so every ABI drops the desktop-only controller deps: without this
+    # a 64-bit build would compile gilrs' udev/HID stack for Android.
+    features = ['--no-default-features', '--features', 'audio']
     manifests = [(['-p', 'horizon-android'], features)]
     environment = dict(os.environ)
     environment['PATH'] = os.pathsep.join([str(ndk / 'bin'), str(args.java_home / 'bin'), environment['PATH']])
