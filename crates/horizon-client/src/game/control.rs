@@ -304,6 +304,15 @@ impl Game<'_> {
                 }
                 Ok(Some(json!({ "ok": true, "flat": r.flat_draws() })))
             }
+            "section-indirect" => {
+                let r = self.renderer.as_mut().ok_or("no renderer")?;
+                match words.get(1).copied() {
+                    Some("on") => r.set_indirect_draws(true)?,
+                    Some("off") => r.set_indirect_draws(false)?,
+                    _ => return Err("section-indirect on|off".into()),
+                }
+                Ok(Some(json!({ "ok": true, "indirect": r.multi_draw })))
+            }
             "sky-order" => {
                 let on = match arg(1)? {
                     "early" => false,

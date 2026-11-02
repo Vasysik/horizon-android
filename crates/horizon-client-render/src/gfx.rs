@@ -3884,7 +3884,30 @@ impl Renderer {
         if on && self.flat.is_none() {
             return Err("flat section draws are off on this device".into());
         }
+        if on && let Some(flat) = &mut self.flat {
+            // Explicit developer comparisons must exercise the flat path even
+            // on backends whose automatic vanilla threshold disables it.
+            flat.min_sections = 0;
+        }
         self.flat_on = on;
+        Ok(())
+    }
+    /// Developer A/B control: direct and indirect draws use the same section geometry.
+    pub fn set_indirect_draws(&mut self, on: bool) -> Result<()> {
+        if on
+            && !(self
+                .device
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+                && self
+                    .adapter
+                    .get_downlevel_capabilities()
+                    .flags
+                    .contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION))
+        {
+            return Err("indirect section draws are unavailable on this device".into());
+        }
+        self.multi_draw = on;
         Ok(())
     }
     /// Developer A/B control; unavailable backends retain their ordinary pipeline.
@@ -6288,6 +6311,13 @@ impl Renderer {
             Some(flat)
                 if self.flat_on
                     && !self.draws.is_empty()
+                    // Preserve Android packs' existing terrain/material path.
+                    // Classic terrain/shadow programs explicitly require flat inputs.
+                    && (!cfg!(target_os = "android")
+                        || (self.native.is_none()
+                            && (self.pack_post.is_none()
+                                || pack_terrain
+                                || shadow_view.is_some())))
                     && (self.drawn_sections >= flat.min_sections
                         || pack_terrain
                         || shadow_view.is_some()) =>
@@ -6950,10 +6980,12 @@ impl Renderer {
                                 pass.set_pipeline(opaque);
                                 self.draw_sections(&mut pass, &self.indirect, 0, 0, opaque_draws);
                                 pass.set_pipeline(cutout);
+                                // All three material ranges share the complete
+                                // indirect buffer; its draw zero stays draw zero.
                                 self.draw_sections(
                                     &mut pass,
                                     &self.indirect,
-                                    opaque_draws,
+                                    0,
                                     opaque_draws,
                                     cutout_end - opaque_draws,
                                 );
@@ -6961,7 +6993,7 @@ impl Renderer {
                                 self.draw_sections(
                                     &mut pass,
                                     &self.indirect,
-                                    cutout_end,
+                                    0,
                                     cutout_end,
                                     solid_draws - cutout_end,
                                 );
