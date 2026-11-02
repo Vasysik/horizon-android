@@ -109,6 +109,18 @@ impl LayoutRuntime {
         self.state.evaluate_layer_visibility_changes(&self.layout)
     }
 
+    pub fn screen_width(&self) -> f32 {
+        self.screen_width
+    }
+
+    pub fn screen_height(&self) -> f32 {
+        self.screen_height
+    }
+
+    pub fn display_density(&self) -> f32 {
+        self.display_density
+    }
+
     pub fn is_layer_visible(&self, layer: &ControlLayer) -> bool {
         self.state.is_layer_visible(layer)
     }
@@ -582,7 +594,7 @@ impl RuntimeState {
     }
 }
 
-fn calculate_button_bounds(
+pub fn calculate_button_bounds(
     pos: &ButtonPosition,
     size: &ButtonSize,
     screen_width: f32,
@@ -594,7 +606,7 @@ fn calculate_button_bounds(
     (x, y, w, h)
 }
 
-fn calculate_joystick_bounds(
+pub fn calculate_joystick_bounds(
     joy: &JoystickButton,
     screen_width: f32,
     screen_height: f32,

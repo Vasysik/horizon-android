@@ -56,6 +56,12 @@ pub struct Config {
     pub device: crate::device_preferences::Settings,
     pub shader_source: crate::shader_catalog::Origin,
     pub mod_source: crate::shader_catalog::Origin,
+    #[serde(default = "default_active_control_layout")]
+    pub active_control_layout: String,
+}
+
+fn default_active_control_layout() -> String {
+    "default".to_string()
 }
 
 pub use horizon_client::android_gamepad::InputMode as InputHost;

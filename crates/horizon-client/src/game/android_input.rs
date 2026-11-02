@@ -396,6 +396,142 @@ impl Game<'_> {
                             }
                         }
                     }
+                    Action::OpenControlDialog => {
+                        let data_dir = crate::backend::data_dir();
+                        let active = self.settings.touch.active_control_layout.as_str();
+                        let storage = horizon_client_input::control_layout::LayoutStorage::new(
+                            data_dir.join("control_layouts"),
+                            active,
+                        );
+                        let _ = storage.ensure_default_layout();
+                        let layouts = storage.list_layouts("en");
+                        self.pad.touch_ui.replacement_dialog =
+                            Some(horizon_client::touch_ui::ReplacementControlDialog::new(layouts));
+                    }
+                    Action::SelectControlLayout(slug) => {
+                        let data_dir = crate::backend::data_dir();
+                        let storage = horizon_client_input::control_layout::LayoutStorage::new(
+                            data_dir.join("control_layouts"),
+                            &slug,
+                        );
+                        if let Ok(layout) = storage.load_layout(&slug) {
+                            if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
+                                runtime.set_layout(layout);
+                            }
+                            self.settings.touch.active_control_layout = slug.clone();
+                            let _ = self.save_options();
+                        }
+                        if let Some(dialog) = self.pad.touch_ui.replacement_dialog.as_mut() {
+                            for (i, l) in dialog.layouts.iter_mut().enumerate() {
+                                l.is_active = l.file_stem == slug;
+                                if l.is_active {
+                                    dialog.selected_index = i;
+                                }
+                            }
+                        }
+                    }
+                    Action::CloseControlDialog => {
+                        self.pad.touch_ui.replacement_dialog = None;
+                    }
+                    Action::OpenControlEditor => {
+                        let data_dir = crate::backend::data_dir();
+                        let active = self.settings.touch.active_control_layout.as_str();
+                        self.pad.touch_ui.open_editor(&data_dir, active);
+                    }
+                    Action::CloseControlEditor => {
+                        self.pad.touch_ui.close_editor();
+                    }
+                    Action::SaveControlEditor => {
+                        if let Some(editor) = self.pad.touch_ui.editor.as_mut() {
+                            let data_dir = crate::backend::data_dir();
+                            let storage = horizon_client_input::control_layout::LayoutStorage::new(
+                                data_dir.join("control_layouts"),
+                                &editor.original_slug,
+                            );
+                            if let Err(e) = editor.save(&storage) {
+                                log::error!("Failed to save control layout: {e}");
+                            } else {
+                                log::info!("Control layout saved successfully");
+                                if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
+                                    runtime.set_layout(editor.layout.clone());
+                                }
+                            }
+                        }
+                    }
+                    Action::EditorAddButton => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.add_normal_button("NEW");
+                        }
+                    }
+                    Action::EditorAddJoystick => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.add_joystick();
+                        }
+                    }
+                    Action::EditorDuplicate => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.duplicate_selected();
+                        }
+                    }
+                    Action::EditorDelete => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.delete_selected();
+                        }
+                    }
+                    Action::EditorToggleLeftDrawer => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.left_drawer_open = !e.left_drawer_open;
+                        }
+                    }
+                    Action::EditorToggleRightDrawer => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.right_drawer_open = !e.right_drawer_open;
+                        }
+                    }
+                    Action::EditorTogglePreview => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.preview_mode = !e.preview_mode;
+                        }
+                    }
+                    Action::EditorToggleFocusMode => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.layer_focus_mode = !e.layer_focus_mode;
+                        }
+                    }
+                    Action::EditorAddLayer => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.add_layer("New Layer");
+                        }
+                    }
+                    Action::EditorSelectLayer(idx) => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.active_layer_index = idx;
+                        }
+                    }
+                    Action::EditorToggleLayerHide(idx) => {
+                        if let Some(e) = self.pad.touch_ui.editor.as_mut() {
+                            e.toggle_layer_visibility(idx);
+                        }
+                    }
+                }
+            }
+            return Ok(true);
+        }
+
+        if let Some(editor) = self.pad.touch_ui.editor.as_mut() {
+            let px = p[0];
+            let py = p[1];
+            match t.phase {
+                TouchPhase::Started => {
+                    if !editor.start_drag(t.id, (px, py)) {
+                        editor.select_at((px, py));
+                    }
+                }
+                TouchPhase::Moved => {
+                    editor.update_drag(t.id, (px, py));
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    editor.end_drag(t.id);
                 }
             }
             return Ok(true);

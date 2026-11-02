@@ -157,8 +157,14 @@ pub struct Settings {
     pub button_visibility: [u8; 14],
     pub horizontal_margin: f32,
     pub vertical_margin: f32,
+    #[serde(default = "default_active_control_layout")]
+    pub active_control_layout: String,
     #[serde(deserialize_with = "deserialize_layouts")]
     pub layouts: [[Placement; 14]; 3],
+}
+
+fn default_active_control_layout() -> String {
+    "default".to_string()
 }
 // Append new buttons without resetting a player's existing ten-button layout.
 fn deserialize_layouts<'de, D: serde::Deserializer<'de>>(
@@ -235,6 +241,7 @@ impl Default for Settings {
             button_visibility: [0; 14],
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
+            active_control_layout: "default".to_string(),
             layouts,
         }
     }

@@ -3,10 +3,12 @@
 //! Provides clean-room data models, storage manager, runtime touch dispatch,
 //! and input event translation for mobile touch gameplay.
 
+pub mod editor;
 pub mod model;
 pub mod runtime;
 pub mod storage;
 
+pub use editor::*;
 pub use model::*;
 pub use runtime::*;
 pub use storage::*;
@@ -264,5 +266,42 @@ mod tests {
         let clear_evs = runtime.release_all_inputs();
         assert!(clear_evs.contains(&LayoutOutputEvent::KeyUp(KeyCode::KeyW)));
         assert!(clear_evs.contains(&LayoutOutputEvent::KeyUp(KeyCode::ControlLeft)));
+    }
+
+    #[test]
+    fn test_editor_selection_drag_snap_and_resize() {
+        let layout = LayoutStorage::default_layout();
+        let mut editor = LayoutEditor::new(layout, "default");
+        editor.set_dimensions(1000.0, 1000.0, 1.0);
+
+        // Add a button at (5000, 5000)
+        let btn_uuid = editor.add_normal_button("TEST");
+        assert_eq!(editor.selected, Some(SelectedWidget::Button(btn_uuid.clone())));
+
+        // Select at button center (560px, 550px)
+        assert!(editor.select_at((560.0, 550.0)));
+        assert_eq!(editor.selected, Some(SelectedWidget::Button(btn_uuid.clone())));
+
+        // Drag move near left edge -> snaps to x = 0
+        assert!(editor.start_drag(1, (560.0, 550.0)));
+        // Move -520px horizontally (towards left)
+        editor.update_drag(1, (40.0, 550.0));
+        assert!(editor.active_snap_lines.contains(&SnapLine::Vertical(0.0)));
+        editor.end_drag(1);
+
+        // Verify button position snapped to 0
+        let layer = &editor.layout.layers[editor.active_layer_index];
+        let btn = layer.normal_buttons.iter().find(|b| b.uuid == btn_uuid).unwrap();
+        assert_eq!(btn.position.x, 0);
+
+        // Test duplicate
+        let dup_uuid = editor.duplicate_selected().expect("duplicate button");
+        assert_ne!(dup_uuid, btn_uuid);
+        assert_eq!(editor.layout.layers[editor.active_layer_index].normal_buttons.len(), 3);
+
+        // Test delete
+        assert!(editor.delete_selected());
+        assert_eq!(editor.layout.layers[editor.active_layer_index].normal_buttons.len(), 2);
+        assert_eq!(editor.selected, None);
     }
 }

@@ -61,6 +61,10 @@ pub(super) enum Action {
     ChooseWorkerLimit(u32),
     PerformanceHints,
     GpuProfile,
+    ControlLayout,
+    ChooseControlLayout(usize),
+    CreateControlLayout,
+    OpenControlEditor,
 }
 
 pub(super) fn button(
@@ -875,6 +879,11 @@ impl Launcher {
                     Action::RecordPerformance,
                 ),
                 (
+                    "Control layout",
+                    c.active_control_layout.clone(),
+                    Action::ControlLayout,
+                ),
+                (
                     "Diagnostic report",
                     "Export one ZIP to share".into(),
                     Action::ExportDiagnostics,
@@ -1454,6 +1463,36 @@ impl Launcher {
                 self.catalog.config.save(&self.home)?;
                 self.catalog.refresh(&self.home);
                 self.chooser = None;
+            }
+            Some(Action::ControlLayout) => self.open_chooser(chooser::Kind::ControlLayout),
+            Some(Action::ChooseControlLayout(idx)) => {
+                let storage = horizon_client_input::control_layout::LayoutStorage::new(
+                    self.home.join("control_layouts"),
+                    &self.catalog.config.active_control_layout,
+                );
+                let list = storage.list_layouts("en");
+                if let Some(item) = list.get(idx) {
+                    self.catalog.config.active_control_layout = item.file_stem.clone();
+                    self.catalog.config.save(&self.home)?;
+                }
+                self.chooser = None;
+            }
+            Some(Action::CreateControlLayout) => {
+                let storage = horizon_client_input::control_layout::LayoutStorage::new(
+                    self.home.join("control_layouts"),
+                    &self.catalog.config.active_control_layout,
+                );
+                let count = storage.list_layouts("en").len() + 1;
+                let name = format!("Layout {count}");
+                if let Ok(slug) = storage.create_layout(&name, "Player", "1.0") {
+                    self.catalog.config.active_control_layout = slug;
+                    let _ = self.catalog.config.save(&self.home);
+                }
+                self.open_chooser(chooser::Kind::ControlLayout);
+            }
+            Some(Action::OpenControlEditor) => {
+                self.chooser = None;
+                log::info!("Opening full-screen touch control editor");
             }
             Some(Action::Dismiss) => {
                 self.exit_confirmation = false;

@@ -16,6 +16,7 @@ pub(super) enum Kind {
     Profile,
     Orientation,
     InputHost,
+    ControlLayout,
 }
 pub(super) struct Chooser {
     title: &'static str,
@@ -244,6 +245,43 @@ impl Launcher {
                 (
                     "Choose profile",
                     "Each profile keeps its own game settings and saves.",
+                    choices,
+                )
+            }
+            Kind::ControlLayout => {
+                let storage = horizon_client_input::control_layout::LayoutStorage::new(
+                    self.home.join("control_layouts"),
+                    &c.active_control_layout,
+                );
+                let _ = storage.ensure_default_layout();
+                let list = storage.list_layouts("en");
+                let mut choices: Vec<_> = list
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, item)| {
+                        (
+                            item.display_name,
+                            format!("v{} by {} - {}", item.version, item.author, item.description),
+                            Action::ChooseControlLayout(i),
+                            item.is_active,
+                        )
+                    })
+                    .collect();
+                choices.push((
+                    "+ Create New Layout".into(),
+                    "Add a new customizable control layout".into(),
+                    Action::CreateControlLayout,
+                    false,
+                ));
+                choices.push((
+                    "Open Control Editor".into(),
+                    "Launch full-screen layout designer".into(),
+                    Action::OpenControlEditor,
+                    false,
+                ));
+                (
+                    "Control Layout Manager",
+                    "Choose active touch control layout, create copies, or customize in editor.",
                     choices,
                 )
             }

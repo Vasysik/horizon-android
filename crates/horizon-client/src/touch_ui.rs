@@ -3,6 +3,10 @@ use crate::{
     hud::{HudAtlas, HudBatch, rgba},
     osk::{Keyboard, Output},
 };
+use horizon_client_input::control_layout::{
+    calculate_button_bounds, calculate_joystick_bounds, LayoutEditor, LayoutRuntime, LayoutSummary,
+    SelectedWidget, SnapLine, TextAlignment,
+};
 use std::{
     collections::BTreeMap,
     time::{Duration, Instant},
@@ -21,6 +25,29 @@ pub struct TouchUi {
     pointer_drag: Option<u64>,
     held_keys: BTreeMap<u64, KeyCode>,
     pub f3_latched: bool,
+    pub control_runtime: Option<LayoutRuntime>,
+    pub replacement_dialog: Option<ReplacementControlDialog>,
+    pub editor: Option<LayoutEditor>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplacementControlDialog {
+    pub open: bool,
+    pub layouts: Vec<LayoutSummary>,
+    pub selected_index: usize,
+    pub scroll: f32,
+}
+
+impl ReplacementControlDialog {
+    pub fn new(layouts: Vec<LayoutSummary>) -> Self {
+        let selected_index = layouts.iter().position(|l| l.is_active).unwrap_or(0);
+        Self {
+            open: true,
+            layouts,
+            selected_index,
+            scroll: 0.0,
+        }
+    }
 }
 struct RelativeTouch {
     id: u64,
@@ -44,6 +71,23 @@ pub enum Action {
     VirtualMouse,
     MouseButton(bool),
     More,
+    OpenControlDialog,
+    SelectControlLayout(String),
+    CloseControlDialog,
+    OpenControlEditor,
+    CloseControlEditor,
+    SaveControlEditor,
+    EditorAddButton,
+    EditorAddJoystick,
+    EditorDuplicate,
+    EditorDelete,
+    EditorToggleLeftDrawer,
+    EditorToggleRightDrawer,
+    EditorTogglePreview,
+    EditorToggleFocusMode,
+    EditorAddLayer,
+    EditorSelectLayer(usize),
+    EditorToggleLayerHide(usize),
 }
 
 const KEYS: [(&str, KeyCode); 28] = [
@@ -285,6 +329,109 @@ impl TouchUi {
         }
     }
     pub fn action(&self, w: f32, h: f32, p: [f32; 2], menu: bool) -> Option<Action> {
+        if let Some(editor) = &self.editor {
+            // Check top header bar
+            if (3.0..25.0).contains(&p[1]) {
+                if (4.0..46.0).contains(&p[0]) {
+                    return Some(Action::EditorToggleLeftDrawer);
+                }
+                if (50.0..98.0).contains(&p[0]) {
+                    return Some(Action::EditorToggleRightDrawer);
+                }
+                if (102.0..176.0).contains(&p[0]) {
+                    return Some(Action::EditorTogglePreview);
+                }
+                if (w - 90.0..w - 50.0).contains(&p[0]) {
+                    return Some(Action::SaveControlEditor);
+                }
+                if (w - 46.0..w - 4.0).contains(&p[0]) {
+                    return Some(Action::CloseControlEditor);
+                }
+            }
+
+            // Check Left Drawer
+            if editor.left_drawer_open && p[0] <= 160.0 && p[1] >= 26.0 {
+                if (48.0..72.0).contains(&p[1]) {
+                    return Some(Action::EditorAddButton);
+                }
+                if (74.0..98.0).contains(&p[1]) {
+                    return Some(Action::EditorAddJoystick);
+                }
+                if (100.0..124.0).contains(&p[1]) {
+                    return Some(Action::EditorDuplicate);
+                }
+                if (126.0..150.0).contains(&p[1]) {
+                    return Some(Action::EditorDelete);
+                }
+                if (152.0..176.0).contains(&p[1]) {
+                    return Some(Action::EditorToggleFocusMode);
+                }
+                if (178.0..202.0).contains(&p[1]) {
+                    return Some(Action::SaveControlEditor);
+                }
+                if (204.0..228.0).contains(&p[1]) {
+                    return Some(Action::CloseControlEditor);
+                }
+                return None; // swallow click inside left drawer
+            }
+
+            // Check Right Drawer
+            if editor.right_drawer_open && p[0] >= w - 180.0 && p[1] >= 26.0 {
+                let dx = w - 180.0;
+                if (48.0..72.0).contains(&p[1]) {
+                    return Some(Action::EditorAddLayer);
+                }
+                for (idx, _) in editor.layout.layers.iter().enumerate() {
+                    let ly = 78.0 + (idx as f32 * 30.0);
+                    if (ly..ly + 26.0).contains(&p[1]) {
+                        if (dx + 180.0 - 44.0..dx + 180.0 - 12.0).contains(&p[0]) {
+                            return Some(Action::EditorToggleLayerHide(idx));
+                        } else {
+                            return Some(Action::EditorSelectLayer(idx));
+                        }
+                    }
+                }
+                return None; // swallow click inside right drawer
+            }
+
+            return None;
+        }
+
+        if let Some(dialog) = &self.replacement_dialog {
+            if dialog.open {
+                let dw: f32 = 320.0_f32.min(w - 24.0);
+                let dh: f32 = 240.0_f32.min(h - 24.0);
+                let dx = (w - dw) * 0.5;
+                let dy = (h - dh) * 0.5;
+
+                // Close button: upper right of dialog card
+                if (dx + dw - 36.0..dx + dw - 6.0).contains(&p[0]) && (dy + 6.0..dy + 28.0).contains(&p[1]) {
+                    return Some(Action::CloseControlDialog);
+                }
+
+                // Edit button: bottom right
+                if (dx + dw - 85.0..dx + dw - 10.0).contains(&p[0]) && (dy + dh - 32.0..dy + dh - 8.0).contains(&p[1]) {
+                    return Some(Action::OpenControlEditor);
+                }
+
+                // Layout list entries
+                let list_top = dy + 36.0;
+                let list_bottom = dy + dh - 36.0;
+                if (dx + 12.0..dx + dw - 12.0).contains(&p[0]) && (list_top..list_bottom).contains(&p[1]) {
+                    let item_y = p[1] - list_top + dialog.scroll;
+                    let idx = (item_y / 36.0) as usize;
+                    if let Some(item) = dialog.layouts.get(idx) {
+                        return Some(Action::SelectControlLayout(item.file_stem.clone()));
+                    }
+                }
+
+                // Absorb any other click inside dialog bounds
+                if (dx..dx + dw).contains(&p[0]) && (dy..dy + dh).contains(&p[1]) {
+                    return None;
+                }
+            }
+        }
+
         if menu && self.virtual_mouse {
             for ([x, y, width, height], right) in mouse_button_rects(w, h) {
                 if (x..x + width).contains(&p[0]) && (y..y + height).contains(&p[1]) {
@@ -314,6 +461,9 @@ impl TouchUi {
             if self.expanded && (147.0..186.0).contains(&p[0]) {
                 return Some(Action::Keyboard);
             }
+            if self.expanded && (189.0..235.0).contains(&p[0]) {
+                return Some(Action::OpenControlDialog);
+            }
         }
         if self.expanded && (3.0..203.0).contains(&p[0]) && (27.0..219.0).contains(&p[1]) {
             let i = ((p[1] - 27.0) / 24.0) as usize * 4 + ((p[0] - 3.0) / 50.0) as usize;
@@ -329,12 +479,22 @@ impl TouchUi {
         None
     }
     pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas, menu: bool) {
+        if let Some(editor) = &self.editor {
+            draw_layout_editor(b, a, editor);
+            return;
+        }
+
+        if let Some(runtime) = &self.control_runtime {
+            draw_custom_controls(b, a, runtime);
+        }
+
         for (label, x, width) in [
             ("...", 3.0, 33.0),
             ("F3", 39.0, 33.0),
             ("F5", 75.0, 33.0),
             ("Chat", 111.0, 33.0),
             ("Keys", 147.0, 39.0),
+            ("Layout", 189.0, 44.0),
         ] {
             if label != "..." && !self.expanded {
                 continue;
@@ -394,6 +554,12 @@ impl TouchUi {
                 );
             }
         }
+
+        if let Some(dialog) = &self.replacement_dialog {
+            if dialog.open {
+                draw_replacement_dialog(b, a, dialog);
+            }
+        }
     }
     pub fn keyboard_touch(
         &mut self,
@@ -419,7 +585,392 @@ impl TouchUi {
             ui.finish();
         }
     }
+    pub fn ensure_control_runtime(&mut self, data_dir: &std::path::Path, active_slug: &str) {
+        if self.control_runtime.is_none() {
+            let storage = horizon_client_input::control_layout::LayoutStorage::new(
+                data_dir.join("control_layouts"),
+                active_slug,
+            );
+            let _ = storage.ensure_default_layout();
+            let layout = storage.load_layout(active_slug).unwrap_or_else(|_| {
+                horizon_client_input::control_layout::LayoutStorage::default_layout()
+            });
+            self.control_runtime = Some(LayoutRuntime::new(layout));
+        }
+    }
+    pub fn open_editor(&mut self, data_dir: &std::path::Path, slug: &str) {
+        let storage = horizon_client_input::control_layout::LayoutStorage::new(
+            data_dir.join("control_layouts"),
+            slug,
+        );
+        let _ = storage.ensure_default_layout();
+        let layout = storage
+            .load_layout(slug)
+            .unwrap_or_else(|_| horizon_client_input::control_layout::LayoutStorage::default_layout());
+        let mut editor = LayoutEditor::new(layout, slug);
+        if let Some(runtime) = &self.control_runtime {
+            editor.set_dimensions(
+                runtime.screen_width(),
+                runtime.screen_height(),
+                runtime.display_density(),
+            );
+        }
+        self.editor = Some(editor);
+        self.replacement_dialog = None;
+    }
+    pub fn close_editor(&mut self) {
+        self.editor = None;
+    }
 }
+
+fn draw_layout_editor(b: &mut HudBatch, a: &HudAtlas, editor: &LayoutEditor) {
+    let (w, h) = (b.width, b.height);
+    let sw = editor.screen_width;
+    let sh = editor.screen_height;
+    let density = editor.display_density;
+
+    // 1. Canvas background & grid lines
+    b.fill(a, 0.0, 0.0, w, h, rgba(14, 16, 22, 255));
+    let mut gx = 0.0;
+    while gx < w {
+        b.fill(a, gx, 0.0, 1.0, h, rgba(25, 29, 38, 120));
+        gx += 50.0;
+    }
+    let mut gy = 0.0;
+    while gy < h {
+        b.fill(a, 0.0, gy, w, 1.0, rgba(25, 29, 38, 120));
+        gy += 50.0;
+    }
+
+    // Center crosshair (5000, 5000)
+    b.fill(a, w * 0.5, 0.0, 1.0, h, rgba(40, 50, 70, 160));
+    b.fill(a, 0.0, h * 0.5, w, 1.0, rgba(40, 50, 70, 160));
+
+    // 2. Snap guidelines
+    for snap in &editor.active_snap_lines {
+        match snap {
+            SnapLine::Horizontal(y) => {
+                b.fill(a, 0.0, *y, w, 1.5, rgba(0, 240, 255, 240));
+            }
+            SnapLine::Vertical(x) => {
+                b.fill(a, *x, 0.0, 1.5, h, rgba(0, 240, 255, 240));
+            }
+        }
+    }
+
+    // 3. Render layout elements across layers
+    for (layer_idx, layer) in editor.layout.layers.iter().enumerate() {
+        if editor.layer_focus_mode && layer_idx != editor.active_layer_index {
+            continue;
+        }
+        let alpha_mult = if layer.hide { 0.4 } else { 1.0 };
+
+        // Normal buttons
+        for btn in &layer.normal_buttons {
+            let (bx, by, bw, bh) =
+                calculate_button_bounds(&btn.position, &btn.button_size, sw, sh, density);
+            let is_selected = editor.selected == Some(SelectedWidget::Button(btn.uuid.clone()));
+
+            let bg = if is_selected {
+                rgba(50, 85, 130, (220.0 * alpha_mult) as u8)
+            } else {
+                rgba(24, 28, 38, (180.0 * alpha_mult) as u8)
+            };
+            b.fill(a, bx, by, bw, bh, bg);
+
+            // Border
+            let border_color = if is_selected {
+                rgba(0, 220, 255, 255)
+            } else {
+                rgba(70, 85, 110, (180.0 * alpha_mult) as u8)
+            };
+            b.fill(a, bx, by, bw, 1.0, border_color);
+            b.fill(a, bx, by + bh - 1.0, bw, 1.0, border_color);
+            b.fill(a, bx, by, 1.0, bh, border_color);
+            b.fill(a, bx + bw - 1.0, by, 1.0, bh, border_color);
+
+            let label = btn.text.resolve("en");
+            let tx = bx + 6.0;
+            let ty = by + (bh - 10.0) * 0.5;
+            b.text(a, label, tx, ty, rgba(240, 240, 240, 255), true);
+
+            // Resize handles if selected
+            if is_selected {
+                b.fill(a, bx - 6.0, by - 6.0, 12.0, 12.0, rgba(0, 240, 255, 255));
+                b.fill(
+                    a,
+                    bx + bw - 6.0,
+                    by + bh - 6.0,
+                    12.0,
+                    12.0,
+                    rgba(0, 240, 255, 255),
+                );
+            }
+        }
+
+        // Joysticks
+        for joy in &layer.joystick_buttons {
+            let (jx, jy, jr) = calculate_joystick_bounds(joy, sw, sh, density);
+            let is_selected = editor.selected == Some(SelectedWidget::Joystick(joy.uuid.clone()));
+
+            let border_color = if is_selected {
+                rgba(0, 220, 255, 255)
+            } else {
+                rgba(80, 100, 130, (160.0 * alpha_mult) as u8)
+            };
+            b.fill(
+                a,
+                jx - jr,
+                jy - jr,
+                jr * 2.0,
+                jr * 2.0,
+                rgba(22, 27, 38, (120.0 * alpha_mult) as u8),
+            );
+            b.fill(a, jx - jr, jy - jr, jr * 2.0, 1.0, border_color);
+            b.fill(a, jx - jr, jy + jr - 1.0, jr * 2.0, 1.0, border_color);
+            b.fill(a, jx - jr, jy - jr, 1.0, jr * 2.0, border_color);
+            b.fill(a, jx + jr - 1.0, jy - jr, 1.0, jr * 2.0, border_color);
+
+            // Center thumb
+            let thumb_r = jr * 0.35;
+            b.fill(
+                a,
+                jx - thumb_r,
+                jy - thumb_r,
+                thumb_r * 2.0,
+                thumb_r * 2.0,
+                rgba(80, 120, 180, 200),
+            );
+            b.text(
+                a,
+                "JOYSTICK",
+                jx - 20.0,
+                jy - 5.0,
+                rgba(220, 230, 245, 255),
+                false,
+            );
+        }
+    }
+
+    // 4. Top Header Bar
+    b.fill(a, 0.0, 0.0, w, 26.0, rgba(20, 24, 32, 240));
+    b.fill(a, 0.0, 25.0, w, 1.0, rgba(60, 75, 100, 200));
+
+    button(b, a, "Menu", 4.0, 3.0, 42.0);
+    button(b, a, "Layers", 50.0, 3.0, 48.0);
+    let preview_label = if editor.preview_mode {
+        "Preview: ON"
+    } else {
+        "Preview: OFF"
+    };
+    button(b, a, preview_label, 102.0, 3.0, 74.0);
+
+    let title = if editor.is_dirty {
+        format!("Editor: {}*", editor.layout.info.name.resolve("en"))
+    } else {
+        format!("Editor: {}", editor.layout.info.name.resolve("en"))
+    };
+    b.text(a, &title, 185.0, 7.0, rgba(255, 255, 255, 255), true);
+
+    button(b, a, "Save", w - 90.0, 3.0, 40.0);
+    button(b, a, "Exit", w - 46.0, 3.0, 42.0);
+
+    // 5. Left Drawer (Editor Menu)
+    if editor.left_drawer_open {
+        let dw = 160.0;
+        b.fill(a, 0.0, 26.0, dw, h - 26.0, rgba(22, 26, 36, 250));
+        b.fill(a, dw - 1.0, 26.0, 1.0, h - 26.0, rgba(70, 85, 115, 220));
+
+        b.text(a, "EDITOR MENU", 10.0, 32.0, rgba(0, 220, 255, 255), true);
+        button(b, a, "+ Add Button", 10.0, 48.0, 140.0);
+        button(b, a, "+ Add Joystick", 10.0, 74.0, 140.0);
+        button(b, a, "Duplicate Sel", 10.0, 100.0, 140.0);
+        button(b, a, "Delete Sel", 10.0, 126.0, 140.0);
+        let focus_label = if editor.layer_focus_mode {
+            "Focus: ON"
+        } else {
+            "Focus: OFF"
+        };
+        button(b, a, focus_label, 10.0, 152.0, 140.0);
+        button(b, a, "Save Layout", 10.0, 178.0, 140.0);
+        button(b, a, "Exit Editor", 10.0, 204.0, 140.0);
+    }
+
+    // 6. Right Drawer (Layers Menu)
+    if editor.right_drawer_open {
+        let dw = 180.0;
+        let dx = w - dw;
+        b.fill(a, dx, 26.0, dw, h - 26.0, rgba(22, 26, 36, 250));
+        b.fill(a, dx, 26.0, 1.0, h - 26.0, rgba(70, 85, 115, 220));
+
+        b.text(a, "LAYERS MENU", dx + 10.0, 32.0, rgba(0, 220, 255, 255), true);
+        button(b, a, "+ Add Layer", dx + 10.0, 48.0, 160.0);
+
+        for (idx, layer) in editor.layout.layers.iter().enumerate() {
+            let ly = 78.0 + (idx as f32 * 30.0);
+            if ly + 28.0 > h {
+                break;
+            }
+            let is_active = idx == editor.active_layer_index;
+            let bg = if is_active {
+                rgba(40, 70, 110, 200)
+            } else {
+                rgba(30, 34, 46, 160)
+            };
+            b.fill(a, dx + 8.0, ly, dw - 16.0, 26.0, bg);
+
+            let layer_name = format!("{}. {}", idx + 1, layer.name);
+            b.text(
+                a,
+                &layer_name,
+                dx + 12.0,
+                ly + 6.0,
+                rgba(240, 240, 240, 255),
+                is_active,
+            );
+
+            let eye = if layer.hide { "[-]" } else { "[V]" };
+            button(b, a, eye, dx + dw - 44.0, ly + 2.0, 32.0);
+        }
+    }
+}
+
+fn draw_custom_controls(b: &mut HudBatch, a: &HudAtlas, runtime: &LayoutRuntime) {
+    let layout = runtime.layout();
+    let sw = runtime.screen_width();
+    let sh = runtime.screen_height();
+    let density = runtime.display_density();
+
+    for layer in &layout.layers {
+        if !runtime.is_layer_visible(layer) {
+            continue;
+        }
+
+        // Draw normal buttons
+        for btn in &layer.normal_buttons {
+            let (bx, by, bw, bh) = calculate_button_bounds(&btn.position, &btn.button_size, sw, sh, density);
+            let is_pressed = runtime
+                .state()
+                .buttons_state
+                .get(&btn.uuid)
+                .map(|s| s.is_pressed)
+                .unwrap_or(false);
+
+            // Button body
+            let bg = if is_pressed {
+                rgba(60, 80, 110, 210)
+            } else {
+                rgba(22, 26, 35, 160)
+            };
+            b.fill(a, bx, by, bw, bh, bg);
+
+            // Border outline
+            let border = if is_pressed {
+                rgba(120, 160, 220, 240)
+            } else {
+                rgba(70, 80, 100, 180)
+            };
+            b.fill(a, bx, by, bw, 1.0, border);
+            b.fill(a, bx, by + bh - 1.0, bw, 1.0, border);
+            b.fill(a, bx, by, 1.0, bh, border);
+            b.fill(a, bx + bw - 1.0, by, 1.0, bh, border);
+
+            // Button label
+            let text = btn.text.resolve("en");
+            let text_w = text.len() as f32 * 6.0;
+            let tx = match btn.text_alignment {
+                TextAlignment::Left => bx + 6.0,
+                TextAlignment::Center => bx + (bw - text_w).max(0.0) * 0.5,
+                TextAlignment::Right => bx + bw - text_w - 6.0,
+            };
+            let ty = by + (bh - 10.0) * 0.5;
+            b.text(a, text, tx, ty, rgba(245, 245, 245, 255), true);
+        }
+
+        // Draw joysticks
+        for joy in &layer.joystick_buttons {
+            let (jx, jy, jr) = calculate_joystick_bounds(joy, sw, sh, density);
+            let state = runtime.state().joysticks_state.get(&joy.uuid);
+            let (ox, oy) = state.map(|s| s.normalized_offset).unwrap_or((0.0, 0.0));
+            let is_locked = state.map(|s| s.is_locked).unwrap_or(false);
+
+            // Outer ring base
+            b.fill(a, jx - jr, jy - jr, jr * 2.0, jr * 2.0, rgba(20, 25, 36, 120));
+            b.fill(a, jx - jr, jy - jr, jr * 2.0, 1.0, rgba(80, 95, 120, 160));
+            b.fill(a, jx - jr, jy + jr - 1.0, jr * 2.0, 1.0, rgba(80, 95, 120, 160));
+            b.fill(a, jx - jr, jy - jr, 1.0, jr * 2.0, rgba(80, 95, 120, 160));
+            b.fill(a, jx + jr - 1.0, jy - jr, 1.0, jr * 2.0, rgba(80, 95, 120, 160));
+
+            // Thumb handle
+            let handle_r = jr * 0.4;
+            let hx = jx + ox * jr * 0.6;
+            let hy = jy + oy * jr * 0.6;
+            let handle_color = if is_locked {
+                rgba(50, 180, 120, 220)
+            } else {
+                rgba(80, 110, 160, 200)
+            };
+            b.fill(a, hx - handle_r, hy - handle_r, handle_r * 2.0, handle_r * 2.0, handle_color);
+
+            if is_locked {
+                b.text(a, "LOCK", jx - 12.0, jy - jr - 14.0, rgba(80, 240, 150, 255), true);
+            }
+        }
+    }
+}
+
+fn draw_replacement_dialog(b: &mut HudBatch, a: &HudAtlas, dialog: &ReplacementControlDialog) {
+    // Dim background overlay
+    b.fill(a, 0.0, 0.0, b.width, b.height, rgba(0, 0, 0, 150));
+
+    let dw: f32 = 320.0_f32.min(b.width - 24.0);
+    let dh: f32 = 240.0_f32.min(b.height - 24.0);
+    let dx = (b.width - dw) * 0.5;
+    let dy = (b.height - dh) * 0.5;
+
+    // Dialog card
+    b.fill(a, dx, dy, dw, dh, rgba(24, 27, 36, 250));
+    b.fill(a, dx, dy, dw, 1.0, rgba(70, 85, 115, 255));
+    b.fill(a, dx, dy + dh - 1.0, dw, 1.0, rgba(70, 85, 115, 255));
+    b.fill(a, dx, dy, 1.0, dh, rgba(70, 85, 115, 255));
+    b.fill(a, dx + dw - 1.0, dy, 1.0, dh, rgba(70, 85, 115, 255));
+
+    // Title
+    b.text(a, "Select Control Layout", dx + 12.0, dy + 10.0, rgba(255, 255, 255, 255), true);
+
+    // Close button [X]
+    button(b, a, "X", dx + dw - 36.0, dy + 6.0, 30.0);
+
+    // Layout rows
+    let list_top = dy + 36.0;
+    let list_bottom = dy + dh - 36.0;
+    for (i, item) in dialog.layouts.iter().enumerate() {
+        let iy = list_top + (i as f32 * 36.0) - dialog.scroll;
+        if iy < list_top - 30.0 || iy > list_bottom {
+            continue;
+        }
+
+        let bg = if item.is_active {
+            rgba(40, 75, 120, 220)
+        } else {
+            rgba(32, 36, 48, 180)
+        };
+        b.fill(a, dx + 12.0, iy, dw - 24.0, 32.0, bg);
+
+        let label = if item.is_active {
+            format!("{} (Active)", item.display_name)
+        } else {
+            item.display_name.clone()
+        };
+        b.text(a, &label, dx + 20.0, iy + 6.0, rgba(240, 240, 240, 255), true);
+        let sub = format!("v{} by {}", item.version, item.author);
+        b.text(a, &sub, dx + 20.0, iy + 18.0, rgba(160, 170, 190, 255), false);
+    }
+
+    // Bottom action button: Open Editor
+    button(b, a, "Edit Layout", dx + dw - 95.0, dy + dh - 32.0, 85.0);
+}
+
 fn button(b: &mut HudBatch, a: &HudAtlas, label: &str, x: f32, y: f32, w: f32) {
     if !crate::touch::theme_button(b, a, "button", [x, y, w, 20.0], false, u32::MAX, true) {
         b.fill(a, x, y, w, 20.0, rgba(16, 18, 24, 180));

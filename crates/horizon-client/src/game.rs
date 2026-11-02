@@ -13975,6 +13975,14 @@ impl Game<'_> {
             if (crate::touch_visible() || self.settings.keypad.enabled)
                 && self.pad.touch.editor.is_none()
             {
+                self.pad.touch_ui.ensure_control_runtime(
+                    &crate::backend::data_dir(),
+                    &self.settings.touch.active_control_layout,
+                );
+                if let Some(runtime) = self.pad.touch_ui.control_runtime.as_mut() {
+                    runtime.set_screen_dimensions(hud.width, hud.height, hud.scale);
+                    runtime.set_in_menu(self.pad_in_menu());
+                }
                 self.pad
                     .touch_ui
                     .draw(&mut hud, &self.gui.atlas, self.pad_in_menu());
