@@ -95,7 +95,11 @@ inputs, caches, saves, build products and signing material. Upstream workflows
 remain under `.github/upstream-workflows/*.disabled`; the Android source workflow
 runs source checks on pushes and pull requests to `android`, with read-only
 permissions. A manual run with `native_checks` enabled also type-checks all four
-Android ABIs. It does not build APKs, use signing keys or publish releases.
+Android ABIs, and one with `build_apk` enabled prepares the pinned engine tables,
+builds that ABI's public APK and uploads it as a workflow artifact. The artifact
+is signed with the throwaway development key CI generates on each run, so it
+replaces a release install rather than updating it. The workflow never uses the
+release signing key and never publishes releases.
 
 ## Upstream maintenance
 

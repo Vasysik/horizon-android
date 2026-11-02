@@ -11,6 +11,15 @@ on:
         description: Type-check all four Android ABIs (slower)
         type: boolean
         default: false
+      build_apk:
+        description: Build a public APK for one ABI and upload it as an artifact
+        type: boolean
+        default: false
+      abi:
+        description: ABI built when build_apk is enabled
+        type: choice
+        options: [arm64-v8a, armeabi-v7a, x86, x86_64]
+        default: arm64-v8a
 permissions:
   contents: read
 concurrency:
@@ -65,3 +74,50 @@ jobs:
           rustup target add "${{ matrix.target }}"
       - name: Check Android Rust code without building an APK
         run: python3 tools/android_build.py --abi "${{ matrix.abi }}" --check --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"
+  build:
+    # On demand only: an APK takes the better part of an hour and needs the
+    # pinned game inputs, while pushes stay a ten-minute source check.
+    if: github.event_name == 'workflow_dispatch' && inputs.build_apk
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      HORIZON_TELEMETRY_URL: "off"
+      CARGO_TARGET_DIR: .local/android/ci-target
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install Android toolchain
+        run: |
+          sdkmanager "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-35"
+          target=$(case "${{ inputs.abi }}" in
+            armeabi-v7a) echo armv7-linux-androideabi ;;
+            x86) echo i686-linux-android ;;
+            x86_64) echo x86_64-linux-android ;;
+            *) echo aarch64-linux-android ;;
+          esac)
+          rustup target add "$target"
+      - name: Install Gradle 8.14
+        run: |
+          version=8.14
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://services.gradle.org/distributions/gradle-$version-bin.zip"
+          expected=$(curl -fsSL "https://services.gradle.org/distributions/gradle-$version-bin.zip.sha256" | awk '{print $1}')
+          actual=$(sha256sum "gradle-$version-bin.zip" | awk '{print $1}')
+          if [ "$expected" != "$actual" ]; then echo "Gradle checksum mismatch"; exit 1; fi
+          unzip -q "gradle-$version-bin.zip"
+          "./gradle-$version/bin/gradle" --version
+      - name: Prepare the pinned engine tables
+        run: python3 tools/android_prepare.py
+      - name: Build the public APK
+        run: |
+          python3 tools/android_build.py --abi "${{ inputs.abi }}" --public \
+            --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" \
+            --gradle "$RUNNER_TEMP/gradle-8.14/bin/gradle"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: horizon-android-public-${{ inputs.abi }}
+          path: .local/android/apk/${{ inputs.abi }}/horizon-android-public.apk
+          if-no-files-found: error
