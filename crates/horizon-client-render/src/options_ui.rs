@@ -2154,11 +2154,74 @@ impl OptionsUi {
                     };
                     Row::Buttons(button(0.0, 0.0, 310.0, Text::literal(label), act), None)
                 };
-                let mut rows = vec![
-                    Row::Note("Horizon's own packs, and Iris and OptiFine ones".into()),
-                    Row::Note(shader_folder_note()),
-                    pick(choice.is_none(), "Off", Act::PickShaderPack(None)),
-                ];
+                let mut rows = Vec::new();
+                // Packs cost per pixel: what matters most, above however many packs there are.
+                if let Some((pack, profile)) = &choice {
+                    let scale = s.horizon.resolution_scale;
+                    let limit = (crate::graphics::auto_shader_scale() * 100.0).round() as u32;
+                    let limited = profile == crate::graphics::AUTO_PROFILE
+                        && !crate::graphics::light_shader_pack(pack)
+                        && scale > limit;
+                    let resolution = if limited {
+                        format!("Resolution: {limit}% (Auto)")
+                    } else {
+                        format!("Resolution: {scale}%")
+                    };
+                    let fps = match s.max_fps {
+                        fps if fps >= 260 => "Off".to_owned(),
+                        fps => fps.to_string(),
+                    };
+                    rows.push(Row::Note("Settings of the pack on".into()));
+                    rows.push(Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            150.0,
+                            Text::literal(resolution),
+                            Act::ShaderResolution,
+                        ),
+                        Some(button(
+                            0.0,
+                            0.0,
+                            150.0,
+                            Text::literal(format!("FPS Limit: {fps}")),
+                            Act::ShaderFpsLimit,
+                        )),
+                    ));
+                    // Profiles are a `shaders/` pack's; Horizon's own have none.
+                    if !s
+                        .shader_packs
+                        .iter()
+                        .any(|p| p.file == *pack && p.kind == PackKind::Horizon)
+                    {
+                        let shown = match profile.as_str() {
+                            "" => "Pack Default",
+                            crate::graphics::AUTO_PROFILE => "Auto",
+                            profile => profile,
+                        };
+                        rows.push(Row::Buttons(
+                            button(
+                                0.0,
+                                0.0,
+                                150.0,
+                                Text::literal(format!("Profile: {shown}")),
+                                Act::ShaderProfile,
+                            ),
+                            Some(button(
+                                0.0,
+                                0.0,
+                                150.0,
+                                Text::literal("Shader Options..."),
+                                Act::ShaderOptions,
+                            )),
+                        ));
+                    }
+                }
+                rows.push(Row::Note(
+                    "Horizon's own packs, and Iris and OptiFine ones".into(),
+                ));
+                rows.push(Row::Note(shader_folder_note()));
+                rows.push(pick(choice.is_none(), "Off", Act::PickShaderPack(None)));
                 if s.shader_packs.is_empty() {
                     rows.push(Row::Header(
                         "No shader packs: put them in the shaderpacks folder",
@@ -2171,71 +2234,6 @@ impl OptionsUi {
                         PackKind::Classic => pack.title.clone(),
                     };
                     rows.push(pick(on, &name, Act::PickShaderPack(Some(i))));
-                }
-                // Profiles are a `shaders/` pack's; Horizon's own have none.
-                if let Some((pack, profile)) = &choice
-                    && !s
-                        .shader_packs
-                        .iter()
-                        .any(|p| p.file == *pack && p.kind == PackKind::Horizon)
-                {
-                    let shown = match profile.as_str() {
-                        "" => "Pack Default",
-                        crate::graphics::AUTO_PROFILE => "Auto",
-                        profile => profile,
-                    };
-                    rows.push(Row::Note("Settings of the pack on".into()));
-                    rows.push(Row::Buttons(
-                        button(
-                            0.0,
-                            0.0,
-                            310.0,
-                            Text::literal(format!("Profile: {shown}")),
-                            Act::ShaderProfile,
-                        ),
-                        None,
-                    ));
-                    rows.push(Row::Buttons(
-                        button(
-                            0.0,
-                            0.0,
-                            310.0,
-                            Text::literal("Shader Options..."),
-                            Act::ShaderOptions,
-                        ),
-                        None,
-                    ));
-                }
-                // Packs cost per pixel: the setting that matters most, where they are picked.
-                if let Some((pack, profile)) = &choice {
-                    let scale = s.horizon.resolution_scale;
-                    let limit = (crate::graphics::auto_shader_scale() * 100.0).round() as u32;
-                    let limited = profile == crate::graphics::AUTO_PROFILE
-                        && !crate::graphics::light_shader_pack(pack)
-                        && scale > limit;
-                    let label = if limited {
-                        format!("Resolution: {scale}% (Auto draws {limit}%)")
-                    } else {
-                        format!("Resolution: {scale}%")
-                    };
-                    rows.push(Row::Buttons(
-                        button(0.0, 0.0, 310.0, Text::literal(label), Act::ShaderResolution),
-                        None,
-                    ));
-                    let limit = match s.max_fps {
-                        fps if fps >= 260 => "Off".to_owned(),
-                        fps => fps.to_string(),
-                    };
-                    rows.push(Row::Buttons(
-                        button(
-                            0.0,
-                            0.0,
-                            310.0,
-                            Text::literal(format!("FPS Limit: {limit}")),
-                            Act::ShaderFpsLimit,
-                        ),
-                        None,
-                    ));
                 }
                 rows
             }
