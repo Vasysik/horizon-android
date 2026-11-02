@@ -70,7 +70,10 @@ jobs:
           persist-credentials: false
       - name: Install Android toolchain
         run: |
-          sdkmanager "ndk;28.2.13676358" "build-tools;35.0.0"
+          # The runner image ships the SDK without cmdline-tools on PATH.
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$sdkmanager" ] || sdkmanager=$(command -v sdkmanager)
+          "$sdkmanager" "ndk;28.2.13676358" "build-tools;35.0.0"
           rustup target add "${{ matrix.target }}"
       - name: Check Android Rust code without building an APK
         run: python3 tools/android_build.py --abi "${{ matrix.abi }}" --check --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"
@@ -91,7 +94,10 @@ jobs:
           persist-credentials: false
       - name: Install Android toolchain
         run: |
-          sdkmanager "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-35"
+          # The runner image ships the SDK without cmdline-tools on PATH.
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$sdkmanager" ] || sdkmanager=$(command -v sdkmanager)
+          "$sdkmanager" "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-35"
           target=$(case "${{ inputs.abi }}" in
             armeabi-v7a) echo armv7-linux-androideabi ;;
             x86) echo i686-linux-android ;;
