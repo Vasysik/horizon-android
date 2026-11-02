@@ -265,7 +265,7 @@ fn java_mod_summary(path: &std::path::Path) -> Option<String> {
         ("Forge", "META-INF/mods.toml"),
         ("Forge", "mcmod.info"),
     ] {
-        if let Ok(mut entry) = zip.by_name(entry) {
+        if let Ok(entry) = zip.by_name(entry) {
             let mut raw = Vec::new();
             if entry.take(256 * 1024).read_to_end(&mut raw).is_ok() {
                 meta = Some((loader, String::from_utf8_lossy(&raw).into_owned()));
@@ -358,11 +358,13 @@ fn oxide_search(text: &str, offset: usize) -> Result<Vec<Project>, String> {
             .timeout_read(std::time::Duration::from_secs(30))
             .build()
             .get(&format!("{OXIDE_RELEASE_BASE}index.json"))
-            .call()?
+            .call()
+            .map_err(|e| e.to_string())?
             .into_reader()
             .take(1024 * 1024)
-            .read_to_end(&mut raw)?;
-        serde_json::from_slice::<serde_json::Value>(&raw)
+            .read_to_end(&mut raw)
+            .map_err(|e| e.to_string())?;
+        serde_json::from_slice::<serde_json::Value>(&raw).map_err(|e| e.to_string())
     })();
     let map = |value: &serde_json::Value| -> Vec<Project> {
         value
