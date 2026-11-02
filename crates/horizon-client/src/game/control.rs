@@ -11,6 +11,7 @@ use std::{
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 const HELP: &[&str] = &[
+    "terrain-passes single|split    A/B terrain pipelines; split requires a supported backend",
     "status                         game, player, streaming and renderer state",
     "simulation                     authoritative projectiles in the owner's level",
     "server-hold on|off             hold simulation and player packets at a control-fixture barrier",
@@ -301,6 +302,18 @@ impl Game<'_> {
                     Some(other) => return Err(format!("unknown section draw mode {other}").into()),
                 }
                 Ok(Some(json!({ "ok": true, "flat": r.flat_draws() })))
+            }
+            "terrain-passes" => {
+                let on = match arg(1)? {
+                    "single" => false,
+                    "split" => true,
+                    _ => return Err("terrain-passes single|split".into()),
+                };
+                self.renderer
+                    .as_mut()
+                    .ok_or("no renderer")?
+                    .set_opaque_terrain(on)?;
+                ok()
             }
             "section-cull" => {
                 let r = self.renderer.as_mut().ok_or("no renderer")?;
@@ -1133,6 +1146,7 @@ impl Game<'_> {
                 "drawn_sections": r.drawn_sections,
                 "section_draws": r.section_draws,
                 "section_draw_calls": r.section_draw_calls,
+                "terrain_pass_draws": r.terrain_pass_draws,
                 "culled_sections": r.culled_sections(),
                 "uploaded_bytes": r.uploaded_bytes,
                 "resident_sections": r.resident_sections(),

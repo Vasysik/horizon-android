@@ -3,6 +3,17 @@
 use wgpu::util::DeviceExt;
 
 fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8) -> Vec<u8> {
+    render_paths(device, queue, source, variant, false, 255, false)
+}
+fn render_paths(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    source: &str,
+    variant: u8,
+    split: bool,
+    alpha: u8,
+    mixed: bool,
+) -> Vec<u8> {
     let module = naga::front::wgsl::parse_str(source).unwrap();
     let (_, globals) = module
         .types
@@ -93,7 +104,7 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
     });
     queue.write_texture(
         white.as_image_copy(),
-        &[255; 4],
+        &[255, 255, 255, alpha],
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(4),
@@ -163,42 +174,52 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
     let attributes =
         wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
     let instance_attributes = wgpu::vertex_attr_array![5=>Float32x4];
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: None,
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_terrain"),
-            compilation_options: Default::default(),
-            buffers: &[
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 24,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                }),
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 16,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &instance_attributes,
-                }),
-            ],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_solid"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: Default::default(),
-        depth_stencil: None,
-        multisample: Default::default(),
-        multiview_mask: None,
-        cache: None,
-    });
+    let make_pipeline = |vertex, fragment| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(vertex),
+                compilation_options: Default::default(),
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 24,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &attributes,
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 16,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &instance_attributes,
+                    }),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(fragment),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let pipelines = if split {
+        vec![
+            make_pipeline("vs_terrain_opaque", "fs_opaque"),
+            make_pipeline("vs_terrain_cutout", "fs_solid"),
+        ]
+    } else {
+        vec![make_pipeline("vs_terrain", "fs_solid")]
+    };
     let mut vertices = Vec::new();
     for emission in 0..16u8 {
         let x = -1.0 + f32::from(emission) / 8.0;
@@ -211,7 +232,15 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
             [x, 1.0],
         ] {
             vertices.extend_from_slice(bytemuck::cast_slice(&[px, py, 0.5f32]));
-            vertices.extend_from_slice(bytemuck::cast_slice(&[16384u16, 16384, 0]));
+            vertices.extend_from_slice(bytemuck::cast_slice(&[
+                16384u16,
+                16384,
+                if mixed && emission % 2 == 0 {
+                    0x8000
+                } else {
+                    0
+                },
+            ]));
             vertices.extend_from_slice(&[240, 240, 64, 128, 192, 255 - emission]);
         }
     }
@@ -268,11 +297,14 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, variant: u8)
             })],
             ..Default::default()
         });
-        pass.set_pipeline(&pipeline);
+
         pass.set_bind_group(0, &group, &[]);
         pass.set_vertex_buffer(0, vertex.slice(..));
         pass.set_vertex_buffer(1, instance.slice(..));
-        pass.draw(0..96, 0..1);
+        for pipeline in &pipelines {
+            pass.set_pipeline(pipeline);
+            pass.draw(0..96, 0..1);
+        }
     }
     encoder.copy_texture_to_buffer(
         target.as_image_copy(),
@@ -331,6 +363,21 @@ fn packed_interface_preserves_rgb_fog_fade_and_all_hdr_tiers_on_gpu() {
                     assert_eq!(&packed[p..p + 3], &[64, 128, 192]);
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn split_opaque_cutout_preserves_pixels_for_alpha_fog_fade_and_emission() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    for alpha in [0, 64, 127, 128, 255] {
+        for variant in 0..36 {
+            let source = super::terrain_shader(false);
+            let original = render_paths(&device, &queue, &source, variant, false, alpha, true);
+            let split = render_paths(&device, &queue, &source, variant, true, alpha, true);
+            assert_eq!(original, split, "scene {variant}, texture alpha {alpha}");
         }
     }
 }

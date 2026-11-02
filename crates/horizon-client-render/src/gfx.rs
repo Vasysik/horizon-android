@@ -559,6 +559,11 @@ pub struct Renderer {
     device_lost: Arc<std::sync::atomic::AtomicBool>,
     pub config: wgpu::SurfaceConfiguration,
     solid: wgpu::RenderPipeline,
+    /// No-discard opaque and alpha-cutout pipelines for Android Vulkan.
+    opaque_terrain: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    opaque_terrain_on: bool,
+    /// Last frame's opaque/cutout/order-sensitive draw counts; None uses the ordinary path.
+    pub terrain_pass_draws: Option<[u32; 3]>,
     translucent: wgpu::RenderPipeline,
     /// Flat section draws (`flat`), where multi-draw is emulated.
     flat: Option<flat::Flat>,
@@ -1989,6 +1994,48 @@ impl Renderer {
             true,
             None,
         );
+        // Keep opaque terrain free of discard so mobile hidden-surface removal can reject occluded pixels.
+        let opaque_terrain = (cfg!(target_os = "android")
+            && adapter.get_info().backend == wgpu::Backend::Vulkan)
+            .then(|| {
+                let checks = GpuChecks::push(&device);
+                let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+                let pipelines = (
+                    pipeline(
+                        "Terrain opaque",
+                        "vs_terrain_opaque",
+                        "fs_opaque",
+                        &terrain_buffers,
+                        tri,
+                        Some(wgpu::Face::Back),
+                        true,
+                        true,
+                        None,
+                    ),
+                    pipeline(
+                        "Terrain cutout",
+                        "vs_terrain_cutout",
+                        "fs_solid",
+                        &terrain_buffers,
+                        tri,
+                        Some(wgpu::Face::Back),
+                        true,
+                        true,
+                        None,
+                    ),
+                );
+                let internal = pollster::block_on(internal.pop());
+                if let Some(error) = internal.or(checks.pop()) {
+                    log::warn!(
+                        "Opaque terrain pipelines unavailable, retaining single pass: {error}"
+                    );
+                    None
+                } else {
+                    Some(pipelines)
+                }
+            })
+            .flatten();
+        crate::mesher::group_parts(opaque_terrain.is_some());
         // The water mirror's camera sees the world from the other side of the plane, which
         // flips the winding: its solid terrain culls the front.
         let solid_mirror = pipeline(
@@ -3358,6 +3405,9 @@ impl Renderer {
             device_lost,
             config,
             solid,
+            opaque_terrain,
+            opaque_terrain_on: true,
+            terrain_pass_draws: None,
             translucent,
             flat_on: flat.is_some(),
             cull_on: cull.is_some(),
@@ -3766,6 +3816,14 @@ impl Renderer {
             return Err("flat section draws are off on this device".into());
         }
         self.flat_on = on;
+        Ok(())
+    }
+    /// Developer A/B control; unavailable backends retain their ordinary pipeline.
+    pub fn set_opaque_terrain(&mut self, on: bool) -> Result<()> {
+        if on && self.opaque_terrain.is_none() {
+            return Err("split opaque terrain is unavailable on this backend".into());
+        }
+        self.opaque_terrain_on = on;
         Ok(())
     }
     /// Whether one of Horizon's own packs reads the water mirror, which needs the frame's
@@ -5524,43 +5582,105 @@ impl Renderer {
         self.phase2_pages.clear();
         self.solid_runs.clear();
         self.phase2_runs.clear();
-        for (i, v) in visible.iter().enumerate() {
-            let s = self.sections.get(v.slot);
-            let first_phase = cull.as_ref().is_none_or(|c| c.first(v.slot));
-            let (draws, pages) = if first_phase {
-                (&mut self.draws, &mut self.draw_pages)
-            } else {
-                (&mut self.phase2_draws, &mut self.phase2_pages)
-            };
-            let start = draws.len();
-            let instances = u32::from(first_phase);
-            let mut indices = 0;
-            facing_runs_from(&s.sides, eye, mirror_low, v.origin, |first, quads| {
-                indices += quads * 6;
-                let base = s.start as u32 + first * 4;
-                draws.push([quads * 6, instances, 0, base, i as u32]);
-                pages.push((s.page, None));
-            });
-            let runs = if first_phase {
-                &mut self.solid_runs
-            } else {
-                &mut self.phase2_runs
-            };
-            runs.push(
-                v.distance,
-                s.page,
-                start,
-                draws.len() - start,
-                [i as u32, v.slot, indices],
-            );
-            if let Some(c) = &mut cull
-                && first_phase
-            {
-                c.drawn(i, v.slot, indices);
+        let split_terrain = self.opaque_terrain.is_some()
+            && self.opaque_terrain_on
+            && cull.is_none()
+            && visible_lods.is_empty()
+            && self.native.is_none()
+            && self.pack_post.is_none();
+        let mut opaque_draws = 0u32;
+        let mut cutout_end = 0u32;
+        if split_terrain {
+            use crate::mesher::Part;
+            for part in [Part::Opaque, Part::Cutout, Part::All] {
+                let offset = self.draws.len();
+                self.solid_runs.clear();
+                for (i, v) in visible.iter().enumerate() {
+                    let section = self.sections.get(v.slot);
+                    let fading = section.fade(now, self.lod_retiring.contains(&v.key)) != 0;
+                    let wanted = match (part, section.sides.can_partition(), fading) {
+                        (Part::All, true, _) | (Part::Opaque | Part::Cutout, false, _) => continue,
+                        (Part::Opaque, true, true) => continue,
+                        (Part::Cutout, true, true) => Part::All,
+                        _ => part,
+                    };
+                    let start = self.draws.len();
+                    let local_eye = eye.map(|eye| eye - Vec3::from(v.origin));
+                    let mut draw = |first, quads| {
+                        self.draws.push([
+                            quads * 6,
+                            1,
+                            0,
+                            section.start as u32 + first * 4,
+                            i as u32,
+                        ]);
+                        self.draw_pages.push((section.page, None));
+                    };
+                    match local_eye {
+                        Some(eye) => section.sides.visible_part_from(
+                            eye.to_array(),
+                            mirror_low.map_or(eye.y, |y| (y - v.origin[1]).min(eye.y)),
+                            wanted,
+                            &mut draw,
+                        ),
+                        None => section.sides.every(wanted, &mut draw),
+                    }
+                    self.solid_runs.push(
+                        v.distance,
+                        section.page,
+                        start,
+                        self.draws.len() - start,
+                        [0; 3],
+                    );
+                }
+                self.solid_runs
+                    .regroup(&mut self.draws, &mut self.draw_pages, offset);
+                if part == Part::Opaque {
+                    opaque_draws = self.draws.len() as u32;
+                }
+                if part == Part::Cutout {
+                    cutout_end = self.draws.len() as u32;
+                }
             }
+        } else {
+            for (i, v) in visible.iter().enumerate() {
+                let s = self.sections.get(v.slot);
+                let first_phase = cull.as_ref().is_none_or(|c| c.first(v.slot));
+                let (draws, pages) = if first_phase {
+                    (&mut self.draws, &mut self.draw_pages)
+                } else {
+                    (&mut self.phase2_draws, &mut self.phase2_pages)
+                };
+                let start = draws.len();
+                let instances = u32::from(first_phase);
+                let mut indices = 0;
+                facing_runs_from(&s.sides, eye, mirror_low, v.origin, |first, quads| {
+                    indices += quads * 6;
+                    let base = s.start as u32 + first * 4;
+                    draws.push([quads * 6, instances, 0, base, i as u32]);
+                    pages.push((s.page, None));
+                });
+                let runs = if first_phase {
+                    &mut self.solid_runs
+                } else {
+                    &mut self.phase2_runs
+                };
+                runs.push(
+                    v.distance,
+                    s.page,
+                    start,
+                    draws.len() - start,
+                    [i as u32, v.slot, indices],
+                );
+                if let Some(c) = &mut cull
+                    && first_phase
+                {
+                    c.drawn(i, v.slot, indices);
+                }
+            }
+            self.solid_runs
+                .regroup(&mut self.draws, &mut self.draw_pages, 0);
         }
-        self.solid_runs
-            .regroup(&mut self.draws, &mut self.draw_pages, 0);
         // Phase 2's draws are tested where grouping left them.
         let runs = self
             .phase2_runs
@@ -6565,6 +6685,11 @@ impl Renderer {
             .filter(|_| !frame.title)
             .and_then(|n| Some((n.material.as_ref()?, &n.frame.group)));
         let solid_pipeline = material.map_or(&self.solid, |(m, _)| &m.solid);
+        self.terrain_pass_draws = (split_terrain && !flat_frame).then_some([
+            opaque_draws,
+            cutout_end - opaque_draws,
+            solid_draws - cutout_end,
+        ]);
         let translucent_pipeline = material.map_or(&self.translucent, |(m, _)| &m.translucent);
         let pack_flat = material.and_then(|(m, _)| m.flat.as_ref());
         // A material stage's translucent pass reads a copy of the depth the solid terrain
@@ -6731,7 +6856,33 @@ impl Renderer {
                                 solid_draws - phase1_draws,
                             );
                         }
-                        None => self.draw_sections(&mut pass, &self.indirect, 0, 0, solid_draws),
+                        None => {
+                            if split_terrain
+                                && material.is_none()
+                                && let Some((opaque, cutout)) = &self.opaque_terrain
+                            {
+                                pass.set_pipeline(opaque);
+                                self.draw_sections(&mut pass, &self.indirect, 0, 0, opaque_draws);
+                                pass.set_pipeline(cutout);
+                                self.draw_sections(
+                                    &mut pass,
+                                    &self.indirect,
+                                    opaque_draws,
+                                    opaque_draws,
+                                    cutout_end - opaque_draws,
+                                );
+                                pass.set_pipeline(solid_pipeline);
+                                self.draw_sections(
+                                    &mut pass,
+                                    &self.indirect,
+                                    cutout_end,
+                                    cutout_end,
+                                    solid_draws - cutout_end,
+                                );
+                            } else {
+                                self.draw_sections(&mut pass, &self.indirect, 0, 0, solid_draws);
+                            }
+                        }
                     }
                 }
             }

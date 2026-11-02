@@ -507,6 +507,7 @@ impl Game<'_> {
                 "wait_ms":r.last_wait.as_secs_f32()*1000.0,
                 "gpu_profiling_requested":crate::device_runtime::preferences().gpu_profile,
                 "gpu_encoder_timestamps_supported":r.device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+                "terrain_pass_draws": r.terrain_pass_draws,
                 "gpu_stage_distributions":r.gpu_stage_distributions().into_iter().map(|(stage,p50,p95,p99,n)|serde_json::json!({"stage":stage,"p50_ms":p50,"p95_ms":p95,"p99_ms":p99,"samples":n})).collect::<Vec<_>>(),
                 "gpu_stages":r.gpu_stage_times().into_iter().map(|(stage, median_ms, max_ms, samples)|
                     serde_json::json!({"stage":stage,"median_ms":median_ms,"max_ms":max_ms,"samples":samples})).collect::<Vec<_>>(),
