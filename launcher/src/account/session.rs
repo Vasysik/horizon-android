@@ -83,7 +83,7 @@ impl Status {
         let state = match secrets {
             None => State::SignInRequired,
             Some(s) if s.sign_in_required => State::SignInRequired,
-            Some(s) if !s.owns => State::OwnershipRequired,
+            Some(s) if !s.owns && s.provider == Provider::Microsoft => State::OwnershipRequired,
             Some(s) if s.minecraft_expires_at <= now() + RENEW_BEFORE => State::NeedsRefresh,
             Some(_) => State::Ready,
         };
@@ -271,7 +271,7 @@ pub(super) fn refresh_account(
         progress(Phase::Queued);
         let _operation = lock(store)?;
         progress(Phase::Keychain);
-        let Some(secrets) = read(store, &account.uuid)? else {
+        let Some(secrets) = read(store, &account.key())? else {
             return Ok(Status::from_secrets(None));
         };
         let before =
@@ -285,7 +285,7 @@ pub(super) fn refresh_account(
                     if saved
                         .accounts
                         .iter()
-                        .any(|a| a.uuid == renewed.uuid && *a != renewed)
+                        .any(|a| a.key() == renewed.key() && *a != renewed)
                     {
                         saved.update(renewed);
                         let _ = saved.save_to(accounts);
@@ -307,7 +307,7 @@ pub(super) fn refresh_account(
         if before != after {
             progress(Phase::Saving);
         }
-        if before != after && store.set(&account.uuid, &after).is_err() {
+        if before != after && store.set(&account.key(), &after).is_err() {
             status.state = State::Retry;
             status.message =
                 "The renewed sign-in could not be saved in the keychain. Unlock it and retry."
@@ -349,7 +349,7 @@ pub(super) fn renew_for_game_with(
         return Err(status);
     }
     let _operation = lock(store).map_err(|e| Status::failed(&e))?;
-    let secrets = read(store, &account.uuid)
+    let secrets = read(store, &account.key())
         .map_err(|e| Status::failed(&e))?
         .ok_or_else(|| Status::from_secrets(None))?;
     write_session_file(dir, account, &secrets).map_err(|e| Status::failed(&e))
