@@ -4,8 +4,8 @@
 //! Handles 14 TCP CustomPayload channels and 10 UDP AES-128-GCM packets.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes128Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use std::io::{Cursor, Read};
 
@@ -149,6 +149,7 @@ impl<'a> ByteBufReader<'a> {
 }
 
 /// Helper for writing Minecraft FriendlyByteBuf network representations.
+#[derive(Default)]
 pub struct ByteBufWriter {
     buffer: Vec<u8>,
 }
@@ -198,7 +199,8 @@ impl ByteBufWriter {
                 self.buffer.push(value as u8);
                 return;
             }
-            self.buffer.push(((value & 0b0111_1111) | 0b1000_0000) as u8);
+            self.buffer
+                .push(((value & 0b0111_1111) | 0b1000_0000) as u8);
             value = ((value as u32) >> 7) as i32;
         }
     }
@@ -325,41 +327,10 @@ pub struct SecretPacket {
 }
 
 impl SecretPacket {
-    fn is_valid(pkt: &SecretPacket) -> bool {
-        (1..=65535).contains(&pkt.server_port)
-            && (128..=65536).contains(&pkt.mtu_size)
-            && pkt.codec <= 10
-    }
-
-    fn read_secret_bytes(
-        r: &mut ByteBufReader,
-        has_varint_prefix: bool,
-    ) -> Result<[u8; 16], std::io::Error> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
         let mut secret = [0u8; 16];
-        if has_varint_prefix {
-            let len = r.read_varint()?;
-            if len == 16 {
-                r.read_exact_bytes(&mut secret)?;
-            } else if len == 18 {
-                let mut buf = [0u8; 18];
-                r.read_exact_bytes(&mut buf)?;
-                secret.copy_from_slice(&buf[..16]);
-            } else {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Unexpected secret VarInt length: {len}"),
-                ));
-            }
-        } else {
-            r.read_exact_bytes(&mut secret)?;
-        }
-        Ok(secret)
-    }
-
-    fn parse_v20(data: &[u8], has_varint_prefix: bool) -> Result<Self, std::io::Error> {
-        let mut r = ByteBufReader::new(data);
-        let secret = Self::read_secret_bytes(&mut r, has_varint_prefix)?;
-        let connection_id = r.read_uuid()?;
+        r.read_exact_bytes(&mut secret)?;
         let server_port = r.read_i32()?;
         let player_uuid = r.read_uuid()?;
         let codec = r.read_u8()?;
@@ -378,45 +349,16 @@ impl SecretPacket {
             false
         };
 
-        Ok(Self {
-            secret,
-            connection_id,
-            server_port,
-            player_uuid,
-            codec,
-            mtu_size,
-            voice_chat_distance,
-            keep_alive,
-            groups_enabled,
-            voice_host,
-            allow_recording,
-        })
-    }
-
-    fn parse_v18(data: &[u8], has_varint_prefix: bool) -> Result<Self, std::io::Error> {
-        let mut r = ByteBufReader::new(data);
-        let secret = Self::read_secret_bytes(&mut r, has_varint_prefix)?;
-        let server_port = r.read_i32()?;
-        let player_uuid = r.read_uuid()?;
-        let codec = r.read_u8()?;
-        let mtu_size = r.read_i32()?;
-        let voice_chat_distance = r.read_f64()?;
-        let keep_alive = r.read_i32()?;
-        let groups_enabled = r.read_bool()?;
-        let voice_host = if r.remaining() > 0 {
-            r.read_string().unwrap_or_default()
-        } else {
-            String::new()
-        };
-        let allow_recording = if r.remaining() > 0 {
-            r.read_bool().unwrap_or(false)
-        } else {
-            false
-        };
-
-        // For v18/v19 without separate connection_id, connection_id is set to player_uuid
+        // For SVC compat 20, connection_id is the player_uuid
         let connection_id = player_uuid;
 
+        log::info!(
+            "SVC: Handshake secret parsed successfully. UDP Port: {}, Host: '{}', MTU: {}",
+            server_port,
+            voice_host,
+            mtu_size
+        );
+
         Ok(Self {
             secret,
             connection_id,
@@ -430,101 +372,11 @@ impl SecretPacket {
             voice_host,
             allow_recording,
         })
-    }
-
-    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
-        log::info!(
-            "SVC: Raw secret payload ({} bytes): {:02x?}",
-            data.len(),
-            data
-        );
-
-        // 1. Try v20+ scheme first (without VarInt prefix)
-        if let Ok(pkt) = Self::parse_v20(data, false) {
-            if Self::is_valid(&pkt) {
-                log::info!(
-                    "SVC: Handshake secret parsed successfully (v20+ format). UDP Port: {}, Host: '{}', MTU: {}",
-                    pkt.server_port,
-                    pkt.voice_host,
-                    pkt.mtu_size
-                );
-                return Ok(pkt);
-            } else {
-                log::warn!(
-                    "SVC: SecretPacket parsed as v20+, but failed validation: port={}, mtu={}, codec={}. Trying fallback...",
-                    pkt.server_port,
-                    pkt.mtu_size,
-                    pkt.codec
-                );
-            }
-        }
-
-        // Check if there is a VarInt prefix indicating array length (e.g. data[0] == 16 or 18)
-        let has_prefix_candidate = data.first().copied().map_or(false, |b| b == 16 || b == 18);
-
-        // 2. Try v20+ with VarInt prefix if prefix candidate matches
-        if has_prefix_candidate {
-            if let Ok(pkt) = Self::parse_v20(data, true) {
-                if Self::is_valid(&pkt) {
-                    log::info!(
-                        "SVC: Handshake secret parsed successfully (v20+ format with VarInt prefix). UDP Port: {}, Host: '{}', MTU: {}",
-                        pkt.server_port,
-                        pkt.voice_host,
-                        pkt.mtu_size
-                    );
-                    return Ok(pkt);
-                }
-            }
-        }
-
-        // 3. Fallback: Try v18/v19 scheme (without separate connection_id)
-        if let Ok(pkt) = Self::parse_v18(data, false) {
-            if Self::is_valid(&pkt) {
-                log::info!(
-                    "SVC: Handshake secret parsed successfully (v18/v19 fallback format). UDP Port: {}, Host: '{}', MTU: {}",
-                    pkt.server_port,
-                    pkt.voice_host,
-                    pkt.mtu_size
-                );
-                return Ok(pkt);
-            } else {
-                log::warn!(
-                    "SVC: SecretPacket parsed as v18/v19, but failed validation: port={}, mtu={}, codec={}",
-                    pkt.server_port,
-                    pkt.mtu_size,
-                    pkt.codec
-                );
-            }
-        }
-
-        // 4. Fallback: Try v18/v19 with VarInt prefix if prefix candidate matches
-        if has_prefix_candidate {
-            if let Ok(pkt) = Self::parse_v18(data, true) {
-                if Self::is_valid(&pkt) {
-                    log::info!(
-                        "SVC: Handshake secret parsed successfully (v18/v19 format with VarInt prefix). UDP Port: {}, Host: '{}', MTU: {}",
-                        pkt.server_port,
-                        pkt.voice_host,
-                        pkt.mtu_size
-                    );
-                    return Ok(pkt);
-                }
-            }
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "Failed to parse SecretPacket: invalid packet payload or unsupported version (len={})",
-                data.len()
-            ),
-        ))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut w = ByteBufWriter::new();
         w.write_raw_bytes(&self.secret);
-        w.write_uuid(self.connection_id);
         w.write_i32(self.server_port);
         w.write_uuid(self.player_uuid);
         w.write_u8(self.codec);
@@ -535,22 +387,75 @@ impl SecretPacket {
         w.write_string(&self.voice_host);
         w.write_bool(self.allow_recording);
         w.into_bytes()
+    }
+}
+
+/// Parses voice host into `(host, port)`.
+///
+/// Handles:
+/// - Empty or whitespace string -> `(default_host, default_port)`
+/// - Numeric string (e.g. `"8000"`) -> `(default_host, 8000)`
+/// - IPv6 with brackets and port (e.g. `"[::1]:8000"`) -> `("::1", 8000)`
+/// - IPv6 with brackets without port (e.g. `"[::1]"`) -> `("::1", default_port)`
+/// - IPv6 without brackets (e.g. `"::1"`) -> `("::1", default_port)`
+/// - Host with port (e.g. `"edge.slimeskyes.id:8000"`) -> `("edge.slimeskyes.id", 8000)`
+/// - Host without port (e.g. `"edge.slimeskyes.id"`) -> `("edge.slimeskyes.id", default_port)`
+///
+/// Port specified in `host` overrides `default_port`.
+pub fn parse_voice_host(host: &str, default_host: &str, default_port: u16) -> (String, u16) {
+    let trimmed = host.trim();
+    if trimmed.is_empty() {
+        return (default_host.trim().to_string(), default_port);
     }
 
-    pub fn to_v18_bytes(&self) -> Vec<u8> {
-        let mut w = ByteBufWriter::new();
-        w.write_raw_bytes(&self.secret);
-        w.write_i32(self.server_port);
-        w.write_uuid(self.player_uuid);
-        w.write_u8(self.codec);
-        w.write_i32(self.mtu_size);
-        w.write_f64(self.voice_chat_distance);
-        w.write_i32(self.keep_alive);
-        w.write_bool(self.groups_enabled);
-        w.write_string(&self.voice_host);
-        w.write_bool(self.allow_recording);
-        w.into_bytes()
+    // 1. Check if the string is just a numeric port (e.g. "8000")
+    if let Ok(p @ 1..) = trimmed.parse::<u16>() {
+        return (default_host.trim().to_string(), p);
     }
+
+    // 2. Bracketed IPv6, e.g. "[::1]:8000" or "[::1]"
+    if let Some((ip_part, rest)) = trimmed.strip_prefix('[').and_then(|s| s.split_once(']')) {
+        let rest = rest.trim();
+        let port = if let Some(port_str) = rest.strip_prefix(':') {
+            port_str
+                .trim()
+                .parse::<u16>()
+                .ok()
+                .filter(|&p| p > 0)
+                .unwrap_or(default_port)
+        } else {
+            default_port
+        };
+        let final_host = if ip_part.is_empty() {
+            default_host.trim()
+        } else {
+            ip_part.trim()
+        };
+        return (final_host.to_string(), port);
+    }
+
+    // 3. Unbracketed IPv6 (contains multiple colons), e.g. "::1" or "2001:db8::1"
+    let colon_count = trimmed.chars().filter(|&c| c == ':').count();
+    if colon_count > 1 {
+        return (trimmed.to_string(), default_port);
+    }
+
+    // 4. Host with single port, e.g. "edge.slimeskyes.id:8000" or ":8000"
+    if colon_count == 1 {
+        let mut parts = trimmed.splitn(2, ':');
+        let h = parts.next().unwrap_or("").trim();
+        let p_str = parts.next().unwrap_or("").trim();
+        let port = p_str
+            .parse::<u16>()
+            .ok()
+            .filter(|&p| (1..=65535).contains(&p))
+            .unwrap_or(default_port);
+        let final_host = if h.is_empty() { default_host.trim() } else { h };
+        return (final_host.to_string(), port);
+    }
+
+    // 5. Hostname or IPv4 without port, e.g. "edge.slimeskyes.id"
+    (trimmed.to_string(), default_port)
 }
 
 /// UpdateStatePacket (channel: voicechat:client_state)
@@ -811,11 +716,7 @@ impl JoinGroupPacket {
         let mut r = ByteBufReader::new(data);
         let group_id = r.read_uuid()?;
         let has_pw = r.read_bool()?;
-        let password = if has_pw {
-            Some(r.read_string()?)
-        } else {
-            None
-        };
+        let password = if has_pw { Some(r.read_string()?) } else { None };
         Ok(Self { group_id, password })
     }
 }
@@ -844,11 +745,7 @@ impl CreateGroupPacket {
         let mut r = ByteBufReader::new(data);
         let name = r.read_string()?;
         let has_pw = r.read_bool()?;
-        let password = if has_pw {
-            Some(r.read_string()?)
-        } else {
-            None
-        };
+        let password = if has_pw { Some(r.read_string()?) } else { None };
         let group_type = r.read_i16()?;
         Ok(Self {
             name,
@@ -1177,7 +1074,19 @@ mod tests {
 
     #[test]
     fn test_varint_roundtrip() {
-        let values = [0, 1, 127, 128, 255, 256, 16384, 2097151, -1, i32::MAX, i32::MIN];
+        let values = [
+            0,
+            1,
+            127,
+            128,
+            255,
+            256,
+            16384,
+            2097151,
+            -1,
+            i32::MAX,
+            i32::MIN,
+        ];
         for val in values {
             let mut w = ByteBufWriter::new();
             w.write_varint(val);
@@ -1190,7 +1099,7 @@ mod tests {
     fn test_secret_packet_serialization() {
         let secret = SecretPacket {
             secret: [42u8; 16],
-            connection_id: 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210,
+            connection_id: 0x1111_2222_3333_4444_5555_6666_7777_8888,
             server_port: 24454,
             player_uuid: 0x1111_2222_3333_4444_5555_6666_7777_8888,
             codec: 0,
@@ -1212,7 +1121,7 @@ mod tests {
         for allow_recording in [true, false] {
             let secret = SecretPacket {
                 secret: [7u8; 16],
-                connection_id: 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210,
+                connection_id: 0x1111_2222_3333_4444_5555_6666_7777_8888,
                 server_port: 24454,
                 player_uuid: 0x1111_2222_3333_4444_5555_6666_7777_8888,
                 codec: 1,
@@ -1225,7 +1134,8 @@ mod tests {
             };
 
             let bytes = secret.to_bytes();
-            let decoded = SecretPacket::from_bytes(&bytes).expect("Full packet decode should succeed");
+            let decoded =
+                SecretPacket::from_bytes(&bytes).expect("Full packet decode should succeed");
             assert_eq!(decoded, secret);
             assert_eq!(decoded.allow_recording, allow_recording);
         }
@@ -1236,7 +1146,6 @@ mod tests {
         let mut w = ByteBufWriter::new();
         let secret_bytes = [42u8; 16];
         w.write_raw_bytes(&secret_bytes);
-        w.write_uuid(0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210);
         w.write_i32(24454);
         w.write_uuid(0x1111_2222_3333_4444_5555_6666_7777_8888);
         w.write_u8(0);
@@ -1248,9 +1157,18 @@ mod tests {
         // Payload ends here, truncated without allow_recording
 
         let bytes = w.into_bytes();
-        let decoded = SecretPacket::from_bytes(&bytes).expect("Legacy packet without allow_recording should decode");
+        let decoded = SecretPacket::from_bytes(&bytes)
+            .expect("Legacy packet without allow_recording should decode");
         assert_eq!(decoded.secret, secret_bytes);
         assert_eq!(decoded.server_port, 24454);
+        assert_eq!(
+            decoded.player_uuid,
+            0x1111_2222_3333_4444_5555_6666_7777_8888
+        );
+        assert_eq!(
+            decoded.connection_id,
+            0x1111_2222_3333_4444_5555_6666_7777_8888
+        );
         assert_eq!(decoded.voice_host, "voice.legacy.lan");
         assert_eq!(decoded.allow_recording, false);
     }
@@ -1261,7 +1179,6 @@ mod tests {
         let mut w1 = ByteBufWriter::new();
         let secret_bytes = [99u8; 16];
         w1.write_raw_bytes(&secret_bytes);
-        w1.write_uuid(0x1234_5678);
         w1.write_i32(25565);
         w1.write_uuid(0x5678_1234);
         w1.write_u8(0);
@@ -1272,7 +1189,8 @@ mod tests {
         // Truncated here: no voice_host and no allow_recording
 
         let bytes1 = w1.into_bytes();
-        let decoded1 = SecretPacket::from_bytes(&bytes1).expect("Packet without voice_host and allow_recording should decode");
+        let decoded1 = SecretPacket::from_bytes(&bytes1)
+            .expect("Packet without voice_host and allow_recording should decode");
         assert_eq!(decoded1.secret, secret_bytes);
         assert_eq!(decoded1.server_port, 25565);
         assert_eq!(decoded1.voice_host, "");
@@ -1281,7 +1199,6 @@ mod tests {
         // Case B: Payload with empty host string "" and no allow_recording
         let mut w2 = ByteBufWriter::new();
         w2.write_raw_bytes(&secret_bytes);
-        w2.write_uuid(0x1234_5678);
         w2.write_i32(25565);
         w2.write_uuid(0x5678_1234);
         w2.write_u8(0);
@@ -1293,163 +1210,109 @@ mod tests {
         // No allow_recording
 
         let bytes2 = w2.into_bytes();
-        let decoded2 = SecretPacket::from_bytes(&bytes2).expect("Packet with empty host and no allow_recording should decode");
+        let decoded2 = SecretPacket::from_bytes(&bytes2)
+            .expect("Packet with empty host and no allow_recording should decode");
         assert_eq!(decoded2.voice_host, "");
         assert_eq!(decoded2.allow_recording, false);
     }
 
     #[test]
-    fn test_secret_packet_v18_v19_fallback() {
-        let secret = SecretPacket {
-            secret: [55u8; 16],
-            connection_id: 0x9999_8888_7777_6666_5555_4444_3333_2222,
-            server_port: 24454,
-            player_uuid: 0x9999_8888_7777_6666_5555_4444_3333_2222,
-            codec: 0,
-            mtu_size: 1024,
-            voice_chat_distance: 48.0,
-            keep_alive: 1000,
-            groups_enabled: true,
-            voice_host: "play.soramc.id".to_string(),
-            allow_recording: false,
-        };
+    fn test_secret_packet_raw_payload() {
+        let mut payload = Vec::new();
+        // 0..16: dummy secret (16 bytes)
+        let dummy_secret = [0x5Au8; 16];
+        payload.extend_from_slice(&dummy_secret);
+        // 16..20: port 8000 (0x00001f40)
+        payload.extend_from_slice(&[0x00, 0x00, 0x1f, 0x40]);
+        // 20..36: dummy playerUUID (16 bytes)
+        let dummy_uuid: u128 = 0x2c97_a0a3_44db_4bea_a05b_c8e8_be59_0791;
+        payload.extend_from_slice(&dummy_uuid.to_be_bytes());
+        // 36..37: codec 0 (VOIP)
+        payload.push(0x00);
+        // 37..41: mtu 1024 (0x00000400)
+        payload.extend_from_slice(&[0x00, 0x00, 0x04, 0x00]);
+        // 41..49: distance 14.0 (0x402c000000000000)
+        payload.extend_from_slice(&14.0f64.to_be_bytes());
+        // 49..53: keepAlive 1000 (0x000003e8)
+        payload.extend_from_slice(&[0x00, 0x00, 0x03, 0xe8]);
+        // 53..54: groups true (0x01)
+        payload.push(0x01);
+        // 54..55: voiceHost length (23 bytes)
+        let host_str = "edge.slimeskyes.id:8000";
+        payload.push(host_str.len() as u8);
+        // 55..78: host string
+        payload.extend_from_slice(host_str.as_bytes());
+        // 78..79: allowRecording true (0x01)
+        payload.push(0x01);
 
-        let bytes = secret.to_v18_bytes();
-        let decoded = SecretPacket::from_bytes(&bytes).expect("v18/v19 packet should decode via fallback");
-        assert_eq!(decoded.secret, secret.secret);
-        assert_eq!(decoded.server_port, 24454);
-        assert_eq!(decoded.player_uuid, secret.player_uuid);
-        assert_eq!(decoded.connection_id, secret.player_uuid);
-        assert_eq!(decoded.mtu_size, 1024);
+        let decoded = SecretPacket::from_bytes(&payload).expect("Raw payload should parse");
+        assert_eq!(decoded.secret, dummy_secret);
+        assert_eq!(decoded.server_port, 8000);
+        assert_eq!(decoded.player_uuid, dummy_uuid);
+        assert_eq!(decoded.connection_id, dummy_uuid);
         assert_eq!(decoded.codec, 0);
-        assert_eq!(decoded.voice_host, "play.soramc.id");
-        assert_eq!(decoded.groups_enabled, true);
-    }
-
-    #[test]
-    fn test_secret_packet_soramc_byte_shift_scenario() {
-        // Construct a v18 packet where the player_uuid would produce the exact shifted port and MTU
-        // if mistakenly parsed as v20+
-        let mut w = ByteBufWriter::new();
-        w.write_raw_bytes(&[1u8; 16]); // secret
-        w.write_i32(24454); // actual server port
-        // player_uuid: 16 bytes. Let the last 4 bytes be 0xBE590791 (-1101322351 in i32)
-        let player_uuid: u128 = 0x01020304_05060708_090A0B0C_BE590791;
-        w.write_uuid(player_uuid);
-        w.write_u8(0); // codec
-        w.write_i32(1024); // mtu_size
-        w.write_f64(48.0);
-        w.write_i32(1000);
-        w.write_bool(true);
-        w.write_string("play.soramc.id");
-        w.write_bool(false);
-
-        let bytes = w.into_bytes();
-        let decoded = SecretPacket::from_bytes(&bytes).expect("Should successfully recover v18 payload");
-        assert_eq!(decoded.server_port, 24454);
         assert_eq!(decoded.mtu_size, 1024);
-        assert_eq!(decoded.player_uuid, player_uuid);
-        assert_eq!(decoded.connection_id, player_uuid);
-        assert_eq!(decoded.voice_host, "play.soramc.id");
+        assert!((decoded.voice_chat_distance - 14.0).abs() < 1e-6);
+        assert_eq!(decoded.keep_alive, 1000);
+        assert_eq!(decoded.groups_enabled, true);
+        assert!(decoded.voice_host.contains(":8000"));
+        assert_eq!(decoded.voice_host, "edge.slimeskyes.id:8000");
+        assert_eq!(decoded.allow_recording, true);
     }
 
     #[test]
-    fn test_secret_packet_varint_prefix_16_and_18() {
-        // v20+ with VarInt prefix 16
-        let mut w_v20_16 = ByteBufWriter::new();
-        w_v20_16.write_varint(16);
-        w_v20_16.write_raw_bytes(&[77u8; 16]);
-        w_v20_16.write_uuid(0x1234);
-        w_v20_16.write_i32(24454);
-        w_v20_16.write_uuid(0x5678);
-        w_v20_16.write_u8(1);
-        w_v20_16.write_i32(1024);
-        w_v20_16.write_f64(32.0);
-        w_v20_16.write_i32(1000);
-        w_v20_16.write_bool(false);
-        w_v20_16.write_string("voice.prefix16.lan");
-        let decoded = SecretPacket::from_bytes(&w_v20_16.into_bytes()).expect("v20 with prefix 16 should decode");
-        assert_eq!(decoded.secret, [77u8; 16]);
-        assert_eq!(decoded.server_port, 24454);
+    fn test_parse_voice_host_cases() {
+        let def_host = "mc.example.com";
+        let def_port = 24454;
 
-        // v18 with VarInt prefix 16
-        let mut w_v18_16 = ByteBufWriter::new();
-        w_v18_16.write_varint(16);
-        w_v18_16.write_raw_bytes(&[88u8; 16]);
-        w_v18_16.write_i32(24454);
-        w_v18_16.write_uuid(0x9999);
-        w_v18_16.write_u8(1);
-        w_v18_16.write_i32(1024);
-        w_v18_16.write_f64(32.0);
-        w_v18_16.write_i32(1000);
-        w_v18_16.write_bool(false);
-        w_v18_16.write_string("voice.v18prefix.lan");
-        let decoded = SecretPacket::from_bytes(&w_v18_16.into_bytes()).expect("v18 with prefix 16 should decode");
-        assert_eq!(decoded.secret, [88u8; 16]);
-        assert_eq!(decoded.server_port, 24454);
-        assert_eq!(decoded.connection_id, 0x9999);
-
-        // v20 with VarInt prefix 18
-        let mut w_v20_18 = ByteBufWriter::new();
-        w_v20_18.write_varint(18);
-        let mut secret18 = [99u8; 18];
-        secret18[0] = 42;
-        w_v20_18.write_raw_bytes(&secret18);
-        w_v20_18.write_uuid(0x1111);
-        w_v20_18.write_i32(30000);
-        w_v20_18.write_uuid(0x2222);
-        w_v20_18.write_u8(0);
-        w_v20_18.write_i32(1024);
-        w_v20_18.write_f64(16.0);
-        w_v20_18.write_i32(1000);
-        w_v20_18.write_bool(true);
-        w_v20_18.write_string("voice.prefix18.lan");
-        let decoded = SecretPacket::from_bytes(&w_v20_18.into_bytes()).expect("v20 with prefix 18 should decode");
-        assert_eq!(decoded.secret[0], 42);
-        assert_eq!(decoded.server_port, 30000);
-    }
-
-    #[test]
-    fn test_secret_packet_invalid_rejections() {
-        // Empty data
-        assert!(SecretPacket::from_bytes(&[]).is_err());
-
-        // Too short data
-        assert!(SecretPacket::from_bytes(&[1u8; 20]).is_err());
-
-        // Invalid port: 0
-        let mut pkt = SecretPacket {
-            secret: [1u8; 16],
-            connection_id: 1,
-            server_port: 0,
-            player_uuid: 2,
-            codec: 0,
-            mtu_size: 1024,
-            voice_chat_distance: 16.0,
-            keep_alive: 1000,
-            groups_enabled: false,
-            voice_host: String::new(),
-            allow_recording: false,
-        };
-        assert!(SecretPacket::from_bytes(&pkt.to_bytes()).is_err());
-
-        // Invalid port: negative
-        pkt.server_port = -100;
-        assert!(SecretPacket::from_bytes(&pkt.to_bytes()).is_err());
-
-        // Invalid port: > 65535
-        pkt.server_port = 70000;
-        assert!(SecretPacket::from_bytes(&pkt.to_bytes()).is_err());
-
-        // Invalid MTU: < 128
-        pkt.server_port = 24454;
-        pkt.mtu_size = 50;
-        assert!(SecretPacket::from_bytes(&pkt.to_bytes()).is_err());
-
-        // Invalid codec: > 10
-        pkt.mtu_size = 1024;
-        pkt.codec = 99;
-        assert!(SecretPacket::from_bytes(&pkt.to_bytes()).is_err());
+        assert_eq!(
+            parse_voice_host("", def_host, def_port),
+            ("mc.example.com".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("   ", def_host, def_port),
+            ("mc.example.com".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("8000", def_host, def_port),
+            ("mc.example.com".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("edge.slimeskyes.id", def_host, def_port),
+            ("edge.slimeskyes.id".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("edge.slimeskyes.id:8000", def_host, def_port),
+            ("edge.slimeskyes.id".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host(":8000", def_host, def_port),
+            ("mc.example.com".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("[::1]:8000", def_host, def_port),
+            ("::1".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("[::1]", def_host, def_port),
+            ("::1".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("::1", def_host, def_port),
+            ("::1".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("2001:db8::1", def_host, def_port),
+            ("2001:db8::1".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("[2001:db8::1]:9000", def_host, def_port),
+            ("2001:db8::1".to_string(), 9000)
+        );
+        assert_eq!(
+            parse_voice_host("192.168.1.100:8080", def_host, def_port),
+            ("192.168.1.100".to_string(), 8080)
+        );
     }
 
     #[test]
