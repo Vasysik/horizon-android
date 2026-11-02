@@ -179,9 +179,14 @@ impl Game<'_> {
                 continue;
             }
             if name == "mouse.scroll.up" || name == "mouse.scroll.down" {
-                if down && let Some(p) = self.player.as_mut() {
-                    let delta = if name == "mouse.scroll.up" { 8 } else { 1 };
-                    p.selected_slot = (p.selected_slot + delta) % 9;
+                if down {
+                    let delta = if name == "mouse.scroll.up" { 8.0 } else { 1.0 };
+                    let next = horizon_client::mouse::ScrollWheelHandler::next_selection(
+                        delta,
+                        self.selected as i32,
+                        9,
+                    );
+                    self.selected = next as usize;
                 }
                 continue;
             }
