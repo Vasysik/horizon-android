@@ -427,13 +427,181 @@ impl Settings {
         let _ = copy.save_to(&active_file);
         Ok(target)
     }
+    pub const PRESETS: [(&'static str, &'static str, &'static str); 5] = [
+        (
+            "default",
+            "Pocket Edition (Default)",
+            "Classic Bedrock D-Pad & Jump/Sneak/Attack/Use HUD",
+        ),
+        (
+            "pojav",
+            "PojavLauncher Classic",
+            "Left PRI/SEC + Right Jump/Sneak/Swap with Pass-Through look",
+        ),
+        (
+            "pvp",
+            "PvP 4-Finger Claw",
+            "Top-corner Attack/Use index triggers + bottom thumb controls",
+        ),
+        (
+            "building",
+            "Builder Split Crosshair",
+            "Analog Joystick + Center Crosshair + dedicated Place/Break/Swap",
+        ),
+        (
+            "speedrun",
+            "Speedrun Pro",
+            "High-visibility HUD with F3, F5, Swap, Inventory & fast triggers",
+        ),
+    ];
+
+    pub fn apply_preset(&mut self, name: &str) {
+        let clean = Self::sanitize_profile_name(name);
+        let base_default = Self::default();
+        self.layouts = base_default.layouts;
+        self.button_visibility = [0; 14];
+        match clean.as_str() {
+            "default" | "pocket" => {
+                // Pocket Edition style: D-Pad movement on bottom-left, Jump/Sneak/Sprint/Attack/Use on right
+                self.mode = Mode::Dpad;
+                self.split_controls = false;
+                self.offhand_button = true;
+                self.sprint_button = true;
+                let idx = Mode::Dpad.index();
+                self.layouts[idx][Control::Move as usize] = Placement::new(0.14, 0.73, 0.33);
+                self.layouts[idx][Control::Jump as usize] = Placement::new(0.89, 0.74, 0.15);
+                self.layouts[idx][Control::Sneak as usize] = Placement::new(0.89, 0.54, 0.13);
+                self.layouts[idx][Control::Sprint as usize] = Placement::new(0.75, 0.82, 0.12);
+                self.layouts[idx][Control::Attack as usize] = Placement::new(0.75, 0.62, 0.145);
+                self.layouts[idx][Control::Use as usize] = Placement::new(0.89, 0.36, 0.145);
+                self.layouts[idx][Control::Inventory as usize] = Placement::new(0.68, 0.94, 0.08);
+                self.layouts[idx][Control::Offhand as usize] = Placement::new(0.78, 0.94, 0.08);
+                // Show Attack, Use, Sprint, Offhand in Pocket Edition preset so all buttons are ready
+                self.button_visibility[Control::Attack as usize] = 1;
+                self.button_visibility[Control::Use as usize] = 1;
+                self.button_visibility[Control::Sprint as usize] = 1;
+                self.button_visibility[Control::Offhand as usize] = 1;
+            }
+            "pojav" => {
+                // PojavLauncher style: PRI/SEC on left above movement, Jump/Sneak/Swap on right with Pass-Through
+                self.mode = Mode::Crosshair;
+                self.split_controls = true;
+                self.offhand_button = true;
+                self.shield_button = true;
+                self.sprint_toggle = true;
+                for m in 0..3 {
+                    self.layouts[m][Control::Move as usize] = Placement::new(0.15, 0.75, 0.32);
+                    let mut atk = Placement::new(0.11, 0.38, 0.14);
+                    atk.passthrough = true;
+                    self.layouts[m][Control::Attack as usize] = atk;
+                    let mut use_btn = Placement::new(0.24, 0.38, 0.14);
+                    use_btn.passthrough = true;
+                    self.layouts[m][Control::Use as usize] = use_btn;
+                    let mut jmp = Placement::new(0.89, 0.76, 0.155);
+                    jmp.passthrough = true;
+                    self.layouts[m][Control::Jump as usize] = jmp;
+                    let mut snk = Placement::new(0.76, 0.84, 0.125);
+                    snk.toggleable = true;
+                    self.layouts[m][Control::Sneak as usize] = snk;
+                    let mut spr = Placement::new(0.89, 0.56, 0.12);
+                    spr.toggleable = true;
+                    self.layouts[m][Control::Sprint as usize] = spr;
+                    self.layouts[m][Control::Offhand as usize] = Placement::new(0.76, 0.64, 0.11);
+                    self.layouts[m][Control::Inventory as usize] = Placement::new(0.64, 0.93, 0.085);
+                }
+                self.button_visibility[Control::Attack as usize] = 1;
+                self.button_visibility[Control::Use as usize] = 1;
+                self.button_visibility[Control::Offhand as usize] = 1;
+                self.button_visibility[Control::Debug as usize] = 1;
+                self.button_visibility[Control::Perspective as usize] = 1;
+            }
+            "pvp" => {
+                // 4-Finger Claw PvP layout: Top-left Attack, Top-right Use (Pass-Through), bottom thumb movement/jump
+                self.mode = Mode::Crosshair;
+                self.split_controls = true;
+                self.offhand_button = true;
+                self.shield_button = true;
+                self.sprint_toggle = true;
+                for m in 0..3 {
+                    self.layouts[m][Control::Move as usize] = Placement::new(0.15, 0.75, 0.33);
+                    let mut atk = Placement::new(0.13, 0.22, 0.165);
+                    atk.passthrough = true;
+                    self.layouts[m][Control::Attack as usize] = atk;
+                    let mut use_btn = Placement::new(0.87, 0.22, 0.165);
+                    use_btn.passthrough = true;
+                    self.layouts[m][Control::Use as usize] = use_btn;
+                    let mut jmp = Placement::new(0.89, 0.76, 0.16);
+                    jmp.passthrough = true;
+                    self.layouts[m][Control::Jump as usize] = jmp;
+                    let mut spr = Placement::new(0.75, 0.82, 0.12);
+                    spr.toggleable = true;
+                    self.layouts[m][Control::Sprint as usize] = spr;
+                    self.layouts[m][Control::Sneak as usize] = Placement::new(0.75, 0.62, 0.125);
+                    self.layouts[m][Control::Offhand as usize] = Placement::new(0.89, 0.54, 0.115);
+                    self.layouts[m][Control::Shield as usize] = Placement::new(0.63, 0.74, 0.115);
+                }
+                self.button_visibility[Control::Attack as usize] = 1;
+                self.button_visibility[Control::Use as usize] = 1;
+                self.button_visibility[Control::Offhand as usize] = 1;
+                self.button_visibility[Control::Shield as usize] = 1;
+            }
+            "building" | "split" => {
+                // Builder Split Crosshair: Joystick + Center Crosshair + side-by-side Break & Place
+                self.mode = Mode::Crosshair;
+                self.split_controls = true;
+                self.offhand_button = true;
+                for m in 0..3 {
+                    self.layouts[m][Control::Move as usize] = Placement::new(0.14, 0.75, 0.32);
+                    let mut atk = Placement::new(0.77, 0.58, 0.15);
+                    atk.passthrough = true;
+                    self.layouts[m][Control::Attack as usize] = atk;
+                    let mut use_btn = Placement::new(0.90, 0.58, 0.15);
+                    use_btn.passthrough = true;
+                    self.layouts[m][Control::Use as usize] = use_btn;
+                    self.layouts[m][Control::Jump as usize] = Placement::new(0.90, 0.79, 0.15);
+                    let mut snk = Placement::new(0.77, 0.79, 0.13);
+                    snk.toggleable = true;
+                    self.layouts[m][Control::Sneak as usize] = snk;
+                    self.layouts[m][Control::Sprint as usize] = Placement::new(0.65, 0.79, 0.115);
+                    self.layouts[m][Control::Offhand as usize] = Placement::new(0.65, 0.58, 0.11);
+                }
+                self.button_visibility[Control::Attack as usize] = 1;
+                self.button_visibility[Control::Use as usize] = 1;
+                self.button_visibility[Control::Offhand as usize] = 1;
+            }
+            "speedrun" => {
+                self.mode = Mode::Crosshair;
+                self.split_controls = true;
+                self.offhand_button = true;
+                self.sprint_toggle = true;
+                for m in 0..3 {
+                    self.layouts[m][Control::Debug as usize] = Placement::new(0.38, 0.065, 0.085);
+                    self.layouts[m][Control::Perspective as usize] = Placement::new(0.62, 0.065, 0.085);
+                    self.layouts[m][Control::Offhand as usize] = Placement::new(0.77, 0.48, 0.12);
+                    self.layouts[m][Control::Inventory as usize] = Placement::new(0.89, 0.38, 0.11);
+                }
+                self.button_visibility[Control::Attack as usize] = 1;
+                self.button_visibility[Control::Use as usize] = 1;
+                self.button_visibility[Control::Offhand as usize] = 1;
+                self.button_visibility[Control::Debug as usize] = 1;
+                self.button_visibility[Control::Perspective as usize] = 1;
+            }
+            _ => {}
+        }
+        self.active_profile = clean;
+        self.sanitize();
+    }
+
     pub fn load_profile(game_home: &std::path::Path, name: &str) -> Self {
         let clean = Self::sanitize_profile_name(name);
         let candidate = game_home.join("controlmap").join(format!("{clean}.json"));
         let mut loaded = if candidate.is_file() {
             Self::load_from(&candidate)
         } else {
-            Self::load_from(&game_home.join("horizon-touch.json"))
+            let mut s = Self::load_from(&game_home.join("horizon-touch.json"));
+            s.apply_preset(&clean);
+            let _ = s.save_profile(game_home, &clean);
+            s
         };
         loaded.active_profile = clean;
         let _ = loaded.save_to(&game_home.join("horizon-touch.json"));

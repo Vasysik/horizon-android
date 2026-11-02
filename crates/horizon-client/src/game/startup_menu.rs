@@ -1161,8 +1161,12 @@ impl Loading {
                 self.menu.controls.viewport(size[0], size[1]);
                 if t.phase == TouchPhase::Cancelled {
                     self.menu.controls.cancel_editor();
-                } else {
-                    self.menu.controls.edit_touch(
+                } else if let Some(gui) = self.gui.as_ref() {
+                    let mut b = HudBatch::new(size);
+                    horizon_client::touch_ui::touch_hud_editor(
+                        &mut self.menu.controls,
+                        &mut b,
+                        &gui.atlas,
                         t.id,
                         [
                             t.location.x as f32 / size[0].max(1) as f32,
@@ -1630,7 +1634,14 @@ impl Loading {
         }
         #[cfg(target_os = "android")]
         if self.menu.controls.editor.is_some() {
-            self.menu.controls.draw(batch, &gui.atlas);
+            let profile_name = self.menu.controls.settings.profile.clone();
+            horizon_client::touch_ui::draw_hud_editor(
+                &self.menu.controls,
+                batch,
+                &gui.atlas,
+                &profile_name,
+                None,
+            );
             return;
         }
         if self.menu.pending.is_some() {

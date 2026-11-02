@@ -306,8 +306,97 @@ impl Game<'_> {
         } else {
             return Ok(false);
         };
-        let b = HudBatch::new([size.width, size.height]);
+        let mut b = HudBatch::new([size.width, size.height]);
         let p = [t.location.x as f32 / b.scale, t.location.y as f32 / b.scale];
+        if t.phase == TouchPhase::Started
+            && !self.pad.touch_ui.owns_relative(t.id)
+            && !self.pad.touch_ui.owns_gesture(t.id)
+            && let Some(menu_act) = self.pad.touch_ui.floating_menu_touch(
+                &mut b,
+                &self.gui.atlas,
+                p,
+                &self.pad.touch.settings,
+            )
+        {
+            use horizon_client::touch_ui::InGameMenuAction;
+            self.pad.touch.clear();
+            self.pad.touch.ignore(t.id);
+            self.audio.play_button_click();
+            match menu_act {
+                InGameMenuAction::Close => {}
+                InGameMenuAction::OpenControlEditor => {
+                    self.pad.touch.open_editor();
+                }
+                InGameMenuAction::ApplyPreset(name) => {
+                    self.pad.touch.settings.apply_preset(name);
+                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::CycleMovementMode => {
+                    use horizon_client::touch::MovementMode;
+                    self.pad.touch.settings.movement_mode = match self.pad.touch.settings.movement_mode {
+                        MovementMode::Dpad => MovementMode::Thumbstick,
+                        MovementMode::Thumbstick => MovementMode::FloatingThumbstick,
+                        MovementMode::FloatingThumbstick => MovementMode::Dpad,
+                    };
+                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::ToggleSplitTouch => {
+                    use horizon_client::touch::InteractionMode;
+                    self.pad.touch.settings.interaction_mode = match self.pad.touch.settings.interaction_mode {
+                        InteractionMode::Gesture => InteractionMode::SplitTouch,
+                        InteractionMode::SplitTouch => InteractionMode::Gesture,
+                    };
+                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::ToggleLeftHanded => {
+                    self.pad.touch.settings.left_handed = !self.pad.touch.settings.left_handed;
+                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::ToggleGyro => {
+                    self.pad.touch.settings.gyro_enabled = !self.pad.touch.settings.gyro_enabled;
+                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::ToggleVirtualMouse => {
+                    self.pad.touch_ui.virtual_mouse ^= true;
+                }
+                InGameMenuAction::StepTouchSensitivity(dir) => {
+                    self.pad.touch.settings.sensitivity =
+                        (self.pad.touch.settings.sensitivity + dir as f32 * 0.10).clamp(0.2, 2.5);
+                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::StepButtonScale(dir) => {
+                    self.pad.touch.settings.button_scale =
+                        (self.pad.touch.settings.button_scale + dir as f32 * 0.10).clamp(0.5, 2.0);
+                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::StepButtonOpacity(dir) => {
+                    self.pad.touch.settings.opacity =
+                        (self.pad.touch.settings.opacity + dir as f32 * 0.10).clamp(0.2, 1.0);
+                    self.pad.touch.settings.save(&self.pad.touch.path);
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::TriggerKey(key) => {
+                    if !self.debug_key(key, KeyAction::Press) {
+                        self.key_pressed(key)?;
+                    }
+                    self.debug_key(key, KeyAction::Release);
+                    if matches!(key, KeyCode::KeyT | KeyCode::Slash) && self.screen == Screen::Chat {
+                        self.android_show_keyboard();
+                    }
+                }
+                InGameMenuAction::OpenKeyboard => {
+                    self.android_show_keyboard();
+                }
+            }
+            return Ok(true);
+        }
         if t.phase == TouchPhase::Started
             && !self.pad.touch_ui.owns_relative(t.id)
             && !self.pad.touch_ui.owns_gesture(t.id)

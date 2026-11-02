@@ -14908,9 +14908,17 @@ impl Game<'_> {
                 self.settings.keypad.enabled && self.pad.touch.editor.is_none();
         }
         #[cfg(target_os = "android")]
-        if self.pad.touch.editor.is_some()
-            || ((crate::touch_visible() || self.settings.keypad.enabled)
-                && (!self.pad_in_menu() || self.android_inventory_controls()))
+        if self.pad.touch.editor.is_some() {
+            let profile_name = self.pad.touch.settings.profile.clone();
+            horizon_client::touch_ui::draw_hud_editor(
+                &self.pad.touch,
+                &mut hud,
+                &self.gui.atlas,
+                &profile_name,
+                None,
+            );
+        } else if (crate::touch_visible() || self.settings.keypad.enabled)
+            && (!self.pad_in_menu() || self.android_inventory_controls())
         {
             self.pad.touch.context_use =
                 self.pad.touch.settings.contextual_interact && self.touch_context_use();
@@ -14930,6 +14938,11 @@ impl Game<'_> {
                 self.pad
                     .touch_ui
                     .draw(&mut hud, &self.gui.atlas, self.pad_in_menu());
+                self.pad.touch_ui.draw_floating_menu(
+                    &mut hud,
+                    &self.gui.atlas,
+                    &self.pad.touch.settings,
+                );
             }
         }
         self.flush_ime(&mut hud);
@@ -16229,16 +16242,22 @@ impl Game<'_> {
                 if touch.phase == TouchPhase::Cancelled {
                     self.pad.touch.cancel_editor();
                     self.pause = false;
-                } else if self.pad.touch.edit_touch(
-                    touch.id,
-                    [
-                        touch.location.x as f32 / size.width.max(1) as f32,
-                        touch.location.y as f32 / size.height.max(1) as f32,
-                    ],
-                    touch.phase == TouchPhase::Started,
-                    touch.phase == TouchPhase::Ended,
-                ) {
-                    self.pause = false;
+                } else {
+                    let mut b = HudBatch::new([size.width, size.height]);
+                    if horizon_client::touch_ui::touch_hud_editor(
+                        &mut self.pad.touch,
+                        &mut b,
+                        &self.gui.atlas,
+                        touch.id,
+                        [
+                            touch.location.x as f32 / size.width.max(1) as f32,
+                            touch.location.y as f32 / size.height.max(1) as f32,
+                        ],
+                        touch.phase == TouchPhase::Started,
+                        touch.phase == TouchPhase::Ended,
+                    ) {
+                        self.pause = false;
+                    }
                 }
                 if self.pad.touch.editor.is_none() {
                     self.settings.touch = self.pad.touch.settings.clone();

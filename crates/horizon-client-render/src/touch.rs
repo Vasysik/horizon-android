@@ -209,7 +209,7 @@ impl TouchControls {
             self.loaded = true;
         }
     }
-    fn aspect(&self) -> f32 {
+    pub fn aspect(&self) -> f32 {
         if self.aspect > 0.0 {
             self.aspect
         } else {
@@ -264,7 +264,7 @@ impl TouchControls {
     pub fn tap(&mut self, button: Button) {
         self.pending.set(button, true);
     }
-    fn visible(&self, c: Control) -> bool {
+    pub fn visible(&self, c: Control) -> bool {
         if c == Control::Shield && !self.shield_available && self.editor.is_none() {
             return false;
         }
@@ -288,7 +288,7 @@ impl TouchControls {
                         .values()
                         .any(|(r, _)| matches!(r, Role::Button(Button::LeftTrigger)))))
     }
-    fn placement(&self, c: Control) -> layout::Placement {
+    pub fn placement(&self, c: Control) -> layout::Placement {
         let mut p = self.settings.placement(c);
         let factory_swap = c == Control::Offhand
             && self.settings.layouts[self.settings.mode.index()][c as usize].center == [0.80, 0.96]
@@ -1096,6 +1096,33 @@ fn fitted_sprite(b: &mut HudBatch, a: &HudAtlas, name: &str, [x, y, w, h]: [f32;
             rect,
             color,
         );
+    } else {
+        // Procedural Pocket Edition style fallback when bedrock textures are not yet loaded.
+        let alpha = (color >> 24) as u8;
+        let bg = rgba(28, 25, 42, (u16::from(alpha) * 190 / 255) as u8);
+        let border = rgba(154, 123, 255, (u16::from(alpha) * 215 / 255) as u8);
+        let fg = rgba(244, 240, 252, alpha);
+        b.fill(a, x + 1.0, y + 1.0, (w - 2.0).max(1.0), (h - 2.0).max(1.0), bg);
+        b.fill(a, x, y, w, 1.5, border);
+        b.fill(a, x, y + h - 1.5, w, 1.5, border);
+        b.fill(a, x, y, 1.5, h, border);
+        b.fill(a, x + w - 1.5, y, 1.5, h, border);
+        // Simple geometric glyph inside the procedural button
+        let cx = x + w * 0.5;
+        let cy = y + h * 0.5;
+        let s = w.min(h) * 0.22;
+        if name.contains("up") || name.contains("jump") || name.contains("ascend") {
+            b.fill(a, cx - s * 0.3, cy - s, s * 0.6, s * 1.8, fg);
+            b.fill(a, cx - s, cy - s * 0.3, s * 2.0, s * 0.5, fg);
+        } else if name.contains("down") || name.contains("sneak") || name.contains("descend") {
+            b.fill(a, cx - s * 0.7, cy - s * 0.4, s * 1.4, s * 0.8, fg);
+        } else if name.contains("left") {
+            b.fill(a, cx - s, cy - s * 0.3, s * 1.8, s * 0.6, fg);
+        } else if name.contains("right") {
+            b.fill(a, cx - s * 0.8, cy - s * 0.3, s * 1.8, s * 0.6, fg);
+        } else {
+            b.fill(a, cx - s * 0.5, cy - s * 0.5, s, s, fg);
+        }
     }
 }
 fn region(

@@ -246,7 +246,9 @@ pub(super) fn button(
         if accent { MY3_ON_ACCENT } else { MY3_TEXT },
         &fitted,
     );
-    targets.push((rect, action));
+    if let Some(c) = ui.clip_rect(rect) {
+        targets.push((c, action));
+    }
 }
 
 fn toggle(
@@ -283,7 +285,9 @@ fn toggle(
         10.0,
         if on { MY3_ON_ACCENT } else { MY3_MUTED },
     );
-    targets.push(([x, y, w, h], action));
+    if let Some(c) = ui.clip_rect([x, y, w, h]) {
+        targets.push((c, action));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -650,40 +654,18 @@ impl Launcher {
         self.list_targets.clear();
         self.list_view = None;
 
-        // If the Fullscreen HUD Control Editor is open, render it over a dark blueprint grid
-        // with a quick "Done / Save Layout" floating pill.
+        // Fullscreen Material You 3 + Pocket Edition HUD Control Editor
         if let Some(tc) = &mut self.control_editor {
             let mut b = HudBatch::new([r.config.width, r.config.height]);
-            {
-                let mut ui = Ui::mobile(&gui.atlas, &mut b, (0.0, 0.0));
-                let (w, h) = (ui.w, ui.h);
-                let scale = ui.density / ui.batch.scale;
-                ui.batch
-                    .fill(&gui.atlas, 0.0, 0.0, w * scale, h * scale, color::hex(0x10111A, 255));
-                // Subtle alignment grid lines in dp space
-                let step = 32.0;
-                let mut gx = step;
-                while gx < w {
-                    ui.rounded(gx, 0.0, 1.0, h, 0.0, color::hex(0x1E2030, 180));
-                    gx += step;
-                }
-                let mut gy = step;
-                while gy < h {
-                    ui.rounded(0.0, gy, w, 1.0, 0.0, color::hex(0x1E2030, 180));
-                    gy += step;
-                }
-                button(
-                    &mut ui,
-                    &mut self.targets,
-                    [14.0, 12.0, 148.0, 34.0],
-                    "← Save & Exit",
-                    Action::CloseControlEditor,
-                    true,
-                );
-                ui.finish();
-            }
             tc.viewport(r.config.width, r.config.height);
-            tc.draw(&mut b, &gui.atlas);
+            let profile_name = tc.settings.active_profile.clone();
+            horizon_client::touch_ui::draw_hud_editor(
+                tc,
+                &mut b,
+                &gui.atlas,
+                &profile_name,
+                None,
+            );
             if !r.render(&game::loading_frame(&b))? && !b.patches.is_empty() {
                 horizon_client::ui_theme::reset_atlas();
             }
@@ -724,7 +706,33 @@ impl Launcher {
         let pill_y = 11.0;
         let pill_h = 36.0;
 
-        let max_title_w = (pill_x - 76.0).max(80.0);
+        let eq_btn_rect = [pill_x - 44.0, pill_y, 36.0, pill_h];
+        ui.rounded(
+            eq_btn_rect[0],
+            eq_btn_rect[1],
+            eq_btn_rect[2],
+            eq_btn_rect[3],
+            pill_h * 0.5,
+            color::hex(0x1C1929, 255),
+        );
+        ui.border(
+            eq_btn_rect[0],
+            eq_btn_rect[1],
+            eq_btn_rect[2],
+            eq_btn_rect[3],
+            pill_h * 0.5,
+            color::hex(0x312C45, 255),
+        );
+        ui.icon(
+            Icon::MenuEquals,
+            eq_btn_rect[0] + 9.0,
+            eq_btn_rect[1] + 9.0,
+            18.0,
+            MY3_ACCENT,
+        );
+        self.targets.push((eq_btn_rect, Action::OpenControlEditor));
+
+        let max_title_w = (eq_btn_rect[0] - 76.0).max(80.0);
         let fitted_header = ui.fit_text(Face::SemiBold, 15.5, &header_title, max_title_w);
         ui.text(Face::SemiBold, 15.5, 67.0, 17.0, MY3_TEXT, &fitted_header);
 
@@ -1209,6 +1217,7 @@ impl Launcher {
             ]);
 
             let fallback_icon = page_icon(page);
+            ui.set_clip(Some([content_x - 2.0, top, content_w + 4.0, (bottom - top).max(1.0)]));
 
             for (row, (id, title, description)) in bundled.iter().enumerate() {
                 let y = top + row as f32 * row_h - self.catalog.scroll;
@@ -1217,7 +1226,7 @@ impl Launcher {
                 let btn_rect = [content_x + content_w - 112.0, y + 13.0, 100.0, 38.0];
                 self.list_targets.push((card_rect, Action::OpenBundledProject(id)));
                 self.list_targets.push((btn_rect, Action::ToggleBundled(id)));
-                if y < top - 4.0 || y + 64.0 > bottom {
+                if y + 64.0 < top || y > bottom {
                     continue;
                 }
                 ui.rounded(content_x, y, content_w, 64.0, 14.0, MY3_CARD_BG);
@@ -1289,7 +1298,7 @@ impl Launcher {
                     MY3_ACCENT,
                     "Horizon Built-in • Tap for versions, Modrinth info & screenshots",
                 );
-                self.targets.push((card_rect, Action::OpenBundledProject(id)));
+                if let Some(c) = ui.clip_rect(card_rect) { self.targets.push((c, Action::OpenBundledProject(id))); }
                 button(
                     &mut ui,
                     &mut self.targets,
@@ -1309,7 +1318,7 @@ impl Launcher {
                 if download.is_none() {
                     self.list_targets.push((btn_rect, Action::Install(i)));
                 }
-                if y < top - 4.0 || y + 64.0 > bottom {
+                if y + 64.0 < top || y > bottom {
                     continue;
                 }
                 ui.rounded(content_x, y, content_w, 64.0, 14.0, MY3_CARD_BG);
@@ -1394,7 +1403,7 @@ impl Launcher {
                     MY3_ACCENT,
                     &fitted_meta,
                 );
-                self.targets.push((card_rect, Action::OpenProject(i)));
+                if let Some(c) = ui.clip_rect(card_rect) { self.targets.push((c, Action::OpenProject(i))); }
 
                 if let Some(state) = download {
                     ui.rounded(
@@ -1420,7 +1429,7 @@ impl Launcher {
                         MY3_TEXT,
                         &state,
                     );
-                    self.targets.push((btn_rect, Action::OpenProject(i)));
+                    if let Some(c) = ui.clip_rect(btn_rect) { self.targets.push((c, Action::OpenProject(i))); }
                 } else {
                     button(
                         &mut ui,
@@ -1433,6 +1442,7 @@ impl Launcher {
                 }
             }
 
+            ui.set_clip(None);
             let pager_y = h - 42.0;
             button(
                 &mut ui,
@@ -1478,6 +1488,7 @@ impl Launcher {
             let maximum = (total - (bottom - top)).max(0.0);
             self.catalog.scroll = self.catalog.scroll.clamp(0.0, maximum);
             self.list_view = Some([top, bottom, maximum]);
+            ui.set_clip(Some([content_x - 2.0, top, content_w + 4.0, (bottom - top).max(1.0)]));
             let mut offset = 0.0;
             for (section, kind) in Kind::ALL.into_iter().enumerate() {
                 let count = self.catalog.local.iter().filter(|e| e.kind == kind).count();
@@ -1498,7 +1509,7 @@ impl Launcher {
                     [content_x + sec_w + 8.0, y, 110.0, 36.0],
                     Action::Import(kind),
                 ));
-                if y >= top - 4.0 && y + 36.0 <= bottom {
+                if y + 36.0 >= top && y <= bottom {
                     button(
                         &mut ui,
                         &mut self.targets,
@@ -1543,7 +1554,7 @@ impl Launcher {
                         [remove_x, y, 94.0, row_height - 6.0],
                         Action::DeleteLocal(i),
                     ));
-                    if y < top - 4.0 || y + row_height - 4.0 > bottom {
+                    if y + row_height < top || y > bottom {
                         continue;
                     }
                     ui.rounded(content_x, y, content_w, row_height - 6.0, 14.0, MY3_CARD_BG);
@@ -1594,6 +1605,7 @@ impl Launcher {
                     );
                 }
             }
+            ui.set_clip(None);
         } else {
             self.draw_settings_page(&mut ui, content_x, content_w, h, compact, slide_y);
         }
@@ -1914,15 +1926,16 @@ impl Launcher {
         modal.scroll = modal.scroll.clamp(0.0, max_scroll);
         self.list_view = Some([body_top, body_bottom, max_scroll]);
 
+        ui.set_clip(Some([mx + 4.0, body_top, mw - 8.0, (body_bottom - body_top).max(1.0)]));
         let mut cy = body_top - modal.scroll;
 
         // Section 1: About / Description
-        if cy >= body_top - 16.0 && cy + 20.0 <= body_bottom {
+        if cy + 20.0 >= body_top && cy <= body_bottom {
             ui.text(Face::SemiBold, 14.0, inner_x, cy, MY3_ACCENT, "About Project");
         }
         cy += 22.0;
         for line in &desc_lines {
-            if cy >= body_top - 6.0 && cy + 18.0 <= body_bottom {
+            if cy + 18.0 >= body_top && cy <= body_bottom {
                 ui.text(Face::Regular, 13.0, inner_x, cy, MY3_TEXT, line);
             }
             cy += 18.5;
@@ -1931,7 +1944,7 @@ impl Launcher {
 
         // Section 2: Screenshots (from Modrinth gallery)
         if !modal.screenshots.is_empty() {
-            if cy >= body_top - 16.0 && cy + 20.0 <= body_bottom {
+            if cy + 20.0 >= body_top && cy <= body_bottom {
                 ui.text(
                     Face::SemiBold,
                     14.0,
@@ -1946,7 +1959,7 @@ impl Launcher {
             let gap = 10.0;
             let card_w = ((inner_w - gap * (count - 1.0)) / count).clamp(110.0, 200.0);
             let card_h = 84.0;
-            if cy >= body_top - 12.0 && cy + card_h <= body_bottom + 12.0 {
+            if cy + card_h >= body_top && cy <= body_bottom {
                 for (idx, (caption, sw, sh, rgba)) in modal.screenshots.iter().take(3).enumerate() {
                     let sx = inner_x + idx as f32 * (card_w + gap);
                     ui.rounded(sx, cy, card_w, card_h, 12.0, MY3_CARD_BG);
@@ -1961,7 +1974,7 @@ impl Launcher {
         }
 
         // Section 3: Selectable Versions to Download
-        if cy >= body_top - 16.0 && cy + 20.0 <= body_bottom {
+        if cy + 20.0 >= body_top && cy <= body_bottom {
             ui.text(
                 Face::SemiBold,
                 14.0,
@@ -1976,7 +1989,7 @@ impl Launcher {
             let selected = modal.selected_version == v_idx;
             let row_rect = [inner_x, cy, inner_w, 34.0];
             self.list_targets.push((row_rect, Action::SelectModalVersion(v_idx)));
-            if cy >= body_top - 6.0 && cy + 34.0 <= body_bottom + 4.0 {
+            if cy + 34.0 >= body_top && cy <= body_bottom {
                 ui.rounded(
                     inner_x,
                     cy,
@@ -2013,11 +2026,12 @@ impl Launcher {
                     if selected { MY3_TEXT } else { MY3_MUTED },
                     &fitted_v,
                 );
-                self.targets.push((row_rect, Action::SelectModalVersion(v_idx)));
+                if let Some(c) = ui.clip_rect(row_rect) { self.targets.push((c, Action::SelectModalVersion(v_idx))); }
             }
             cy += 38.0;
         }
 
+        ui.set_clip(None);
         // Modal Bottom Action Bar
         ui.rounded(mx + 16.0, my + mh - 56.0, mw - 32.0, 1.0, 0.0, MY3_BORDER);
 
@@ -2197,88 +2211,70 @@ impl Launcher {
 
         match cat {
             SettingsCategory::Video => {
-                let count = 10;
+                let c = &self.catalog.config;
+                let count = 8;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
-                let rd_str = format!("{} chunks", opts.render_distance);
-                let sd_str = format!("{} chunks", opts.simulation_distance);
-                let fov_str = format!("{:.0}°", opts.fov);
-                let fps_str = if opts.max_fps >= 260 {
-                    "Unlimited v".to_owned()
-                } else {
-                    format!("{} FPS v", opts.max_fps)
-                };
-                let preset_str = format!("{} v", capitalize(&opts.graphics_preset));
+                let renderer_str = format!("{} v", c.renderer.label());
                 let res_str = if self.catalog.editing == Some("render_scale") {
                     self.catalog.render_scale_text.clone()
                 } else {
-                    format!("{}% v", self.catalog.config.render_scale.percent())
+                    format!("{}% v", c.render_scale.percent())
                 };
-                let hz_str = format!("{} v", self.catalog.config.device.display_label());
-                let clouds_str = match opts.clouds.as_str() {
-                    "false" => "Off v",
-                    "fast" => "Fast v",
-                    _ => "Fancy v",
-                };
+                let hz_str = format!("{} v", c.device.display_label());
+                let aspect_str = format!("{} v", c.screen.aspect.label());
+                let orient_str = format!("{} v", c.orientation.label());
+                let ui_scale_str = format!("{} v", c.ui_scale_label());
 
-                let rows: [(&str, &str, SettingControl<'_>); 10] = [
+                let rows: [(&str, &str, SettingControl<'_>); 8] = [
                     (
-                        "Render distance",
-                        "Visible terrain chunk radius around the player",
-                        SettingControl::Stepper(&rd_str, Action::RenderDistDelta(-2), Action::RenderDistDelta(2)),
-                    ),
-                    (
-                        "Simulation distance",
-                        "Active entity and block-tick chunk radius",
-                        SettingControl::Stepper(&sd_str, Action::SimDistDelta(-1), Action::SimDistDelta(1)),
-                    ),
-                    (
-                        "Field of view (FOV)",
-                        "Camera view angle in degrees (30° to 110°)",
-                        SettingControl::Stepper(&fov_str, Action::FovDelta(-5.0), Action::FovDelta(5.0)),
+                        "Rendering backend (Vulkan / GLES)",
+                        "Hardware GPU driver pipeline used when launching Minecraft",
+                        SettingControl::Button(&renderer_str, Action::Renderer, true),
                     ),
                     (
                         "Client resolution scale",
-                        "3D framebuffer resolution percentage",
+                        "3D framebuffer resolution percentage (lower boosts FPS on high-DPI phones)",
                         SettingControl::Button(&res_str, Action::RenderScale, false),
                     ),
                     (
-                        "Max framerate cap",
-                        "Frame limiter ceiling (30 / 60 / 90 / 120 / Unlimited)",
-                        SettingControl::Button(&fps_str, Action::CycleMaxFps, false),
-                    ),
-                    (
                         "Display refresh rate",
-                        "Preferred Android screen refresh rate (Hz)",
+                        "Preferred Android screen refresh rate (60Hz / 90Hz / 120Hz)",
                         SettingControl::Button(&hz_str, Action::DisplayHz, false),
                     ),
                     (
-                        "Graphics quality preset",
-                        "Balances shader detail, leaves and weather fidelity",
-                        SettingControl::Button(&preset_str, Action::CycleGraphicsPreset, false),
+                        "Display aspect ratio",
+                        "Native fullscreen, 16:9 widescreen, 4:3 classic or square",
+                        SettingControl::Button(&aspect_str, Action::Aspect, false),
                     ),
                     (
-                        "VSync",
-                        "Synchronize frame presentation with display refresh",
-                        SettingControl::Toggle(opts.vsync, Action::ToggleVsync),
+                        "Screen orientation",
+                        "Sensor landscape, locked landscape or portrait layout",
+                        SettingControl::Button(&orient_str, Action::Orientation, false),
                     ),
                     (
-                        "Smooth lighting & ambient occlusion",
-                        "Soft per-block lighting transitions",
-                        SettingControl::Toggle(opts.smooth_lighting, Action::ToggleSmoothLighting),
+                        "Immersive fullscreen",
+                        "Hide Android status and navigation bars during play",
+                        SettingControl::Toggle(c.screen.immersive, Action::Immersive),
                     ),
                     (
-                        "Clouds & menu blur",
-                        "Tap to cycle cloud rendering mode (Off / Fast / Fancy)",
-                        SettingControl::Button(clouds_str, Action::CycleClouds, false),
+                        "Avoid camera cutout / notch",
+                        "Inset HUD away from punch-hole cameras and curved display edges",
+                        SettingControl::Toggle(c.screen.avoid_cutout, Action::Cutout),
+                    ),
+                    (
+                        "Launcher UI scale (Phone DPI)",
+                        "Adapts launcher cards, text and buttons to your screen DPI",
+                        SettingControl::Button(&ui_scale_str, Action::UiScale, false),
                     ),
                 ];
 
+                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
-                    if y < list_top - 8.0 || y + card_h > list_bottom + 8.0 {
+                    if y + card_h < list_top || y > list_bottom {
                         continue;
                     }
                     draw_setting_card(
@@ -2294,6 +2290,7 @@ impl Launcher {
                         ctrl,
                     );
                 }
+                ui.set_clip(None);
             }
             SettingsCategory::Launcher => {
                 let c = &self.catalog.config;
@@ -2387,9 +2384,10 @@ impl Launcher {
                     ),
                 ];
 
+                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
-                    if y < list_top - 8.0 || y + card_h > list_bottom + 8.0 {
+                    if y + card_h < list_top || y > list_bottom {
                         continue;
                     }
                     draw_setting_card(
@@ -2405,6 +2403,7 @@ impl Launcher {
                         ctrl,
                     );
                 }
+                ui.set_clip(None);
             }
             SettingsCategory::Controls => {
                 let count = 13;
@@ -2487,9 +2486,10 @@ impl Launcher {
                     ),
                 ];
 
+                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
-                    if y < list_top - 8.0 || y + card_h > list_bottom + 8.0 {
+                    if y + card_h < list_top || y > list_bottom {
                         continue;
                     }
                     draw_setting_card(
@@ -2505,6 +2505,7 @@ impl Launcher {
                         ctrl,
                     );
                 }
+                ui.set_clip(None);
             }
             SettingsCategory::Experimental => {
                 let c = &self.catalog.config;
@@ -2551,9 +2552,10 @@ impl Launcher {
                     ),
                 ];
 
+                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
-                    if y < list_top - 8.0 || y + card_h > list_bottom + 8.0 {
+                    if y + card_h < list_top || y > list_bottom {
                         continue;
                     }
                     draw_setting_card(
@@ -2569,6 +2571,7 @@ impl Launcher {
                         ctrl,
                     );
                 }
+                ui.set_clip(None);
             }
             SettingsCategory::Diagnostics => {
                 let c = &self.catalog.config;
@@ -2605,9 +2608,10 @@ impl Launcher {
                     ),
                 ];
 
+                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
-                    if y < list_top - 8.0 || y + card_h > list_bottom + 8.0 {
+                    if y + card_h < list_top || y > list_bottom {
                         continue;
                     }
                     draw_setting_card(
@@ -2623,6 +2627,7 @@ impl Launcher {
                         ctrl,
                     );
                 }
+                ui.set_clip(None);
             }
             // Not reachable from the category grid yet.
             SettingsCategory::Overview | SettingsCategory::Account => {}
@@ -2899,9 +2904,8 @@ impl Launcher {
             Some(Action::OpenControlEditor) => {
                 let game_home = self.catalog.config.game_home(&self.home);
                 let mut tc = horizon_client::touch::TouchControls::default();
-                tc.settings = horizon_client::touch::Settings::load_from(
-                    &game_home.join("horizon-touch.json"),
-                );
+                tc.path = game_home.join("horizon-touch.json");
+                tc.settings = horizon_client::touch::Settings::load_from(&tc.path);
                 tc.open_editor();
                 self.control_editor = Some(tc);
             }
@@ -2923,16 +2927,26 @@ impl Launcher {
             }
             Some(Action::ChooseControlProfile(idx)) => {
                 let game_home = self.catalog.config.game_home(&self.home);
-                let mut profiles = horizon_client::touch::Settings::list_profiles(&game_home);
-                for preset in ["default", "pvp", "building", "speedrun"] {
-                    if !profiles.iter().any(|p| p == preset) {
-                        profiles.push(preset.to_owned());
+                let mut profiles = Vec::new();
+                for (id, _, _) in horizon_client::touch::Settings::PRESETS {
+                    profiles.push((*id).to_owned());
+                }
+                for saved in horizon_client::touch::Settings::list_profiles(&game_home) {
+                    if !profiles.iter().any(|p| p.eq_ignore_ascii_case(&saved)) {
+                        profiles.push(saved);
                     }
                 }
                 if let Some(name) = profiles.get(idx as usize) {
-                    let loaded = horizon_client::touch::Settings::load_profile(&game_home, name);
-                    self.catalog.status = format!("Loaded HUD control layout profile '{name}'.");
-                    drop(loaded);
+                    let mut loaded = horizon_client::touch::Settings::load_profile(&game_home, name);
+                    if horizon_client::touch::Settings::PRESETS
+                        .iter()
+                        .any(|(id, _, _)| id.eq_ignore_ascii_case(name))
+                    {
+                        loaded.apply_preset(name);
+                        let _ = loaded.save_profile(&game_home, name);
+                        let _ = loaded.save_to(&game_home.join("horizon-touch.json"));
+                    }
+                    self.catalog.status = format!("Applied HUD control layout preset '{name}'.");
                 }
                 self.chooser = None;
             }
@@ -3379,38 +3393,32 @@ impl Launcher {
         }
         self.cursor = (t.location.x, t.location.y);
 
-        // If the Fullscreen HUD Control Editor is open, check the top-left "Save & Exit" pill
-        // first, then route all drags/taps directly into TouchControls::edit_touch.
+        // Route all touches in the Material You 3 + Pocket Edition HUD Control Editor
+        // through touch_hud_editor (handles dragging, '=' floating menu, presets, and Done).
         if self.control_editor.is_some() {
-            let density = self.ui_density();
-            let px = t.location.x as f32 / density;
-            let py = t.location.y as f32 / density;
-            if t.phase == TouchPhase::Ended
-                && (14.0..162.0).contains(&px)
-                && (12.0..46.0).contains(&py)
-            {
-                self.activate(events)?;
-                return Ok(());
-            }
             let (rw, rh) = self
                 .renderer
                 .as_ref()
-                .map_or((1920.0, 1080.0), |r| {
-                    (r.config.width.max(1) as f32, r.config.height.max(1) as f32)
+                .map_or((1920, 1080), |r| {
+                    (r.config.width.max(1), r.config.height.max(1))
                 });
-            if let Some(tc) = &mut self.control_editor {
-                tc.viewport(rw as u32, rh as u32);
+            if let (Some(tc), Some(gui)) = (&mut self.control_editor, &self.gui) {
+                tc.viewport(rw, rh);
+                let mut b = HudBatch::new([rw, rh]);
                 let norm = [
-                    (t.location.x as f32 / rw).clamp(0.0, 1.0),
-                    (t.location.y as f32 / rh).clamp(0.0, 1.0),
+                    (t.location.x as f32 / rw as f32).clamp(0.0, 1.0),
+                    (t.location.y as f32 / rh as f32).clamp(0.0, 1.0),
                 ];
-                let closed = tc.edit_touch(
+                let closed = horizon_client::touch_ui::touch_hud_editor(
+                    tc,
+                    &mut b,
+                    &gui.atlas,
                     t.id,
                     norm,
                     t.phase == TouchPhase::Started,
                     matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled),
                 );
-                if closed {
+                if closed || tc.editor.is_none() {
                     let game_home = self.catalog.config.game_home(&self.home);
                     let _ = tc
                         .settings

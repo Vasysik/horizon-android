@@ -42,13 +42,13 @@ impl CustomButton {
             return "Button".into();
         }
         let primary = if let Some(name) = self.key.strip_prefix("action:") {
-            crate::text::Text::translate(name, &[]).plain()
+            friendly_action_name(name)
         } else {
             crate::keybinds::display_name(&self.key).plain()
         };
         if !self.second_key.is_empty() && Self::valid_token(&self.second_key) && self.second_key != "key.keyboard.unknown" {
             let sec = if let Some(name) = self.second_key.strip_prefix("action:") {
-                crate::text::Text::translate(name, &[]).plain()
+                friendly_action_name(name)
             } else {
                 crate::keybinds::display_name(&self.second_key).plain()
             };
@@ -57,8 +57,51 @@ impl CustomButton {
             primary
         }
     }
+    pub fn choices(raw_keys: bool) -> Vec<(String, String)> {
+        choices(raw_keys)
+    }
 }
-pub(super) fn choices(raw_keys: bool) -> Vec<(String, String)> {
+fn friendly_action_name(name: &str) -> String {
+    let translated = crate::text::Text::translate(name, &[]).plain();
+    if translated != name && !translated.starts_with("key.") {
+        return translated;
+    }
+    match name {
+        "key.attack" => "Attack / Destroy".into(),
+        "key.use" => "Use Item / Place Block".into(),
+        "key.forward" => "Walk Forward".into(),
+        "key.left" => "Strafe Left".into(),
+        "key.back" => "Walk Backwards".into(),
+        "key.right" => "Strafe Right".into(),
+        "key.jump" => "Jump".into(),
+        "key.sneak" => "Sneak / Crouch".into(),
+        "key.sprint" => "Sprint".into(),
+        "key.drop" => "Drop Selected Item (Q)".into(),
+        "key.inventory" => "Open Inventory (E)".into(),
+        "key.chat" => "Open Chat (T)".into(),
+        "key.playerlist" => "List Players (Tab)".into(),
+        "key.pickItem" => "Pick Block (Middle Click)".into(),
+        "key.command" => "Open Command (/)".into(),
+        "key.socialInteractions" => "Social Interactions (P)".into(),
+        "key.screenshot" => "Take Screenshot (F2)".into(),
+        "key.togglePerspective" => "Toggle Perspective (F5)".into(),
+        "key.smoothCamera" => "Toggle Cinematic Camera".into(),
+        "key.fullscreen" => "Toggle Fullscreen (F11)".into(),
+        "key.spectatorOutlines" => "Highlight Players (Spectator)".into(),
+        "key.swapOffhand" => "Swap Item With Offhand (F)".into(),
+        "key.saveToolbarActivator" => "Save Hotbar Activator (C)".into(),
+        "key.loadToolbarActivator" => "Load Hotbar Activator (X)".into(),
+        "key.advancements" => "Advancements (L)".into(),
+        other => {
+            if let Some(slot) = other.strip_prefix("key.hotbar.") {
+                format!("Hotbar Slot {slot}")
+            } else {
+                other.strip_prefix("key.").unwrap_or(other).to_owned()
+            }
+        }
+    }
+}
+pub fn choices(raw_keys: bool) -> Vec<(String, String)> {
     if raw_keys {
         crate::keybinds::available_keys()
             .iter()
@@ -68,12 +111,7 @@ pub(super) fn choices(raw_keys: bool) -> Vec<(String, String)> {
         crate::keybinds::MAPPINGS
             .iter()
             .filter(|m| m.1 != "key.keyboard.unknown")
-            .map(|(name, _, _)| {
-                (
-                    format!("action:{name}"),
-                    crate::text::Text::translate(name, &[]).plain(),
-                )
-            })
+            .map(|(name, _, _)| (format!("action:{name}"), friendly_action_name(name)))
             .collect()
     }
 }
@@ -110,7 +148,7 @@ impl TouchControls {
         }
         false
     }
-    pub(super) fn fit_placement(&self, mut p: Placement) -> Placement {
+    pub fn fit_placement(&self, mut p: Placement) -> Placement {
         p.size = (p.size * self.settings.button_scale)
             .min(self.aspect())
             .min(1.0);
@@ -120,7 +158,7 @@ impl TouchControls {
         }
         p
     }
-    pub(super) fn custom_placement(&self, index: usize) -> Placement {
+    pub fn custom_placement(&self, index: usize) -> Placement {
         let mut p = self.settings.custom_buttons[index].layouts[self.settings.mode.index()];
         if self.settings.left_handed {
             p.center[0] = 1.0 - p.center[0];

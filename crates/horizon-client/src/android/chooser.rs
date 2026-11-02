@@ -273,32 +273,46 @@ impl Launcher {
             Kind::ControlProfile => {
                 let game_home = c.game_home(&self.home);
                 let touch = horizon_client::touch::Settings::load_from(&game_home.join("horizon-touch.json"));
-                let mut profiles = horizon_client::touch::Settings::list_profiles(&game_home);
-                for preset in ["default", "pvp", "building", "speedrun"] {
-                    if !profiles.iter().any(|p| p == preset) {
-                        profiles.push(preset.to_owned());
+                let mut profiles = Vec::new();
+                for (id, _, _) in horizon_client::touch::Settings::PRESETS {
+                    profiles.push((*id).to_owned());
+                }
+                for saved in horizon_client::touch::Settings::list_profiles(&game_home) {
+                    if !profiles.iter().any(|p| p.eq_ignore_ascii_case(&saved)) {
+                        profiles.push(saved);
                     }
                 }
                 let choices = profiles
                     .into_iter()
                     .enumerate()
                     .map(|(idx, name)| {
-                        let active = touch.active_profile == name;
+                        let active = touch.active_profile.eq_ignore_ascii_case(&name);
+                        let preset_info = horizon_client::touch::Settings::PRESETS
+                            .iter()
+                            .find(|(id, _, _)| id.eq_ignore_ascii_case(&name));
+                        let (title, sub) = if let Some((_, title, desc)) = preset_info {
+                            ((*title).to_owned(), (*desc).to_owned())
+                        } else {
+                            (
+                                format!("Custom Layout: {name}"),
+                                if active {
+                                    "Currently active custom HUD layout".into()
+                                } else {
+                                    "Saved custom layout in controlmap/".into()
+                                },
+                            )
+                        };
                         (
-                            format!("Layout: {name}"),
-                            if active {
-                                "Currently active HUD control profile".into()
-                            } else {
-                                "Tap to load this HUD control layout".into()
-                            },
+                            title,
+                            sub,
                             Action::ChooseControlProfile(idx as u32),
                             active,
                         )
                     })
                     .collect();
                 (
-                    "HUD Control Profiles",
-                    "Switch between saved HUD button layouts or export/import them as JSON files.",
+                    "HUD Control Presets & Profiles",
+                    "Select a built-in Pocket Edition / Pojav preset or a custom saved layout.",
                     choices,
                 )
             }
@@ -337,10 +351,10 @@ impl Chooser {
             .map(|(i, (_, _, action, _))| {
                 (
                     [
-                        32.0,
-                        137.0 + i as f32 * 84.0 - self.scroll,
-                        width - 64.0,
-                        76.0,
+                        28.0,
+                        108.0 + i as f32 * 64.0 - self.scroll,
+                        width - 56.0,
+                        58.0,
                     ],
                     *action,
                 )
@@ -348,46 +362,90 @@ impl Chooser {
             .collect()
     }
     pub(super) fn viewport(&self, height: f32) -> [f32; 3] {
+        let top = 108.0;
+        let bottom = (height - 64.0).max(top + 60.0);
         [
-            137.0,
-            height - 100.0,
-            (self.choices.len() as f32 * 84.0 - (height - 237.0)).max(0.0),
+            top,
+            bottom,
+            (self.choices.len() as f32 * 64.0 - (bottom - top)).max(0.0),
         ]
     }
     pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>) {
         let (w, h) = (ui.w, ui.h);
         targets.clear();
         ui.rounded(0.0, 0.0, w, h, 0.0, color::hex(0x0D0C14, 255));
-        ui.text(Face::Medium, 28.0, 32.0, 35.0, color::TEXT, self.title);
-        ui.text(Face::Regular, 15.0, 32.0, 85.0, color::MUTED, self.help);
+        ui.text(Face::SemiBold, 22.0, 28.0, 20.0, color::TEXT, self.title);
+        let fitted_help = ui.fit_text(Face::Regular, 13.5, self.help, w - 56.0);
+        ui.text(Face::Regular, 13.5, 28.0, 54.0, color::MUTED, &fitted_help);
         if let Some(device) = &self.device {
-            ui.text(Face::Regular, 13.0, 32.0, 111.0, color::MUTED, device);
+            let fitted_dev = ui.fit_text(Face::Regular, 12.5, device, w - 56.0);
+            ui.text(Face::Regular, 12.5, 28.0, 78.0, color::MUTED, &fitted_dev);
         }
-        let top = 137.0;
-        let bottom = h - 100.0;
+        let top = 108.0;
+        let bottom = (h - 64.0).max(top + 60.0);
         self.scroll = self.scroll.clamp(
             0.0,
-            (self.choices.len() as f32 * 84.0 - (bottom - top)).max(0.0),
+            (self.choices.len() as f32 * 64.0 - (bottom - top)).max(0.0),
         );
+        ui.set_clip(Some([0.0, top, w, bottom - top]));
         for (i, (label, detail, action, selected)) in self.choices.iter().enumerate() {
-            let y = top + i as f32 * 84.0 - self.scroll;
-            if y < top || y + 76.0 > bottom {
+            let y = top + i as f32 * 64.0 - self.scroll;
+            if y + 58.0 < top || y > bottom {
                 continue;
             }
-            ui.rounded(34.0, y + 10.0, 22.0, 22.0, 11.0, color::TEXT);
-            ui.rounded(36.0, y + 12.0, 18.0, 18.0, 9.0, color::BG);
+            let bg = if *selected {
+                color::hex(0x282142, 255)
+            } else {
+                color::hex(0x171621, 255)
+            };
+            let border = if *selected {
+                color::hex(0x9A7BFF, 255)
+            } else {
+                color::hex(0x262435, 255)
+            };
+            ui.rounded(28.0, y, w - 56.0, 56.0, 14.0, bg);
+            ui.border(28.0, y, w - 56.0, 56.0, 14.0, border);
+            ui.rounded(
+                44.0,
+                y + 18.0,
+                20.0,
+                20.0,
+                10.0,
+                if *selected {
+                    color::hex(0x9A7BFF, 255)
+                } else {
+                    color::hex(0x353248, 255)
+                },
+            );
+            ui.rounded(46.0, y + 20.0, 16.0, 16.0, 8.0, bg);
             if *selected {
-                ui.rounded(40.0, y + 16.0, 10.0, 10.0, 5.0, color::TEXT);
+                ui.rounded(50.0, y + 24.0, 8.0, 8.0, 4.0, color::hex(0x9A7BFF, 255));
             }
-            ui.text(Face::Medium, 19.0, 80.0, y + 8.0, color::TEXT, label);
-            ui.text(Face::Regular, 14.0, 80.0, y + 40.0, color::MUTED, detail);
-            ui.rounded(32.0, y + 75.0, w - 64.0, 1.0, 0.0, color::BORDER);
-            targets.push(([32.0, y, w - 64.0, 76.0], *action));
+            let has_detail = !detail.trim().is_empty();
+            let fitted_lbl = ui.fit_text(Face::SemiBold, 15.5, label, w - 120.0);
+            ui.text(
+                Face::SemiBold,
+                15.5,
+                76.0,
+                y + if has_detail { 8.0 } else { 17.0 },
+                color::TEXT,
+                &fitted_lbl,
+            );
+            if has_detail {
+                let fitted_det = ui.fit_text(Face::Regular, 12.5, detail, w - 120.0);
+                ui.text(Face::Regular, 12.5, 76.0, y + 31.0, color::MUTED, &fitted_det);
+            }
+            let cy0 = y.max(top);
+            let cy1 = (y + 56.0).min(bottom);
+            if cy1 > cy0 + 8.0 {
+                targets.push(([28.0, cy0, w - 56.0, cy1 - cy0], *action));
+            }
         }
+        ui.set_clip(None);
         button(
             ui,
             targets,
-            [32.0, h - 78.0, 160.0, 44.0],
+            [28.0, h - 50.0, 136.0, 38.0],
             "Cancel",
             Action::Dismiss,
             false,

@@ -2,16 +2,19 @@ use super::*;
 
 pub struct Editor {
     pub selected: Option<Control>,
-    option: Option<usize>,
-    apply_all: bool,
-    original: Settings,
+    pub option: Option<usize>,
+    pub apply_all: bool,
+    pub original: Settings,
     drag: Option<(u64, Drag)>,
-    error: Option<String>,
-    palette: bool,
-    selected_custom: Option<usize>,
-    key_picker: bool,
-    key_page: usize,
-    raw_keys: bool,
+    pub error: Option<String>,
+    pub palette: bool,
+    pub selected_custom: Option<usize>,
+    pub key_picker: bool,
+    pub key_page: usize,
+    pub raw_keys: bool,
+    pub menu_open: bool,
+    pub show_hidden: bool,
+    pub active_drag: Option<(u64, [f32; 2], bool)>,
 }
 
 enum Drag {
@@ -34,6 +37,9 @@ impl TouchControls {
             key_picker: false,
             key_page: 0,
             raw_keys: false,
+            menu_open: false,
+            show_hidden: true,
+            active_drag: None,
         });
     }
     pub fn cancel_editor(&mut self) {

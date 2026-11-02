@@ -125,6 +125,7 @@ pub enum Icon {
     MicrosoftGrid,
     Gamepad,
     ArrowLeft,
+    MenuEquals,
 }
 
 struct Fonts {
@@ -405,6 +406,12 @@ fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
             let bot = seg_dist(u, v, 0.34, 0.50, 0.62, 0.76) <= 0.055;
             top || bot
         }
+        Icon::MenuEquals => {
+            // Crisp two-bar "=" floating menu icon with rounded caps.
+            let bar1 = seg_dist(u, v, 0.20, 0.36, 0.80, 0.36) <= 0.065;
+            let bar2 = seg_dist(u, v, 0.20, 0.64, 0.80, 0.64) <= 0.065;
+            bar1 || bar2
+        }
     }
 }
 
@@ -630,6 +637,7 @@ pub struct Ui<'a> {
     /// Physical pixels per dp.
     pub density: f32,
     scale: f32,
+    clip: Option<[f32; 4]>,
 }
 impl<'a> Ui<'a> {
     /// `cursor` is in GUI pixels, like every screen's input.
@@ -645,6 +653,7 @@ impl<'a> Ui<'a> {
             density,
             scale,
             batch,
+            clip: None,
         }
     }
     /// Native phone DPI-adaptive launcher density; game HUD scale is untouched.
@@ -712,6 +721,34 @@ impl<'a> Ui<'a> {
         self.batch.patches.extend(pending);
     }
 
+    /// Set or clear a scissor clip rectangle `[x, y, w, h]` in dp coordinates.
+    /// Every shape, border, icon, image, and text glyph drawn while active is
+    /// smoothly clipped at pixel granularity so scrolling lists never pop.
+    pub fn set_clip(&mut self, rect: Option<[f32; 4]>) {
+        self.clip = rect.map(|[x, y, w, h]| {
+            [
+                self.px_x(x),
+                self.px_y(y),
+                self.px_x(x + w.max(0.0)),
+                self.px_y(y + h.max(0.0)),
+            ]
+        });
+    }
+
+    pub fn clip_rect(&self, rect: [f32; 4]) -> Option<[f32; 4]> {
+        let [x, y, w, h] = rect;
+        if let Some([cx0, cy0, cx1, cy1]) = self.clip {
+            let d = self.density.max(0.001);
+            let x0 = x.max(cx0 / d);
+            let y0 = y.max(cy0 / d);
+            let x1 = (x + w).min(cx1 / d);
+            let y1 = (y + h).min(cy1 / d);
+            (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
+        } else {
+            (w > 0.0 && h > 0.0).then_some(rect)
+        }
+    }
+
     // ---- geometry, snapped to physical pixels ----
     fn px_x(&self, v: f32) -> f32 {
         (v * self.density).round()
@@ -719,7 +756,13 @@ impl<'a> Ui<'a> {
     fn px_y(&self, v: f32) -> f32 {
         (v * self.density).round()
     }
-    fn raw_fill(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, color: u32) {
+    fn raw_fill(&mut self, mut x0: f32, mut y0: f32, mut x1: f32, mut y1: f32, color: u32) {
+        if let Some([cx0, cy0, cx1, cy1]) = self.clip {
+            x0 = x0.max(cx0);
+            y0 = y0.max(cy0);
+            x1 = x1.min(cx1);
+            y1 = y1.min(cy1);
+        }
         if x1 > x0 && y1 > y0 {
             let s = self.scale;
             self.batch.fill(
@@ -732,6 +775,49 @@ impl<'a> Ui<'a> {
             );
         }
     }
+    #[allow(clippy::too_many_arguments)]
+    fn emit_clipped_uv(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        u0: f32,
+        v0: f32,
+        u1: f32,
+        v1: f32,
+        color: u32,
+    ) {
+        let w = x1 - x0;
+        let h = y1 - y0;
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let (mut nx0, mut ny0, mut nx1, mut ny1) = (x0, y0, x1, y1);
+        let (mut nu0, mut nv0, mut nu1, mut nv1) = (u0, v0, u1, v1);
+        if let Some([cx0, cy0, cx1, cy1]) = self.clip {
+            nx0 = x0.max(cx0);
+            ny0 = y0.max(cy0);
+            nx1 = x1.min(cx1);
+            ny1 = y1.min(cy1);
+            if nx1 <= nx0 || ny1 <= ny0 {
+                return;
+            }
+            let du = u1 - u0;
+            let dv = v1 - v0;
+            nu0 = u0 + du * ((nx0 - x0) / w);
+            nu1 = u0 + du * ((nx1 - x0) / w);
+            nv0 = v0 + dv * ((ny0 - y0) / h);
+            nv1 = v0 + dv * ((ny1 - y0) / h);
+        }
+        let s = self.scale;
+        let (gx0, gy0, gx1, gy1) = (nx0 / s, ny0 / s, nx1 / s, ny1 / s);
+        self.batch.quad(
+            [[gx0, gy0], [gx1, gy0], [gx1, gy1], [gx0, gy1]],
+            [[nu0, nv0], [nu1, nv0], [nu1, nv1], [nu0, nv1]],
+            color,
+        );
+    }
     fn corner_quad(&mut self, rect: Rect, x: f32, y: f32, r: f32, flip: (bool, bool), color: u32) {
         let (u0, u1) = if flip.0 {
             (rect.u1, rect.u0)
@@ -743,13 +829,7 @@ impl<'a> Ui<'a> {
         } else {
             (rect.v0, rect.v1)
         };
-        let s = self.scale;
-        let (gx, gy, gr) = (x / s, y / s, r / s);
-        self.batch.quad(
-            [[gx, gy], [gx + gr, gy], [gx + gr, gy + gr], [gx, gy + gr]],
-            [[u0, v0], [u1, v0], [u1, v1], [u0, v1]],
-            color,
-        );
+        self.emit_clipped_uv(x, y, x + r, y + r, u0, v0, u1, v1, color);
     }
     fn corners(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, r: f32, ring: bool, color: u32) {
         if r < 1.0 {
@@ -820,10 +900,18 @@ impl<'a> Ui<'a> {
         let px = (size * self.density).round().clamp(8.0, 128.0) as u16;
         let atlas = self.atlas;
         if let Some(rect) = with_cache(atlas, |c| c.vector_icon(atlas, icon, px)) {
-            let s = self.scale;
-            let draw_px = f32::from(px) / s;
-            self.batch
-                .rect_uv(x0 / s, y0 / s, draw_px, draw_px, rect, color);
+            let pxf = f32::from(px);
+            self.emit_clipped_uv(
+                x0,
+                y0,
+                x0 + pxf,
+                y0 + pxf,
+                rect.u0,
+                rect.v0,
+                rect.u1,
+                rect.v1,
+                color,
+            );
         }
     }
 
@@ -903,13 +991,15 @@ impl<'a> Ui<'a> {
             self.px_x(x + dw),
             self.px_y(y + dh),
         );
-        let s = self.scale;
-        self.batch.rect_uv(
-            x0 / s,
-            y0 / s,
-            (x1 - x0) / s,
-            (y1 - y0) / s,
-            rect,
+        self.emit_clipped_uv(
+            x0,
+            y0,
+            x1,
+            y1,
+            rect.u0,
+            rect.v0,
+            rect.u1,
+            rect.v1,
             u32::MAX,
         );
         true
@@ -983,14 +1073,16 @@ impl<'a> Ui<'a> {
             }
             (pen - x0) / density
         });
-        let s = self.scale;
         for (gx, gy, rect) in quads {
-            self.batch.rect_uv(
-                gx / s,
-                gy / s,
-                rect.w as f32 / s,
-                rect.h as f32 / s,
-                rect,
+            self.emit_clipped_uv(
+                gx,
+                gy,
+                gx + rect.w as f32,
+                gy + rect.h as f32,
+                rect.u0,
+                rect.v0,
+                rect.u1,
+                rect.v1,
                 color,
             );
         }
