@@ -151,8 +151,10 @@ impl RulesScreen {
         Self::build(rules, false)
     }
     fn build(rules: &GameRules, in_world: bool) -> Self {
-        // setInitialFocus: the search box.
-        let search = EditBox::new(0.0, 0.0, SEARCH_WIDTH, 15.0);
+        // setInitialFocus: the search box. On a phone the focus opens the keyboard: there it waits
+        // for a tap.
+        let mut search = EditBox::new(0.0, 0.0, SEARCH_WIDTH, 15.0);
+        search.focused = !cfg!(target_os = "android");
         let numbers = rules
             .available_rules()
             .filter(|r| matches!(r.default, Value::Int(_)))
@@ -373,6 +375,10 @@ impl RulesScreen {
             self.search.reset_blink();
             self.search.click(atlas, cursor.0, false, false);
             return None;
+        }
+        // On a phone a tap elsewhere lets go of the box, which closes the keyboard.
+        if cfg!(target_os = "android") {
+            self.unfocus();
         }
         let rows = self.rows();
         let i = self.hovered(rows.len(), cursor, size)?;
