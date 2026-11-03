@@ -303,7 +303,7 @@ impl Game<'_> {
             let right = button == MouseButton::Right;
             if matches!(button, MouseButton::Left | MouseButton::Right) {
                 return self.android_menu_mouse(
-                    &super::event_loop::EventLoopCtl::Noop,
+                    &super::event_loop::Noop,
                     WindowId::dummy(),
                     right,
                     down,
