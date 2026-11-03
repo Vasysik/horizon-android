@@ -96,6 +96,25 @@ impl Game<'_> {
         });
     }
     fn server_tick_spawner(&mut self, key: Pos, spawner: &mut Spawner) -> Result<()> {
+        self.server_tick_spawner_of(key, spawner, None)
+    }
+    /// `BaseSpawner.serverTick` at `key`: a spawner block's, or the spawner minecart
+    /// `cart` is at (its `broadcastEvent` is an entity event on the cart).
+    pub(super) fn server_tick_spawner_of(
+        &mut self,
+        key: Pos,
+        spawner: &mut Spawner,
+        cart: Option<u32>,
+    ) -> Result<()> {
+        // `BaseSpawner.serverTick` does nothing without an alive player in
+        // range (`isNearPlayer`) or with the rule off: no level to build for it.
+        let at = [key.0, key.1, key.2].map(|c| f64::from(c) + 0.5);
+        let range = f64::from(spawner.required_player_range);
+        if !self.alive_player_near(at[0], at[1], at[2], range)
+            || !self.ui.rules.bool("spawner_blocks_work")
+        {
+            return Ok(());
+        }
         let pos = [key.0, key.1, key.2];
         let mut random = std::mem::replace(
             &mut self.world.random,
@@ -112,7 +131,7 @@ impl Game<'_> {
         }
         self.world.random = random;
         let ids = self.add_planned(planned);
-        self.apply_spawner_events(key, events, &ids)
+        self.apply_spawner_events(key, events, &ids, cart)
     }
     /// Creates the mobs a spawner tick planned; their provisional ids
     /// (counting down from u32::MAX) map to the mobs' ids.
@@ -126,8 +145,10 @@ impl Game<'_> {
                     mob.id = self.next_entity;
                     let id = mob.id;
                     self.mobs.push(mob);
+                    self.native_mobs_joined(self.mobs.len() - 1, false);
                     self.enchant_spawn_equipment(id);
-                    self.spawn_jockeys(id, true);
+                    self.halloween_spawn_head(id);
+                    self.spawn_jockeys(id, false);
                     Some((id, equipment))
                 }
                 Planned::Loaded(tag, equipment) => {
@@ -201,8 +222,16 @@ impl Game<'_> {
             if r.trial {
                 tag.insert("PersistenceRequired".into(), Tag::Byte(1));
             }
-            let tag = Tag::Compound(tag);
-            let mob = horizon_client::entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), 0)?;
+            let mut tag = Tag::Compound(tag);
+            // EntityType.loadEntityRecursive applies the spawner's placement
+            // callback to every passenger as well as the root.
+            super::commands::place_summoned(&mut tag, r.position);
+            let mob = horizon_client::entity_nbt::mob_from_nbt(
+                &tag,
+                self.res.mob_types(),
+                0,
+                Some(self.pack.assets.registry),
+            )?;
             let bounds = mob.bounds();
             planned.push(Planned::Loaded(tag, r.equipment.cloned()));
             bounds
@@ -221,11 +250,19 @@ impl Game<'_> {
         key: Pos,
         events: Vec<SpawnerEvent>,
         ids: &HashMap<u32, u32>,
+        cart: Option<u32>,
     ) -> Result<()> {
         let pos = [key.0, key.1, key.2];
         for event in events {
             match event {
+                // A cart has no block to update: `sendBlockUpdated` finds nothing to send.
+                SpawnerEvent::BlockUpdated if cart.is_some() => {}
                 SpawnerEvent::BlockUpdated => self.spawner_block_updated(key),
+                // `broadcastEvent`: `level.broadcastEntityEvent(cart, id)`.
+                SpawnerEvent::BlockEvent(id) if cart.is_some() => {
+                    let at = pos.map(|c| f64::from(c) + 0.5);
+                    self.lan_entity_event(cart.unwrap_or_default() as i32, id as i8, at);
+                }
                 SpawnerEvent::BlockEvent(id) => {
                     self.lan_block_event(pos, id, 0);
                     // The client copy's onEventTriggered.
@@ -369,9 +406,15 @@ impl Game<'_> {
         };
         self.res.mob_types().contains_key(&id).then_some(id)
     }
-    /// `SpawnEggItem.useOn` on a spawner: the egg sets its mob. None when the
-    /// clicked block has no spawner.
-    pub(super) fn use_spawn_egg_on_spawner(&mut self, pos: [i32; 3], kind: &str) -> Option<bool> {
+    /// `SpawnEggItem.useOn` on a spawner: the egg sets its mob, and an op's
+    /// egg its entity `data` too (`block_entity_item::spawn_egg_on_spawner`).
+    /// None when the clicked block has no spawner.
+    pub(super) fn use_spawn_egg_on_spawner(
+        &mut self,
+        pos: [i32; 3],
+        kind: &str,
+        data: Option<&horizon_world::nbt::Compound>,
+    ) -> Option<bool> {
         let key = (pos[0], pos[1], pos[2]);
         let trial = match self.world.block_entities.get(&key) {
             Some(BlockEntity::Spawner(_)) => false,
@@ -386,10 +429,13 @@ impl Game<'_> {
             return Some(false);
         }
         if trial {
-            // TrialSpawnerBlockEntity.setEntityId: overrideEntityToSpawn, which
-            // ends in setState(INACTIVE).
+            // TrialSpawnerBlockEntity.setEntityId and setEntityData:
+            // overrideEntityToSpawn, which ends in setState(INACTIVE).
             if let Some(BlockEntity::TrialSpawner(t)) = self.world.block_entities.get_mut(&key) {
-                t.override_entity(kind);
+                match data {
+                    Some(data) => t.override_entity_data(kind, data),
+                    None => t.override_entity(kind),
+                }
             }
             let ominous = self.trial_spawner_block(key).is_some_and(|(_, o)| o);
             let _ = self.set_trial_spawner_state(key, TrialState::Inactive, ominous);
@@ -400,15 +446,63 @@ impl Game<'_> {
                 horizon_core::random::LegacyRandom::new(0),
             );
             if let Some(BlockEntity::Spawner(s)) = self.world.block_entities.get_mut(&key) {
-                s.set_entity_id(kind, &mut random, &mut events);
+                match data {
+                    Some(data) => s.set_entity_data(kind, data, &mut random, &mut events),
+                    None => s.set_entity_id(kind, &mut random, &mut events),
+                }
             }
             self.world.random = random;
-            let _ = self.apply_spawner_events(key, events, &HashMap::new());
+            let _ = self.apply_spawner_events(key, events, &HashMap::new(), None);
         }
         // sendBlockUpdated(3) and the player's block_change game event.
         self.spawner_block_updated(key);
+        self.update_spawner_display(key);
         self.post_block_game_event("minecraft:block_change", pos, Some(Who::Player), None);
         Some(true)
+    }
+    /// `PlayerList.isOp` for the player acting now: a server's guest by their
+    /// own level, else the window's player.
+    pub(super) fn acting_player_is_op(&self) -> bool {
+        self.lan_acting_permission
+            .unwrap_or(self.ui.registries.permission)
+            > 0
+    }
+    /// Ticks spawners, trial spawners and vaults near the player on a remote
+    /// client (`tick_remote`).
+    pub(super) fn tick_remote_spawners(&mut self) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let center = [
+            p.position.x.floor() as i32,
+            p.position.y.floor() as i32,
+            p.position.z.floor() as i32,
+        ];
+        let mut keys = Vec::new();
+        let mut trial_keys = Vec::new();
+        let mut vault_keys = Vec::new();
+        for (&pos, be) in &self.world.block_entities {
+            let d = (pos.0 - center[0])
+                .abs()
+                .max((pos.1 - center[1]).abs())
+                .max((pos.2 - center[2]).abs());
+            if d <= 64 {
+                match be {
+                    BlockEntity::Spawner(_) => keys.push(pos),
+                    BlockEntity::TrialSpawner(_) => trial_keys.push(pos),
+                    BlockEntity::Vault(_) => vault_keys.push(pos),
+                    _ => {}
+                }
+            }
+        }
+        self.client_tick_spawners(&keys);
+        for key in trial_keys {
+            self.client_tick_trial_spawner(key);
+        }
+        // VaultBlock.getTicker on the client: VaultBlockEntity.Client.tick.
+        for key in vault_keys {
+            self.client_tick_vault(key);
+        }
     }
     /// `SpawnerRenderer` and `TrialSpawnerRenderer`: the next mob of every
     /// spawner near the camera, small and turning.

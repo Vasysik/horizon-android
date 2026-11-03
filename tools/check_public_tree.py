@@ -9,6 +9,7 @@ import sys
 PRIVATE_ROOTS = {".local", "decompiled", "minecraft", "assets", "run", "logs"}
 PRIVATE_EXTENSIONS = {".jar", ".class", ".jfr", ".hprof", ".java"}
 ORIGINAL_JDK_TOOLS = {"tools/JfrSummary.java", "tests/java/JfrFixture.java"}
+<<<<<<< HEAD
 # The Android app's own classes (packaging/android/build_apk.py), Horizon's code like the above.
 ORIGINAL_ANDROID = {
     "packaging/android/java/io/github/juanluci/starling/StarlingActivity.java",
@@ -20,6 +21,11 @@ ORIGINAL_ANDROID = {
     # The same activity before the app was named Starling, in the history.
     "packaging/android/java/dev/horizon/android/HorizonActivity.java",
 }
+||||||| f8988d5a7
+=======
+# The prepared folder's files in one file (crates/horizon-core/src/prepared_files.rs): Mojang's data.
+PRIVATE_NAMES = {"horizon-data.bin"}
+>>>>>>> 31f83499b
 
 
 def prohibited(path):
@@ -30,7 +36,11 @@ def prohibited(path):
     # Original Horizon mod sources may also be tracked.
     if parsed.suffix == ".java" and path.startswith(("mods/horizon/src/", "mods/horizon-lab/src/")):
         return not ("/dev/horizonlab/" in path)
-    return bool(parsed.parts and parsed.parts[0] in PRIVATE_ROOTS) or parsed.suffix.lower() in PRIVATE_EXTENSIONS
+    return (
+        bool(parsed.parts and parsed.parts[0] in PRIVATE_ROOTS)
+        or parsed.suffix.lower() in PRIVATE_EXTENSIONS
+        or parsed.name in PRIVATE_NAMES
+    )
 
 
 def paths_in_repository(history=False, revisions=None):
@@ -63,9 +73,12 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--history", action="store_true", help="Inspect paths in all local Git history")
     mode.add_argument("--pre-push", action="store_true", help="Inspect history reachable from Git's ref updates on stdin")
+    # CI's pull requests: only the commits a merge would add, not every ref's whole history.
+    mode.add_argument("--range", metavar="BASE..HEAD", help="Inspect the commits of a revision range")
     args = parser.parse_args()
-    revisions = pushed_revisions(sys.stdin) if args.pre_push else None
-    rejected = sorted({path for path in paths_in_repository(args.history or args.pre_push, revisions)
+    revisions = pushed_revisions(sys.stdin) if args.pre_push else [args.range] if args.range else None
+    history = args.history or args.pre_push or bool(args.range)
+    rejected = sorted({path for path in paths_in_repository(history, revisions)
                        if path and prohibited(path)})
     if rejected:
         print("Private game/profiling artifacts must stay outside Git:", file=sys.stderr)

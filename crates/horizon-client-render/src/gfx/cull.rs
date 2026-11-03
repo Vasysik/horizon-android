@@ -491,10 +491,6 @@ impl Cull {
         }
     }
 
-    pub fn depth_test(&self) -> DepthTest {
-        self.depth_test
-    }
-
     /// In the world pass after phase 1 (`Early`): draw the tested boxes
     /// against its depth. Leaves the pass's pipeline and group 0 changed.
     pub fn test(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -532,7 +528,11 @@ impl Cull {
 
     /// Between the phases (`InShader`): draw the tested boxes in a pass of
     /// their own that reads phase 1's depth, bound by `bind_depth`.
-    pub fn test_pass(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn test_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        timing: Option<&mut super::pack_timing::PassTiming>,
+    ) {
         let (Some(Group { group, .. }), Some(DepthGroup { view, group: depth })) =
             (&self.group, &self.depth_group)
         else {
@@ -543,6 +543,7 @@ impl Cull {
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Section culling"),
+            timestamp_writes: timing.and_then(|t| t.writes("Occlusion test")),
             color_attachments: &[],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view,
@@ -584,23 +585,25 @@ impl Cull {
         self.current = Some(self.next);
     }
 
-    /// After the frame's submission: start reading its results back.
-    pub fn submitted(&mut self) {
-        let Some(i) = self.current.take() else {
-            return;
-        };
+    /// The frame's results to read back, started by calling it right after the frame's
+    /// submission (on the submit thread, when the frame goes there).
+    pub fn submitted(&mut self) -> Option<impl FnOnce() + Send + 'static> {
+        let i = self.current.take()?;
         let r = &self.readbacks[i];
         let state = r.state.clone();
         state.store(PENDING, Ordering::Release);
-        r.buffer
-            .slice(..r.slots.len() as u64 * 4)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                state.store(
-                    if result.is_ok() { MAPPED } else { FREE },
-                    Ordering::Release,
-                );
-            });
+        let (buffer, bytes) = (r.buffer.clone(), r.slots.len() as u64 * 4);
         self.next = (i + 1) % READBACKS;
+        Some(move || {
+            buffer
+                .slice(..bytes)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    state.store(
+                        if result.is_ok() { MAPPED } else { FREE },
+                        Ordering::Release,
+                    );
+                });
+        })
     }
 
     fn make_group(

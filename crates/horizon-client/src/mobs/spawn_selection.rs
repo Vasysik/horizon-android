@@ -539,18 +539,21 @@ pub fn spawn_aabb(s: Species, x: f64, y: f64, z: f64, width: f32, height: f32) -
         Vec3::new(x + half, y + f64::from(scale * height), z + half),
     )
 }
-/// `checkSpawnObstruction` of a freshly created mob with the given box.
+/// `checkSpawnObstruction` of a freshly created mob with the given box, with
+/// the mobs already `spawned` in the way; None in a generation region, which
+/// has no entities (`WorldGenRegion.getEntities`).
 pub(crate) fn spawn_obstruction<L: NaturalLevel>(
     s: Species,
     l: &L,
     bounds: Aabb,
-    spawned: &[Aabb],
+    spawned: Option<&[Aabb]>,
     x: i32,
     y: i32,
     z: i32,
 ) -> bool {
-    let unobstructed =
-        |l: &L| l.unobstructed(bounds) && !spawned.iter().any(|b| b.intersects(bounds));
+    let unobstructed = |l: &L| {
+        spawned.is_none_or(|s| l.unobstructed(bounds) && !s.iter().any(|b| b.intersects(bounds)))
+    };
     match obstruction(s) {
         Obstruction::NoLiquidUnobstructed => !contains_any_liquid(l, bounds) && unobstructed(l),
         Obstruction::Unobstructed => unobstructed(l),
@@ -756,11 +759,19 @@ pub struct SpawnState {
     counts: [i32; 8],
     charges: Vec<([i32; 3], f64)>,
     players: Vec<SpawnPlayer>,
-    players_near: FxHashMap<(i32, i32), Vec<usize>>,
-    player_counts: FxHashMap<usize, [i32; 8]>,
+    /// Each chunk asked about: its players' run in `near_list`.
+    players_near: FxHashMap<(i32, i32), (u32, u32)>,
+    near_list: Vec<usize>,
+    /// The mobs counted near each player (`playerMobCounts`), by category.
+    player_counts: Vec<[i32; 8]>,
     last_checked: Option<([i32; 3], String, f64)>,
 }
 impl SpawnState {
+    /// `getSpawnableChunkCount` and `getMobCategoryCounts` (by
+    /// [`Category::ALL`]), for the debug overlay's spawn counts.
+    pub fn counts(&self) -> (i32, [i32; 8]) {
+        (self.spawnable_chunks, self.counts)
+    }
     /// `NaturalSpawner.createState`: every non-persistent entity of a
     /// spawning category in a loaded chunk adds its biome's spawn charge, its
     /// category count and (for mobs) the local caps of the players near it.
@@ -775,9 +786,10 @@ impl SpawnState {
             spawnable_chunks,
             counts: [0; 8],
             charges: Vec::new(),
+            player_counts: vec![[0; 8]; players.len()],
             players,
             players_near: FxHashMap::default(),
-            player_counts: FxHashMap::default(),
+            near_list: Vec::new(),
             last_checked: None,
         };
         for e in entities {
@@ -806,13 +818,10 @@ impl SpawnState {
     /// `ChunkMap.getPlayersCloseForSpawning`: none past the natural spawn
     /// chunk tracker's range of 8 chunks from every player, else the
     /// non-spectators within 128 blocks of the chunk's centre.
-    fn players_near<'a>(
-        near: &'a mut FxHashMap<(i32, i32), Vec<usize>>,
-        players: &[SpawnPlayer],
-        cx: i32,
-        cz: i32,
-    ) -> &'a [usize] {
-        near.entry((cx, cz)).or_insert_with(|| {
+    fn players_near(&mut self, cx: i32, cz: i32) -> std::ops::Range<usize> {
+        let (list, players) = (&mut self.near_list, &self.players);
+        let (start, len) = *self.players_near.entry((cx, cz)).or_insert_with(|| {
+            let start = list.len() as u32;
             let tracked = players.iter().any(|p| {
                 let (px, pz) = (
                     (p.position[0].floor() as i32) >> 4,
@@ -820,24 +829,26 @@ impl SpawnState {
                 );
                 (px - cx).abs().max((pz - cz).abs()) <= 8
             });
-            if !tracked {
-                return Vec::new();
+            if tracked {
+                let (x, z) = (f64::from(cx * 16 + 8), f64::from(cz * 16 + 8));
+                list.extend(
+                    players
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| {
+                            let (dx, dz) = (x - p.position[0], z - p.position[2]);
+                            !p.spectator && dx * dx + dz * dz < 16384.0
+                        })
+                        .map(|(i, _)| i),
+                );
             }
-            let (x, z) = (f64::from(cx * 16 + 8), f64::from(cz * 16 + 8));
-            players
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| {
-                    let (dx, dz) = (x - p.position[0], z - p.position[2]);
-                    !p.spectator && dx * dx + dz * dz < 16384.0
-                })
-                .map(|(i, _)| i)
-                .collect()
-        })
+            (start, list.len() as u32 - start)
+        });
+        start as usize..(start + len) as usize
     }
     fn add_local(&mut self, cx: i32, cz: i32, category: Category) {
-        for &p in Self::players_near(&mut self.players_near, &self.players, cx, cz) {
-            self.player_counts.entry(p).or_insert([0; 8])[category.index()] += 1;
+        for i in self.players_near(cx, cz) {
+            self.player_counts[self.near_list[i]][category.index()] += 1;
         }
     }
     /// `canSpawnForCategoryGlobal`.
@@ -847,12 +858,12 @@ impl SpawnState {
     }
     /// `canSpawnForCategoryLocal` (`LocalMobCapCalculator.canSpawn`).
     pub fn can_spawn_local(&mut self, category: Category, cx: i32, cz: i32) -> bool {
-        let near = Self::players_near(&mut self.players_near, &self.players, cx, cz);
-        near.iter().any(|p| {
-            self.player_counts
-                .get(p)
-                .is_none_or(|c| c[category.index()] < category.max())
-        })
+        // A player with nothing counted yet can spawn: zero is under every
+        // spawning category's cap.
+        let near = self.players_near(cx, cz);
+        self.near_list[near]
+            .iter()
+            .any(|&p| self.player_counts[p][category.index()] < category.max())
     }
     /// `getFilteredSpawningCategories`.
     pub fn filtered_categories(
@@ -1084,7 +1095,7 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
             let far = distance > despawn && removed_when_far(species);
             if far
                 || !mob_spawn_rules(species, l, x, y, z)
-                || !spawn_obstruction(species, l, bounds, &spawned, x, y, z)
+                || !spawn_obstruction(species, l, bounds, Some(&spawned), x, y, z)
             {
                 continue;
             }
@@ -1206,14 +1217,18 @@ fn valid_position_for_type<L: NaturalLevel, R: RandomSource>(
         return false;
     }
     let [x, y, z] = pos;
+    // `canSpawnMobAt` comes first in vanilla, but it and `isSpawnPositionOk`
+    // only read the level, so their order cannot change the answer: the few
+    // block reads of the placement turn most positions away before the spawn
+    // list (structures, biome) is looked up again.
+    if !spawn_rules::is_spawn_position_ok(species, l, x, y, z) {
+        return false;
+    }
     if !listed
         && !mobs_at(l, category, x, y, z)
             .iter()
             .any(|e| same_spawner(e, entry))
     {
-        return false;
-    }
-    if !spawn_rules::is_spawn_position_ok(species, l, x, y, z) {
         return false;
     }
     if !spawn_rules::check_spawn_rules(species, l, Reason::Natural, random, x, y, z) {
@@ -1237,8 +1252,8 @@ pub enum GenEvent {
     Spawn(String, [f64; 3], f32),
 }
 /// `NaturalSpawner.spawnMobsForChunkGeneration`: creature packs placed on
-/// the chunk's surface. `rules` is the level's own random, which the spawn
-/// predicates draw from.
+/// the chunk's surface. `rules` is the region's random, which the spawn
+/// predicates and `spawn` (finalizeSpawn) draw from.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: RandomSource>(
     l: &L,
@@ -1246,7 +1261,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
     chunk: (i32, i32),
     random: &mut R,
     rules: &mut Q,
-    spawn: &mut dyn FnMut(&L, &SpawnRequest) -> Option<Spawned>,
+    spawn: &mut dyn FnMut(&L, &SpawnRequest, &mut Q) -> bool,
     trace: &mut dyn FnMut(GenEvent),
 ) {
     if !l.spawn_mobs() {
@@ -1269,7 +1284,6 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
         };
         let count = sample_count(&entry, random);
         let mut group_index = 0u32;
-        let mut spawned: Vec<Aabb> = Vec::new();
         let mut x = xo + random.next_int_bound(16).unwrap_or(0);
         let mut z = zo + random.next_int_bound(16).unwrap_or(0);
         let (start_x, start_z) = (x, z);
@@ -1311,7 +1325,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
                     let yaw = random.next_float() * 360.0;
                     let bounds = spawn_box(fx, fy, fz, width, height);
                     if mob_spawn_rules(species, l, bx, pos[1], bz)
-                        && spawn_obstruction(species, l, bounds, &spawned, bx, pos[1], bz)
+                        && spawn_obstruction(species, l, bounds, None, bx, pos[1], bz)
                     {
                         let request = SpawnRequest {
                             entity: &entry.entity,
@@ -1321,9 +1335,8 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
                             group_index,
                             reason: Reason::ChunkGeneration,
                         };
-                        if let Some(result) = spawn(l, &request) {
+                        if spawn(l, &request, rules) {
                             group_index += 1;
-                            spawned.push(result.bounds);
                             trace(GenEvent::Spawn(entry.entity.clone(), [fx, fy, fz], yaw));
                             success = true;
                         }

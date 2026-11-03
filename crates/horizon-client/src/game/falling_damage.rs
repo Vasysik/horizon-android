@@ -1,22 +1,19 @@
 //! Landing impacts for falling blocks, before their placement/drop decision.
 use super::{FallingBlock, Game, Landing};
-use horizon_client::{falling_block, items::ItemStack};
+use horizon_client::falling_block;
 use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use horizon_world::level::LevelEvent;
 
 impl Game<'_> {
-    pub(super) fn finish_falling_block(&mut self, mut block: FallingBlock, pos: [i32; 3]) {
+    /// `FallingBlockEntity.causeFallDamage`: impact damage and anvil wear,
+    /// before block effects and portal handling can transfer the entity.
+    pub(super) fn falling_block_impact(&mut self, block: &mut FallingBlock) {
         let name = self.res.facts().get(block.state).name.clone();
         let anvil = name.ends_with("anvil");
         let stalactite = matches!(
             &*name,
             "minecraft:pointed_dripstone" | "minecraft:sulfur_spike"
         );
-        let sound_event = match &*name {
-            "minecraft:pointed_dripstone" => Some(1045),
-            "minecraft:sulfur_spike" => Some(1052),
-            _ => None,
-        };
         if let Some(impact) = block.damage.impact(block.fall_distance) {
             if impact.amount > 0.0 {
                 let mob_kind = if stalactite {
@@ -79,16 +76,23 @@ impl Game<'_> {
                 }
             }
         }
+    }
+
+    pub(super) fn finish_falling_block(&mut self, block: FallingBlock, pos: [i32; 3]) {
+        let name = self.res.facts().get(block.state).name.clone();
+        let anvil = name.ends_with("anvil");
+        // Fallable.onBrokenAfterFall: the anvil's, the pointed dripstone's and
+        // the sulfur spike's level event.
+        let sound_event = match &*name {
+            "minecraft:pointed_dripstone" => Some(1045),
+            "minecraft:sulfur_spike" => Some(1052),
+            _ if anvil => Some(1029),
+            _ => None,
+        };
         if block.damage.cancel_drop {
             if let Some(id) = sound_event {
                 self.level_events.push(LevelEvent::LevelEvent {
                     id,
-                    pos: BlockPos::new(pos[0], pos[1], pos[2]),
-                    data: 0,
-                });
-            } else if anvil {
-                self.level_events.push(LevelEvent::LevelEvent {
-                    id: 1029,
                     pos: BlockPos::new(pos[0], pos[1], pos[2]),
                     data: 0,
                 });
@@ -123,6 +127,22 @@ impl Game<'_> {
                 false,
             )
         });
+        // FallingBlockEntity.tick: the players tracking the entity are told to
+        // show the block for a moment, after the block update.
+        if let Landing::Placed(state) = landing
+            && block.id != 0
+            && let Some(host) = &self.lan
+        {
+            host.hub.send_to_tracking(
+                block.id as i32,
+                &horizon_protocol::packets::play::Clientbound::AddTransientBlock(
+                    horizon_protocol::packets::play::AddTransientBlock {
+                        pos,
+                        state: state.0 as i32,
+                    },
+                ),
+            );
+        }
         if matches!(landing, Landing::Broken)
             && block.drop_item
             && self.ui.rules.bool("entity_drops")
@@ -134,18 +154,9 @@ impl Game<'_> {
                     data: 0,
                 });
             }
-            let item = self.res.facts().get(block.state).item.clone();
-            if &*item != "minecraft:air" {
-                self.pop_resource(
-                    pos,
-                    ItemStack {
-                        item,
-                        count: 1,
-                        damage: 0,
-                        extra: None,
-                    },
-                );
-            }
+            // FallingBlockEntity.tick: spawnAtLocation, from where the entity
+            // came to rest (on top of a turtle egg, not inside its cell).
+            self.drop_falling_block(block.state, block.position);
         }
     }
     fn falling_hurt_player(&mut self, position: Vec3, amount: f32, kind: &str) {

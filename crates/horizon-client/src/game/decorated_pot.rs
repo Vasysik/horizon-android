@@ -74,7 +74,10 @@ impl Game<'_> {
                 ("z", Tag::Int(pos[2])),
             ])
         });
-        let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
+        let loot = horizon_client::structure_blocks::loot_data(
+            &self.options.resources,
+            &self.pack_files(),
+        );
         unpack_loot(
             &mut tag,
             loot.as_deref(),
@@ -110,11 +113,13 @@ impl Game<'_> {
             );
             self.block_entity_event(pos, 1, WOBBLE_NEGATIVE);
             self.post_block_game_event("minecraft:block_change", pos, Some(Who::Player), None);
+            // ServerPlayerGameMode.useItemOn: useWithoutItem consumed the click.
+            self.trigger_default_block_use(pos);
             return true;
         };
         let stack = stack.clone();
         self.block_entity_event(pos, 1, WOBBLE_POSITIVE);
-        self.stats.add("used", &stack.item, 1);
+        self.award_stat("used", &stack.item, 1);
         // consumeAndReturn(1): one item goes in (a creative player keeps theirs).
         let inserted = match &mut pot_item {
             Some(p) => {

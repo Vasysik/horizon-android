@@ -21,6 +21,7 @@ enum Stage {
     Entities(VecDeque<(i32, i32)>),
     Writes,
     Server,
+    Quit,
 }
 
 // Bound the work in both sparse and block-entity-heavy worlds. A single chunk
@@ -41,7 +42,7 @@ impl Game<'_> {
                 close: true,
                 reply: None,
                 started: Instant::now(),
-                stage: Stage::Writes,
+                stage: Stage::Quit,
             });
             return Ok(());
         }
@@ -58,16 +59,20 @@ impl Game<'_> {
             if !quit {
                 return self.leave_server(None);
             }
+            if let Some(mut remote) = self.remote.take() {
+                remote.session.disconnect();
+            }
+            self.saved_for_exit = true;
             self.pending_save = Some(ClosingSave {
                 quit,
                 close: true,
                 reply: None,
                 started: Instant::now(),
-                stage: Stage::Writes,
+                stage: Stage::Quit,
             });
         } else {
             self.close_container();
-            self.stats.custom("leave_game", 1);
+            self.award_custom_stat("leave_game", 1);
             self.lan_close(false);
             self.free_player_beds()?;
             self.pending_save = Some(ClosingSave {
@@ -162,6 +167,7 @@ impl Game<'_> {
         };
         let result = (|| -> Result<bool> {
             match &mut save.stage {
+                Stage::Quit => Ok(true),
                 Stage::Server => {
                     let server = self
                         .integrated
@@ -196,7 +202,7 @@ impl Game<'_> {
                         self.save.save_later(
                             &chunks,
                             self.pack.assets.registry,
-                            self.res.biomes(),
+                            world_biomes!(self),
                         )?;
                         self.world.modified.remove(&key);
                         keys.pop_front();
@@ -224,6 +230,7 @@ impl Game<'_> {
                     if keys.is_empty() {
                         self.prune_entity_memory();
                         self.save_raids();
+                        self.save.save_attachments(&self.world.attachments)?;
                         self.save.save_forced_chunks(&self.streaming.forced)?;
                         self.save_game_metadata()?;
                         save.stage = Stage::Writes;
@@ -273,6 +280,21 @@ impl Game<'_> {
     }
 
     pub(super) fn render_closing_save(&mut self) -> Result<()> {
+        if matches!(
+            self.pending_save.as_ref().map(|save| &save.stage),
+            Some(Stage::Quit)
+        ) {
+            return Ok(());
+        }
+        // disconnectWithSavingScreen: a GenericMessageScreen, its title and
+        // no navigation.
+        horizon_client::widgets::begin_screen(|| {
+            horizon_client::widgets::ScreenInfo::new(
+                "saving",
+                super::screen_info::tr("menu.savingLevel", &[]),
+            )
+            .without_navigation()
+        });
         let Some(renderer) = &mut self.renderer else {
             return Ok(());
         };

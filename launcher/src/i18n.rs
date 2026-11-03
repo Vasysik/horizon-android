@@ -1,7 +1,7 @@
-//! The launcher's languages: English (the strings in the code), French, Russian, and
-//! German, the languages Horizon's own game menus have. A table per language
-//! (`launcher/lang/<code>.json`) maps each English string to its translation; a string
-//! the table lacks shows in English.
+//! The launcher's languages: English (the strings in the code), French, Russian, German and
+//! Spanish, the languages Horizon's own game menus have, Simplified Chinese, Ukrainian,
+//! Polish, Brazilian Portuguese, Japanese and Turkish. A table per language (`launcher/lang/<code>.json`) maps each English string to its
+//! translation; a string the table lacks shows in English.
 //!
 //! The language follows the system's unless the player picks one in Settings
 //! (`Settings::language`). Translations are Horizon's own, written for this launcher.
@@ -21,10 +21,36 @@ pub enum Language {
     Russian,
     #[serde(rename = "de")]
     German,
+    #[serde(rename = "zh")]
+    Chinese,
+    #[serde(rename = "es")]
+    Spanish,
+    #[serde(rename = "uk")]
+    Ukrainian,
+    #[serde(rename = "pl")]
+    Polish,
+    #[serde(rename = "pt-br")]
+    PortugueseBrazil,
+    #[serde(rename = "ja")]
+    Japanese,
+    #[serde(rename = "tr")]
+    Turkish,
 }
 
 impl Language {
-    pub const ALL: [Language; 4] = [Self::English, Self::French, Self::Russian, Self::German];
+    pub const ALL: [Language; 11] = [
+        Self::English,
+        Self::French,
+        Self::Russian,
+        Self::German,
+        Self::Chinese,
+        Self::Spanish,
+        Self::Ukrainian,
+        Self::Polish,
+        Self::PortugueseBrazil,
+        Self::Japanese,
+        Self::Turkish,
+    ];
 
     /// Its code in `settings.json` and on the command line.
     pub fn code(self) -> &'static str {
@@ -33,6 +59,13 @@ impl Language {
             Self::French => "fr",
             Self::Russian => "ru",
             Self::German => "de",
+            Self::Chinese => "zh",
+            Self::Spanish => "es",
+            Self::Ukrainian => "uk",
+            Self::Polish => "pl",
+            Self::PortugueseBrazil => "pt-br",
+            Self::Japanese => "ja",
+            Self::Turkish => "tr",
         }
     }
 
@@ -43,14 +76,37 @@ impl Language {
             Self::French => "Français",
             Self::Russian => "Русский",
             Self::German => "Deutsch",
+            Self::Chinese => "简体中文",
+            Self::Spanish => "Español",
+            Self::Ukrainian => "Українська",
+            Self::Polish => "Polski",
+            Self::PortugueseBrazil => "Português (Brasil)",
+            Self::Japanese => "日本語",
+            Self::Turkish => "Türkçe",
         }
     }
 
-    /// A language code (`fr`, `fr-CH`, `fr_FR.UTF-8`), if the launcher has it.
+    /// Parses a language code (e.g. `fr`, `fr-CH`, `pt-BR`, or `pt_BR.UTF-8`)
+    /// if the launcher supports it.
+    ///
+    /// Underscores are normalized to hyphens to support locale formats commonly
+    /// returned by operating systems. Brazilian Portuguese (`pt-BR`) is matched
+    /// explicitly, while other Portuguese variants (such as `pt-PT`) are not
+    /// mapped to it.
     pub fn parse(code: &str) -> Option<Self> {
         let lower = code.trim().to_ascii_lowercase();
-        let base = lower.split(['-', '_', '.', '@']).next().unwrap_or("");
-        Self::ALL.into_iter().find(|l| l.code() == base)
+        let clean = lower.split(['.', '@']).next().unwrap_or("");
+        let normalized = clean.replace('_', "-");
+
+        if normalized == "pt-br" {
+            return Some(Self::PortugueseBrazil);
+        }
+
+        let base = normalized.split('-').next().unwrap_or("");
+
+        Self::ALL
+            .into_iter()
+            .find(|language| language.code() == base)
     }
 
     /// The first of the system's preferred languages the launcher has, else English.
@@ -74,6 +130,13 @@ impl Language {
             Self::French => include_str!("../lang/fr.json"),
             Self::Russian => include_str!("../lang/ru.json"),
             Self::German => include_str!("../lang/de.json"),
+            Self::Chinese => include_str!("../lang/zh.json"),
+            Self::Spanish => include_str!("../lang/es.json"),
+            Self::Ukrainian => include_str!("../lang/uk.json"),
+            Self::Polish => include_str!("../lang/pl.json"),
+            Self::PortugueseBrazil => include_str!("../lang/pt-br.json"),
+            Self::Japanese => include_str!("../lang/ja.json"),
+            Self::Turkish => include_str!("../lang/tr.json"),
         }
     }
 }

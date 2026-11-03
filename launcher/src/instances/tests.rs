@@ -373,3 +373,53 @@ fn deleted_instances_go_to_the_trash_and_are_forgotten() {
     assert_eq!(again.group, None);
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn the_mod_browser_installs_for_the_instance_loader() {
+    let vanilla = JavaGame {
+        minecraft: "1.21.1".into(),
+        ..JavaGame::default()
+    };
+    assert_eq!(vanilla.target().loader, None);
+    let quilt = JavaGame {
+        loader: Some(crate::loaders::Loader {
+            kind: crate::loaders::Kind::Quilt,
+            version: "0.30.1".into(),
+        }),
+        ..vanilla
+    };
+    let target = quilt.target();
+    assert_eq!(
+        (target.minecraft.as_str(), target.loader.as_deref()),
+        ("1.21.1", Some("quilt"))
+    );
+    // A Quilt instance takes Fabric mods too.
+    assert!(target.accepts("fabric") && !target.accepts("neoforge"));
+}
+
+/// A chosen picture is kept scaled to 128 pixels in the instance's folder; removing it moves it
+/// to the trash; a file that isn't an image is refused.
+#[test]
+fn a_picture_is_kept_small_and_goes_to_the_trash() {
+    let root = scratch("picture");
+    let (home, trash) = (root.join("home"), root.join("trash"));
+    let mut photo = Vec::new();
+    image::RgbaImage::from_pixel(600, 400, image::Rgba([200, 90, 40, 255]))
+        .write_to(
+            &mut std::io::Cursor::new(&mut photo),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    let png = picture(photo).unwrap();
+    let to_trash = |p: &Path| crate::desktop_seams::to_folder(p, &trash);
+    set_picture(&home, Some(&png), &to_trash).unwrap();
+    let kept = image::open(home.join(PICTURE)).unwrap();
+    assert_eq!((kept.width(), kept.height()), (128, 85));
+    set_picture(&home, None, &to_trash).unwrap();
+    assert!(!home.join(PICTURE).exists());
+    assert!(trash.join(PICTURE).is_file());
+    // Nothing to remove is fine.
+    set_picture(&home, None, &to_trash).unwrap();
+    assert!(picture(b"not an image".to_vec()).is_err());
+    fs::remove_dir_all(&root).unwrap();
+}

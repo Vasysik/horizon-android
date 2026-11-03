@@ -21,11 +21,23 @@ pub const STARLING_API: &str = "starling-0.1";
 /// The WIT packages and versions a component may link.
 const LINKED: [(&str, &str); 2] = [("horizon:mods/", "0.1."), ("starling:mods/", "0.1.")];
 /// The manifest `api` lines this build loads. 0.2 is 0.1 plus content:
+<<<<<<< HEAD
 /// `assets/` and `data/` in the `.hmod`, with blocks and items declared in
 /// `data/<id>/horizon/` (docs/modpacks.md). Code still links API 0.1.
 /// 0.3 is a server mod (experimental): the `horizon-server-mod` world. starling-0.1 links
 /// `starling:mods` and may hold content too.
 pub const APIS: [&str; 4] = [API, "0.2", SERVER_API, STARLING_API];
+||||||| f8988d5a7
+/// `assets/` and `data/` in the `.hmod`, with blocks and items declared in
+/// `data/<id>/horizon/` (docs/modpacks.md). Code still links API 0.1.
+/// 0.3 is a server mod (experimental): the `horizon-server-mod` world.
+pub const APIS: [&str; 3] = [API, "0.2", SERVER_API];
+=======
+/// `assets/` and `data/` in the `.hmod`, with blocks, items, creative tabs, mob effects,
+/// entity types and menu types declared in `data/<id>/horizon/` (docs/mods.md). Code still links API 0.1.
+/// 0.3 is a server mod (experimental): the `horizon-server-mod` world.
+pub const APIS: [&str; 3] = [API, "0.2", SERVER_API];
+>>>>>>> 31f83499b
 /// The line of server mods, experimental: `side = "server"`.
 pub const SERVER_API: &str = "0.3";
 /// Namespaces no mod may claim: vanilla's, the convention tags' (mods add
@@ -153,7 +165,7 @@ pub enum Capability {
     Storage,
     /// Runs vanilla commands as the player, with the player's permissions.
     Command,
-    /// New blocks and items from the mod's `data/` (API 0.2): no WIT
+    /// New blocks, items and mob effects from the mod's `data/` (API 0.2): no WIT
     /// interface, the game reads them before the world loads.
     Registries,
     /// The players on the server and messages to them (server mods).
@@ -260,11 +272,43 @@ impl Capability {
     /// What the player reads before turning the mod on: "May <this>".
     pub fn describe(self) -> &'static str {
         match self {
+<<<<<<< HEAD
             Capability::GameRead => "see your position, health, effects and the time",
             Capability::WorldRead => "see the blocks and creatures around you",
             Capability::InventoryRead => "see your items",
             Capability::InventoryClick => "move your items, in your inventory and what you open",
             Capability::Creative => "take items from the creative tabs, in creative mode",
+||||||| f8988d5a7
+            Capability::GameRead => "see your position, health and the time",
+            Capability::Chat => "show you chat messages",
+            Capability::Hud => "draw text on your screen",
+            Capability::Storage => "save its own settings to disk",
+            Capability::Command => "run commands as you, with your permissions",
+            Capability::Registries => "add blocks and items to your worlds",
+            Capability::Ui => "show its own screens and a settings page",
+            Capability::Render => "draw on your screen, shake and zoom the camera",
+            Capability::Input => {
+                "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
+            }
+            Capability::Players => "see who is on the server and message them",
+            Capability::World => "read and change the world's blocks",
+=======
+            Capability::GameRead => "see your position, health and the time",
+            Capability::Chat => "show you chat messages",
+            Capability::Hud => "draw text on your screen",
+            Capability::Storage => "save its own settings to disk",
+            Capability::Command => "run commands as you, with your permissions",
+            Capability::Registries => {
+                "add blocks, items, mob effects and entity types to your worlds"
+            }
+            Capability::Ui => "show its own screens and a settings page",
+            Capability::Render => "draw on your screen, shake and zoom the camera",
+            Capability::Input => {
+                "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
+            }
+            Capability::Players => "see who is on the server and message them",
+            Capability::World => "read and change the world's blocks",
+>>>>>>> 31f83499b
             Capability::Recipes => {
                 "read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items"
             }
@@ -594,6 +638,17 @@ impl Package {
         }
         Ok(Package { manifest, wasm, js })
     }
+    /// Whether the mod at `path` (a `.hmod` or a folder) has a [`MANIFEST`]: content, or a legacy
+    /// WebAssembly mod. A `.hmod` holding only native code has none.
+    pub fn has_manifest(path: &Path) -> bool {
+        if path.is_dir() {
+            return path.join(MANIFEST).is_file();
+        }
+        std::fs::File::open(path)
+            .ok()
+            .and_then(|f| zip::ZipArchive::new(f).ok())
+            .is_some_and(|mut zip| zip.by_name(MANIFEST).is_ok())
+    }
     /// The `.hmod` bytes for `manifest_text` and a component.
     pub fn write(manifest_text: &str, wasm: &[u8]) -> Result<Vec<u8>, String> {
         Self::write_files(manifest_text, Some(wasm), &[])
@@ -638,37 +693,6 @@ pub fn find(dir: &Path) -> Vec<PathBuf> {
         .collect();
     found.sort();
     found
-}
-
-/// Turns a `wasm32-unknown-unknown` cdylib built with the SDK into the
-/// component the game loads.
-#[cfg(feature = "pack")]
-pub fn componentize(core: &[u8]) -> Result<Vec<u8>, String> {
-    wit_component::ComponentEncoder::default()
-        .module(core)
-        .and_then(|e| e.validate(true).encode())
-        .map_err(|e| format!("{e:#}"))
-}
-
-/// The names a component imports: `horizon:mods/game@0.1.0`, ...
-#[cfg(feature = "pack")]
-pub fn component_imports(component: &[u8]) -> Result<Vec<String>, String> {
-    use wit_parser::{WorldItem, WorldKey};
-    let wit_component::DecodedWasm::Component(resolve, world) =
-        wit_component::decode(component).map_err(|e| format!("{e:#}"))?
-    else {
-        return Err("a WIT package, not a component".into());
-    };
-    let names = resolve.worlds[world]
-        .imports
-        .iter()
-        .map(|(key, item)| match (key, item) {
-            (WorldKey::Interface(id), _) | (_, WorldItem::Interface { id, .. }) => resolve
-                .id_of(*id)
-                .unwrap_or_else(|| resolve.name_world_key(key)),
-            _ => resolve.name_world_key(key),
-        });
-    Ok(names.collect())
 }
 
 #[cfg(test)]

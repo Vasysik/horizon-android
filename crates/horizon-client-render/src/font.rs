@@ -8,7 +8,7 @@
 //! offsets), styled drawing and StringSplitter-style line wrapping.
 use crate::{
     hud::Rect,
-    text::{Style, Text},
+    text::{Span, Style, Text, legacy_format},
     zip::Zip,
 };
 use ab_glyph::{Font as _, ScaleFont as _};
@@ -112,7 +112,12 @@ struct Region {
     cursor: (u32, u32),
     row: u32,
     pending: Vec<Patch>,
+<<<<<<< HEAD
     /// A placement found no room (`glyph_of` then starts the region again).
+||||||| f8988d5a7
+=======
+    /// A glyph did not fit since the last `Font::begin_frame`.
+>>>>>>> 31f83499b
     full: bool,
 }
 struct Cache {
@@ -692,7 +697,18 @@ impl Font {
         }
         cache.region.cursor = (0, 0);
         cache.region.row = 0;
+        cache.region.full = false;
         self.generation.set(next_generation());
+    }
+    /// Call once per frame before any text is laid out. When the dynamic
+    /// region ran out of room (vanilla's glyph textures grow instead), the
+    /// glyphs are forgotten so they are rasterized again from the start; it
+    /// waits for the frame boundary because quads already queued hold the old
+    /// rects.
+    pub fn begin_frame(&self) {
+        if self.cache.borrow().region.full {
+            self.reset_cache();
+        }
     }
     /// Changes whenever a glyph may come out different: another font, a
     /// cache reset (glyphs move in the atlas) or other font options. Text laid
@@ -738,6 +754,7 @@ impl Font {
         if let Some(g) = sets[i].1.glyphs.get(&c) {
             return *g;
         }
+<<<<<<< HEAD
         region.full = false;
         let mut glyph = self.resolve(&mut sets[i].1, region, c);
         // A server pack's menu backgrounds and HUD images fill the run-time rows as they are
@@ -754,6 +771,22 @@ impl Font {
         }
         let glyph = glyph.unwrap_or(self.missing);
         sets[i].1.glyphs.insert(c, glyph);
+||||||| f8988d5a7
+        let glyph = self.resolve(set, region, c).unwrap_or(self.missing);
+        set.glyphs.insert(c, glyph);
+=======
+        let was_full = std::mem::replace(&mut region.full, false);
+        let found = self.resolve(set, region, c);
+        // No room: the missing glyph for now, not remembered, so the
+        // character is tried again once `begin_frame` cleared the region.
+        let overflowed = std::mem::replace(&mut region.full, was_full);
+        region.full |= overflowed;
+        if overflowed {
+            return self.missing;
+        }
+        let glyph = found.unwrap_or(self.missing);
+        set.glyphs.insert(c, glyph);
+>>>>>>> 31f83499b
         glyph
     }
     fn resolve(&self, set: &mut FontSet, region: &mut Region, c: char) -> Option<Glyph> {
@@ -942,6 +975,9 @@ impl Font {
         std::mem::take(&mut self.cache.borrow_mut().region.pending)
     }
     pub fn advance(&self, c: char, style: &Style) -> f32 {
+        if c == '\u{fffc}' && style.inline_object.is_some() {
+            return 8.0;
+        }
         let g = self.glyph_styled(c, style);
         g.advance + if style.is_bold() { g.offset } else { 0.0 }
     }
@@ -961,6 +997,16 @@ impl Font {
     pub fn width_text(&self, t: &Text) -> f32 {
         let t = t.resolved();
         crate::bidi::visual(&t)
+            .chars()
+            .map(|(c, s)| self.advance(c, s))
+            .sum::<f32>()
+            .ceil()
+    }
+    /// `Font.width(FormattedCharSequence)` of a sequence a component built
+    /// with `FormattedCharSequence.forward`: every character is a glyph, a
+    /// `§` included (`StringDecomposer.iterate`, not `iterateFormatted`).
+    pub fn width_drawn(&self, t: &Text) -> f32 {
+        crate::bidi::visual(t)
             .chars()
             .map(|(c, s)| self.advance(c, s))
             .sum::<f32>()
@@ -1011,6 +1057,83 @@ impl Font {
             out.push((Text::empty(), false));
         }
         out
+    }
+    /// `Font.split`: `StringSplitter.splitLines(text, width, Style.EMPTY)` over
+    /// the text's parts with their `§` codes in. A code styles what follows
+    /// (`§r` back to no style while measuring), and the part a line breaks in
+    /// goes on in the style at the break. Lines keep their codes for drawing.
+    pub fn split_formatted(&self, t: &Text, max_width: f32) -> Vec<Text> {
+        let max_width = max_width.max(1.0);
+        let mut parts: Vec<(Vec<char>, Style)> = t
+            .spans
+            .iter()
+            .filter(|s| !s.text.is_empty())
+            .map(|s| (s.text.chars().collect(), s.style.clone()))
+            .collect();
+        let mut flat: Vec<char> = parts.iter().flat_map(|p| p.0.iter().copied()).collect();
+        let mut out = Vec::new();
+        let mut force_new_line = false;
+        // One LineBreakFinder per line, over the parts left.
+        while let Some((at, split_style)) = self.line_break(&parts, max_width) {
+            let tail = flat[at];
+            let new_line = tail == '\n';
+            let skip = usize::from(new_line || tail == ' ');
+            force_new_line = new_line;
+            out.push(split_at(&mut parts, at, skip, &split_style));
+            flat.drain(..at + skip);
+        }
+        if !parts.is_empty() {
+            let mut rest = Text::default();
+            rest.spans = parts
+                .into_iter()
+                .map(|(text, style)| Span {
+                    text: text.into_iter().collect(),
+                    style,
+                })
+                .collect();
+            out.push(rest);
+        } else if force_new_line {
+            out.push(Text::empty());
+        }
+        out
+    }
+    /// `StringSplitter.LineBreakFinder` fed by `StringDecomposer.iterateFormatted`:
+    /// where the parts break (a character index) and the style there.
+    fn line_break(&self, parts: &[(Vec<char>, Style)], max_width: f32) -> Option<(usize, Style)> {
+        let (mut width, mut had_visible, mut last_space) = (0.0f32, false, None);
+        let mut offset = 0;
+        for (contents, part_style) in parts {
+            let mut style = part_style.clone();
+            let mut i = 0;
+            while i < contents.len() {
+                let c = contents[i];
+                if c == '§' {
+                    // A `§` that ends its part ends only that part.
+                    let Some(&code) = contents.get(i + 1) else {
+                        break;
+                    };
+                    style = legacy_format(&style, code, &Style::default());
+                    i += 2;
+                    continue;
+                }
+                let at = offset + i;
+                if c == '\n' {
+                    return Some((at, style));
+                }
+                if c == ' ' {
+                    last_space = Some((at, style.clone()));
+                }
+                let advance = self.advance(c, &style);
+                width += advance;
+                if had_visible && width > max_width {
+                    return Some(last_space.unwrap_or((at, style)));
+                }
+                had_visible |= advance != 0.0;
+                i += 1;
+            }
+            offset += contents.len();
+        }
+        None
     }
     /// `ComponentRenderUtils.wrapComponents`: the split lines, wrapped ones
     /// indented by an unstyled space; one empty line for empty text.
@@ -1103,6 +1226,47 @@ impl Font {
     pub fn white(&self) -> Rect {
         self.white
     }
+}
+
+/// `StringSplitter.FlatComponents.splitAt`: the parts before `at` as a line,
+/// `skip` characters dropped, and the part it ends in restyled as `style`.
+fn split_at(parts: &mut Vec<(Vec<char>, Style)>, at: usize, skip: usize, style: &Style) -> Text {
+    let mut line = Text::default();
+    let mut push = |text: &[char], style: &Style| {
+        line.spans.push(Span {
+            text: text.iter().collect(),
+            style: style.clone(),
+        })
+    };
+    // Each part done is removed, so the one at hand is always the first.
+    let (mut position, mut in_skip) = (at, false);
+    while let Some((text, part_style)) = parts.first() {
+        let size = text.len();
+        if !in_skip {
+            if position > size {
+                push(text, part_style);
+                parts.remove(0);
+                position -= size;
+                continue;
+            }
+            if position > 0 {
+                push(&text[..position], part_style);
+            }
+            position += skip;
+            in_skip = true;
+        }
+        if position <= size {
+            if position == size {
+                parts.remove(0);
+            } else {
+                parts[0] = (text[position..].to_vec(), style.clone());
+            }
+            break;
+        }
+        parts.remove(0);
+        position -= size;
+    }
+    line
 }
 
 #[cfg(test)]
@@ -1267,6 +1431,37 @@ mod tests {
         assert!(!font.take_patches().is_empty());
     }
 
+    /// StringDecomposer.iterateFormatted: a `§` that ends a part stops that
+    /// part only; the next part is still measured and can break.
+    #[test]
+    fn a_section_sign_ending_a_part_still_breaks_the_next() {
+        let sheet = png(16, 8, |x, _| x < 2);
+        let default = br#"{"providers":[{"type":"space","advances":{" ":4}},{"type":"bitmap","file":"minecraft:font/a.png","ascent":7,"chars":["ab"]}]}"#;
+        let root = root(
+            "section-sign",
+            &[
+                ("assets/minecraft/font/default.json", default),
+                ("assets/minecraft/textures/font/a.png", &sheet),
+            ],
+        );
+        let font = load(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let mut text = Text::default();
+        text.spans = ["a§", "a a"]
+            .map(|part| Span {
+                text: part.into(),
+                style: Style::default(),
+            })
+            .into();
+        // 3 + 3 + 4 + 3 is past 12: the line breaks at the space.
+        let lines: Vec<String> = font
+            .split_formatted(&text, 12.0)
+            .iter()
+            .map(Text::plain)
+            .collect();
+        assert_eq!(lines, ["a§a", "a"]);
+    }
+
     /// A renderer rebuilt over the same font (the loading screen's handoff)
     /// makes its atlas texture from the textures alone, so the glyphs it had
     /// rasterized into the previous texture must be placed into the new one.
@@ -1314,6 +1509,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn a_full_glyph_region_starts_again_instead_of_missing_glyphs() {
         // Three 2048 x 200 glyphs: the 512 run-time rows hold two.
         let sheet = png(2048, 600, |_, _| true);
@@ -1333,5 +1529,57 @@ mod tests {
         assert_eq!(c.v0, a.v0);
         // 'a' went with the rows and is placed again.
         assert!(font.glyph('a').rect.is_some_and(|r| r.v0 != c.v0));
+||||||| f8988d5a7
+=======
+    fn a_full_glyph_region_recovers_at_the_next_frame() {
+        // Two 8x8 glyphs from a sheet outside the atlas; the region holds one row.
+        let sheet = png(16, 8, |x, _| x % 8 < 4);
+        let default = br#"{"providers":[{"type":"bitmap","file":"pack:font/s.png","ascent":7,"chars":["ab"]}]}"#;
+        let root = root(
+            "full",
+            &[
+                ("assets/minecraft/font/default.json", default),
+                ("assets/pack/textures/font/s.png", &sheet),
+            ],
+        );
+        // A 10 wide atlas fits one 8 pixel glyph per row; the region two rows.
+        let font = Font::load(&root, &HashMap::new(), &[], (10, 64), (0, 8), white());
+        let _ = std::fs::remove_dir_all(&root);
+        let epoch = font.epoch();
+        let a = font.glyph('a');
+        assert!(a.rect.is_some());
+        // No room for 'b': missing for now, and asked again next time.
+        assert!(font.glyph('b').rect.is_none());
+        assert!(font.glyph('b').rect.is_none());
+        assert_eq!(font.epoch(), epoch);
+        font.begin_frame();
+        assert_ne!(font.epoch(), epoch);
+        let b = font.glyph('b');
+        assert!(b.rect.is_some());
+        assert_eq!(b.advance, a.advance);
+        // Nothing overflowed since: the next frame keeps the glyphs.
+        let epoch = font.epoch();
+        font.begin_frame();
+        assert_eq!(font.epoch(), epoch);
+    }
+
+    #[test]
+    fn a_character_without_a_provider_does_not_reset_the_region() {
+        let sheet = png(8, 8, |x, _| x < 4);
+        let default = br#"{"providers":[{"type":"bitmap","file":"pack:font/s.png","ascent":7,"chars":["a"]}]}"#;
+        let root = root(
+            "nofill",
+            &[
+                ("assets/minecraft/font/default.json", default),
+                ("assets/pack/textures/font/s.png", &sheet),
+            ],
+        );
+        let font = Font::load(&root, &HashMap::new(), &[], (10, 64), (0, 8), white());
+        let _ = std::fs::remove_dir_all(&root);
+        let epoch = font.epoch();
+        assert!(font.glyph('z').rect.is_none());
+        font.begin_frame();
+        assert_eq!(font.epoch(), epoch);
+>>>>>>> 31f83499b
     }
 }

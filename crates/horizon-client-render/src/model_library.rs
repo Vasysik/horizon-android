@@ -43,10 +43,20 @@ impl ParsedModels {
                 }
             }
         }
+<<<<<<< HEAD
         let parsed = crate::par::par_map(&files, |(id, path)| {
             let text = fs::read_to_string(path).ok()?;
             let model = CuboidModel::from_json(&text).ok()?;
             Some(Arc::new(with_mesh(root, id, model)))
+||||||| f8988d5a7
+        let parsed = crate::par::par_map(&files, |(_, path)| {
+            let text = fs::read_to_string(path).ok()?;
+            CuboidModel::from_json(&text).ok().map(Arc::new)
+=======
+        let parsed = crate::par::par_map(&files, |(_, path)| {
+            let text = horizon_core::prepared_files::read_to_string(path).ok()?;
+            CuboidModel::from_json(&text).ok().map(Arc::new)
+>>>>>>> 31f83499b
         });
         let models = files
             .into_iter()
@@ -90,8 +100,8 @@ impl ParsedModels {
                     let read = || -> Result<CuboidModel> {
                         let (namespace, path) =
                             name.split_once(':').ok_or("invalid model identifier")?;
-                        let text = fs::read_to_string(
-                            root.join(format!("assets/{namespace}/models/{path}.json")),
+                        let text = horizon_core::prepared_files::read_to_string(
+                            &root.join(format!("assets/{namespace}/models/{path}.json")),
                         )?;
                         Ok(with_mesh(root, &name, CuboidModel::from_json(&text)?))
                     };

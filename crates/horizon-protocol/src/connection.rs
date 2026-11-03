@@ -83,11 +83,7 @@ impl Read for Pipe {
                 }
             };
         }
-        let n = out.len().min(state.0.len());
-        for (o, b) in out.iter_mut().zip(state.0.drain(..n)) {
-            *o = b;
-        }
-        Ok(n)
+        state.0.read(out)
     }
 }
 impl Write for Pipe {
@@ -169,11 +165,24 @@ pub struct Counters {
 
 pub struct ConnReader {
     stream: Stream,
+    /// Bytes read: `buffer[start..end]` are not consumed yet, and reads go
+    /// straight into `buffer[end..]`.
     buffer: Vec<u8>,
+    start: usize,
+    end: usize,
+    inflater: frame::Inflater,
     decrypt: Option<Cfb8>,
     pub threshold: Option<usize>,
     pub counters: Arc<Counters>,
 }
+/// Closes a connection from another thread: a read or a write blocked on it fails.
+pub struct Closer(Stream);
+impl Closer {
+    pub fn close(&self) {
+        self.0.shutdown();
+    }
+}
+
 pub struct ConnWriter {
     stream: Stream,
     encrypt: Option<Cfb8>,
@@ -203,11 +212,21 @@ impl Connection {
             .collect();
         Self::connect_addresses(host, addrs, timeout)
     }
-    /// Minecraft's SRV redirect applies to the socket destination only. Callers
-    /// keep the player's original host and port in the protocol handshake.
+    /// Connect through Minecraft's SRV redirect. Status requests still use the
+    /// original address in their handshake (`ServerStatusPinger.pingServer`).
     pub fn connect_server(host: &str, port: u16, timeout: Duration) -> Result<Self> {
-        let addrs = crate::resolver::resolve(host, port)?;
-        Self::connect_addresses(host, addrs, timeout)
+        Self::connect_server_with_address(host, port, timeout).map(|(connection, _, _)| connection)
+    }
+    /// `ConnectScreen.startConnecting`: login handshakes use the resolved host
+    /// and port, including an SRV redirect, rather than the status request's address.
+    pub fn connect_server_with_address(
+        host: &str,
+        port: u16,
+        timeout: Duration,
+    ) -> Result<(Self, String, u16)> {
+        let resolved = crate::resolver::resolve(host, port)?;
+        let connection = Self::connect_addresses(host, resolved.addresses, timeout)?;
+        Ok((connection, resolved.host, resolved.port))
     }
     /// Each address starts once the earlier ones fail or [`ATTEMPT_DELAY`] after the last
     /// start, alongside those still trying, and the first to connect wins: a dead address
@@ -273,6 +292,9 @@ impl Connection {
             reader: ConnReader {
                 stream,
                 buffer: Vec::new(),
+                start: 0,
+                end: 0,
+                inflater: frame::Inflater::default(),
                 decrypt: None,
                 threshold: None,
                 counters: counters.clone(),
@@ -299,7 +321,8 @@ impl Connection {
     pub fn enable_encryption(&mut self, secret: &[u8; 16]) {
         let mut decrypt = Cfb8::new(secret, secret);
         // Bytes already read past the last packet were sent encrypted.
-        decrypt.decrypt(&mut self.reader.buffer);
+        let r = &mut self.reader;
+        decrypt.decrypt(&mut r.buffer[r.start..r.end]);
         self.reader.decrypt = Some(decrypt);
         self.writer.encrypt = Some(Cfb8::new(secret, secret));
     }
@@ -314,44 +337,110 @@ impl Connection {
     }
 }
 impl ConnReader {
+    /// Read exactly `len` bytes as they are, with no framing.
+    pub fn read_raw(&mut self, len: usize) -> Result<Vec<u8>> {
+        let mut out = vec![0u8; len];
+        self.stream.read_exact(&mut out)?;
+        Ok(out)
+    }
     /// Block until a whole packet arrives: (id, payload).
     pub fn recv(&mut self) -> Result<(i32, Vec<u8>)> {
         loop {
-            if let Some(frame) = frame::split(&mut self.buffer)? {
-                let body = frame::decompress(frame, self.threshold)?;
-                if body.is_empty() {
-                    // A frame with no packet in it. Vanilla's PacketDecoder
-                    // only decodes a packet from a readable buffer, so an
-                    // empty compressed frame is skipped and the connection
-                    // stays up.
+            let pending = &self.buffer[self.start..self.end];
+            let mut wanted = 0;
+            if let Some((prefix, len)) = frame::header(pending)? {
+                if pending.len() >= prefix + len {
+                    let frame = self.start + prefix..self.start + prefix + len;
+                    self.start = frame.end;
+                    if let Some(packet) = self.packet(frame)? {
+                        self.counters.received.fetch_add(1, Ordering::Relaxed);
+                        return Ok(packet);
+                    }
                     continue;
                 }
+                wanted = prefix + len;
+            }
+            self.fill(wanted)?;
+        }
+    }
+    /// The packet in `buffer[frame]`, or `None` for a frame with no packet in it:
+    /// vanilla's PacketDecoder only decodes a packet from a readable buffer, so an
+    /// empty compressed frame is skipped and the connection stays up.
+    fn packet(&mut self, frame: std::ops::Range<usize>) -> Result<Option<(i32, Vec<u8>)>> {
+        let frame = &self.buffer[frame];
+        match frame::body(frame, self.threshold, &mut self.inflater)? {
+            frame::Body::Plain(at) => {
+                let body = &frame[at..];
+                if body.is_empty() {
+                    return Ok(None);
+                }
+                let mut r = Reader::new(body);
+                let id = r.varint()?;
+                Ok(Some((id, body[r.position()..].to_vec())))
+            }
+            frame::Body::Inflated(mut body) => {
                 let mut r = Reader::new(&body);
                 let id = r.varint()?;
-                let start = r.position();
-                self.counters.received.fetch_add(1, Ordering::Relaxed);
-                return Ok((id, body[start..].to_vec()));
+                let at = r.position();
+                body.drain(..at);
+                Ok(Some((id, body)))
             }
-            let mut chunk = [0u8; 16384];
-            let n = self.stream.read(&mut chunk)?;
-            if n == 0 {
-                return Err(Error::new("Connection closed by the server"));
-            }
-            self.counters
-                .bytes_in
-                .fetch_add(n as i64, Ordering::Relaxed);
-            let data = &mut chunk[..n];
-            if let Some(c) = &mut self.decrypt {
-                c.decrypt(data);
-            }
-            self.buffer.extend_from_slice(data);
         }
+    }
+    /// Read once from the stream into the buffer, with room for at least
+    /// `frame` bytes of unconsumed data (a whole frame, once its length is known).
+    fn fill(&mut self, frame: usize) -> Result<()> {
+        const READ: usize = 1 << 16;
+        let pending = self.end - self.start;
+        let room = READ.max(frame.saturating_sub(pending));
+        if self.buffer.len() - self.end < room {
+            self.buffer.copy_within(self.start..self.end, 0);
+            (self.start, self.end) = (0, pending);
+            if self.buffer.len() < pending + room {
+                self.buffer.resize(pending + room, 0);
+            }
+        }
+        let n = match self.stream.read(&mut self.buffer[self.end..]) {
+            Ok(0) => return Err(Error::end_of_stream()),
+            Ok(n) => n,
+            // The read timeout passed: Windows reports TimedOut, Unix
+            // WouldBlock.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err(Error::timed_out());
+            }
+            Err(e) => return Err(e.into()),
+        };
+        self.counters
+            .bytes_in
+            .fetch_add(n as i64, Ordering::Relaxed);
+        let data = &mut self.buffer[self.end..self.end + n];
+        if let Some(c) = &mut self.decrypt {
+            c.decrypt(data);
+        }
+        self.end += n;
+        Ok(())
+    }
+    /// A [`Closer`] for this connection.
+    pub fn closer(&self) -> Result<Closer> {
+        Ok(Closer(self.stream.try_clone()?))
     }
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
         Ok(self.stream.set_read_timeout(timeout)?)
     }
 }
 impl ConnWriter {
+    /// Write bytes as they are, with no framing: the legacy server list ping
+    /// (`LegacyServerPinger`) is not a framed protocol.
+    pub fn write_raw(&mut self, data: &[u8]) -> Result<()> {
+        self.stream.write_all(data)?;
+        self.stream.flush()?;
+        Ok(())
+    }
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
         self.send_contents(&frame::contents(body, self.threshold)?)
@@ -482,6 +571,23 @@ mod tests {
     }
 
     #[test]
+    fn a_silent_peer_times_out_and_a_closed_one_ends_the_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5)).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        c.reader
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let silent = c.recv().unwrap_err();
+        assert!(silent.is_timed_out(), "{silent}");
+        assert_eq!(silent.to_string(), "Timed out");
+        drop(server);
+        let closed = c.recv().unwrap_err();
+        assert!(closed.is_end_of_stream(), "{closed}");
+    }
+
+    #[test]
     fn loopback_with_compression_and_encryption() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -534,6 +640,38 @@ mod tests {
         assert_eq!(c.reader.counters.received.load(Ordering::Relaxed), 1);
         server.join().unwrap();
         assert!(c.recv().is_err());
+    }
+
+    /// Packets from one byte to past the read size, compressed and
+    /// encrypted, arrive whole and in order however the reads cut them.
+    #[test]
+    fn packets_of_every_size_arrive_whole() {
+        let (a, b) = Pipe::pair();
+        let bodies: Vec<Vec<u8>> = (0..400u32)
+            .map(|i| {
+                let len = [1, 2, 63, 64, 65, 300, 4000, 70_000, 200_000][i as usize % 9];
+                (0..len).map(|j| (j as u32 * 31 + i) as u8 & 0x7f).collect()
+            })
+            .collect();
+        let sent = bodies.clone();
+        let server = std::thread::spawn(move || {
+            let mut c = Connection::local(b);
+            c.set_compression(64);
+            c.enable_encryption(&[3; 16]);
+            for body in &sent {
+                c.send(body).unwrap();
+            }
+            c
+        });
+        let mut c = Connection::local(a);
+        c.set_compression(64);
+        c.enable_encryption(&[3; 16]);
+        for body in &bodies {
+            let (id, payload) = c.recv().unwrap();
+            assert_eq!(id, i32::from(body[0]));
+            assert_eq!(payload, body[1..]);
+        }
+        drop(server.join().unwrap());
     }
 
     #[test]

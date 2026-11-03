@@ -39,7 +39,7 @@ pub fn named_color(name: &str) -> Option<u32> {
     COLORS.iter().find(|c| c.1 == name).map(|c| c.2)
 }
 
-/// Click actions carried by locally constructed text components.
+/// Click actions carried by text components.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClickEvent {
     /// `ClickEvent.OpenUrl`: an http or https link, opened once the player says yes
@@ -55,8 +55,13 @@ pub enum ClickEvent {
     /// `ClickEvent.ShowDialog`: a `minecraft:dialog` registry id, or the
     /// dialog itself as the component carried it.
     ShowDialog(horizon_world::nbt::Tag),
+<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
     /// `ClickEvent.Custom`: back to the server (ServerboundCustomClickActionPacket), with
     /// its payload as the component carried it.
+||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
+=======
+    /// `ClickEvent.Custom`: a server-defined action with an optional NBT payload.
+>>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     Custom {
         id: String,
         payload: Option<horizon_world::nbt::Tag>,
@@ -66,10 +71,34 @@ pub enum ClickEvent {
     OpenFile(String),
 }
 
+/// A non-character `minecraft:object` embedded in a text component.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InlineObject {
+    Player {
+        profile: Value,
+        hat: bool,
+        fallback: String,
+    },
+    Atlas {
+        atlas: String,
+        sprite: String,
+        fallback: String,
+    },
+}
+impl InlineObject {
+    pub fn fallback(&self) -> &str {
+        match self {
+            Self::Player { fallback, .. } | Self::Atlas { fallback, .. } => fallback,
+        }
+    }
+}
+
 /// Text style; `None` fields inherit from the enclosing style.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Style {
     pub color: Option<u32>,
+    /// Text component `shadow_color` as packed ARGB. Zero suppresses shadows.
+    pub shadow_color: Option<u32>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub underlined: Option<bool>,
@@ -80,14 +109,15 @@ pub struct Style {
     pub hover: Option<Box<Text>>,
     /// `HoverEvent.ShowItem`: the event's `{id, count?, components?}` object.
     pub hover_item: Option<Box<Value>>,
+    /// `HoverEvent.ShowEntity`: the event's `{id, uuid, name?}` object.
+    pub hover_entity: Option<Box<Value>>,
     /// `Style.insertion`: the text a Shift-click puts in the chat box.
     pub insertion: Option<String>,
     /// The font (`FontDescription.Resource`), a full id like
     /// `minecraft:alt`; the default font when unset.
     pub font: Option<String>,
-    /// `Style.shadowColor` (ARGB): the drop shadow's colour; unset, a quarter of the text's.
-    /// HUD plugins hide shadows with a transparent one.
-    pub shadow_color: Option<u32>,
+    /// Content metadata for a single U+FFFC object span; never inherited.
+    pub inline_object: Option<InlineObject>,
 }
 /// A style's `font` field: an identifier (`alt` is `minecraft:alt`).
 pub fn font_id(v: &Value) -> Option<String> {
@@ -103,6 +133,7 @@ impl Style {
     /// Fill unset fields from `base` (Style.applyTo).
     pub fn inherit(&mut self, base: &Style) {
         self.color = self.color.or(base.color);
+        self.shadow_color = self.shadow_color.or(base.shadow_color);
         self.bold = self.bold.or(base.bold);
         self.italic = self.italic.or(base.italic);
         self.underlined = self.underlined.or(base.underlined);
@@ -111,11 +142,12 @@ impl Style {
         if self.click.is_none() {
             self.click.clone_from(&base.click);
         }
-        if self.hover.is_none() {
+        // One HoverEvent: its three kinds are inherited together, so a style
+        // with its own event never picks up another kind from `base`.
+        if self.hover.is_none() && self.hover_item.is_none() && self.hover_entity.is_none() {
             self.hover.clone_from(&base.hover);
-        }
-        if self.hover_item.is_none() {
             self.hover_item.clone_from(&base.hover_item);
+            self.hover_entity.clone_from(&base.hover_entity);
         }
         if self.insertion.is_none() {
             self.insertion.clone_from(&base.insertion);
@@ -123,7 +155,6 @@ impl Style {
         if self.font.is_none() {
             self.font.clone_from(&base.font);
         }
-        self.shadow_color = self.shadow_color.or(base.shadow_color);
     }
     pub fn is_bold(&self) -> bool {
         self.bold == Some(true)
@@ -349,7 +380,13 @@ impl Text {
     }
     /// Component.getString: the plain characters.
     pub fn plain(&self) -> String {
-        self.spans.iter().map(|s| s.text.as_str()).collect()
+        self.spans
+            .iter()
+            .map(|s| match &s.style.inline_object {
+                Some(object) if s.text == "\u{fffc}" => object.fallback(),
+                _ => s.text.as_str(),
+            })
+            .collect()
     }
     pub fn is_empty(&self) -> bool {
         self.spans.iter().all(|s| s.text.is_empty())
@@ -415,31 +452,7 @@ impl Text {
                     continue;
                 }
                 let Some(code) = chars.next() else { break };
-                let code = code.to_ascii_lowercase();
-                let next = if let Some(c) = COLORS.iter().find(|c| c.0 == code) {
-                    // Style.applyLegacyFormat: a colour clears the decorations.
-                    Style {
-                        color: Some(c.2),
-                        bold: Some(false),
-                        italic: Some(false),
-                        underlined: Some(false),
-                        strikethrough: Some(false),
-                        obfuscated: Some(false),
-                        ..style.clone()
-                    }
-                } else {
-                    let mut s = style.clone();
-                    match code {
-                        'k' => s.obfuscated = Some(true),
-                        'l' => s.bold = Some(true),
-                        'm' => s.strikethrough = Some(true),
-                        'n' => s.underlined = Some(true),
-                        'o' => s.italic = Some(true),
-                        'r' => s = span.style.clone(),
-                        _ => {}
-                    }
-                    s
-                };
+                let next = legacy_format(&style, code, &span.style);
                 if next != style {
                     if !current.is_empty() {
                         out.spans.push(Span {
@@ -526,8 +539,9 @@ impl Text {
 }
 
 /// The style fields of a component's JSON.
-const STYLE_KEYS: [&str; 10] = [
+const STYLE_KEYS: [&str; 11] = [
     "color",
+    "shadow_color",
     "bold",
     "italic",
     "underlined",
@@ -538,7 +552,7 @@ const STYLE_KEYS: [&str; 10] = [
     "insertion",
     "font",
 ];
-/// Style.Serializer: the fields a style sets.
+/// `Style.Serializer`: the fields a style sets.
 fn style_json(style: &Style) -> Vec<(String, Value)> {
     let mut out = Vec::new();
     if let Some(c) = style.color {
@@ -547,6 +561,9 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
             .find(|n| n.2 == c)
             .map_or_else(|| format!("#{c:06X}"), |n| n.1.to_owned());
         out.push(("color".to_owned(), name.into()));
+    }
+    if let Some(shadow) = style.shadow_color {
+        out.push(("shadow_color".to_owned(), Value::from(shadow as i32)));
     }
     for (key, flag) in [
         ("bold", style.bold),
@@ -577,6 +594,13 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
                 "action": "show_dialog",
                 "dialog": crate::scoreboard::tag_to_json(dialog),
             }),
+            ClickEvent::Custom { id, payload } => {
+                let mut event = json!({ "action": "custom", "id": id });
+                if let Some(payload) = payload {
+                    event["payload"] = crate::scoreboard::tag_to_json(payload);
+                }
+                event
+            }
             ClickEvent::OpenFile(path) => json!({ "action": "open_file", "path": path }),
             ClickEvent::Custom { id, payload } => {
                 let mut event = json!({ "action": "custom", "id": id });
@@ -597,6 +621,10 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
         let mut event = item.clone();
         event.insert("action".into(), "show_item".into());
         out.push(("hover_event".to_owned(), Value::Object(event)));
+    } else if let Some(Value::Object(entity)) = style.hover_entity.as_deref() {
+        let mut event = entity.clone();
+        event.insert("action".into(), "show_entity".into());
+        out.push(("hover_event".to_owned(), Value::Object(event)));
     }
     if let Some(insertion) = &style.insertion {
         out.push(("insertion".to_owned(), insertion.clone().into()));
@@ -604,10 +632,36 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
     if let Some(font) = &style.font {
         out.push(("font".to_owned(), font.clone().into()));
     }
-    if let Some(argb) = style.shadow_color {
-        out.push(("shadow_color".to_owned(), (argb as i32).into()));
-    }
     out
+}
+
+/// `Style.applyLegacyFormat` for the code after a `§`, `§r` going back to
+/// `reset` (`StringDecomposer.iterateFormatted`); an unknown code changes nothing.
+pub fn legacy_format(style: &Style, code: char, reset: &Style) -> Style {
+    let code = code.to_ascii_lowercase();
+    if let Some(c) = COLORS.iter().find(|c| c.0 == code) {
+        // A colour clears the decorations.
+        return Style {
+            color: Some(c.2),
+            bold: Some(false),
+            italic: Some(false),
+            underlined: Some(false),
+            strikethrough: Some(false),
+            obfuscated: Some(false),
+            ..style.clone()
+        };
+    }
+    let mut s = style.clone();
+    match code {
+        'k' => s.obfuscated = Some(true),
+        'l' => s.bold = Some(true),
+        'm' => s.strikethrough = Some(true),
+        'n' => s.underlined = Some(true),
+        'o' => s.italic = Some(true),
+        'r' => s = reset.clone(),
+        _ => {}
+    }
+    s
 }
 
 /// TranslatableContents.decomposeTemplate: `%s` takes the next argument,

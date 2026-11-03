@@ -1,8 +1,11 @@
 //! `/recipe`, `/damage`, `/rotate`, `/swing`, `/playsound`, `/stopsound`,
 //! `/particle`, `/attribute`, `/ride` and `/spreadplayers`.
-use super::{Arg, Context, Game, R, Target, err};
+use super::{Arg, Context, Game, R, Target, err, wrap_degrees};
 use horizon_client::{
-    mobs::{Damage, DamageKind, Who},
+    mobs::{
+        Damage, DamageKind, Who,
+        finalize::{self, Attr},
+    },
     scoreboard_cmd::{Holder, Tracker},
     settings::SOUND_SOURCES,
     text::Text,
@@ -32,7 +35,7 @@ impl Game<'_> {
 
     /// Every recipe id of the recipe manager (what `/recipe` resolves and suggests).
     pub(super) fn learnable_recipes(&self) -> Vec<String> {
-        self.res.stations().recipe_index.ids().cloned().collect()
+        self.stations().recipe_index.ids().cloned().collect()
     }
     pub(super) fn cmd_recipe(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let targets = self.entities(ctx, "targets", true)?;
@@ -82,7 +85,7 @@ impl Game<'_> {
     /// many recipe book displays changed (a transmute recipe has one per
     /// material count).
     fn change_recipes(&mut self, give: bool, recipes: &[String]) -> i32 {
-        let index = &self.res.stations().recipe_index;
+        let index = &world_stations!(self).recipe_index;
         if give {
             let (count, unlocked) = self.level.recipe_book.add_recipes(index, recipes);
             self.recipe_unlocked(&unlocked);
@@ -109,11 +112,14 @@ impl Game<'_> {
             "mob_attack" | "mob_attack_no_aggro" => DamageKind::MobAttack,
             "arrow" => DamageKind::Arrow,
             "thrown" | "trident" | "mob_projectile" => DamageKind::Thrown,
-            "fireball" | "unattributed_fireball" | "wither_skull" => DamageKind::Fireball,
+            "fireball" | "unattributed_fireball" => DamageKind::Fireball,
+            "wither_skull" => DamageKind::WitherSkull,
             "explosion" | "player_explosion" | "bad_respawn_point" => DamageKind::Explosion,
             "fall" | "ender_pearl" | "fly_into_wall" => DamageKind::Fall,
             "on_fire" => DamageKind::OnFire,
-            "in_fire" | "campfire" | "hot_floor" => DamageKind::InFire,
+            "in_fire" => DamageKind::InFire,
+            "hot_floor" => DamageKind::HotFloor,
+            "campfire" => DamageKind::Campfire,
             "lava" => DamageKind::Lava,
             "drown" => DamageKind::Drown,
             "dry_out" => DamageKind::DryOut,
@@ -124,6 +130,21 @@ impl Game<'_> {
             "freeze" => DamageKind::Freeze,
             "in_wall" => DamageKind::InWall,
             "thorns" => DamageKind::Thorns,
+            "cramming" => DamageKind::Cramming,
+            "falling_anvil" => DamageKind::FallingAnvil,
+            "falling_block" => DamageKind::FallingBlock,
+            "fireworks" => DamageKind::Fireworks,
+            "generic_kill" => DamageKind::GenericKill,
+            "lightning_bolt" => DamageKind::LightningBolt,
+            "out_of_world" => DamageKind::OutOfWorld,
+            "outside_border" => DamageKind::OutsideBorder,
+            "sonic_boom" => DamageKind::SonicBoom,
+            "spit" => DamageKind::Spit,
+            "stalagmite" => DamageKind::Stalagmite,
+            "starve" => DamageKind::Starve,
+            "sulfur_cube_hot" => DamageKind::SulfurCubeHot,
+            "wind_charge" => DamageKind::WindCharge,
+            "wither" => DamageKind::Wither,
             _ => DamageKind::Generic,
         }
     }
@@ -155,23 +176,28 @@ impl Game<'_> {
         let hurt = match target {
             // The causing mob is the one the hit is credited to and thorns
             // answer; the source position gives the knockback its direction.
-            Target::Player => {
+            Target::Player | Target::Guest(_) => {
                 // `DamageSource(type, cause, by)`: the death message names the
                 // causing entity, else the direct one. A mob is noted by
                 // `hurt_player_from`, a player here.
-                if let Some(t @ (Target::Player | Target::Guest(_))) = cause.or(by) {
-                    let name = self.target_name(t);
-                    self.note_direct_entity(&ty, name);
-                }
-                if self.spectator() {
-                    false
-                } else {
-                    let attacker = match cause.or(by) {
-                        Some(Target::Mob(i)) => Some(Some(i)),
-                        _ => Some(None),
-                    };
-                    self.hurt_player_from(amount, from, &ty, attacker)
-                }
+                let named = match cause.or(by) {
+                    Some(t @ (Target::Player | Target::Guest(_))) => Some(self.target_name(t)),
+                    _ => None,
+                };
+                let attacker = match cause.or(by) {
+                    Some(Target::Mob(i)) => Some(Some(i)),
+                    _ => Some(None),
+                };
+                self.for_player(target, |g| {
+                    if g.spectator() {
+                        return false;
+                    }
+                    if let Some(name) = named {
+                        g.note_direct_entity(&ty, name);
+                    }
+                    g.hurt_player_from(amount, from, &ty, attacker)
+                })
+                .unwrap_or(false)
             }
             Target::Mob(id) => {
                 let attacker = cause.or(by).and_then(|t| match t {
@@ -184,10 +210,15 @@ impl Game<'_> {
                     attacker,
                     from,
                 };
-                self.mobs
+                let hurt = self
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id)
-                    .is_some_and(|m| m.damage(amount, damage))
+                    .is_some_and(|m| m.damage(amount, damage));
+                if hurt {
+                    self.resolve_player_responsible(id, damage);
+                }
+                hurt
             }
             _ => false,
         };
@@ -216,27 +247,43 @@ impl Game<'_> {
             return Ok(0);
         };
         let current = self.target_rotation(t);
+        let mut look_at_target = None;
         let rot = if let Some(Arg::Coords(c)) = ctx.get("rotation") {
             // Relative parts are offsets from the entity's own rotation.
             c.rotation(current)
         } else {
+            let mut faced_entity = None;
             let to = if ctx.has("entity") {
                 let faced = self.entities(ctx, "facingEntity", false)?;
                 let Some(f) = faced.first().copied() else {
                     return Ok(0);
                 };
                 let mut p = self.target_position(f).unwrap_or(pos);
-                if matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true))) {
+                let eyes = matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true)));
+                if eyes {
                     p[1] += self.target_eye_height(f);
                 }
+                faced_entity = Some((f, eyes));
                 p
             } else {
                 self.position_arg(ctx, "facingLocation").unwrap_or(pos)
             };
-            let from = [pos[0], pos[1] + self.target_eye_height(t), pos[2]];
+            // LookAt.perform: Entity.lookAt from the source's anchor (the
+            // feet, unless `anchored eyes`).
+            let anchored_eyes = self.command_source.is_some_and(|s| s.eyes);
+            let eye = if anchored_eyes {
+                self.target_eye_height(t)
+            } else {
+                0.0
+            };
+            let from = [pos[0], pos[1] + eye, pos[2]];
+            look_at_target = Some((anchored_eyes, to, faced_entity));
             look_at(from, to)
         };
         self.teleport_to(t, pos, Some(rot));
+        if let Some((eyes, to, entity)) = look_at_target {
+            self.send_player_look_at(t, eyes, to, entity);
+        }
         if t == Target::Player {
             self.pitch = rot[1].clamp(-90.0, 90.0);
         }
@@ -332,23 +379,8 @@ impl Game<'_> {
             let Some(p) = self.target_position(t) else {
                 continue;
             };
-            let d = [pos[0] - p[0], pos[1] - p[1], pos[2] - p[2]];
-            let dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-            let (at, v) = if dist2 > f64::from(range) * f64::from(range) {
-                if min_volume <= 0.0 {
-                    continue;
-                }
-                let dist = dist2.sqrt();
-                (
-                    [
-                        p[0] + d[0] / dist * 2.0,
-                        p[1] + d[1] / dist * 2.0,
-                        p[2] + d[2] / dist * 2.0,
-                    ],
-                    min_volume,
-                )
-            } else {
-                (pos, volume)
+            let Some((at, v)) = playsound_placement(pos, p, range, volume, min_volume) else {
+                continue;
             };
             // The connection is sent the sound; the window's own player
             // plays it.
@@ -889,9 +921,13 @@ impl Game<'_> {
                 let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id) else {
                     return Ok(0);
                 };
-                // Mobs keep three attributes as plain values.
+                // Core mob attributes also have cached gameplay fields.
                 let slot: Option<f64> = match short.as_str() {
-                    "max_health" => Some(f64::from(m.attrs.max_health)),
+                    "max_health" => Some(if id == "attribute.base.get" {
+                        finalize::base_value(m, Attr::MaxHealth)
+                    } else {
+                        finalize::value(m, Attr::MaxHealth)
+                    }),
                     "movement_speed" => Some(m.attrs.speed),
                     "attack_damage" => Some(f64::from(m.attrs.attack_damage)),
                     _ => None,
@@ -915,8 +951,9 @@ impl Game<'_> {
                     "attribute.base.set" => {
                         match short.as_str() {
                             "max_health" => {
-                                m.attrs.max_health = value_arg as f32;
-                                m.health = m.health.min(m.attrs.max_health);
+                                // AttributeInstance keeps the raw base, clamps only
+                                // the effective value, and does not change Health.
+                                finalize::set_base(m, Attr::MaxHealth, value_arg);
                             }
                             "movement_speed" => m.attrs.speed = value_arg,
                             _ => m.attrs.attack_damage = value_arg as f32,
@@ -929,12 +966,15 @@ impl Game<'_> {
                     }
                     "attribute.base.reset" => {
                         match short.as_str() {
-                            "max_health" => m.attrs.max_health = m.kind.max_health,
+                            "max_health" => {
+                                let default = f64::from(m.kind.max_health);
+                                finalize::set_base(m, Attr::MaxHealth, default);
+                            }
                             "movement_speed" => m.attrs.speed = m.kind.speed,
                             _ => m.attrs.attack_damage = m.kind.attack_damage,
                         }
                         let v = match short.as_str() {
-                            "max_health" => f64::from(m.attrs.max_health),
+                            "max_health" => finalize::base_value(m, Attr::MaxHealth),
                             "movement_speed" => m.attrs.speed,
                             _ => f64::from(m.attrs.attack_damage),
                         };
@@ -1129,7 +1169,7 @@ impl Game<'_> {
             };
             let vehicle_name = self.target_name(v);
             match target {
-                Target::Player => self.dismount_mount(),
+                Target::Player => self.stop_riding(),
                 Target::Mob(rider) => self.dismount_mob(rider),
                 _ => {}
             }
@@ -1162,33 +1202,89 @@ impl Game<'_> {
             }
             up = self.ride_vehicle(v);
         }
-        // Players and mobs can ride mobs.
-        let Target::Mob(mob_id) = vehicle else {
-            return Err(err(
-                "commands.ride.mount.failure.generic",
-                &[&name.plain(), &vehicle_name.plain()],
-            ));
-        };
         let rider = match target {
             Target::Mob(id) => Some(id),
             _ => None,
         };
-        if !(target == Target::Player || rider.is_some())
-            || !self.mobs.iter().any(|m| m.id == mob_id && m.alive())
-        {
-            return Err(err(
+        let generic = || {
+            err(
                 "commands.ride.mount.failure.generic",
                 &[&name.plain(), &vehicle_name.plain()],
-            ));
+            )
+        };
+        // Only players and mobs ride.
+        if !(target == Target::Player || rider.is_some()) {
+            return Err(generic());
+        }
+        // `RideCommand.mount` forces the ride (`startRiding(vehicle, true, true)`),
+        // which skips `canRide` and `canAddPassenger`: a boat under water still
+        // takes the rider. Horizon's boats seat at most `max_passengers`, so a
+        // full boat still refuses. Minecarts carry only players here: Horizon's
+        // carts have no mob passengers yet.
+        match vehicle {
+            Target::Boat(id) => {
+                let Some(i) = self.boats.iter().position(|b| b.id == id) else {
+                    return Err(generic());
+                };
+                if self.boat_passengers(id) >= self.boats[i].max_passengers() {
+                    return Err(generic());
+                }
+                if let Some(rider) = rider {
+                    if !self.try_mount_mob(rider, id) {
+                        return Err(generic());
+                    }
+                } else {
+                    if !self.native_may_board(id) {
+                        return Err(generic());
+                    }
+                    self.riding = Some(id);
+                    self.yaw = self.boats[i].yaw;
+                    // sendEventAndTriggers: START_RIDING_TRIGGER.
+                    self.trigger_player("minecraft:started_riding");
+                }
+                self.feedback(Text::translate(
+                    "commands.ride.mount.success",
+                    &[name, vehicle_name],
+                ));
+                return Ok(1);
+            }
+            Target::Cart(id) => {
+                if target != Target::Player
+                    || self.ridden_by_guest(id)
+                    || !self.native_may_board(id)
+                {
+                    return Err(generic());
+                }
+                self.riding = Some(id);
+                self.trigger_player("minecraft:started_riding");
+                self.feedback(Text::translate(
+                    "commands.ride.mount.success",
+                    &[name, vehicle_name],
+                ));
+                return Ok(1);
+            }
+            _ => {}
+        }
+        // Mobs carry players and mobs.
+        let Target::Mob(mob_id) = vehicle else {
+            return Err(generic());
+        };
+        if !self.mobs.iter().any(|m| m.id == mob_id && m.alive()) {
+            return Err(generic());
         }
         if let Some(rider) = rider {
             // Entity.startRiding.
-            self.mount_mob(rider, mob_id);
+            if !self.try_mount_mob(rider, mob_id) {
+                return Err(generic());
+            }
             self.feedback(Text::translate(
                 "commands.ride.mount.success",
                 &[name, vehicle_name],
             ));
             return Ok(1);
+        }
+        if !self.native_may_board(mob_id) {
+            return Err(generic());
         }
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id) {
             m.extra.flag = false;
@@ -1208,12 +1304,14 @@ impl Game<'_> {
     /// Entity.getVehicle: the player's mount, or a mob's.
     pub(super) fn ride_vehicle(&self, t: Target) -> Option<Target> {
         let id = match t {
-            Target::Player => return self.riding.map(Target::Mob),
+            Target::Player => self.riding?,
             Target::Mob(id) => self.mobs.iter().find(|m| m.id == id)?.extra.mount?,
             _ => return None,
         };
         Some(if self.boats.iter().any(|b| b.id == id) {
             Target::Boat(id)
+        } else if self.carts.iter().any(|c| c.id == id) {
+            Target::Cart(id)
         } else {
             Target::Mob(id)
         })
@@ -1225,9 +1323,13 @@ impl Game<'_> {
         let Some(i) = self.mobs.iter().position(|m| m.id == rider) else {
             return;
         };
-        let Some(v) = self.mobs[i].extra.mount.take() else {
+        let Some(v) = self.mobs[i].extra.mount else {
             return;
         };
+        if !self.native_mob_may_ride(rider, v, false) {
+            return;
+        }
+        self.mobs[i].extra.mount = None;
         let (width, yaw) = (f64::from(self.mobs[i].width()), self.mobs[i].yaw);
         let at = if let Some(b) = self.boats.iter().position(|b| b.id == v) {
             self.boat_dismount_target(b, width, yaw)
@@ -1260,12 +1362,12 @@ impl Game<'_> {
         let respect = matches!(ctx.get("respectTeams"), Some(Arg::Bool(true)));
         let max_y = match ctx.get("maxHeight") {
             Some(Arg::Int(h)) => *h,
-            _ => horizon_client::chunk::MIN_Y + horizon_client::chunk::HEIGHT,
+            _ => self.world.top_y(),
         };
-        if max_y < horizon_client::chunk::MIN_Y {
+        if max_y < self.world.bottom_y() {
             return Err(err(
                 "commands.spreadplayers.failed.invalid.height",
-                &[&max_y, &horizon_client::chunk::MIN_Y],
+                &[&max_y, &self.world.bottom_y()],
             ));
         }
         let targets = self.entities(ctx, "targets", false)?;
@@ -1393,7 +1495,7 @@ impl Game<'_> {
                     num(points.len()),
                     float(centre_f[0]),
                     float(centre_f[1]),
-                    Text::literal(format!("{min_distance:.2}")),
+                    Text::literal(super::percent_f(min_distance, 2)),
                 ],
             ));
         }
@@ -1447,7 +1549,7 @@ impl Game<'_> {
                 num(points.len()),
                 float(centre_f[0]),
                 float(centre_f[1]),
-                Text::literal(format!("{average:.2}")),
+                Text::literal(super::percent_f(average, 2)),
             ],
         ));
         Ok(points.len() as i32)
@@ -1466,7 +1568,7 @@ impl Game<'_> {
         let mut air2 = air(y);
         y -= 1;
         let mut air1 = air(y);
-        while y > horizon_client::chunk::MIN_Y {
+        while y > self.world.bottom_y() {
             y -= 1;
             let current = air(y);
             if !current && air1 && air2 {
@@ -1506,11 +1608,124 @@ fn text_error(key: &str, args: &[Text]) -> horizon_client::command::CommandError
     horizon_client::command::CommandError::new(Text::translate(key, args))
 }
 
-/// `Entity.lookAt`: yaw and pitch from `from` towards `to`.
-fn look_at(from: [f64; 3], to: [f64; 3]) -> [f32; 2] {
+/// `PlaySoundCommand.playSound`: the point and the volume one target hears the
+/// sound at. A target past `range` hears nothing unless `minVolume` is above
+/// zero, and then the point moves two blocks from the target towards the sound
+/// and the volume is `minVolume`; a target exactly at `range` still hears it
+/// (the command's test is `>`, unlike `PlayerList.broadcast`'s `<`).
+fn playsound_placement(
+    pos: [f64; 3],
+    target: [f64; 3],
+    range: f32,
+    volume: f32,
+    min_volume: f32,
+) -> Option<([f64; 3], f32)> {
+    let d = [pos[0] - target[0], pos[1] - target[1], pos[2] - target[2]];
+    let dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    // PlaySoundCommand compares against Mth.square(float range): the square
+    // rounds in float and only then widens, so a point between that square and
+    // the double square is out of range in vanilla.
+    if dist2 <= f64::from(range * range) {
+        return Some((pos, volume));
+    }
+    if min_volume <= 0.0 {
+        return None;
+    }
+    let dist = dist2.sqrt();
+    Some((
+        [
+            target[0] + d[0] / dist * 2.0,
+            target[1] + d[1] / dist * 2.0,
+            target[2] + d[2] / dist * 2.0,
+        ],
+        min_volume,
+    ))
+}
+
+/// `Entity.lookAt`: yaw and pitch from `from` towards `to`, the yaw wrapped
+/// to -180..180 as `Mth.wrapDegrees` does.
+pub(super) fn look_at(from: [f64; 3], to: [f64; 3]) -> [f32; 2] {
     let (dx, dy, dz) = (to[0] - from[0], to[1] - from[1], to[2] - from[2]);
     let horizontal = (dx * dx + dz * dz).sqrt();
-    let pitch = (-(dy.atan2(horizontal).to_degrees())) as f32;
-    let yaw = (dz.atan2(dx).to_degrees() - 90.0) as f32;
-    [yaw.rem_euclid(360.0), pitch]
+    // `Entity.lookAt` turns radians to degrees with the float constant
+    // `57.2957763671875`, not `Math.toDegrees`.
+    let pitch = wrap_degrees((-(dy.atan2(horizontal) * 57.295_776_367_187_5)) as f32);
+    let yaw = (dz.atan2(dx) * 57.295_776_367_187_5) as f32 - 90.0;
+    [wrap_degrees(yaw), pitch]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{look_at, playsound_placement};
+
+    fn assert_angle(got: f32, want: f32) {
+        assert!((got - want).abs() < 1.0e-4, "{got} is not {want}");
+    }
+
+    /// `Entity.lookAt` wraps the yaw with `Mth.wrapDegrees`, so a target to
+    /// the north-west turns the entity to 135 degrees, not to -225, and a
+    /// target due north leaves -180 rather than 180.
+    #[test]
+    fn a_facing_target_wraps_the_yaw_to_180() {
+        let at = [0.0, 64.0, 0.0];
+        assert_angle(look_at(at, [-1.0, 64.0, -1.0])[0], 135.0);
+        assert_angle(look_at(at, [0.0, 64.0, -1.0])[0], -180.0);
+        assert_angle(look_at(at, [1.0, 64.0, 0.0])[0], -90.0);
+        assert_angle(look_at(at, [0.0, 64.0, 1.0])[0], 0.0);
+        assert_angle(look_at(at, [-1.0, 64.0, 0.0])[0], 90.0);
+        // The pitch is the elevation, unchanged; its own wrap is a no-op.
+        assert_angle(look_at(at, [0.0, 65.0, 1.0])[1], -45.0);
+    }
+
+    /// `PlaySoundCommand.playSound`: inside the range the point and volume are
+    /// the command's own, exactly on it still is, past it there is nothing
+    /// without a minimum volume, and with one the point is two blocks from the
+    /// target towards the sound and the volume is that minimum.
+    #[test]
+    fn a_target_past_the_range_hears_it_two_blocks_away() {
+        let pos = [0.0, 64.0, 0.0];
+        let near = [0.0, 64.0, 15.0];
+        assert_eq!(
+            playsound_placement(pos, near, 16.0, 3.0, 0.0),
+            Some((pos, 3.0))
+        );
+        let on_the_edge = [16.0, 64.0, 0.0];
+        assert_eq!(
+            playsound_placement(pos, on_the_edge, 16.0, 3.0, 0.0),
+            Some((pos, 3.0))
+        );
+        let far = [0.0, 64.0, 32.0];
+        assert_eq!(playsound_placement(pos, far, 16.0, 3.0, 0.0), None);
+        assert_eq!(
+            playsound_placement(pos, far, 16.0, 3.0, 0.5),
+            Some(([0.0, 64.0, 30.0], 0.5))
+        );
+    }
+
+    /// The range is squared as a float, as `Mth.square(getRange(volume))` is:
+    /// a point between that square and the double one is past the range in
+    /// vanilla, so it gets the `minVolume` placement rather than full volume.
+    #[test]
+    fn the_range_square_rounds_as_a_float() {
+        let volume = 1.1f32;
+        let range = 16.0 * volume;
+        let float_square = f64::from(range * range);
+        let double_square = f64::from(range) * f64::from(range);
+        assert!(float_square < double_square);
+        let dist2 = (float_square + double_square) / 2.0;
+        let pos = [0.0, 64.0, 0.0];
+        let target = [dist2.sqrt(), 64.0, 0.0];
+        assert_eq!(
+            playsound_placement(pos, target, range, volume, 0.0),
+            None,
+            "past the float range"
+        );
+        let moved = playsound_placement(pos, target, range, volume, 0.7);
+        let Some((point, heard)) = moved else {
+            panic!("minVolume should place it");
+        };
+        assert_eq!(heard, 0.7);
+        assert!((point[0] - (target[0] - 2.0)).abs() < 1e-9, "{point:?}");
+        assert_eq!(point[1..], [64.0, 0.0]);
+    }
 }

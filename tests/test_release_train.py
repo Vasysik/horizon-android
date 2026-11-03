@@ -201,7 +201,8 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertIn("### Known issues\n- Sound cuts out after an hour.", body)
         self.assertNotIn("#7", body)
         self.assertNotIn("#8", body)
-        self.assertIn("Thanks to @cosmic.", body)
+        self.assertIn("### Contributors\nThanks to @cosmic.", body)
+        self.assertTrue(body.endswith("---\n" + train.DISCLAIMER + "\n"), body)
         self.assertLess(body.index("### New"), body.index("### Fixed"))
         title, _ = train.notes("game", "v2026.10.15.2", [pr(9, "Horizon's mark", labels=["feature"]),
                                                          pr(10, "Game menus", labels=["feature"])], [])
@@ -228,16 +229,25 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertIn("### Fixed\n- Launcher: say the self-update succeeded (#3)", body)
         self.assertNotIn("Known issues", body)
         self.assertNotIn(train.PLAYERS, body)
+        self.assertNotIn(train.PLAYERS_FOOTER, body)
         self.assertIn("Your launcher updates itself.", body)
 
     def test_a_game_release_opens_with_the_way_to_the_launcher(self):
         # GitHub's latest is a game release: whoever lands on it is sent to the launcher first (#1647).
         _, body = train.notes("game", "v0.2.50", [pr(1)], ["- Sound cuts out after an hour."])
+<<<<<<< HEAD
         self.assertTrue(body.startswith('<h3>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher'))
         # The repository's own launcher releases: PLAYERS is built at import from GITHUB_REPOSITORY, a fork's in its CI.
         self.assertIn(f'href="https://github.com/{train.REPO}/releases?q=launcher&amp;expanded=true"', body)
+||||||| f8988d5a7
+        self.assertTrue(body.startswith('<h3>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher'))
+        self.assertIn('href="https://github.com/horizon-rust/horizon/releases?q=launcher&amp;expanded=true"', body)
+=======
+        self.assertTrue(body.startswith(train.PLAYERS + "\n\n"))
+        self.assertTrue(body.endswith("\n\n" + train.PLAYERS_FOOTER + "\n\n---\n" + train.DISCLAIMER + "\n"), body)
+>>>>>>> 31f83499b
         self.assertNotIn("\n", train.PLAYERS, "one line: one HTML block, which ends at the blank line after it")
-        self.assertEqual(body.count("playhorizon.dev"), 1, "said once, at the top")
+        self.assertEqual(body.count("playhorizon.dev"), 2, "said at the top and the bottom")
         _, body = train.notes("game", "v0.2.51", [], [])
         self.assertTrue(body.startswith(train.PLAYERS + "\n\nRebuilt from the latest main."))
 

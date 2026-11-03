@@ -1,6 +1,7 @@
 //! Paintings: `HangingEntityItem.useOn` placement with `Painting.create`'s
-//! variant choice, `HangingEntity.survives` checks every 100 ticks,
-//! breaking by attack (`dropItem`), saving, and `PaintingRenderer` quads.
+//! variant choice (or the stack's `painting/variant`), `HangingEntity.survives`
+//! checks every 100 ticks, breaking by attack (`dropItem`), saving, and
+//! `PaintingRenderer` quads.
 use super::{Game, Hit};
 use horizon_client::{entities::Painting, items::ItemStack, mesher::Vertex};
 use horizon_core::{
@@ -16,6 +17,9 @@ pub(super) struct Variant {
     pub asset: String,
     pub width: i32,
     pub height: i32,
+    /// `PaintingVariant.title` and `author`: text components.
+    pub title: Option<serde_json::Value>,
+    pub author: Option<serde_json::Value>,
 }
 /// Variants by id plus the `#minecraft:placeable` list.
 #[derive(Default)]
@@ -27,16 +31,12 @@ impl PaintingVariants {
     pub fn load(root: &std::path::Path) -> Self {
         let data = root.join("data/minecraft");
         let mut all = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(data.join("painting_variant")) {
-            for e in entries.flatten() {
-                let path = e.path();
-                let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-                let Ok(bytes) = std::fs::read(&path) else {
-                    continue;
-                };
-                let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        if let Ok(folder) = horizon_world::json_folder::read(&data.join("painting_variant")) {
+            for file in &folder.files {
+                let name = file.name.as_str();
+                let Ok(v) =
+                    serde_json::from_slice::<serde_json::Value>(file.bytes().unwrap_or_default())
+                else {
                     continue;
                 };
                 all.push(Variant {
@@ -48,25 +48,47 @@ impl PaintingVariants {
                         .to_owned(),
                     width: v["width"].as_i64().unwrap_or(1) as i32,
                     height: v["height"].as_i64().unwrap_or(1) as i32,
+                    title: v.get("title").cloned(),
+                    author: v.get("author").cloned(),
                 });
             }
         }
-        let placeable = std::fs::read(data.join("tags/painting_variant/placeable.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            .and_then(|v| v["values"].as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|v| v.as_str().map(Arc::from))
-            .collect();
+        let placeable =
+            horizon_core::prepared_files::read(&data.join("tags/painting_variant/placeable.json"))
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .and_then(|v| v["values"].as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|v| v.as_str().map(Arc::from))
+                .collect();
         Self { all, placeable }
     }
     pub fn get(&self, id: &str) -> Option<&Variant> {
         self.all.iter().find(|v| &*v.id == id)
     }
+    /// The variant a stack's `painting/variant` component names.
+    pub fn of_stack(&self, stack: &ItemStack) -> Option<&Variant> {
+        let id = horizon_client::save::text(stack.data()?.other("minecraft:painting/variant"))?;
+        self.get(&horizon_world::datafix::dynamic::namespaced(&id))
+    }
 }
 fn overlaps(a: ([f64; 3], [f64; 3]), b: ([f64; 3], [f64; 3])) -> bool {
     (0..3).all(|i| a.0[i] < b.1[i] && b.0[i] < a.1[i])
+}
+
+/// `HangingEntityItem.mayPlace` for a painting: not a floor or ceiling.
+/// Direction.get2DDataValue: south 0, west 1, north 2, east 3.
+fn painting_facing(face: [i32; 3]) -> Option<u8> {
+    if face[1] != 0 {
+        return None;
+    }
+    Some(match face {
+        [0, 0, 1] => 0,
+        [-1, 0, 0] => 1,
+        [0, 0, -1] => 2,
+        _ => 3,
+    })
 }
 impl Game<'_> {
     /// `HangingEntity.survives`: no block collision in the box, solid blocks
@@ -106,16 +128,58 @@ impl Game<'_> {
             .iter()
             .any(|o| o.id != p.id && overlaps(o.bounds(), (lo, hi)))
     }
-    /// `HangingEntityItem.useOn` for a painting against `hit`'s face.
-    pub(super) fn place_painting(&mut self, hit: &Hit, stack: &ItemStack) -> bool {
-        if &*stack.item != "minecraft:painting" || hit.face[1] != 0 {
+    /// `HangingEntityItem.useOn` on a client level: SUCCESS once
+    /// `Painting.create` finds a surviving variant (and the stack's
+    /// `painting/variant`, if any, also survives). The random pick and
+    /// spawn are the server's.
+    pub(super) fn painting_fits(&self, hit: &Hit, stack: &ItemStack) -> bool {
+        if &*stack.item != "minecraft:painting" {
             return false;
         }
-        let facing = match hit.face {
-            [0, 0, 1] => 0,
-            [-1, 0, 0] => 1,
-            [0, 0, -1] => 2,
-            _ => 3,
+        let Some(facing) = painting_facing(hit.face) else {
+            return false;
+        };
+        let pos = [
+            hit.pos[0] + hit.face[0],
+            hit.pos[1],
+            hit.pos[2] + hit.face[2],
+        ];
+        let mut candidate = Painting {
+            id: self.next_entity.wrapping_add(1),
+            pos,
+            facing,
+            variant: Arc::from(""),
+            width: 1,
+            height: 1,
+            check_interval: 0,
+        };
+        let mut any = false;
+        for id in &self.painting_variants.placeable {
+            let Some(v) = self.painting_variants.get(id) else {
+                continue;
+            };
+            (candidate.width, candidate.height) = (v.width, v.height);
+            if self.painting_survives(&candidate) {
+                any = true;
+                break;
+            }
+        }
+        if !any {
+            return false;
+        }
+        if let Some(v) = self.painting_variants.of_stack(stack).cloned() {
+            (candidate.variant, candidate.width, candidate.height) = (v.id, v.width, v.height);
+            return self.painting_survives(&candidate);
+        }
+        true
+    }
+    /// `HangingEntityItem.useOn` for a painting against `hit`'s face.
+    pub(super) fn place_painting(&mut self, hit: &Hit, stack: &ItemStack) -> bool {
+        if &*stack.item != "minecraft:painting" {
+            return false;
+        }
+        let Some(facing) = painting_facing(hit.face) else {
+            return false;
         };
         let pos = [
             hit.pos[0] + hit.face[0],
@@ -154,6 +218,18 @@ impl Game<'_> {
             .unwrap_or(0) as usize;
         let v = &fitting[pick];
         (candidate.variant, candidate.width, candidate.height) = (v.id.clone(), v.width, v.height);
+        // EntityType.createDefaultStackConfig -> Painting.applyImplicitComponents:
+        // the stack's `painting/variant` replaces the random pick, and that
+        // painting has to survive where it goes (else the use is CONSUME).
+        if let Some(v) = self.painting_variants.of_stack(stack).cloned() {
+            (candidate.variant, candidate.width, candidate.height) = (v.id, v.width, v.height);
+            if !self.painting_survives(&candidate) {
+                return false;
+            }
+        }
+        if self.hanging_place_cancelled("minecraft:painting", pos) {
+            return true;
+        }
         let (lo, hi) = candidate.bounds();
         let at = [
             (lo[0] + hi[0]) / 2.0,
@@ -167,12 +243,14 @@ impl Game<'_> {
         if !self.creative {
             self.consume_held();
         }
+        // HangingEntityItem.useOn returns SUCCESS: the hand swings.
+        self.swing_arm();
         true
     }
     /// The painting under the crosshair within reach and its distance.
     pub(super) fn painting_hit(&self) -> Option<(usize, f64)> {
         let (eye, dir) = self.aim()?;
-        let reach: f64 = if self.creative { 5.0 } else { 3.0 };
+        let reach: f64 = self.entity_reach;
         let mut best: Option<(usize, f64)> = None;
         for (i, p) in self.paintings.iter().enumerate() {
             let (lo, hi) = p.bounds();
@@ -196,8 +274,13 @@ impl Game<'_> {
         }
         best
     }
-    /// `Painting.hurtServer` -> kill and `dropItem`.
-    pub(super) fn break_painting(&mut self, index: usize, by_player: bool) {
+    /// `Painting.hurtServer` -> kill and `dropItem`. False when a mod kept it
+    /// (`native_hanging_break`): it stays at `index`.
+    pub(super) fn break_painting(&mut self, index: usize, by_player: bool) -> bool {
+        let pos = self.paintings[index].pos;
+        if self.hanging_break_cancelled("minecraft:painting", pos, by_player) {
+            return false;
+        }
         let p = self.paintings.remove(index);
         let (lo, hi) = p.bounds();
         let at = [
@@ -207,12 +290,12 @@ impl Game<'_> {
         ];
         self.world.modified.insert((p.pos[0] >> 4, p.pos[2] >> 4));
         if !self.ui.rules.bool("entity_drops") {
-            return;
+            return true;
         }
         self.audio
             .play("minecraft:entity.painting.break", Some(at), 1.0, 1.0);
         if by_player && self.creative {
-            return;
+            return true;
         }
         // HangingEntity.spawnAtLocation: 0.15 out from the wall.
         let s = p.step().map(f64::from);
@@ -228,6 +311,7 @@ impl Game<'_> {
             [0.0; 3],
             10,
         );
+        true
     }
     /// BlockAttachedEntity.tick: check survival every 100 ticks.
     pub(super) fn tick_paintings(&mut self) {
@@ -245,8 +329,7 @@ impl Game<'_> {
             if self.paintings[i].check_interval >= 100 {
                 self.paintings[i].check_interval = 0;
                 let p = self.paintings[i].clone();
-                if !self.painting_survives(&p) {
-                    self.break_painting(i, false);
+                if !self.painting_survives(&p) && self.break_painting(i, false) {
                     continue;
                 }
             }
@@ -386,5 +469,28 @@ impl Game<'_> {
             );
             self.cull_entity_vertices(out, entity_start);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `HangingEntityItem.useOn` returns SUCCESS (the hand swings) when a
+    /// painting is created on a wall. Floor, ceiling, or a failed create is
+    /// CONSUME: no swing.
+    fn painting_use_on_swings(face: [i32; 3], created: bool) -> bool {
+        painting_facing(face).is_some() && created
+    }
+
+    #[test]
+    fn placing_a_painting_on_a_wall_swings() {
+        assert!(painting_use_on_swings([0, 0, 1], true));
+        assert!(painting_use_on_swings([-1, 0, 0], true));
+        assert!(painting_use_on_swings([0, 0, -1], true));
+        assert!(painting_use_on_swings([1, 0, 0], true));
+        assert!(!painting_use_on_swings([0, 1, 0], true));
+        assert!(!painting_use_on_swings([0, -1, 0], true));
+        assert!(!painting_use_on_swings([0, 0, 1], false));
     }
 }

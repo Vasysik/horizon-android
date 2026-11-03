@@ -50,6 +50,9 @@ pub fn sound_source(event: &str) -> usize {
         index("ambient")
     } else if e.starts_with("music_disc.") {
         index("record")
+    } else if e.starts_with("item.goat_horn.") {
+        // InstrumentItem.play: SoundSource.RECORDS.
+        index("record")
     } else if e.starts_with("music.") {
         index("music")
     } else if e.starts_with("weather.") || e.starts_with("entity.lightning_bolt") {
@@ -141,6 +144,8 @@ pub struct Settings {
     pub master_volume: f32,
     /// Volumes of every other sound source, indexed like SOUND_SOURCES.
     pub volumes: [f32; 11],
+    /// Empty for system default, or a specific audio device name.
+    pub sound_device: String,
     /// Requested scale (0 = auto); rendering caps it to the current framebuffer.
     pub gui_scale: u32,
     pub view_bobbing: bool,
@@ -188,6 +193,8 @@ pub struct Settings {
     pub chat_links: bool,
     pub chat_links_prompt: bool,
     pub chat_opacity: f32,
+    /// Chat Delay in seconds (`chatDelay`): player chat shows this far apart.
+    pub chat_delay: f64,
     pub text_background_opacity: f32,
     pub chat_scale: f32,
     pub chat_width: f32,
@@ -214,8 +221,18 @@ pub struct Settings {
     pub toggle_use: bool,
     /// Taps of the sprint key counted as double taps (sprintWindow).
     pub sprint_window: i32,
+    /// Show the operator items tab in a creative inventory.
+    pub operator_items_tab: bool,
+    /// Allow platform quit shortcuts to close the game window.
+    pub quit_shortcuts: bool,
+    /// On macOS, turn Control-click into a right click.
+    pub ctrl_click_emulates_right_click: bool,
     /// Horizon's own graphics settings (`horizon-graphics.txt`, not options.txt).
     pub horizon: crate::graphics::Graphics,
+    /// The graphics API the game started with: `Options.preferredGraphicsBackendFromStartup`.
+    pub startup_api: crate::graphics::GraphicsApi,
+    /// `Monitor.videoModes` of the window's monitor, for the Video page (set by the game).
+    pub video_modes: Vec<crate::window::VideoMode>,
     /// Controller settings (`horizon-controller.txt`, Horizon's own).
     pub controller: crate::gamepad::PadSettings,
     /// Horizon's optional extras (`horizon-extras.txt`), all off by default.
@@ -225,10 +242,16 @@ pub struct Settings {
     /// The packs in `shaderpacks/`, listed when the Shader Packs page opens; the pick is
     /// `horizon.shader_pack`.
     pub shader_packs: Vec<crate::shader_pack_list::Entry>,
+<<<<<<< HEAD
     /// The Shader Options page's pack, while it is open.
     pub shader_options: Option<crate::shader_options::ShaderOptions>,
     /// The touch layout's own buttons while the Custom Buttons page shows them.
     pub custom_buttons: Vec<CustomButton>,
+||||||| f8988d5a7
+=======
+    /// The picked pack's options while its Shader Options page is open.
+    pub shader_options: Option<crate::shader_options::ShaderOptions>,
+>>>>>>> 31f83499b
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -239,6 +262,7 @@ impl Default for Settings {
             sensitivity: 0.5,
             master_volume: 1.0,
             volumes: [1.0; 11],
+            sound_device: String::new(),
             gui_scale: 0,
             view_bobbing: true,
             gamma: 0.5,
@@ -281,6 +305,7 @@ impl Default for Settings {
             chat_links: true,
             chat_links_prompt: true,
             chat_opacity: 1.0,
+            chat_delay: 0.0,
             text_background_opacity: 0.5,
             chat_scale: 1.0,
             chat_width: 1.0,
@@ -300,13 +325,22 @@ impl Default for Settings {
             toggle_attack: false,
             toggle_use: false,
             sprint_window: 7,
+            operator_items_tab: false,
+            quit_shortcuts: true,
+            ctrl_click_emulates_right_click: false,
             horizon: Default::default(),
+            startup_api: Default::default(),
+            video_modes: Vec::new(),
             controller: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
             shader_packs: Vec::new(),
             shader_options: None,
+<<<<<<< HEAD
             custom_buttons: Vec::new(),
+||||||| f8988d5a7
+=======
+>>>>>>> 31f83499b
         }
     }
 }
@@ -336,11 +370,22 @@ fn put_s(f: &mut OptionsFile, key: &str, v: &str) {
     }
 }
 impl Settings {
+    /// The index in `video_modes` of the preferred fullscreen mode, -1 (the desktop's own mode)
+    /// when none is set or the monitor lacks it: `Monitor.indexOfMode`.
+    pub fn video_mode_index(&self) -> i32 {
+        self.file
+            .fullscreen_resolution
+            .as_deref()
+            .and_then(crate::window::VideoMode::read)
+            .and_then(|mode| self.video_modes.iter().position(|m| *m == mode))
+            .map_or(-1, |i| i as i32)
+    }
     pub fn load(path: &Path) -> Self {
         let horizon = path
             .parent()
             .map(crate::graphics::Graphics::load)
             .unwrap_or_default();
+        crate::mipmap::set_dither_cutouts(horizon.dither_cutout_mips);
         let controller = path
             .parent()
             .map(crate::gamepad::PadSettings::load)
@@ -349,9 +394,10 @@ impl Settings {
             .parent()
             .map(crate::extras::Extras::load)
             .unwrap_or_default();
+        // The enabled mods are the game folder's, shared by its players (`--player-dir`).
         let mods = path
             .parent()
-            .map(crate::mod_list::ModList::load)
+            .map(|dir| crate::mod_list::ModList::load(&crate::logging::shared_dir(dir)))
             .unwrap_or_default();
         let settings = match fs::read(path) {
             Ok(bytes) => Self {
@@ -370,7 +416,11 @@ impl Settings {
             },
         };
         settings.describe_for_crashes();
-        settings
+        // Options.load: the backend asked for at startup, what a restart is measured from.
+        Self {
+            startup_api: settings.horizon.api,
+            ..settings
+        }
     }
     /// The render settings and resource packs a crash report lists.
     fn describe_for_crashes(&self) {
@@ -429,6 +479,7 @@ impl Settings {
             sensitivity: f.double("mouseSensitivity") as f32,
             master_volume: volumes[0],
             volumes,
+            sound_device: f.string("soundDevice"),
             gui_scale: f.int("guiScale").max(0) as u32,
             view_bobbing: f.bool("bobView"),
             gamma: f.double("gamma") as f32,
@@ -464,13 +515,22 @@ impl Settings {
             toggle_attack: f.bool("toggleAttack"),
             toggle_use: f.bool("toggleUse"),
             sprint_window: f.int("sprintWindow"),
+            operator_items_tab: f.bool("operatorItemsTab"),
+            quit_shortcuts: f.bool("quitShortcuts"),
+            ctrl_click_emulates_right_click: f.bool("ctrlClickEmulatesRightClick"),
             horizon: Default::default(),
+            startup_api: Default::default(),
+            video_modes: Vec::new(),
             controller: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
             shader_packs: Vec::new(),
             shader_options: None,
+<<<<<<< HEAD
             custom_buttons: Vec::new(),
+||||||| f8988d5a7
+=======
+>>>>>>> 31f83499b
             auto_jump: f.bool("autoJump"),
             language: f.string("lang"),
             force_unicode: f.bool("forceUnicodeFont"),
@@ -480,6 +540,7 @@ impl Settings {
             chat_links: f.bool("chatLinks"),
             chat_links_prompt: f.bool("chatLinksPrompt"),
             chat_opacity: f.double("chatOpacity") as f32,
+            chat_delay: f.double("chatDelay"),
             text_background_opacity: f.double("textBackgroundOpacity") as f32,
             chat_scale: f.double("chatScale") as f32,
             chat_width: f.double("chatWidth") as f32,
@@ -508,6 +569,7 @@ impl Settings {
             main_hand: i32::from(!self.main_hand_left),
             particle_status: i32::from(self.particles),
             allows_listing: self.file.bool("allowServerListing"),
+            particle_status: i32::from(self.particles),
             ..ClientInformation::new(view_distance)
         }
     }
@@ -527,6 +589,7 @@ impl Settings {
             };
             put_f(&mut f, &format!("soundCategory_{source}"), v);
         }
+        put_s(&mut f, "soundDevice", &self.sound_device);
         put_i(&mut f, "guiScale", self.gui_scale as i32);
         put_b(&mut f, "bobView", self.view_bobbing);
         put_f(&mut f, "gamma", self.gamma);
@@ -570,6 +633,13 @@ impl Settings {
         put_b(&mut f, "toggleAttack", self.toggle_attack);
         put_b(&mut f, "toggleUse", self.toggle_use);
         put_i(&mut f, "sprintWindow", self.sprint_window);
+        put_b(&mut f, "operatorItemsTab", self.operator_items_tab);
+        put_b(&mut f, "quitShortcuts", self.quit_shortcuts);
+        put_b(
+            &mut f,
+            "ctrlClickEmulatesRightClick",
+            self.ctrl_click_emulates_right_click,
+        );
         put_b(&mut f, "autoJump", self.auto_jump);
         put_s(&mut f, "lang", &self.language);
         put_b(&mut f, "forceUnicodeFont", self.force_unicode);
@@ -579,6 +649,9 @@ impl Settings {
         put_b(&mut f, "chatLinks", self.chat_links);
         put_b(&mut f, "chatLinksPrompt", self.chat_links_prompt);
         put_f(&mut f, "chatOpacity", self.chat_opacity);
+        if self.chat_delay != f.double("chatDelay") {
+            f.set("chatDelay", V::Double(self.chat_delay));
+        }
         put_f(
             &mut f,
             "textBackgroundOpacity",
@@ -614,7 +687,7 @@ impl Settings {
     /// These settings with one `options.txt` value changed (`horizon-ctl
     /// options-set`, as `OptionsFile::set_text` reads it). Horizon's own
     /// files (graphics, controller, extras, the mod list) aren't in
-    /// `options.txt`, so they stay as they are.
+    /// `options.txt`, so they stay as they are, as do the monitor's video modes.
     pub fn with_option(&self, key: &str, value: &str) -> Result<Self, String> {
         let mut file = self.to_file();
         file.set_text(key, value)?;
@@ -623,6 +696,7 @@ impl Settings {
             controller: self.controller.clone(),
             extras: self.extras.clone(),
             mods: self.mods.clone(),
+            video_modes: self.video_modes.clone(),
             ..Self::from_file(file)
         })
     }
@@ -637,7 +711,7 @@ impl Settings {
             self.horizon.save(dir);
             self.controller.save(dir);
             self.extras.save(dir);
-            self.mods.save(dir);
+            self.mods.save(&crate::logging::shared_dir(dir));
         }
     }
     /// Volume of a sound source (master excluded).
@@ -652,6 +726,22 @@ impl Settings {
                     self.volumes[i]
                 }
             })
+    }
+    /// `Options.getFinalSoundSourceVolume`: a source's volume times master's.
+    pub fn final_volume(&self, source: &str) -> f32 {
+        if source == "master" {
+            self.master_volume
+        } else {
+            self.volume(source) * self.master_volume
+        }
+    }
+    /// `Options.narrator`: the `narrator` id in options.txt.
+    pub fn narrator(&self) -> horizon_narrator::Status {
+        horizon_narrator::Status::by_id(self.file.int("narrator"))
+    }
+    pub fn set_narrator(&mut self, status: horizon_narrator::Status) {
+        self.file
+            .set("narrator", crate::options_file::V::Int(status.id()));
     }
     /// `Options.getBackgroundColor(float)`: the text backdrop colour, `default`
     /// opacity unless `backgroundForChatOnly` is off.
@@ -689,6 +779,7 @@ pub enum Opt {
     InvertY,
     AllowCursorChanges,
     Volume(usize),
+    SoundDevice,
     GuiScale,
     ViewBobbing,
     Gamma,
@@ -716,7 +807,13 @@ pub enum Opt {
     MenuBlur,
     ToggleCrouch,
     ToggleSprint,
+    ToggleAttack,
+    ToggleUse,
     AutoJump,
+    SprintWindow,
+    QuitShortcuts,
+    CtrlClickEmulatesRightClick,
+    OperatorItemsTab,
     ChatVisibility,
     ChatColors,
     ChatLinks,
@@ -780,11 +877,34 @@ pub enum Opt {
     SharePresence,
     DirectionalAudio,
     MusicToast,
+    /// `Options.exclusiveFullscreen`.
+    ExclusiveFullscreen,
+    /// VideoSettingsScreen's "Exclusive Fullscreen Mode": the monitor's mode to take.
+    ExclusiveMode,
+    /// `Options.preferredGraphicsBackend`.
+    GraphicsBackend,
+    /// `Options.textureFiltering`.
+    TextureFiltering,
+    /// `Options.maxAnisotropyBit`.
+    MaxAnisotropy,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_narrator_reads_its_status_and_the_voice_under_master() {
+        let s = Settings::parse("narrator:2\nsoundCategory_master:0.5\nsoundCategory_voice:0.5\n");
+        assert_eq!(s.narrator(), horizon_narrator::Status::Chat);
+        assert_eq!(s.final_volume("voice"), 0.25);
+        assert_eq!(s.final_volume("master"), 0.5);
+        let mut s = s;
+        s.set_narrator(horizon_narrator::Status::Off);
+        assert_eq!(
+            Settings::parse(&s.serialize()).narrator(),
+            horizon_narrator::Status::Off
+        );
+    }
     #[test]
     fn an_option_set_keeps_horizon_files() {
         let mut s = Settings::parse("fov:70\n");
@@ -848,6 +968,17 @@ mod tests {
         assert_eq!(again.keys.get("key.jump"), "key.keyboard.j");
     }
     #[test]
+    fn client_information_maps_the_stored_main_hand() {
+        // The Skin Customization option is stored by name; ClientInformation
+        // sends HumanoidArm (LEFT = 0, RIGHT = 1).
+        for (stored, arm) in [("left", 0), ("right", 1)] {
+            let s = Settings::parse(&format!("mainHand:{stored}\n"));
+            assert_eq!(s.client_information(10).main_hand, arm);
+            assert!(s.serialize().contains(&format!("mainHand:\"{stored}\"")));
+        }
+        assert_eq!(Settings::default().client_information(10).main_hand, 1);
+    }
+    #[test]
     fn no_options_txt_paces_frames_like_an_empty_one() {
         let (fresh, empty) = (Settings::default(), Settings::parse(""));
         assert_eq!(fresh.max_fps, 120);
@@ -873,5 +1004,16 @@ mod tests {
             Settings::parse("notificationDisplayTime:50\n").notification_display_time,
             1.0
         );
+    }
+    #[test]
+    fn sound_device_option() {
+        let s = Settings::parse("soundDevice:\"Headphones\"\n");
+        assert_eq!(s.sound_device, "Headphones");
+        let serialized = s.serialize();
+        assert!(serialized.contains("soundDevice:\"Headphones\""));
+        let again = Settings::parse(&serialized);
+        assert_eq!(again.sound_device, "Headphones");
+        let empty = Settings::parse("");
+        assert_eq!(empty.sound_device, "");
     }
 }

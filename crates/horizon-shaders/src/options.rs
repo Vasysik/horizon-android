@@ -86,6 +86,7 @@ pub fn with_options(pack: &Pack, macros: &crate::Macros) -> crate::Macros {
     out
 }
 
+<<<<<<< HEAD
 /// An option the player can change (8.1): a switch (`values` are `false` and `true`), a value
 /// option or a `const` with the list of values it may take.
 #[derive(Clone, Debug, PartialEq)]
@@ -167,6 +168,117 @@ fn declaration(line: &str) -> Option<Declaration<'_>> {
         },
         boolean,
     })
+||||||| f8988d5a7
+=======
+/// A pack's `shaders.properties` as the game reads it before the programs: parsed with the
+/// pack's options over `macros` (the standard set and the renderer's), after which `macros` gets
+/// the features the pack turns on (`iris.features.*`, `Macros::define_features`). Returns the
+/// properties and a note for each required feature Horizon lacks. Whatever reads a pack's
+/// programs (the game, the `real_packs` test) reads them with these macros.
+pub fn read_properties(
+    pack: &Pack,
+    macros: &mut crate::Macros,
+) -> (crate::Properties, Vec<String>) {
+    let text = pack.read_text("shaders.properties").unwrap_or_default();
+    let properties = crate::Properties::parse(&text, &with_options(pack, macros));
+    let notes = macros.define_features(&properties);
+    (properties, notes)
+}
+
+/// An option the player can change (8.1): a switch (`values` are `false` and `true`), a value
+/// option or a `const` with the list of values it may take.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PackOption {
+    pub name: String,
+    pub default: String,
+    pub values: Vec<String>,
+    pub switch: bool,
+    /// A switch some file tests; value options always count as tested.
+    pub tested: bool,
+}
+
+/// A line that declares an option, as [`declaration`] reads it.
+struct Declaration<'a> {
+    name: &'a str,
+    /// The value and its byte offset in the line; `None` for a switch.
+    value: Option<(&'a str, usize)>,
+    /// Behind `//`: a switch that is off.
+    commented: bool,
+    /// The values in the comment's `[...]`.
+    values: Option<Vec<&'a str>>,
+    /// `const bool`: a switch written as a value.
+    boolean: bool,
+}
+
+/// `#define NAME`, `//#define NAME`, `#define NAME VALUE // [A B]`,
+/// `const TYPE NAME = VALUE; // [A B]` or `const bool NAME = true;`.
+fn declaration(line: &str) -> Option<Declaration<'_>> {
+    let body = line.trim_start();
+    let (commented, code) = match body.strip_prefix("//") {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, body),
+    };
+    let offset = |part: &str| part.as_ptr() as usize - line.as_ptr() as usize;
+    if let Some(rest) = code.strip_prefix('#') {
+        let rest = rest.trim_start().strip_prefix("define")?;
+        if !rest.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let (code, comment) = rest.split_once("//").unwrap_or((rest, ""));
+        let mut words = code.split_whitespace();
+        let name = words.next()?;
+        let value = words.next();
+        if words.next().is_some() {
+            return None;
+        }
+        return Some(Declaration {
+            name,
+            value: value.map(|v| (v, offset(v))),
+            commented,
+            values: list_with_default(comment, value),
+            boolean: false,
+        });
+    }
+    if commented {
+        return None;
+    }
+    // `const float shadowDistance = 128.0; // [64.0 128.0]`, `const bool x = true;`
+    let rest = code.strip_prefix("const")?;
+    let (decl, comment) = rest.split_once("//").unwrap_or((rest, ""));
+    let (left, right) = decl.split_once('=')?;
+    let mut words = left.split_whitespace();
+    let (Some(ty), Some(name), None) = (words.next(), words.next(), words.next()) else {
+        return None;
+    };
+    let value = right.trim().strip_suffix(';')?.trim_end();
+    if value.is_empty() || value.contains(char::is_whitespace) {
+        return None;
+    }
+    let boolean = ty == "bool" && matches!(value, "true" | "false");
+    Some(Declaration {
+        name,
+        value: Some((value, offset(value))),
+        commented: false,
+        values: if boolean {
+            Some(vec!["false", "true"])
+        } else {
+            Some(list_with_default(comment, Some(value))?)
+        },
+        boolean,
+    })
+}
+
+/// Keep the declared default selectable without creating an option from an empty range.
+fn list_with_default<'a>(comment: &'a str, default: Option<&'a str>) -> Option<Vec<&'a str>> {
+    let mut values = list(comment)?;
+    if !values.is_empty()
+        && let Some(default) = default
+        && !values.contains(&default)
+    {
+        values.insert(0, default);
+    }
+    Some(values)
+>>>>>>> 31f83499b
 }
 
 /// The values in a comment's `[...]`.
@@ -359,6 +471,81 @@ fn option_texts(pack: &Pack) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `shaders.properties` read as the game reads it: its conditionals see the pack's options
+    /// and the macros given (the renderer's vendor here), and the features it turns on are then
+    /// defined for the programs, with a note for a required one Horizon lacks.
+    #[test]
+    fn properties_are_read_with_the_options_then_define_the_features() {
+        let bytes = crate::pack::tests::zip(&[
+            (
+                "shaders/options.glsl",
+                "#define LEVEL 2 // [1 2]
+",
+            ),
+            (
+                "shaders/shaders.properties",
+                "#if LEVEL == 2
+screen = x
+#endif
+                 #ifdef MC_GL_VENDOR_OTHER
+vendor = other
+#endif
+                 iris.features.optional = SSBO
+iris.features.required = NOT_A_FEATURE
+",
+            ),
+        ]);
+        let pack = Pack::from_zip_bytes("p.zip", bytes).unwrap();
+        let mut macros = crate::Macros::standard();
+        macros.define_renderer(4);
+        let (properties, notes) = read_properties(&pack, &mut macros);
+        assert_eq!(properties.get("screen"), Some("x"));
+        assert_eq!(properties.get("vendor"), Some("other"));
+        assert!(macros.is_defined("IRIS_FEATURE_SSBO"));
+        assert_eq!(
+            notes,
+            ["the pack requires `NOT_A_FEATURE`, which is not supported yet"]
+        );
+    }
+
+    #[test]
+    fn declared_defaults_remain_selectable_and_apply() {
+        for (source, selected) in [
+            (
+                "#define QUALITY 0 // [1 2]\n",
+                "#define QUALITY 2 // [1 2]\n",
+            ),
+            (
+                "const int QUALITY = 0; // [1 2]\n",
+                "const int QUALITY = 2; // [1 2]\n",
+            ),
+        ] {
+            let bytes = crate::pack::tests::zip(&[("shaders/options.glsl", source)]);
+            let pack = Pack::from_zip_bytes("options.zip", bytes).unwrap();
+            let available = options(&pack);
+            let option = &available["QUALITY"];
+            assert_eq!(option.default, "0");
+            assert_eq!(option.values, ["0", "1", "2"]);
+            let chosen = pack.with_chosen(BTreeMap::from([("QUALITY".into(), "2".into())]));
+            assert_eq!(chosen.read_text("options.glsl").unwrap(), selected);
+            let reset = chosen.with_chosen(BTreeMap::from([("QUALITY".into(), "0".into())]));
+            assert_eq!(reset.read_text("options.glsl").unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn declared_defaults_keep_authored_order_and_empty_ranges_stay_hidden() {
+        let bytes = crate::pack::tests::zip(&[(
+            "shaders/options.glsl",
+            "#define QUALITY 1 // [0 1 2]\n#define IGNORED 0 // []\n",
+        )]);
+        let pack = Pack::from_zip_bytes("options.zip", bytes).unwrap();
+        let available = options(&pack);
+        assert_eq!(available["QUALITY"].default, "1");
+        assert_eq!(available["QUALITY"].values, ["0", "1", "2"]);
+        assert!(!available.contains_key("IGNORED"));
+    }
     use crate::pack::tests::zip;
 
     #[test]
@@ -390,5 +577,89 @@ mod tests {
             switches_on(&pack),
             BTreeSet::from(["AO".to_owned(), "GODRAYS".to_owned()])
         );
+    }
+
+    #[test]
+    fn options_read_switches_values_and_consts() {
+        let pack = Pack::from_zip_bytes(
+            "P.zip",
+            zip(&[
+                (
+                    "shaders/lib/settings.glsl",
+                    "#define AO\n//#define BLOOM // glow\n#define LEVEL 2 //[1 2 3]\n\
+                     #define FIXED 4\nconst int shadowMapResolution = 2048; // [1024 2048]\n\
+                     //#define OFF_VALUE 1 // [1 2]\n",
+                ),
+                (
+                    "shaders/final.fsh",
+                    "#ifdef AO\n#endif\n#if defined(BLOOM) && LEVEL > 1\n#endif\n",
+                ),
+                (
+                    "shaders/lib/common.glsl",
+                    "#ifndef COMMON_GLSL\n#define COMMON_GLSL\n#endif\n\
+                     #if !defined(INCLUDE_SKY)\n\n#define INCLUDE_SKY\n#endif\n",
+                ),
+            ]),
+        )
+        .unwrap();
+        let options = options(&pack);
+        let names: Vec<&str> = options.keys().map(String::as_str).collect();
+        assert_eq!(names, ["AO", "BLOOM", "LEVEL", "shadowMapResolution"]);
+        assert_eq!(options["AO"].default, "true");
+        assert!(options["BLOOM"].switch && options["BLOOM"].tested);
+        assert_eq!(options["BLOOM"].default, "false");
+        assert_eq!(options["LEVEL"].values, ["1", "2", "3"]);
+        assert_eq!(options["shadowMapResolution"].default, "2048");
+    }
+
+    #[test]
+    fn const_bools_are_switches_screens_name() {
+        let pack = Pack::from_zip_bytes(
+            "P.zip",
+            zip(&[(
+                "shaders/lib/settings.glsl",
+                "const bool shadowHardwareFiltering = true;\nconst bool generateShadowMipmap = false; // mips\n\
+                 const bool notABool = 1;\n",
+            )]),
+        )
+        .unwrap();
+        let options = options(&pack);
+        let filtering = &options["shadowHardwareFiltering"];
+        assert!(filtering.switch && !filtering.tested);
+        assert_eq!(filtering.default, "true");
+        assert_eq!(options["generateShadowMipmap"].default, "false");
+        assert!(!options.contains_key("notABool"));
+        let chosen = parse_chosen("shadowHardwareFiltering=false\n");
+        assert_eq!(
+            apply("const bool shadowHardwareFiltering = true;\n", &chosen),
+            "const bool shadowHardwareFiltering = false;\n"
+        );
+    }
+
+    #[test]
+    fn chosen_values_rewrite_their_lines() {
+        let chosen = parse_chosen("AO=false\nBLOOM=true\nLEVEL=3\nshadowMapResolution=1024\n");
+        let text = "  #define AO // occlusion\r\n//#define BLOOM\n#define LEVEL 2 //[1 2 3]\n\
+                    #define LEVEL 9\nconst int shadowMapResolution = 2048; // [1024 2048]\n";
+        assert_eq!(
+            apply(text, &chosen),
+            "  //#define AO // occlusion\r\n#define BLOOM\n#define LEVEL 3 //[1 2 3]\n\
+             #define LEVEL 9\nconst int shadowMapResolution = 1024; // [1024 2048]\n"
+        );
+        let pack = Pack::from_zip_bytes(
+            "P.zip",
+            zip(&[
+                ("shaders/lib/settings.glsl", "#define LEVEL 2 //[1 2 3]\n"),
+                ("shaders/shaders.properties", "#define LEVEL 2 //[1 2 3]\n"),
+            ]),
+        )
+        .unwrap()
+        .with_chosen(chosen.clone());
+        assert_eq!(value_options(&pack)["LEVEL"], "3");
+        assert_eq!(
+            pack.read_text("shaders.properties").unwrap(),
+            "#define LEVEL 2 //[1 2 3]\n"
+        );
+        assert_eq!(parse_chosen(&chosen_text(&chosen)), chosen);
     }
 }
