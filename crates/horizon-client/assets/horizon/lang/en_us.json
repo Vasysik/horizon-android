@@ -1,5 +1,4 @@
 {
-  "horizon.shader_options.profile": "Profile",
   "horizon.options.controller": "Controller",
   "horizon.options.vibration": "Vibration",
   "horizon.options.adaptive_triggers": "Adaptive Triggers",
@@ -184,6 +183,8 @@
   "Waits for the display's refresh: no tearing, a little latency.": "Waits for the display's refresh: no tearing, a little latency.",
   "Size of menus and the HUD.": "Size of menus and the HUD.",
   "Sets the options below together. Changing one makes it Custom.": "Sets the options below together. Changing one makes it Custom.",
+  "Sets distance, particles, shadows, sky and fog; changing one makes it Custom.": "Sets distance, particles, shadows, sky and fog; changing one makes it Custom.",
+  "Full Stats": "Full Stats",
   "Lava, fire and sunlight shine brighter than white. Needs an HDR display.": "Lava, fire and sunlight shine brighter than white. Needs an HDR display.",
   "Your display's darkest black. 0 for OLED; LCDs glow a little.": "Your display's darkest black. 0 for OLED; LCDs glow a little.",
   "How bright highlights get. Auto: the peak your system reports.": "How bright highlights get. Auto: the peak your system reports.",

@@ -6173,7 +6173,7 @@ mod tests {
     /// only `level.dat_old`: the world still opens from it, as vanilla's does.
     #[test]
     fn a_world_without_level_dat_opens_from_level_dat_old() {
-        let dir = std::env::temp_dir().join(format!("horizon-dat-old-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("horizon-dat-old-open-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let level = Tag::compound([("Data", Tag::compound([("DataVersion", Tag::Int(7))]))]);

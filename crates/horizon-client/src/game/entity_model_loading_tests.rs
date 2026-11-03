@@ -249,8 +249,12 @@ fn content_mods_equipment_loads_under_its_namespace() {
         .unwrap(),
     )
     .unwrap();
-    // Not a content root: other namespaces stay unread, as before.
-    assert!(ArmorStandAssets::load(&root.0, None).equipment.is_empty());
+    // Every namespace is read (a server's pack adds its own), content root or not.
+    assert!(
+        ArmorStandAssets::load(&root.0, None)
+            .equipment_layers
+            .contains_key("gems:ruby")
+    );
     fs::write(
         root.0.join(horizon_items::content_namespaces::MARKER),
         br#"["gems"]"#,
