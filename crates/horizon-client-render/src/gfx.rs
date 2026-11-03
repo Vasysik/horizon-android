@@ -82,6 +82,37 @@ fn gpu_culling_requested(info: &wgpu::AdapterInfo, env: Option<&str>) -> bool {
     env != Some("0") && (env.is_some() || info.device_type != wgpu::DeviceType::Cpu)
 }
 
+/// The chunk radius past which every section is wholly inside distance fog.
+///
+/// Fragments at or beyond the environmental fog's end are blended to the fog
+/// colour completely, which is also what the frame was cleared to where there
+/// is no skybox (the Nether). Drawing those sections only shades pixels the fog
+/// then replaces. A shader pack applies its own fog (or none), and far terrain
+/// tiles draw past the render distance, so both keep the full radius.
+fn fog_culled_radius(
+    detail_distance: f32,
+    fog: Option<&crate::fog::FogData>,
+    own_fog: bool,
+) -> i32 {
+    let radius = (detail_distance / 16.0) as i32;
+    match fog {
+        Some(f) if !own_fog && f.color[3] >= 1.0 && f.environmental_end > 0.0 => {
+            // One chunk more: the camera is anywhere inside its own chunk, and a
+            // section's nearest point is up to a chunk closer than its centre.
+            radius.min((f.environmental_end / 16.0).ceil() as i32 + 1)
+        }
+        _ => radius,
+    }
+}
+
+/// Whether distance fog alone covers what lies past `fog_culled_radius`.
+///
+/// Not with Distant terrain on (even before its first tiles exist), tiles
+/// already drawn or fading, a shader pack's own fog, or the title screen.
+fn fog_is_only_cover(distant_terrain: bool, tiles_live: bool, packs: bool, title: bool) -> bool {
+    !(distant_terrain || tiles_live || packs || title)
+}
+
 mod animate;
 mod arena;
 pub mod compositor;
@@ -353,6 +384,8 @@ pub struct Frame<'a> {
     pub distance: f32,
     /// Full-detail terrain distance in blocks; distant LODs bypass the cave graph.
     pub detail_distance: f32,
+    /// Horizon's Distant terrain option is on: far tiles draw past the render distance.
+    pub distant_terrain: bool,
     /// `Camera.depthFar`: the far plane (`crate::camera::depth_far`).
     pub depth_far: f32,
     pub underwater: bool,
@@ -5576,6 +5609,17 @@ impl Renderer {
             .zip(eye)
             .map(|(plane, eye)| 2.0 * (plane - frame.camera.y as f32) - eye.y);
         let culling = !frame.title && frame.cave_culling;
+        // Sections wholly inside distance fog are not drawn (`fog_culled_radius`).
+        let own_fog = !fog_is_only_cover(
+            frame.distant_terrain,
+            !self.lods.is_empty() || !self.lod_cutout.is_empty() || !self.lod_leaving.is_empty(),
+            self.native.is_some() || self.pack_post.is_some(),
+            frame.title,
+        );
+        let visible_radius = fog_culled_radius(frame.detail_distance, frame.fog.as_ref(), own_fog);
+        // The occlusion search keeps the full radius: its graph answers `false` beyond the
+        // radius it searched, so a radius that follows the fog would hide sections for the
+        // frames a new search takes whenever the fog widens.
         if culling {
             crate::spans::time("occlusion", || {
                 self.start_occlusion(camera, frame.detail_distance)
@@ -5595,7 +5639,7 @@ impl Renderer {
         crate::spans::time("visibility", || {
             self.sections.visible(
                 camera,
-                (frame.detail_distance / 16.0) as i32,
+                visible_radius,
                 &Frusta(view, mirror),
                 |k| !culling || reachable.contains(k),
                 |x, z| {
@@ -8468,6 +8512,51 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
 
 #[cfg(test)]
 mod tests {
+    fn nether_fog(end: f32) -> crate::fog::FogData {
+        crate::fog::FogData {
+            color: [0.2, 0.03, 0.03, 1.0],
+            environmental_start: 10.0,
+            environmental_end: end,
+            render_distance_start: 180.0,
+            render_distance_end: 192.0,
+            sky_end: 192.0,
+            cloud_end: 192.0,
+        }
+    }
+    #[test]
+    fn fog_bounds_the_drawn_radius_to_where_it_turns_opaque() {
+        // 96 blocks of Nether fog: 6 chunks, plus the camera's own chunk.
+        let fog = nether_fog(96.0);
+        assert_eq!(super::fog_culled_radius(192.0, Some(&fog), false), 7);
+        // A shorter render distance is never extended.
+        assert_eq!(super::fog_culled_radius(64.0, Some(&fog), false), 4);
+        // Fog the player turned off (ends at 2e9) leaves the radius alone.
+        assert_eq!(
+            super::fog_culled_radius(192.0, Some(&nether_fog(2e9)), false),
+            12
+        );
+    }
+    #[test]
+    fn distant_terrain_keeps_the_full_radius_before_its_tiles_exist() {
+        assert!(super::fog_is_only_cover(false, false, false, false));
+        assert!(!super::fog_is_only_cover(true, false, false, false));
+        let fog = nether_fog(96.0);
+        let own_fog = !super::fog_is_only_cover(true, false, false, false);
+        assert_eq!(super::fog_culled_radius(192.0, Some(&fog), own_fog), 12);
+    }
+    #[test]
+    fn own_fog_and_translucent_fog_keep_the_full_radius() {
+        let fog = nether_fog(96.0);
+        // A shader pack or far terrain tiles: the fog here does not hide them.
+        assert_eq!(super::fog_culled_radius(192.0, Some(&fog), true), 12);
+        assert_eq!(super::fog_culled_radius(192.0, None, false), 12);
+        let mut see_through = nether_fog(96.0);
+        see_through.color[3] = 0.5;
+        assert_eq!(
+            super::fog_culled_radius(192.0, Some(&see_through), false),
+            12
+        );
+    }
     fn adapter(device_type: wgpu::DeviceType) -> wgpu::AdapterInfo {
         wgpu::AdapterInfo {
             name: "test adapter".into(),
