@@ -1,0 +1,88 @@
+[mod]
+id = "smartf3"
+version = "0.1.0"
+# No other mod we know of hooks the debug screen; same-site HEAD hooks would
+# run by priority, highest first, and the first that cancels skips the rest.
+priority = 100
+
+# Pinned: the "hud" hook below targets a game function that is not a native
+# hook point (game/native_hooks.rs has none for the F3 screen), and native.rs
+# reads the game's own internals (renderer, picking, chunks, light), so the mod
+# is made for this one commit. Its other hooks use only hook points
+# (NATIVE_HOOKS_API 1).
+[compatibility]
+horizon_revision = "142388e1c136e622652ec7505af15d8ad195e041"
+
+[[module]]
+id = "runtime"
+file = "crates/horizon-client/src/game.rs"
+name = "smartf3"
+source = "runtime.rs"
+
+[[module]]
+id = "native"
+file = "crates/horizon-client/src/game.rs"
+name = "smartf3_native"
+source = "native.rs"
+
+# Pinned: SmartF3's screen replaces the vanilla debug screen. There is no
+# hook point for it: native_hud is drawn under menus, chat and toasts, not under
+# F1 with a menu open, and cannot keep the vanilla text from being drawn too.
+# `debug_keys::Game::draw_debug_overlay` itself can't be hooked (its body has
+# macros, which horizon-mixins refuses: E_UNSUPPORTED_MACRO), so the hook is on
+# its macro-free caller `Game::hud`, which, while F3 is open, is run with
+# SmartF3's screen in its place (native.rs `smartf3_hud`).
+[[injection]]
+id = "hud"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client::game::Game<'_>::hud"
+helper = "hud.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "size", ty = "[u32;2]", value = "size" },
+]
+
+# Hook point: `/smartf3`.
+[[injection]]
+id = "command"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_command"
+helper = "command.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "command", ty = "&str", value = "command" },
+  { name = "ran", ty = "&mut bool", value = "&mut *ran" },
+]
+
+# Hook points: the row in Options > Mods and its settings page.
+[[injection]]
+id = "list"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mods"
+helper = "list.rs"
+bindings = [
+  { name = "mods", ty = "&mut Vec<crate::game::native_hooks::NativeMod>", value = "&mut *mods" },
+]
+
+[[injection]]
+id = "settings"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings"
+helper = "settings.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "buttons", ty = "&mut Vec<String>", value = "&mut *buttons" },
+]
+
+[[injection]]
+id = "click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings_click"
+helper = "click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "button", ty = "usize", value = "button" },
+]

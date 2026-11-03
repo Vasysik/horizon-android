@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original Horizon H mark; scalable TV launcher banner, no game assets. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp" android:height="180dp"
+    android:viewportWidth="320" android:viewportHeight="180">
+    <path android:fillColor="#111B24" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#74D99F" android:pathData="M112,42h24v36h48v-36h24v96h-24v-36h-48v36h-24z" />
+    <path android:fillColor="#3C7658" android:pathData="M0,158h320v22h-320z" />
+</vector>

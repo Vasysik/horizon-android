@@ -1,0 +1,22 @@
+{
+  "horizon.options.controller": "Kontroler",
+  "horizon.options.vibration": "Wibracje",
+  "horizon.options.adaptive_triggers": "Adaptacyjne spusty",
+  "horizon.options.lightbar": "Pasek świetlny",
+  "horizon.options.look_sensitivity": "Czułość rozglądania",
+  "horizon.options.invert_x": "Odwróć oś X rozglądania",
+  "horizon.options.invert_y": "Odwróć oś Y rozglądania",
+  "horizon.options.sneak_button": "Przycisk skradania",
+  "horizon.options.move_deadzone": "Martwa strefa ruchu",
+  "horizon.options.look_deadzone": "Martwa strefa rozglądania",
+  "horizon.options.button_glyphs": "Symbole przycisków",
+  "horizon.options.menu_navigation": "Nawigacja po menu",
+  "horizon.options.on_screen_keyboard": "Klawiatura ekranowa",
+  "horizon.multiplayer.finding_friend": "Szukanie świata znajomego…",
+  "horizon.loading.opening_world": "Otwieranie świata",
+  "horizon.loading.cancelling_world": "Anulowanie",
+  "horizon.multiplayer.not_signed_in": "Ten serwer działa w trybie online. Zaloguj się kontem Microsoft w launcherze Horizon, aby dołączyć.",
+  "horizon.multiplayer.invalid_address": "Nieprawidłowy adres serwera: %s",
+  "horizon.multiplayer.connected_friend_direct": "Połączono bezpośrednio ze znajomym…",
+  "horizon.multiplayer.connected_friend_relay": "Połączono ze znajomym przez przekaźnik…"
+}

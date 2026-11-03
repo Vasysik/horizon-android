@@ -1,0 +1,67 @@
+# The source exporter installs this as the fork's only active workflow.
+name: Android source checks
+on:
+  push:
+    branches: [android]
+  pull_request:
+    branches: [android]
+  workflow_dispatch:
+    inputs:
+      native_checks:
+        description: Type-check all four Android ABIs (slower)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: android-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: git diff --check
+      - run: python3 tools/check_public_tree.py --history
+      - run: python3 -m unittest discover -s tests -p 'test_android*.py'
+      - run: python3 tools/test_android_diagnostics.py
+      - run: python3 tools/test_android_performance.py
+      - run: python3 tools/test_android_content.py
+      - name: Check workflow export matches the active workflow
+        run: cmp .github/workflows/android-source.yml packaging/android/source-checks.yml
+  native:
+    if: github.event_name == 'workflow_dispatch' && inputs.native_checks
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+          - abi: armeabi-v7a
+            target: armv7-linux-androideabi
+          - abi: x86
+            target: i686-linux-android
+          - abi: x86_64
+            target: x86_64-linux-android
+    env:
+      HORIZON_TELEMETRY_URL: "off"
+      CARGO_TARGET_DIR: .local/ci-target
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install Android toolchain
+        run: |
+          sdkmanager "ndk;28.2.13676358" "build-tools;35.0.0"
+          rustup target add "${{ matrix.target }}"
+      - name: Check Android Rust code without building an APK
+        run: python3 tools/android_build.py --abi "${{ matrix.abi }}" --check --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"

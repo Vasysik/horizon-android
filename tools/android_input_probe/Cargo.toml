@@ -1,0 +1,13 @@
+[package]
+name = "horizon-android-input-probe"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+[lib]
+crate-type = ["cdylib"]
+[workspace]
+[dependencies]
+winit = { path = "../../third_party/winit", features = ["android-native-activity"] }
+jni = "0.21"
+android_logger = "0.15"
+log = "0.4"

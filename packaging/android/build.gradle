@@ -1,0 +1,46 @@
+plugins { id 'com.android.application' version '8.11.1' }
+
+android {
+    namespace 'dev.horizon.android'
+    compileSdk 35
+    defaultConfig {
+        applicationId providers.gradleProperty('appId').getOrElse('dev.horizon.android')
+        minSdk providers.gradleProperty('minSdk').getOrElse('28').toInteger()
+        targetSdk 35
+        versionCode 29
+        versionName '0.7.7'
+        ndk { abiFilters providers.gradleProperty('abi').get() }
+    }
+    signingConfigs {
+        development {
+            storeFile file('../../.local/android/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.development
+            versionNameSuffix '-dev.' + providers.gradleProperty('devBuild').getOrElse('local')
+            if (!providers.gradleProperty('appId').isPresent()) { applicationIdSuffix '.dev' }
+        }
+        release {
+            debuggable false
+            jniDebuggable false
+            minifyEnabled false
+            // Retain the existing installation's signing identity for upgrades.
+            // Only the public certificate enters the APK; the key stays in .local/.
+            signingConfig signingConfigs.development
+        }
+    }
+    sourceSets.main {
+        java.srcDirs = ['java']
+        manifest.srcFile 'AndroidManifest.xml'
+        jniLibs.srcDirs = ['../../.local/android/gradle-jni']
+        assets.srcDirs = ['../../.local/android/gradle-assets']
+        res.srcDirs = ['res']
+    }
+    packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += '**/*.so' } }
+}
+layout.buildDirectory = file('../../.local/android/gradle-build')

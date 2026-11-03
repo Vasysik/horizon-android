@@ -1,0 +1,98 @@
+[workspace]
+exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/winit", "third_party/naga"]
+members = [
+    "crates/horizon-android",
+    "crates/horizon-core",
+    "crates/horizon-dualsense",
+    "crates/horizon-narrator",
+    "crates/horizon-threads",
+    "crates/horizon-hdr",
+    "crates/horizon-world",
+    "crates/horizon-client",
+    "crates/horizon-client-core",
+    "crates/horizon-client-input",
+    "crates/horizon-client-render",
+    "crates/horizon-command",
+    "crates/horizon-items",
+    "crates/horizon-server-files",
+    "crates/horizon-anticheat",
+    "crates/horizon-chat-filter",
+    "crates/horizon-server",
+    "crates/horizon-bots",
+    "crates/horizon-assets",
+    "crates/horizon-protocol",
+    "crates/horizon-theme",
+    "crates/horizon-prepare",
+    "crates/horizon-telemetry",
+    "crates/horizon-bench",
+    "crates/horizon-friends",
+    "crates/horizon-relay",
+    "crates/horizon-mod-sdk",
+    "crates/horizon-mods",
+    "crates/horizon-mods/tests/guest",
+    "crates/horizon-mods/tests/ui_guest",
+    "crates/cargo-horizon-mod",
+    "crates/horizon-port-pack",
+    "crates/horizon-shaders",
+    "crates/horizon-optifine",
+    "crates/horizon-shader-api",
+    "crates/horizon-release-sign",
+    "crates/horizon-mod-sdk/examples/coords-hud",
+    "crates/horizon-mod-sdk/examples/predator-missile",
+    "crates/horizon-mod-sdk/examples/welcome",
+    "crates/horizon-mod-sdk/examples/beacons",
+    "mods/official/fps-overlay",
+    "mods/official/keystrokes",
+    "mods/official/far-view",
+    "mods/official/minimap",
+    "mods/official/zoom",
+    "xtask",
+    "mods/official/recipes",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+
+# Ports mirror vanilla's Java signatures, index loops and nested generic types
+# one to one so they can be checked against the decompiled sources.
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+needless_range_loop = "allow"
+large_enum_variant = "allow"
+
+# wgpu-hal 30.0.1 with gfx-rs/wgpu#10124: wgpu 30 creates a Vulkan descriptor
+# pool with no pool sizes while it creates the device, which Vulkan allows only
+# since 1.3.215, and Intel's Windows driver for 6th-10th gen iGPUs (HD 520/530,
+# UHD 620/630) crashes on it with an access violation (#746). It also fixes the
+# Metal backend's lookup of the CoreGraphics HDR colour space names, which handed
+# CoreGraphics a symbol's address as the string and crashed HDR output on macOS.
+# And gfx-rs/wgpu#10714: on Windows, Vulkan waits for the acquire fence only in
+# FIFO (VSync), where it was meant to pace frames; with VSync off it made every
+# frame wait for the GPU to finish the one before (#4604).
+# Drop this and the folder once a wgpu release has these fixes.
+[patch.crates-io]
+winit = { path = "third_party/winit" }
+wgpu-hal = { path = "third_party/wgpu-hal" }
+# naga 30.0.1, with the fixes to its GLSL frontend that shader packs need (THIRD_PARTY_NOTICES.md).
+naga = { path = "third_party/naga" }
+
+# Line tables keep file:line in backtraces; full debug info made every
+# example and test binary hundreds of megabytes and slow to link.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# Optimized but quick-to-link builds for iteration: cargo build --profile fast
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

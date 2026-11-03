@@ -1,0 +1,51 @@
+name: Android bug
+description: Report a reproducible problem with the Android port.
+title: "[Android] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Horizon Android. Include your build and reproduction steps.
+        Never attach account/session files, access tokens, signing keys or a full app-data backup.
+  - type: input
+    id: build
+    attributes:
+      label: APK version or source commit
+      placeholder: "0.6.6 / android branch commit"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone model and Android version
+      placeholder: "Model, Android version, GPU if known"
+    validations:
+      required: true
+  - type: input
+    id: renderer
+    attributes:
+      label: Renderer and resolution scale
+      placeholder: "Vulkan compatibility, 100%"
+  - type: dropdown
+    id: control
+    attributes:
+      label: Touch control scheme
+      options:
+        - Joystick and crosshair
+        - Joystick and tap
+        - D-pad and tap
+        - D-pad and crosshair
+        - Not related to touch controls
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include single player/server, held item and relevant settings.
+      placeholder: "1. ...\n2. ...\nExpected: ...\nActual: ..."
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshot or redacted log excerpt
+      description: Remove personal details and credentials before attaching anything.

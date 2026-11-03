@@ -1,0 +1,81 @@
+[package]
+name = "horizon-android"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "../horizon-client/src/android_main.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+horizon-client-render = { path = "../horizon-client-render" }
+horizon-chat-filter = { path = "../horizon-chat-filter" }
+horizon-narrator = { path = "../horizon-narrator" }
+horizon-client-input = { path = "../horizon-client-input" }
+horizon-anticheat = { path = "../horizon-anticheat" }
+horizon-client = { path = "../horizon-client", default-features = false }
+android_logger = "0.15"
+regex = "1"
+horizon-hdr = { path = "../horizon-hdr" }
+horizon-shader-api = { path = "../horizon-shader-api" }
+jni = "0.21"
+getrandom = "0.3"
+url = "2"
+horizon-assets = { path = "../horizon-assets" }
+horizon-port-pack = { path = "../horizon-port-pack" }
+sha1 = "0.10"
+ureq = { version = "2", default-features = false, features = ["json", "tls"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+horizon-core = { path = "../horizon-core" }
+horizon-items = { path = "../horizon-items" }
+# The server thread ahead of the workers (MinecraftServer.spin's Thread.setPriority).
+horizon-threads = { path = "../horizon-threads" }
+horizon-world = { path = "../horizon-world" }
+horizon-protocol = { path = "../horizon-protocol" }
+# server.properties, eula.txt and the user lists, shared with horizon-server.
+horizon-server-files = { path = "../horizon-server-files" }
+horizon-shaders = { path = "../horizon-shaders" }
+horizon-friends = { path = "../horizon-friends" }
+# Native mod discovery shares the upstream index. Java mods are not supported.
+horizon-mods = { path = "../horizon-mods", default-features = false, features = ["index"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl", "naga-ir"] }
+winit = { version = "0.30.13", features = ["android-native-activity"] }
+pollster = "0.4"
+bytemuck = { version = "1.24", features = ["derive"] }
+glam = "0.30"
+png = "0.18"
+sha2 = "0.10.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+# hlsl-out: the gfx.rs tests translate every shader as wgpu's DirectX 12 backend does. A normal feature,
+# not a dev-dependency's, so builds, tests and examples share one build of naga, wgpu and this crate.
+naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }
+# Sound (ALSA on Linux); the `audio` feature.
+symphonia = { version = "0.5", default-features = false, features = ["ogg", "vorbis"] }
+miniz_oxide = "0.8"
+ab_glyph = "0.2.32"
+log = "0.4"
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+horizon-theme = { path = "../horizon-theme" }
+# Opt-in data collection: the game keeps, the launcher sends (docs/telemetry.md); `live` is
+# the anonymous "I'm playing" ping the game sends itself (`heartbeat.rs`).
+horizon-telemetry = { path = "../horizon-telemetry", default-features = false, features = ["live"] }
+horizon-bench = { path = "../horizon-bench" }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Controllers (evdev + libudev on Linux, IOKit on macOS, Windows.Gaming.Input); the `controllers` feature.
+# The DualSense's rumble, adaptive triggers and lights over HID (gilrs only reads it).
+# HTTPS to the Minecraft services (online-mode session join).
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", default-features = false, features = ["std", "time", "fs"] }
+
+[features]
+default = ["mods", "audio"]
+audio = ["horizon-client/audio"]
+controllers = []
+mods = ["horizon-client/mods", "horizon-mods/runtime"]
+
+[lints]
+workspace = true

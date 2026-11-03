@@ -1,0 +1,19 @@
+[package]
+name = "horizon-diagnostics-probe"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+build = "../../crates/horizon-android/build.rs"
+[lib]
+crate-type = ["cdylib"]
+[workspace]
+[profile.dev]
+panic = "abort"
+debug = 0
+[dependencies]
+android-activity = { version = "0.6.1", features = ["native-activity"] }
+jni = "0.21"
+serde_json = "1"
+regex = "1"
+log = "0.4"
+zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }

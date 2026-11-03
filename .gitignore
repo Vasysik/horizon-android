@@ -1,0 +1,58 @@
+/.local/
+/target/
+**/__pycache__/
+*.py[cod]
+/.venv/
+# Downloaded/decompiled game content and private profiling artifacts.
+*.jar
+*.class
+*.jfr
+*.hprof
+/decompiled/
+/minecraft/
+/assets/
+/run/
+/logs/
+/dist/
+/mods/horizon/build/
+/saves/
+/backups/
+/tools/logs/
+.DS_Store
+# What the client writes to its working directory when run from the repo root.
+/options.txt
+/debug-profile.json
+/horizon.txt
+/horizon-graphics.txt
+/horizon-controller.txt
+/horizon-extras.txt
+/horizon-player.txt
+/servers.dat
+/screenshots/
+/.horizon-cache/
+/crash-reports/
+/debug/
+/horizon-touch.json
+/horizon-touch.json.tmp
+# Android build outputs, signing material and local account/session state.
+**/.gradle/
+**/node_modules/
+**/local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+.env
+.env.*
+!.env.example
+/android-launch.json
+/control.json
+
+# Release-only compiled original exporter bundle.
+/exporters/
+
+/horizon-keypad.json
+/horizon-keypad.json.tmp
+
+# Local artwork workspace and original reference images.
+/art/

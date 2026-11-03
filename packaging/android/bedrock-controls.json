@@ -1,0 +1,424 @@
+{
+  "revision": "46ba6ea985fb5a92d79a9419198f10dda14c199d",
+  "files": [
+    {
+      "path": "controls/dismount.png",
+      "source": "gui/controls/dismount.png",
+      "git_blob": "b217090443ea130c8e0ca9080c614e84128aa296",
+      "sha256": "c39e1717abf0db66ab6d371968a2fc8b3cf05ea98edc5565005c473921f6ad13",
+      "size": 219
+    },
+    {
+      "path": "controls/dismount_pressed.png",
+      "source": "gui/controls/dismount_pressed.png",
+      "git_blob": "9b11516001c2bd8949dfa9612b9f707680e75483",
+      "sha256": "9333c01ae69d45c088d14be0b304da2572691ec57c684b86e6aea7be45613fff",
+      "size": 224
+    },
+    {
+      "path": "controls/down.png",
+      "source": "gui/controls/down.png",
+      "git_blob": "c505ec42adf8af62bbd5365013fd247c43e26a48",
+      "sha256": "8bd75eb0cd3c2f4b1190186c9c3af33eb308b5a4403b9b5773410caeb544cda7",
+      "size": 289
+    },
+    {
+      "path": "controls/down_left.png",
+      "source": "gui/controls/down_left.png",
+      "git_blob": "e3f934b03e550739e8118ade7a9047146b8a2a98",
+      "sha256": "4fe8378aaf72f3164a932d4c324bf1e86038ab33712b8c7f10f09f88166207cb",
+      "size": 198
+    },
+    {
+      "path": "controls/down_left_pressed.png",
+      "source": "gui/controls/down_left_pressed.png",
+      "git_blob": "4e69ac5ecbd8e7bae0222daa90c86a4e2c3cb769",
+      "sha256": "35fd2f90e1b76f6471714243c763ce1fb2d945feac89578e4a6184940c11d2e1",
+      "size": 198
+    },
+    {
+      "path": "controls/down_pressed.png",
+      "source": "gui/controls/down_pressed.png",
+      "git_blob": "8e0de1b0bb6da51cb8bb810c7f4809993fd0a6e1",
+      "sha256": "5063b4957b363a19b257dd702b8866a075e1b369c7d011c0467b01c07e2b2751",
+      "size": 252
+    },
+    {
+      "path": "controls/down_right.png",
+      "source": "gui/controls/down_right.png",
+      "git_blob": "97b6182ec934da1d06d93f3f88fd29fb8f6ade7e",
+      "sha256": "748d2b1753e2d7f75d40f7e3efaa25c5eb776fc734838850767b6ba681e1ec73",
+      "size": 200
+    },
+    {
+      "path": "controls/down_right_pressed.png",
+      "source": "gui/controls/down_right_pressed.png",
+      "git_blob": "c91183321927cac2ed08b6ffa92e04de5b30db94",
+      "sha256": "95f8d94972916372e5eca1d1e9063227f67d1b2d23d713f491d6f2eaa61b4e37",
+      "size": 196
+    },
+    {
+      "path": "controls/flyingascend.png",
+      "source": "gui/controls/flyingascend.png",
+      "git_blob": "eaaed7140f0757ca16e8ff6e801be771af89fb33",
+      "sha256": "546b8b85af6888c6183112bfc03572e30649e8529d001106dd706dbaf44cc943",
+      "size": 696
+    },
+    {
+      "path": "controls/flyingascend_pressed.png",
+      "source": "gui/controls/flyingascend_pressed.png",
+      "git_blob": "2ae71ea2309423ad6d0ca049bdcd7fe6250425c3",
+      "sha256": "ddc6a307855dc1db3624d3faf371410c9fb68e5a37656a9130d2e09c1c14e51f",
+      "size": 696
+    },
+    {
+      "path": "controls/flyingdescend.png",
+      "source": "gui/controls/flyingdescend.png",
+      "git_blob": "b2b82e2f2c10be7e38cc84dbe15577f666fb12f8",
+      "sha256": "10463eb341019b5c02d962b37e5e261b821a20566ba54e2553436c059e139d56",
+      "size": 696
+    },
+    {
+      "path": "controls/flyingdescend_pressed.png",
+      "source": "gui/controls/flyingdescend_pressed.png",
+      "git_blob": "69a60b16e8b5313132957ade97d1a22128232cfe",
+      "sha256": "7cb0dda7c09cbef72fcb0e2d6b8ee78de60660f3aa5fe4b1dabbdde96c15e730",
+      "size": 696
+    },
+    {
+      "path": "controls/jump.png",
+      "source": "gui/controls/jump.png",
+      "git_blob": "c680defa5618a55cc9319008b6839bc310f4c048",
+      "sha256": "fe455f0193dd2061cace38f46815e417108a0155a39b107f5b68eccac9e0db9b",
+      "size": 696
+    },
+    {
+      "path": "controls/jump_dpad.png",
+      "source": "gui/controls/jump_dpad.png",
+      "git_blob": "e47714fa62d35de4c97a5ac64d1363c9a888eb51",
+      "sha256": "150dc0f8e06dfb40d22b4e555240ad1c69c9b9d40b31dd578536b9cf490b5ec7",
+      "size": 232
+    },
+    {
+      "path": "controls/jump_dpad_pressed.png",
+      "source": "gui/controls/jump_dpad_pressed.png",
+      "git_blob": "01491ffa2f5b44eda1d05a49ff32183514e7e89a",
+      "sha256": "879023333892b807f95362d0d341abca91dbf8a158804b293582698281ab4cff",
+      "size": 235
+    },
+    {
+      "path": "controls/jump_pressed.png",
+      "source": "gui/controls/jump_pressed.png",
+      "git_blob": "80491cfcefca3d10a4c55716131f4819c920b960",
+      "sha256": "bfae2246af37c35f89f41b73b7c33b44d8c9409882dbf5d44d7c5a51cb6d7c8c",
+      "size": 696
+    },
+    {
+      "path": "controls/large_button.png",
+      "source": "gui/controls/large_button.png",
+      "git_blob": "63d7c55c558345d62d861b1ea1ddb307bedd5c5e",
+      "sha256": "cb21e7b304fd7ff341198b698529146d25032637e784256434c3551466a1fcf5",
+      "size": 274
+    },
+    {
+      "path": "controls/large_button_pressed.png",
+      "source": "gui/controls/large_button_pressed.png",
+      "git_blob": "c6ae863f64a26c9186b5b6da07bd2d846f770047",
+      "sha256": "06b11995543ff5d76c6283cbcc64f0d6a4d77a87b5c3b7ffc1b2c9bde7aae5be",
+      "size": 290
+    },
+    {
+      "path": "controls/left.png",
+      "source": "gui/controls/left.png",
+      "git_blob": "95f60e6921581522c8af579aad392e29a451d6cd",
+      "sha256": "9e237804563765a8845d416fa0ad420bd8c3a3d634fb60d9fbf0933f2b4146f1",
+      "size": 287
+    },
+    {
+      "path": "controls/left_pressed.png",
+      "source": "gui/controls/left_pressed.png",
+      "git_blob": "43fbd103b15fec82929d20831f76635ab701fcc0",
+      "sha256": "4acaf31a1b3c66cf8c7432544b26d3b064aca3e4a7a94374c1ab4ed04cc8fa65",
+      "size": 259
+    },
+    {
+      "path": "controls/right.png",
+      "source": "gui/controls/right.png",
+      "git_blob": "7e483e8f73d9dcf00eea3055c28bd130d8ea1c9b",
+      "sha256": "44e25a90580a8dff49431c009a1940ecb3bed6ee82eafff16323e98ed7fdee28",
+      "size": 291
+    },
+    {
+      "path": "controls/right_pressed.png",
+      "source": "gui/controls/right_pressed.png",
+      "git_blob": "db24e6ddd4415080bc53ddbfbb69547df47990f2",
+      "sha256": "a5f30f5e78fd2bcfb0a6cfadcb0110f50fa7a83f3a05cdc09d5650bbb3a2408f",
+      "size": 255
+    },
+    {
+      "path": "controls/sneak.png",
+      "source": "gui/controls/sneak.png",
+      "git_blob": "54dcafe7873219e82d9bf7e189bfe10122562512",
+      "sha256": "df329b7904dfbaf95d6f541db5d635d09504d544c7f8bad7ea2cbe7aa85f30fe",
+      "size": 291
+    },
+    {
+      "path": "controls/sneak_dpad.png",
+      "source": "gui/controls/sneak_dpad.png",
+      "git_blob": "1b2457438707bfa8a8e1a41aec10372eead0fc65",
+      "sha256": "36fed0c175518af5b7a8b729d4de31be2a51c598255eb5e1d382bc9c0d20f1b1",
+      "size": 242
+    },
+    {
+      "path": "controls/sneak_dpad_pressed.png",
+      "source": "gui/controls/sneak_dpad_pressed.png",
+      "git_blob": "43a47534be17b99090a1fa3070b2d346240db1e5",
+      "sha256": "84c6d43bd275ff504053b73c601af7dba9ce45eecedb877aaf0861da8c371757",
+      "size": 245
+    },
+    {
+      "path": "controls/sneak_pressed.png",
+      "source": "gui/controls/sneak_pressed.png",
+      "git_blob": "7ccf29444d99a144382f038e3463f744633f732b",
+      "sha256": "883b1820840a7188c8c5f2bf8c8d8cf9fe4fe0ee926c5fbac3dc693766538882",
+      "size": 696
+    },
+    {
+      "path": "controls/up.png",
+      "source": "gui/controls/up.png",
+      "git_blob": "c9af5691a4dfb7c619b64357b3e532480ddc5d54",
+      "sha256": "42d95a9c0e7a134a4a018290d3838c4aef118fb701a3e3be8e8e517526ae7280",
+      "size": 284
+    },
+    {
+      "path": "controls/up_left.png",
+      "source": "gui/controls/up_left.png",
+      "git_blob": "db73c3b3d25b1708899bcd8a4f0446ac8cf61243",
+      "sha256": "d5913dc0f53ccccdbd5c59a046740ce37ba2a84f11eb10d46d6be84bc28a0ce1",
+      "size": 197
+    },
+    {
+      "path": "controls/up_left_pressed.png",
+      "source": "gui/controls/up_left_pressed.png",
+      "git_blob": "33754ea218888ee04dd0bf3e6defd04050dc1e82",
+      "sha256": "5a9a744eaddeff9dc20e638a031ac0e150707f12f730712357f6c9139cdddfce",
+      "size": 196
+    },
+    {
+      "path": "controls/up_pressed.png",
+      "source": "gui/controls/up_pressed.png",
+      "git_blob": "ffccffb0b0b6600c29b9c09b9d19f6345d12e41c",
+      "sha256": "c1475c544cf9d2584358924048f46bc783d13e3236925de6e9d3e8b6feaf172a",
+      "size": 314
+    },
+    {
+      "path": "controls/up_right.png",
+      "source": "gui/controls/up_right.png",
+      "git_blob": "051f8285d4a560c5b5125df3c2246a9e0a34de25",
+      "sha256": "4f99a00e6c88d57498107f463cd35b2d487bc60aeb044bde77a341609ee5274c",
+      "size": 200
+    },
+    {
+      "path": "controls/up_right_pressed.png",
+      "source": "gui/controls/up_right_pressed.png",
+      "git_blob": "1e9a226697bb0519aaba85b7ccf1236ad4c59c70",
+      "sha256": "c0cd8157cf6d73bae365cf09b3a11240ebb3193b0ce1ace1457d66e7da30de4a",
+      "size": 200
+    },
+    {
+      "path": "controls/waterascend.png",
+      "source": "gui/controls/waterascend.png",
+      "git_blob": "7cb9dbc730c3256013718b8b37faa6f180d32c90",
+      "sha256": "f8dad9878094c9623983474de9b739bd98f3542c8870e975b5df0dfefc3188e0",
+      "size": 696
+    },
+    {
+      "path": "controls/waterascend_pressed.png",
+      "source": "gui/controls/waterascend_pressed.png",
+      "git_blob": "fb44fb92c0f29dc806e9c03df44974aefe48722d",
+      "sha256": "23181424ab6934b78421410793b9d85abf5943fcb45bffdb5e44414a2a6dd79c",
+      "size": 696
+    },
+    {
+      "path": "controls/waterdescend.png",
+      "source": "gui/controls/waterdescend.png",
+      "git_blob": "30bf6a797ad31247a79424be5a5ca0f35abcb248",
+      "sha256": "6b3d07a966464d3c86f89dc656c2e7bb5d1f6e9f485b3e668d815a4589f284e6",
+      "size": 696
+    },
+    {
+      "path": "controls/waterdescend_pressed.png",
+      "source": "gui/controls/waterdescend_pressed.png",
+      "git_blob": "54d97c92698e0602fd25003686d79227c28a44e3",
+      "sha256": "770cfa63189fe54f404e54710df4002706d9ed4752de594526ad2cb8136bf886",
+      "size": 696
+    },
+    {
+      "path": "gui.png",
+      "source": "gui/gui.png",
+      "git_blob": "5d04a69162490540ed07849f926ff434f06294c5",
+      "sha256": "4ca9d1f0a4bd02301cd7ced69c3ea8a62a622016a8b8b018283339983c0eb7dd",
+      "size": 30919
+    },
+    {
+      "path": "touchgui.png",
+      "source": "gui/touchgui.png",
+      "git_blob": "4198ce116b7c9519cc60e89131e913d7107d3873",
+      "sha256": "c80ae0390d06577a775f0c33a27fd315b8b0a819f5b58f918d4295e26e4f6994",
+      "size": 13201
+    },
+    {
+      "path": "touchgui2.png",
+      "source": "gui/touchgui2.png",
+      "git_blob": "f8513bb1742759f100300c258ddf77bd57bac815",
+      "sha256": "cdb0d3bec84befc0b8311a90e0f4e7ca3b79988ee9ef59e309b1d6bb29bc8ace",
+      "size": 3050
+    },
+    {
+      "path": "ui/attack.png",
+      "source": "ui/attack.png",
+      "git_blob": "851e5e076366e6f328fc452d94269fcd39b14b76",
+      "sha256": "72e422880e85f0b57818b7024a8602d9ef875c40b9d437a22c34c313b09e02fb",
+      "size": 696
+    },
+    {
+      "path": "ui/attack_pressed.png",
+      "source": "ui/attack_pressed.png",
+      "git_blob": "6e0b72f47dc819ee3e34735d4f9f10519a0acd5d",
+      "sha256": "6f72c27298ab5473f6ffb01b58d46b1e4a874e20f9b484bb5dab46b53c468e50",
+      "size": 696
+    },
+    {
+      "path": "ui/button_borderless_light.png",
+      "source": "ui/button_borderless_light.png",
+      "git_blob": "e407be537858e72f7e0969a91ad698f93f30a94c",
+      "sha256": "313b607889ba3d224cf599420087876ccb3f4572b304dc1ba6c25825f7d2c376",
+      "size": 131
+    },
+    {
+      "path": "ui/gear.png",
+      "source": "ui/gear.png",
+      "git_blob": "51702eb09569a005895eba2f2e6a06f7c83fcaf3",
+      "sha256": "e67c88fe5e446091b02696357c486e41b666fe6efef909da7573a048215ddff4",
+      "size": 310
+    },
+    {
+      "path": "ui/interact.png",
+      "source": "ui/interact.png",
+      "git_blob": "75d677e3346003c489d9aeb45e5b612cef157e95",
+      "sha256": "db7dbe03bab193c907987ebb386f955920a4e1b077ccd96532bd0b88aa22a965",
+      "size": 2958
+    },
+    {
+      "path": "ui/interact_pressed.png",
+      "source": "ui/interact_pressed.png",
+      "git_blob": "c1253f5994d9b834c5c9c2cd8bb4d2242d4e4ffc",
+      "sha256": "6ac8b9d8f3f1a74e43d93362644e03e5bbf5a5a0277148002aaed7b199a785d1",
+      "size": 273
+    },
+    {
+      "path": "ui/joystick_frame.png",
+      "source": "ui/joystick_frame.png",
+      "git_blob": "79a291966875ffe9dbe726cef6cdb460b4cb6475",
+      "sha256": "286218c5385c4d0f63384637180bcf96d327dd3ffc94c380dc1f03fac21fc987",
+      "size": 3256
+    },
+    {
+      "path": "ui/joystick_knob.png",
+      "source": "ui/joystick_knob.png",
+      "git_blob": "d6a6e22c6317bf2a6212309a9bb3d5d2bfcb4dd1",
+      "sha256": "31a00ef5aa2c829a8afca3e00716687a593fa5d7973d14f4cdf7d97ea94bea73",
+      "size": 215
+    },
+    {
+      "path": "ui/jump.png",
+      "source": "ui/jump.png",
+      "git_blob": "c680defa5618a55cc9319008b6839bc310f4c048",
+      "sha256": "fe455f0193dd2061cace38f46815e417108a0155a39b107f5b68eccac9e0db9b",
+      "size": 696
+    },
+    {
+      "path": "ui/jump_pressed.png",
+      "source": "ui/jump_pressed.png",
+      "git_blob": "80491cfcefca3d10a4c55716131f4819c920b960",
+      "sha256": "bfae2246af37c35f89f41b73b7c33b44d8c9409882dbf5d44d7c5a51cb6d7c8c",
+      "size": 696
+    },
+    {
+      "path": "ui/more-dots.png",
+      "source": "ui/more-dots.png",
+      "git_blob": "db8fe214873e731c978f10772e30d2fc89afec5a",
+      "sha256": "19bd1876dbcdfea5d7697dead0eb89083dce16428454540da46c03f42612f106",
+      "size": 125
+    },
+    {
+      "path": "ui/pause_icon.png",
+      "source": "ui/pause_icon.png",
+      "git_blob": "440c5d29902b31496b5f3862cad78eb487f4c59d",
+      "sha256": "d0fe7ac313eb4096054c02876a88b4f93ffda76b64f94d99a6c23518bc3ca817",
+      "size": 142
+    },
+    {
+      "path": "ui/slider_background.png",
+      "source": "ui/slider_background.png",
+      "git_blob": "86c5b86e1837c16ebc2551a28f4c3d7179b56658",
+      "sha256": "2b073c092b631fd3ed3fadbf75d63445de04a8d4eb632ab5f931e55ea225736d",
+      "size": 80
+    },
+    {
+      "path": "ui/slider_button_default.png",
+      "source": "ui/slider_button_default.png",
+      "git_blob": "d3ec0e55fea8401369b0ce5f220603c141d62ec1",
+      "sha256": "6bb35793c1b8ff4be20d8530f5c2e48971eecab5b6b108fbbe646894dc5ca546",
+      "size": 132
+    },
+    {
+      "path": "ui/sneak.png",
+      "source": "ui/sneak.png",
+      "git_blob": "10a83b2ab415da2f12dd156452563069e0d21f79",
+      "sha256": "2fcc63048e74cb4eb4c4e52e0de6312b48fd54b9626a347f1aece13b1d8a9229",
+      "size": 696
+    },
+    {
+      "path": "ui/sneak_pressed.png",
+      "source": "ui/sneak_pressed.png",
+      "git_blob": "7ccf29444d99a144382f038e3463f744633f732b",
+      "sha256": "883b1820840a7188c8c5f2bf8c8d8cf9fe4fe0ee926c5fbac3dc693766538882",
+      "size": 696
+    },
+    {
+      "path": "ui/sprint.png",
+      "source": "ui/sprint.png",
+      "git_blob": "feac835b4cfefcae57cc7f40810bdda039a5b14c",
+      "sha256": "9e5abcb76a60d34ecfe291b19c66008a525844ecb20434ec66a91b0294e4775b",
+      "size": 696
+    },
+    {
+      "path": "ui/sprint_pressed.png",
+      "source": "ui/sprint_pressed.png",
+      "git_blob": "811d438b7e8c433bfff9bf3c9e20b21450d8dd21",
+      "sha256": "de862fd3122540d9fa73fb8dd8e68ad79295fe08a78ae79d5b1837ae3eeb55da",
+      "size": 696
+    },
+    {
+      "path": "ui/text_label_box.png",
+      "source": "ui/text_label_box.png",
+      "git_blob": "6973cb028801371582b05aa762043bac58262563",
+      "sha256": "3e97f09cef95d5d42d557d4971233a46f12a0e754a6c0e445dfb8f56a5b13b42",
+      "size": 74
+    },
+    {
+      "path": "ui/wysiwyg_reset.png",
+      "source": "ui/wysiwyg_reset.png",
+      "git_blob": "5f09c849debd3f654c1aa8a1adbb454a6b957910",
+      "sha256": "497913d80541ea6bbabcf01b3fb52c80753c38d1686f18a53560be75d8e6c49f",
+      "size": 680
+    },
+    {
+      "path": "LICENSE.md",
+      "source": "../../LICENSE.md",
+      "sha256": "ca18c0dede68ce24ea1cd6f9df0813579b6f9f979787983a50baec99345f975d",
+      "size": 222
+    }
+  ]
+}
