@@ -156,10 +156,16 @@ impl Game<'_> {
             container: self.container,
             gesture: DropGesture::new(Instant::now(), point),
             point,
-            viewport: [
-                (batch.width * batch.scale) as u32,
-                (batch.height * batch.scale) as u32,
-            ],
+            // GUI dimensions are rounded up (1280px at scale 3 is 427 GUI
+            // pixels). Rotation checks must use the actual window dimensions.
+            viewport: self
+                .window
+                .as_ref()
+                .map(|window| {
+                    let size = window.inner_size();
+                    [size.width, size.height]
+                })
+                .unwrap_or_default(),
         });
         true
     }
