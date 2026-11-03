@@ -1130,6 +1130,22 @@ fn text_button(
     b.scale_since(start, x + w / 2.0, y + h / 2.0 + offset, scale, scale);
 }
 
+fn draw_mcpe_bevel_button(b: &mut HudBatch, a: &HudAtlas, [x, y, w, h]: [f32; 4], color: u32) {
+    let Some(white) = a.sprites.get("horizon/white") else {
+        return;
+    };
+    let uv = [[(white.u0 + white.u1) / 2.0, (white.v0 + white.v1) / 2.0]; 4];
+    let border = 2.0;
+    let [r, g, bl, a] = color.to_le_bytes();
+    let top = rgba(r.saturating_add(40), g.saturating_add(40), bl.saturating_add(40), a);
+    let bottom = rgba(r.saturating_sub(40), g.saturating_sub(40), bl.saturating_sub(40), a);
+    b.quad([[x, y], [x + w, y], [x + w - border, y + border], [x + border, y + border]], uv, top);
+    b.quad([[x, y + h], [x + border, y + h - border], [x + w - border, y + h - border], [x + w, y + h]], uv, bottom);
+    b.quad([[x, y], [x + border, y + border], [x + border, y + h - border], [x, y + h]], uv, top);
+    b.quad([[x + w, y], [x + w, y + h], [x + w - border, y + h - border], [x + w - border, y + border]], uv, bottom);
+    b.quad([[x + border, y + border], [x + w - border, y + border], [x + w - border, y + h - border], [x + border, y + h - border]], uv, color);
+}
+
 /// Reuse Chat's complete 18x18 border, including its bottommost pixel row.
 fn menu_frame(b: &mut HudBatch, a: &HudAtlas, [x, y, w, h]: [f32; 4], color: u32) {
     if !a.sprites.contains_key("gui/bedrock/gui") {
