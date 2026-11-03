@@ -110,6 +110,10 @@ pub struct CustomButton {
     pub icon: Option<String>,
     /// Wears the player's own image instead (`own_buttons`).
     pub image: bool,
+    /// Wears another image of the player's own while pressed (`own_buttons::pressed_slot`).
+    pub pressed: bool,
+    /// A press turns it on and the next one off; otherwise it is on while held.
+    pub toggle: bool,
 }
 
 /// What a custom button can wear: `starling:touch/custom_<name>` and its `_pressed`

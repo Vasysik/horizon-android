@@ -437,6 +437,18 @@ impl Loading {
         self.menu.touch_editor = Some((Default::default(), config));
     }
 
+    /// The canvas open before a game: no imports run yet, and what the inbox gets is its picture.
+    pub(super) fn menu_button_image(&mut self) {
+        if !self.menu.options_open || !self.menu.options.painting() {
+            return;
+        }
+        match horizon_client::import::take_picture() {
+            Some(Ok((w, h, pixels))) => self.menu.options.import_button_image(w, h, &pixels),
+            Some(Err(e)) => log::warn!("Horizon: {e}"),
+            None => {}
+        }
+    }
+
     fn menu_custom_button_size(&self) -> f32 {
         let (w, h) = self.window.as_ref().map_or((1.0, 1.0), |w| {
             let s = w.inner_size();
@@ -748,8 +760,10 @@ impl Loading {
                     }
                     super::touch::save_custom_buttons(self.settings.custom_buttons.clone());
                 }
-                // No inbox before a game: this menu draws, and imports in the game's.
-                Event::ImportButtonImage(_) => {}
+                // The canvas takes the picture from the inbox itself (`menu_button_image`).
+                Event::ImportButtonImage(_) => {
+                    horizon_client::platform::pick_file();
+                }
                 Event::OpenShaderOptions => {
                     if let Some((name, profile)) = self.settings.horizon.shader_choice() {
                         self.settings.shader_options = super::shader_packs::read_shader_options(
@@ -1350,6 +1364,7 @@ impl Loading {
     }
 
     pub(super) fn draw_menu(&mut self, batch: &mut HudBatch) {
+        self.menu_button_image();
         let logs = horizon_client::logging::recent_lines();
         let Some(gui) = &self.gui else {
             // The pack's screens do not exist yet: the boot screen holds the

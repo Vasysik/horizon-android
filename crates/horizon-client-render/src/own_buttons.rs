@@ -7,6 +7,11 @@ pub const SIZE: u32 = 24;
 /// How many buttons can have one. A button's id is its slot.
 pub const SLOTS: u32 = 32;
 
+/// The slot of the image button `id` wears while pressed.
+pub fn pressed_slot(id: u32) -> u32 {
+    id + SLOTS
+}
+
 /// A slot's sprite in the atlas.
 pub fn sprite(id: u32) -> String {
     format!("starling:gui/sprites/touch/own_{id}")
@@ -42,6 +47,12 @@ pub fn save(id: u32, rgba: &[u8]) -> io::Result<()> {
 /// Forgets a button's image.
 pub fn remove(id: u32) {
     let _ = fs::remove_file(path(id));
+}
+
+/// Forgets both of a button's images.
+pub fn remove_all(id: u32) {
+    remove(id);
+    remove(pressed_slot(id));
 }
 
 /// An image of any size made a button's: its middle square, each pixel the average of what falls

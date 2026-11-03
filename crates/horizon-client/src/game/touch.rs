@@ -371,6 +371,7 @@ pub(super) fn draw_editor(
             Chip::Sneak => config.sneak.label(),
             Chip::Anchor if config.fixed_stick => "Fixed",
             Chip::Anchor => "Float",
+            Chip::Delete => "Del",
         };
         label(ui, c, r, text, ink(1.0));
     }
@@ -826,6 +827,7 @@ impl Game<'_> {
             // A screen opened over the world: let go of everything the fingers held.
             let actions = self.touch.controls.reset();
             self.touch_apply(actions);
+            self.custom_buttons_up();
             if self.touch.editor.take().is_some() {
                 self.save_touch_layout();
             }
@@ -1587,34 +1589,64 @@ impl Game<'_> {
 
     /// A finger landed on or lifted from one of the layout's extra buttons: one of the player's
     /// own.
-    fn extra_button(&mut self, id: &str, bind: &str, pressed: bool) {
+    fn extra_button(&mut self, id: &str, bind: &str, finger: bool) {
         use horizon_client::settings::CustomAction;
         if id != touch::CUSTOM_BUTTONS {
             return;
         }
         let held = format!("{id}:{bind}");
-        self.touch.custom_down.retain(|k| *k != held);
-        if pressed {
-            self.touch.custom_down.push(held);
-        }
-        let action = self
+        let button = self
             .touch
             .config
             .as_ref()
             .and_then(|c| c.custom.iter().find(|b| b.id.to_string() == bind))
-            .map(|b| b.action.clone());
+            .cloned();
+        // A toggle flips with each press, and its finger lifting does nothing.
+        let toggle = button.as_ref().is_some_and(|b| b.toggle);
+        if toggle && !finger {
+            return;
+        }
+        let on = if toggle {
+            !self.touch.custom_down.contains(&held)
+        } else {
+            finger
+        };
+        self.touch.custom_down.retain(|k| *k != held);
+        if on {
+            self.touch.custom_down.push(held);
+        }
+        match button.map(|b| b.action) {
+            Some(CustomAction::Send(line)) if finger => self.handle_chat_input(&line),
+            Some(action) => self.custom_key(&action, on),
+            None => {}
+        }
+    }
+
+    /// The custom buttons on let go, as a screen opening lets go of every key.
+    fn custom_buttons_up(&mut self) {
+        for held in std::mem::take(&mut self.touch.custom_down) {
+            let action = self.touch.config.as_ref().and_then(|c| {
+                let id = held
+                    .strip_prefix(touch::CUSTOM_BUTTONS)?
+                    .strip_prefix(':')?;
+                let button = c.custom.iter().find(|b| b.id.to_string() == id)?;
+                Some(button.action.clone())
+            });
+            if let Some(action) = action {
+                self.custom_key(&action, false);
+            }
+        }
+    }
+
+    /// A custom button's key goes down or up.
+    fn custom_key(&mut self, action: &horizon_client::settings::CustomAction, pressed: bool) {
+        use horizon_client::settings::CustomAction;
         let key = match action {
-            Some(CustomAction::Send(line)) => {
-                if pressed {
-                    self.handle_chat_input(&line);
-                }
-                return;
+            CustomAction::Send(_) => return,
+            CustomAction::Key(name) => {
+                horizon_client::keybinds::key_code(self.settings.keys.get(name))
             }
-            Some(CustomAction::Key(name)) => {
-                horizon_client::keybinds::key_code(self.settings.keys.get(&name))
-            }
-            Some(CustomAction::Input(name)) => horizon_client::keybinds::key_code(&name),
-            None => None,
+            CustomAction::Input(name) => horizon_client::keybinds::key_code(name),
         };
         let Some(key) = key else { return };
         // F3 acts on its release, through its own handler (the game's F3 button too).
@@ -1644,21 +1676,29 @@ impl Game<'_> {
         }
     }
 
-    /// A picture the inbox put in `skins/`, when a custom button asked for it: it goes on the
-    /// canvas, not on the player. True when it was taken.
-    pub(super) fn button_image_imported(&mut self, path: &std::path::Path) -> bool {
-        if self.touch.import_image.take().is_none() {
+    /// The canvas waiting for the picture it asked for: what the inbox gets goes on it, whatever
+    /// its size, and never through the imports. True while it waits; off the canvas it no longer
+    /// does.
+    pub(super) fn button_image_wait(&mut self) -> bool {
+        if self.touch.import_image.is_none() {
             return false;
         }
-        match horizon_client::hud::decode(path) {
+        if self.screen != Screen::Options || !self.ui.options.painting() {
+            self.touch.import_image = None;
+            return false;
+        }
+        let Some(picture) = horizon_client::import::take_picture() else {
+            return true;
+        };
+        self.touch.import_image = None;
+        match picture {
             Ok((w, h, pixels)) => {
                 self.ui.options.import_button_image(w, h, &pixels);
                 self.imports
                     .say("Picture on the canvas: Done keeps it".into());
             }
-            Err(e) => self.imports.say(format!("Could not read the picture: {e}")),
+            Err(e) => self.imports.say_failed(e),
         }
-        let _ = std::fs::remove_file(path);
         true
     }
 
@@ -1724,14 +1764,24 @@ impl Game<'_> {
                 let label: String = b.label().chars().take(14).collect();
                 let width = HudBatch::text_width(&self.gui.atlas, &label) + 10.0;
                 let sprite = |name: &str| self.mod_sprite(&format!("starling:touch/{name}"));
-                // Its own image goes dim while pressed; an icon has a pressed sprite.
-                let skin = if b.image {
-                    sprite(&format!("own_{}", b.id)).map(|own| (own.clone(), own))
+                let own = |slot: u32| sprite(&format!("own_{slot}"));
+                let icon = |end: &str| {
+                    let icon = b.icon.as_deref()?;
+                    sprite(&format!("custom_{icon}{end}"))
+                };
+                let up = if b.image { own(b.id) } else { icon("") };
+                // Its pressed image; else its own image, dim while pressed, or the icon's sprite.
+                let down = if b.pressed {
+                    own(horizon_client::own_buttons::pressed_slot(b.id))
+                } else if b.image {
+                    own(b.id)
                 } else {
-                    b.icon.as_deref().and_then(|icon| {
-                        let up = sprite(&format!("custom_{icon}"))?;
-                        Some((up, sprite(&format!("custom_{icon}_pressed"))?))
-                    })
+                    icon("_pressed")
+                };
+                let skin = match (up, down) {
+                    (Some(up), Some(down)) => Some((up, down)),
+                    (None, Some(down)) => sprite("custom_blank").map(|up| (up, down)),
+                    _ => None,
                 };
                 let face = ModFace {
                     key: format!("{}:{}", touch::CUSTOM_BUTTONS, b.id),

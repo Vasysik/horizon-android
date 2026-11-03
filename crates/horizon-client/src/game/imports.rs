@@ -88,6 +88,15 @@ impl Imports {
         });
     }
 
+    /// Replace the note with what went wrong.
+    pub(super) fn say_failed(&mut self, text: String) {
+        self.note = Some(Note {
+            text,
+            error: true,
+            ended: Some(Instant::now()),
+        });
+    }
+
     /// The note at the top of the screen, while an import runs and for a while after.
     pub(super) fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch) {
         let Some(note) = &self.note else { return };
@@ -129,6 +138,9 @@ impl Imports {
 impl super::Game<'_> {
     /// The inbox, a few times a second, from the frame.
     pub(super) fn poll_imports(&mut self) {
+        if self.button_image_wait() {
+            return;
+        }
         match self.imports.poll(&self.ui.vanilla_root.clone()) {
             Some(Kind::Resources) => self
                 .imports
@@ -138,9 +150,7 @@ impl super::Game<'_> {
             Some(Kind::Mod | Kind::NativeMod) => self.start_mods(),
             // A skin is worn at once (Skin Customization's Choose a File...).
             Some(Kind::Skin) => {
-                if let Some(path) = self.imports.skin.take()
-                    && !self.button_image_imported(&path)
-                {
+                if let Some(path) = self.imports.skin.take() {
                     self.own_skin_imported(&path);
                 }
             }

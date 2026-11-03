@@ -823,13 +823,15 @@ fn builtin_touch_sprites(images: &[PackedImage]) -> Vec<PackedImage> {
             let (w, h, pixels) = decode_bytes(png).ok()?;
             Some((key, w, h, pixels))
         })
-        // A slot for each custom button's own image, whichever it has now.
-        .chain((0..crate::own_buttons::SLOTS).map(|id| {
-            let side = crate::own_buttons::SIZE;
-            let blank = || vec![0; (side * side * 4) as usize];
-            let pixels = crate::own_buttons::load(id).unwrap_or_else(blank);
-            (crate::own_buttons::sprite(id), side, side, pixels)
-        }))
+        // A slot for each custom button's own images, whichever it has now.
+        .chain(
+            (0..crate::own_buttons::pressed_slot(crate::own_buttons::SLOTS)).map(|id| {
+                let side = crate::own_buttons::SIZE;
+                let blank = || vec![0; (side * side * 4) as usize];
+                let pixels = crate::own_buttons::load(id).unwrap_or_else(blank);
+                (crate::own_buttons::sprite(id), side, side, pixels)
+            }),
+        )
         .collect()
 }
 

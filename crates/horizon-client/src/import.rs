@@ -106,6 +106,27 @@ pub fn classify(path: &Path) -> (Kind, String) {
     (Kind::Unknown, String::new())
 }
 
+/// The next complete file of the inbox as a custom button's picture, taken out of it: any size,
+/// and no skin. None while none has arrived.
+pub fn take_picture() -> Option<Result<(u32, u32, Vec<u8>), String>> {
+    picture_in(&inbox_dir())
+}
+
+fn picture_in(dir: &Path) -> Option<Result<(u32, u32, Vec<u8>), String>> {
+    let entry = fs::read_dir(dir).ok()?.flatten().find(|e| {
+        !e.file_name().to_string_lossy().ends_with(".part")
+            && e.file_type().is_ok_and(|t| t.is_file())
+    })?;
+    let name = entry.file_name().to_string_lossy().into_owned();
+    let decoded = fs::read(entry.path())
+        .map_err(|e| format!("could not read {name}: {e}"))
+        .and_then(|bytes| {
+            crate::hud::decode_bytes(&bytes).map_err(|_| format!("{name} is not a PNG"))
+        });
+    let _ = fs::remove_file(entry.path());
+    Some(decoded)
+}
+
 /// `marker` at the archive's root (""), or one folder down ("folder/").
 fn marker_prefix(names: &[String], marker: &str) -> Option<String> {
     if names.iter().any(|n| n == marker) {
@@ -577,6 +598,32 @@ mod tests {
         assert!(!places.game.join("escaped.txt").exists());
 
         assert!(install(&dir.join("addon.mcaddon"), "addon.mcaddon", &places).is_err());
+    }
+
+    #[test]
+    fn a_picture_comes_out_of_the_inbox_at_any_size() {
+        let dir = scratch("picture");
+        assert!(picture_in(&dir).is_none());
+        fs::write(dir.join("big.png.part"), b"arriving").unwrap();
+        assert!(picture_in(&dir).is_none());
+        fs::remove_file(dir.join("big.png.part")).unwrap();
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 24, 16);
+            encoder.set_color(png::ColorType::Rgba);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[255; 24 * 16 * 4]).unwrap();
+        }
+        fs::write(dir.join("0.png"), &png_bytes).unwrap();
+        let (w, h, pixels) = picture_in(&dir).unwrap().unwrap();
+        assert_eq!((w, h, pixels.len()), (24, 16, 24 * 16 * 4));
+        assert!(picture_in(&dir).is_none(), "taken out of the inbox");
+        fs::write(dir.join("photo.jpg"), b"not a png").unwrap();
+        assert_eq!(
+            picture_in(&dir).unwrap().unwrap_err(),
+            "photo.jpg is not a PNG"
+        );
+        assert!(picture_in(&dir).is_none(), "taken out of the inbox");
     }
 
     #[test]

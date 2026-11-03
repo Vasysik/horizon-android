@@ -494,6 +494,8 @@ impl LayoutConfig {
                 action,
                 icon: text("icon"),
                 image: v["image"].as_bool().unwrap_or(false),
+                pressed: v["pressed"].as_bool().unwrap_or(false),
+                toggle: v["toggle"].as_bool().unwrap_or(false),
             });
         }
         // The mods' buttons, those of mods not running now too (they keep their places).
@@ -531,6 +533,18 @@ impl LayoutConfig {
             })
             .collect();
         self.offer(&offered);
+    }
+
+    /// The id of the custom button `target` is, if it is one.
+    fn custom_id(&self, target: Target) -> Option<u32> {
+        let Target::Extra(i) = target else {
+            return None;
+        };
+        let key = &self.extra.get(i)?.key;
+        key.strip_prefix(CUSTOM_BUTTONS)?
+            .strip_prefix(':')?
+            .parse()
+            .ok()
     }
 
     /// The player's own buttons change: those that went take their places with them.
@@ -571,6 +585,12 @@ impl LayoutConfig {
                 }
                 if b.image {
                     entry["image"] = json!(true);
+                }
+                if b.pressed {
+                    entry["pressed"] = json!(true);
+                }
+                if b.toggle {
+                    entry["toggle"] = json!(true);
                 }
                 entry
             })
@@ -1359,6 +1379,8 @@ pub enum Chip {
     Sneak,
     /// The stick's only: floating or fixed ([`LayoutConfig::fixed_stick`]).
     Anchor,
+    /// A custom button's only: it goes, with its image.
+    Delete,
 }
 
 /// The editor's own buttons, at the top.
@@ -1516,6 +1538,9 @@ impl LayoutEditor {
         if selected == Target::Button(Button::Sneak) {
             chips.push((Chip::Sneak, [c[0] + 2.2 * u, y], 0.42 * u));
         }
+        if config.custom_id(selected).is_some() {
+            chips.push((Chip::Delete, [c[0] + 2.2 * u, y], 0.42 * u));
+        }
         chips
     }
 
@@ -1567,19 +1592,20 @@ impl LayoutEditor {
                     }
                     return Some(action);
                 }
-                let u = unit(width, height);
-                let ([x0, y0], [x1, _]) = Self::opacity_track(width, height);
-                if (p[1] - y0).abs() <= 0.45 * u && p[0] >= x0 - 0.3 * u && p[0] <= x1 + 0.3 * u {
-                    self.slider = Some(id);
-                    self.set_opacity(config, width, height, p[0]);
-                    return None;
-                }
+                // The chips first: they can sit over the slider's row.
                 if let Some((chip, ..)) = self
                     .chips(config, width, height)
                     .into_iter()
                     .find(|(_, c, r)| hit(*c, *r))
                 {
-                    if chip == Chip::Sneak {
+                    if chip == Chip::Delete {
+                        if let Some(own) = self.selected.and_then(|t| config.custom_id(t)) {
+                            crate::own_buttons::remove_all(own);
+                            let left = config.custom.iter().filter(|b| b.id != own);
+                            config.set_custom(left.cloned().collect());
+                        }
+                        self.selected = None;
+                    } else if chip == Chip::Sneak {
                         config.sneak = config.sneak.next();
                     } else if chip == Chip::Anchor {
                         config.fixed_stick = !config.fixed_stick;
@@ -1595,9 +1621,16 @@ impl LayoutEditor {
                             Chip::Smaller => place.size = (place.size - SIZE_STEP).max(min),
                             Chip::Bigger => place.size = (place.size + SIZE_STEP).min(max),
                             Chip::Visibility => place.show = place.show.next(stick),
-                            Chip::Sneak | Chip::Anchor => {}
+                            Chip::Sneak | Chip::Anchor | Chip::Delete => {}
                         }
                     }
+                    return None;
+                }
+                let u = unit(width, height);
+                let ([x0, y0], [x1, _]) = Self::opacity_track(width, height);
+                if (p[1] - y0).abs() <= 0.45 * u && p[0] >= x0 - 0.3 * u && p[0] <= x1 + 0.3 * u {
+                    self.slider = Some(id);
+                    self.set_opacity(config, width, height, p[0]);
                     return None;
                 }
                 // The topmost control under the finger (buttons are drawn over the stick).
@@ -1941,6 +1974,40 @@ mod tests {
     }
 
     #[test]
+    fn the_editor_deletes_a_custom_button_and_no_other() {
+        let (w, h) = (3200.0, 1440.0);
+        let mut config = LayoutConfig {
+            custom: vec![CustomButton {
+                id: 1,
+                action: CustomAction::Send("/home".into()),
+                icon: None,
+                image: false,
+                pressed: false,
+                toggle: false,
+            }],
+            ..LayoutConfig::default()
+        };
+        config.offer_custom(0.5);
+        let mut editor = LayoutEditor {
+            selected: Some(Target::Button(Button::Jump)),
+            ..LayoutEditor::default()
+        };
+        let delete = |editor: &LayoutEditor, config: &LayoutConfig| {
+            editor
+                .chips(config, w, h)
+                .into_iter()
+                .find(|(chip, ..)| *chip == Chip::Delete)
+        };
+        assert!(delete(&editor, &config).is_none());
+        editor.selected = Some(Target::Extra(0));
+        let (_, at, _) = delete(&editor, &config).unwrap();
+        editor.event(&mut config, w, h, 1, TouchPhase::Started, at);
+        assert!(config.custom.is_empty());
+        assert!(config.extra.is_empty());
+        assert_eq!(editor.selected, None);
+    }
+
+    #[test]
     fn custom_buttons_are_saved_and_outlast_a_reset() {
         let (w, h) = (3200.0, 1440.0);
         let mut config = LayoutConfig {
@@ -1950,18 +2017,24 @@ mod tests {
                     action: CustomAction::Key("key.sprint".into()),
                     icon: Some("star".into()),
                     image: false,
+                    pressed: true,
+                    toggle: true,
                 },
                 CustomButton {
                     id: 2,
                     action: CustomAction::Send("/home".into()),
                     icon: None,
                     image: true,
+                    pressed: false,
+                    toggle: false,
                 },
                 CustomButton {
                     id: 3,
                     action: CustomAction::Input("key.keyboard.f1".into()),
                     icon: None,
                     image: false,
+                    pressed: false,
+                    toggle: false,
                 },
             ],
             ..LayoutConfig::default()

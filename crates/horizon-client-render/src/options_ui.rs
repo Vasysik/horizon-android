@@ -1339,6 +1339,18 @@ impl Painter {
             .unwrap_or_else(|| vec![0; side * side * 4]);
     }
 
+    /// The image a button wears while pressed, else a pressed blank button, to draw on.
+    fn open_pressed(&mut self, atlas: &HudAtlas, slot: u32) {
+        self.dirty = false;
+        self.last = None;
+        let side = own_buttons::SIZE as usize;
+        self.pixels = own_buttons::load(slot)
+            .or_else(|| Self::sprite(atlas, "custom_blank_pressed"))
+            .or_else(|| Self::sprite(atlas, "custom_blank"))
+            .filter(|p| p.len() == side * side * 4)
+            .unwrap_or_else(|| vec![0; side * side * 4]);
+    }
+
     fn clear(&mut self) {
         self.pixels.fill(0);
         self.dirty = true;
@@ -1540,6 +1552,8 @@ enum Act {
     CustomAdd,
     CustomEdit(u32),
     CustomDelete(u32),
+    /// Toggled or held.
+    CustomToggle(u32),
     CustomKey(u32, &'static str),
     CustomInput(u32, &'static str),
     /// A native mod's key (the mod's index in the installed list, the key's in its page) as the
@@ -3577,6 +3591,31 @@ impl OptionsUi {
                             Act::CustomDraw(id),
                         )),
                     ),
+                    Row::Note("While pressed".into()),
+                    Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            150.0,
+                            Text::literal(if b.is_some_and(|b| b.toggle) {
+                                "Type: Toggle"
+                            } else {
+                                "Type: Hold"
+                            }),
+                            Act::CustomToggle(id),
+                        ),
+                        Some(button(
+                            0.0,
+                            0.0,
+                            150.0,
+                            Text::literal(if b.is_some_and(|b| b.pressed) {
+                                "Pressed Image: Yours"
+                            } else {
+                                "Pressed Image..."
+                            }),
+                            Act::CustomDraw(own_buttons::pressed_slot(id)),
+                        )),
+                    ),
                 ]
             }
             Page::CustomDraw(id) => vec![Row::Canvas(id)],
@@ -5269,9 +5308,14 @@ impl OptionsUi {
                             self.push(Page::CustomButton(id));
                         }
                         Act::CustomDelete(id) => {
-                            own_buttons::remove(id);
+                            own_buttons::remove_all(id);
                             s.custom_buttons.retain(|b| b.id != id);
                             events.push(Event::CustomButtons);
+                        }
+                        Act::CustomToggle(id) => {
+                            if let Some(b) = s.custom_buttons.iter_mut().find(|b| b.id == id) {
+                                b.toggle = !b.toggle;
+                            }
                         }
                         Act::CustomKey(id, name) => {
                             if let Some(b) = s.custom_buttons.iter_mut().find(|b| b.id == id) {
@@ -5315,8 +5359,12 @@ impl OptionsUi {
                             events.extend(self.back(s));
                         }
                         Act::CustomDraw(id) => {
-                            self.painter
-                                .open(atlas, s.custom_buttons.iter().find(|b| b.id == id));
+                            if id < own_buttons::SLOTS {
+                                self.painter
+                                    .open(atlas, s.custom_buttons.iter().find(|b| b.id == id));
+                            } else {
+                                self.painter.open_pressed(atlas, id);
+                            }
                             self.push(Page::CustomDraw(id));
                         }
                         Act::CanvasClear => self.painter.clear(),
@@ -5773,6 +5821,14 @@ impl OptionsUi {
                         b.image = true;
                         b.icon = None;
                     }
+                    // Its pressed image: a canvas cleared takes it away.
+                    if let Some(b) = s
+                        .custom_buttons
+                        .iter_mut()
+                        .find(|b| own_buttons::pressed_slot(b.id) == id)
+                    {
+                        b.pressed = pixels.chunks(4).any(|p| p[3] != 0);
+                    }
                     events.push(Event::CustomImage(id, pixels));
                 }
             }
@@ -5814,6 +5870,8 @@ impl OptionsUi {
             action: crate::settings::CustomAction::Send(String::new()),
             icon: None,
             image: false,
+            pressed: false,
+            toggle: false,
         });
         self.custom_send.set_value("");
         self.custom_send.focused = false;
@@ -6437,6 +6495,7 @@ impl OptionsUi {
                         | Act::CustomModKey(..)
                         | Act::CustomIcon(..)
                         | Act::CustomDraw(_)
+                        | Act::CustomToggle(_)
                         | Act::CanvasClear
                         | Act::CanvasPlate
                         | Act::CanvasImport(_)
