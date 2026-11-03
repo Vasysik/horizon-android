@@ -83,7 +83,7 @@ impl Status {
         let state = match secrets {
             None => State::SignInRequired,
             Some(s) if s.sign_in_required => State::SignInRequired,
-            Some(s) if !s.owns => State::OwnershipRequired,
+            Some(s) if !s.owns && s.provider == Provider::Microsoft => State::OwnershipRequired,
             Some(s) if s.minecraft_expires_at <= now() + RENEW_BEFORE => State::NeedsRefresh,
             Some(_) => State::Ready,
         };
@@ -225,6 +225,39 @@ fn status_within(
     result.unwrap_or_else(|e| Status::failed(&e))
 }
 
+/// Prepare the currently selected provider session without selecting an identity or
+/// rewriting accounts.json. A concurrent UI switch cannot be undone by a late refresh.
+#[cfg(any(target_os = "android", test))]
+pub fn selected_session(client_id: &str) -> Result<Option<(Account, Secrets)>, String> {
+    selected_session_with(&Endpoints::live(), client_id, store(), &Accounts::path())
+}
+#[cfg(any(target_os = "android", test))]
+pub(super) fn selected_session_with(
+    ep: &Endpoints,
+    client_id: &str,
+    store: &dyn SecretStore,
+    accounts: &Path,
+) -> Result<Option<(Account, Secrets)>, String> {
+    let _operation = lock(store)?;
+    let Some(account) = Accounts::load_from(accounts).selected().cloned() else {
+        return Ok(None);
+    };
+    let secrets =
+        read(store, &account.key())?.ok_or("Session ended. Sign in again, or use Offline.")?;
+    let (account, secrets) = fresh(ep, client_id, &account, secrets)?;
+    if Accounts::load_from(accounts)
+        .selected()
+        .is_none_or(|current| current.key() != account.key())
+    {
+        return Err("The selected account changed. Try again.".into());
+    }
+    store.set(
+        &account.key(),
+        &serde_json::to_string(&secrets).map_err(|_| "Could not encode the session.")?,
+    )?;
+    Ok(Some((account, secrets)))
+}
+
 /// Force a renewal even when the access token is fresh. Does not select an account, change
 /// the public account list, or return a token. A future IPC handler can call this same API,
 /// then use write_session_file for an explicit game-session handoff.
@@ -271,7 +304,7 @@ pub(super) fn refresh_account(
         progress(Phase::Queued);
         let _operation = lock(store)?;
         progress(Phase::Keychain);
-        let Some(secrets) = read(store, &account.uuid)? else {
+        let Some(secrets) = read(store, &account.key())? else {
             return Ok(Status::from_secrets(None));
         };
         let before =
@@ -285,7 +318,7 @@ pub(super) fn refresh_account(
                     if saved
                         .accounts
                         .iter()
-                        .any(|a| a.uuid == renewed.uuid && *a != renewed)
+                        .any(|a| a.key() == renewed.key() && *a != renewed)
                     {
                         saved.update(renewed);
                         let _ = saved.save_to(accounts);
@@ -307,7 +340,7 @@ pub(super) fn refresh_account(
         if before != after {
             progress(Phase::Saving);
         }
-        if before != after && store.set(&account.uuid, &after).is_err() {
+        if before != after && store.set(&account.key(), &after).is_err() {
             status.state = State::Retry;
             status.message =
                 "The renewed sign-in could not be saved in the keychain. Unlock it and retry."
@@ -349,7 +382,7 @@ pub(super) fn renew_for_game_with(
         return Err(status);
     }
     let _operation = lock(store).map_err(|e| Status::failed(&e))?;
-    let secrets = read(store, &account.uuid)
+    let secrets = read(store, &account.key())
         .map_err(|e| Status::failed(&e))?
         .ok_or_else(|| Status::from_secrets(None))?;
     write_session_file(dir, account, &secrets).map_err(|e| Status::failed(&e))

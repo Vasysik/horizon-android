@@ -3468,6 +3468,7 @@ mod tests {
         assert!(!dir.exists());
         // An owner: Mojang is asked (and the download fails here, without network).
         let owner = account::Account {
+            provider: Default::default(),
             uuid: "069a79f444e94726a5befca90e38aaf5".into(),
             name: "Notch".into(),
             skin: None,

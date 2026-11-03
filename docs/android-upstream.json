@@ -26,5 +26,15 @@
     "commits_beyond_merged_baseline": 482,
     "merge_preview_conflicting_files": 12,
     "status": "Reviewed candidate only; not merged or Android-validated"
+  },
+  "accounts_appearance_review": {
+    "date": "2026-11-02",
+    "fetched_main": "f696adc8996d7d4b11e7d50a863f2735a21c8000",
+    "reviewed_account_commits": [
+      "ba579191f",
+      "0de577b50"
+    ],
+    "moving_main_merged": false,
+    "notes": "Reviewed newer account-save reporting and desktop encrypted-file storage changes. Android retains its Keystore AES/GCM store and reports sign-in save failures through the existing shared task. The selected stable nightly baseline is unchanged; no experimental UI branches were merged."
   }
 }

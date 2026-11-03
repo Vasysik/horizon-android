@@ -42,9 +42,9 @@ impl Launcher {
             .iter()
             .map(|a| {
                 (
-                    Player::Microsoft(a.uuid.clone()),
+                    Player::Microsoft(a.key()),
                     a.name.clone(),
-                    tr("Microsoft"),
+                    tr(if a.provider == account::Provider::Ely {"Ely.by"} else {"Microsoft"}),
                 )
             })
             .collect();
