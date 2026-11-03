@@ -1385,7 +1385,7 @@ impl TouchUi {
         // Top Header Bar (Matches reference: Purple Sliders Icon Box + Title + Subtitle + Done button)
         ui.rounded(dx + 14.0, dy + 9.0, 30.0, 30.0, 9.0, card_sel);
         ui.border(dx + 14.0, dy + 9.0, 30.0, 30.0, 9.0, accent);
-        ui.icon(Icon::Sliders, dx + 20.0, dy + 15.0, 18.0, accent_hi);
+        ui.icon(Icon::Settings, dx + 20.0, dy + 15.0, 18.0, accent_hi);
         ui.text(
             Face::SemiBold,
             13.5,
@@ -1513,7 +1513,7 @@ impl TouchUi {
                 let active_preset_lbl = format!("Preset: {}", settings.preset_name);
                 for (i, (ic, title, sub)) in [
                     (Icon::MicrosoftGrid, "Customize Controls", "Open layout editor"),
-                    (Icon::Sliders, "Control Presets", active_preset_lbl.as_str()),
+                    (Icon::Settings, "Control Presets", active_preset_lbl.as_str()),
                 ]
                 .into_iter()
                 .enumerate()
