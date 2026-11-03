@@ -267,3 +267,53 @@ impl Transformers {
         None
     }
 }
+
+/// Whether `touch_shield` should skip `use_block` and go straight to raising
+/// the shield. When `touch_shield` is active only because of sneak
+/// (`!shield_button && !shield_held`), a main-hand block transformer aimed at
+/// a block runs `use_block` first so `block_transform` can act while sneaking.
+#[must_use]
+pub fn touch_shield_skips_block(
+    touch_shield: bool,
+    shield_button: bool,
+    shield_held: bool,
+    main_hand_transformer: bool,
+    block_targeted: bool,
+) -> bool {
+    touch_shield && (shield_button || shield_held || !main_hand_transformer || !block_targeted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::touch_shield_skips_block;
+
+    #[test]
+    fn touch_shield_allows_block_transformer_when_sneaking() {
+        // Sneak-activated touch_shield (shield_button=false, shield_held=false)
+        // with a block transformer aimed at a block runs use_block instead of skipping.
+        assert!(!touch_shield_skips_block(true, false, false, true, true));
+        // Dedicated shield button enabled or held still skips use_block to raise shield.
+        assert!(touch_shield_skips_block(true, true, false, true, true));
+        assert!(touch_shield_skips_block(true, false, true, true, true));
+        assert!(touch_shield_skips_block(true, true, true, true, true));
+        // Non-tool items or no targeted block still skip use_block to raise shield.
+        assert!(touch_shield_skips_block(true, false, false, false, true));
+        assert!(touch_shield_skips_block(true, false, false, true, false));
+        // When touch_shield is inactive, use_block is never skipped.
+        for shield_button in [false, true] {
+            for shield_held in [false, true] {
+                for tool in [false, true] {
+                    for targeted in [false, true] {
+                        assert!(!touch_shield_skips_block(
+                            false,
+                            shield_button,
+                            shield_held,
+                            tool,
+                            targeted
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
