@@ -14127,6 +14127,7 @@ impl Game<'_> {
             .clone()
             .ok_or("no window for graphics recovery")?;
         log::warn!("Horizon: rebuilding the renderer after graphics device loss");
+        self.shader_pack_lost_device();
         // Drop the old surface and device before opening another on this window.
         let mut old = self
             .renderer
@@ -14134,6 +14135,8 @@ impl Game<'_> {
             .ok_or("no renderer for graphics recovery")?;
         let screenshot = old.screenshot.take();
         let screenshot_result = old.screenshot_result.take();
+        // A frame on the submit thread holds its surface texture, and the surface goes first.
+        old.queue.wait();
         drop(old);
         let mut renderer = build_renderer(
             window,

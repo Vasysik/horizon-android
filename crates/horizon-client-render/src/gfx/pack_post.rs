@@ -1040,9 +1040,6 @@ pub(super) fn prepass_wanted() -> bool {
         || std::env::var_os("HORIZON_SHADER_PACK_PREPASS").is_some()
 }
 
-/// The vertex output the depth pass reads the atlas coordinates from (pack_atlas.rs writes it).
-pub(super) const PREPASS_UV: u32 = 15;
-
 /// What a pack brings besides its programs: custom textures, images and storage buffers.
 struct Resources<'a> {
     textures: &'a [pack_textures::PackTexture],
@@ -1529,11 +1526,12 @@ fn build_pass(
                     && images.is_empty()
             })
             .zip(atlas)
-            .map(|(_, a)| {
+            .zip(interface.prepass_uv)
+            .map(|((_, a), uv_at)| {
                 let source = format!(
                     "@group(0) @binding({}) var hz_atlas: texture_2d<f32>;\n\
                      @group(0) @binding({}) var hz_atlas_sampler: sampler;\n\
-                     @fragment fn main(@location({PREPASS_UV}) uv: vec2<f32>) {{\n    \
+                     @fragment fn main(@location({uv_at}) uv: vec2<f32>) {{\n    \
                      if textureSample(hz_atlas, hz_atlas_sampler, uv).a <= {cut:?} {{ discard; }}\n}}\n",
                     a.binding, a.sampler
                 );
@@ -4410,6 +4408,7 @@ mod tests {
                 image("flat", "image2D", "rgba8", 3),
             ],
             buffers: Vec::new(),
+            prepass_uv: None,
         };
         let buffers = pack_images::Buffers::new(
             &device,

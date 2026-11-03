@@ -39,6 +39,7 @@ pub fn inputs() -> horizon_shaders::GbuffersInputs {
             .map(|&(n, v)| (n.to_owned(), v.to_owned()))
             .collect(),
         after: String::new(),
+        prepass_uv: false,
         // Vanilla's weather drops texels below 0.1, as Horizon's own weather shader does.
         alpha_test: Some(horizon_shaders::AlphaTest {
             op: ">",

@@ -96,6 +96,7 @@ pub fn inputs() -> horizon_shaders::GbuffersInputs {
         ],
         // At the far plane: the sky shows only where nothing else drew, and it writes no depth.
         after: "    gl_Position.z = gl_Position.w;\n".into(),
+        prepass_uv: false,
         alpha_test: None,
     }
 }
@@ -121,6 +122,7 @@ pub fn celestial_inputs() -> horizon_shaders::GbuffersInputs {
             ("vaNormal".into(), "hz_Normal".into()),
         ],
         after: "    gl_Position.z = gl_Position.w;\n".into(),
+        prepass_uv: false,
         alpha_test: None,
     }
 }

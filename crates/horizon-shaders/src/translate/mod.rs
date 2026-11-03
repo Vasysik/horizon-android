@@ -65,6 +65,8 @@ pub struct Interface {
     pub images: Vec<Image>,
     /// The SSBOs' bindings in set 4 (`bufferObject.<n>`).
     pub buffers: Vec<u32>,
+    /// Where the vertex stage writes `hz_prepass_uv`, when `GbuffersInputs::prepass_uv` asked.
+    pub prepass_uv: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -155,6 +157,9 @@ pub struct GbuffersInputs {
     pub attributes: Vec<(String, String)>,
     /// GLSL statements run last in `main`, with `gl_Position` in wgpu's clip space.
     pub after: String,
+    /// Declare a vertex output `vec2 hz_prepass_uv` past the pack's own varyings, for `after` to
+    /// write and a depth pass to read (`Interface::prepass_uv`).
+    pub prepass_uv: bool,
     /// The alpha test applied to output 0 (`gl_FragData[0]`, `gl_FragColor`), the loader's
     /// (3.2 `alphaTest.<program>`): `None` keeps every fragment.
     pub alpha_test: Option<AlphaTest>,
@@ -373,6 +378,10 @@ fn translate(
         }
     }
 
+    let prepass_uv = gbuffers
+        .filter(|g| g.prepass_uv)
+        .map(|_| locations.len() as u32);
+
     let header = |stage: &Stage| {
         let mut h = resources(&uniforms, &samplers, &images);
         if let Some(reference) = alpha_test_ref {
@@ -403,6 +412,9 @@ fn translate(
         if let (Some(inputs), ShaderStage::Vertex) = (gbuffers, stage.kind) {
             h.push_str(&inputs.declarations);
             h.push('\n');
+            if let Some(at) = prepass_uv {
+                writeln!(h, "layout(location = {at}) out vec2 hz_prepass_uv;").unwrap();
+            }
         }
         h.push_str(&stage.prelude());
         h
@@ -568,6 +580,7 @@ fn translate(
             alpha_cut,
             images,
             buffers: v.buffers.union(&f.buffers).copied().collect(),
+            prepass_uv,
         },
         vertex,
         fragment,
@@ -773,6 +786,7 @@ pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<E
         alpha_cut: None,
         images,
         buffers: c.buffers.iter().copied().collect(),
+        prepass_uv: None,
     };
     mark_atomic(&module, &mut interface.images);
     Ok(ComputeProgram {
@@ -1882,6 +1896,45 @@ mod tests {
         assert_eq!(varying_parts("mat2x3 @[2];").unwrap().1[3].1, "[1][1]");
         assert!(varying_parts("vec4 @;").is_none());
         assert!(varying_parts("vec4 @[N];").is_none());
+    }
+
+    #[test]
+    fn the_prepass_output_goes_past_the_varyings() {
+        let vars = (0..16)
+            .map(|i| format!("varying vec4 v{i};\n"))
+            .collect::<String>();
+        let writes = (0..16)
+            .map(|i| format!("    v{i} = vec4(1.0);\n"))
+            .collect::<String>();
+        let reads = (0..16).map(|i| format!(" + v{i}")).collect::<String>();
+        let vsh = format!(
+            "#version 120\n{vars}void main() {{\n    gl_Position = ftransform();\n{writes}}}\n"
+        );
+        let fsh =
+            format!("#version 120\n{vars}void main() {{ gl_FragColor = vec4(0.0){reads}; }}\n");
+        let pack = Pack::from_zip_bytes(
+            "P.zip",
+            zip(&[
+                ("shaders/gbuffers_terrain.vsh", vsh.as_str()),
+                ("shaders/gbuffers_terrain.fsh", fsh.as_str()),
+            ]),
+        )
+        .unwrap();
+        let m = Macros::standard();
+        let game = GbuffersInputs {
+            body: "    hz_Vertex = vec4(0.0, 0.0, 0.0, 1.0);\n".into(),
+            after: "    hz_prepass_uv = hz_MultiTexCoord0.xy;\n".into(),
+            prepass_uv: true,
+            ..Default::default()
+        };
+        let p = translate_gbuffers(
+            &preprocess(&pack, "gbuffers_terrain.vsh", &m),
+            &preprocess(&pack, "gbuffers_terrain.fsh", &m),
+            Target::Buffers,
+            &game,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(p.interface.prepass_uv, Some(16));
     }
 
     #[test]

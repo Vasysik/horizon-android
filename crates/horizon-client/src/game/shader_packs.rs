@@ -660,6 +660,23 @@ impl Game<'_> {
         ));
     }
 
+    /// The device was lost with a pack picked: most likely its frames were too long for the
+    /// driver, so the rebuilt renderer starts without it and it stays off at the next start.
+    pub(super) fn shader_pack_lost_device(&mut self) {
+        if self.settings.horizon.shader_pack.is_empty() {
+            return;
+        }
+        let name = std::mem::take(&mut self.settings.horizon.shader_pack);
+        log::error!("shader pack {name}: turned off after the graphics device was lost");
+        self.pack_ids = None;
+        self.pack_making = None;
+        self.settings.save(&Self::options_path());
+        self.system_message(Text::colored(
+            format!("Shader pack {name} was too heavy for this device and was turned off"),
+            0xFF5555,
+        ));
+    }
+
     /// Whether the game's vignette draws: the option, unless the loaded pack turns it off.
     pub(super) fn vignette_shown(&self) -> bool {
         self.settings.vignette && self.pack_ids.as_ref().is_none_or(|ids| ids.vignette)

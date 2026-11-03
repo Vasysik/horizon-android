@@ -211,11 +211,8 @@ impl PackAtlas {
         }
         declarations.push_str("vec2 hz_cell; vec2 hz_scale; vec4 hz_tangent;\n");
         let mut after = String::new();
-        if super::pack_post::prepass_wanted() {
-            let at = super::pack_post::PREPASS_UV;
-            declarations.push_str(&format!(
-                "layout(location = {at}) out vec2 hz_prepass_uv;\n"
-            ));
+        let prepass_uv = super::pack_post::prepass_wanted();
+        if prepass_uv {
             after.push_str("    hz_prepass_uv = hz_MultiTexCoord0.xy;\n");
         }
         let entity = if flat {
@@ -253,6 +250,7 @@ impl PackAtlas {
                 .map(|&(n, v)| (n.to_owned(), v.to_owned()))
                 .collect(),
             after,
+            prepass_uv,
             alpha_test: None,
         }
     }

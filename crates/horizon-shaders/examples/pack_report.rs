@@ -89,6 +89,9 @@ fn game_inputs() -> GameInputs {
         declarations: "layout(location = 0) in vec3 hz_v_pos;".into(),
         body: "    hz_Vertex = vec4(hz_v_pos, 1.0);\n    hz_Color = vec4(1.0);\n".into(),
         attributes: vec![("mc_Entity".into(), "vec4(-1.0)".into())],
+        // A phone's depth pass, so the report sees what it adds to the pack's varyings.
+        after: "    hz_prepass_uv = hz_MultiTexCoord0.xy;\n".into(),
+        prepass_uv: true,
         ..Default::default()
     };
     GameInputs {

@@ -458,11 +458,12 @@ impl Game<'_> {
                 let package = match horizon_mods::Package::read(path) {
                     Ok(package) => package,
                     Err(e) => {
+                        log::warn!("Horizon: mod {file} can't be read: {e}");
                         return Installed {
                             id: String::new(),
                             title: file.into_owned(),
                             description: String::new(),
-                            problem: Some(format!("Can't be read: {e}")),
+                            problem: Some("Made for another version: needs an update".to_owned()),
                             dev: false,
                             native: None,
                         };
