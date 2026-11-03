@@ -1023,8 +1023,9 @@ impl TouchUi {
             dy + 30.0,
             muted_c,
             &format!(
-                "Active Layout: {} • GoyControl Engine",
-                settings.active_profile
+                "Active Layout: {} • {}",
+                settings.active_profile,
+                settings.control_style.label()
             ),
         );
 
@@ -1060,7 +1061,7 @@ impl TouchUi {
         let py = dy + 64.0;
         let pw = (dw - 32.0 - 16.0) / 5.0;
         for (i, (id, title)) in [
-            ("default", "Goy Default"),
+            ("default", "MCPE Default"),
             ("goycontrol", "GoyControl"),
             ("pvp", "PvP Claw"),
             ("building", "Builder"),
@@ -2840,7 +2841,7 @@ pub fn draw_hud_editor(
         let py = ey + 48.0;
         let pw = (dw - 28.0 - 16.0) / 5.0;
         for (i, (id, title)) in [
-            ("default", "Goy Default"),
+            ("default", "MCPE Default"),
             ("goycontrol", "GoyControl"),
             ("pvp", "PvP Claw"),
             ("building", "Builder"),

@@ -1158,6 +1158,7 @@ impl Loading {
             if matches!(&event, WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed && (event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::BrowserBack) || event.physical_key == PhysicalKey::Code(KeyCode::Escape)))
             {
                 self.menu.controls.cancel_editor();
+                let _ = self.menu.controls.settings.save();
                 self.settings.touch = self.menu.controls.settings.clone();
                 return Ok(());
             }

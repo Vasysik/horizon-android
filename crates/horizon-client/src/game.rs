@@ -16247,6 +16247,7 @@ impl Game<'_> {
         {
             if self.pad.touch.editor.is_some() {
                 self.pad.touch.cancel_editor();
+                let _ = self.pad.touch.settings.save();
                 self.settings.touch = self.pad.touch.settings.clone();
                 self.pause = false;
                 return;
@@ -16268,6 +16269,7 @@ impl Game<'_> {
             if event.state==ElementState::Pressed && event.physical_key==PhysicalKey::Code(KeyCode::Escape))
         {
             self.pad.touch.cancel_editor();
+            let _ = self.pad.touch.settings.save();
             self.settings.touch = self.pad.touch.settings.clone();
             self.pause = false;
             return;

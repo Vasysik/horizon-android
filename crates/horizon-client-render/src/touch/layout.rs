@@ -89,10 +89,10 @@ impl Control {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ControlStyle {
-    /// Removed look, kept only so older profile files still deserialize.
+    /// Classic Bedrock look: every built-in control in the MCPE style.
+    #[default]
     Mcpe,
     /// GoyControl style (customizable static buttons, custom joystick, up to 3 events, no icons).
-    #[default]
     GoyControl,
 }
 impl ControlStyle {
@@ -552,7 +552,7 @@ impl Default for Settings {
             vertical_margin: 0.0,
             active_profile: default_profile_name(),
             default_profile: default_profile_name(),
-            control_style: ControlStyle::GoyControl,
+            control_style: ControlStyle::Mcpe,
             joystick_style: JoystickStyle::default(),
             floating_menu_pos: default_floating_pos(),
             snap_to_grid: false,
@@ -1115,7 +1115,20 @@ impl Settings {
         self.control_style = style;
         match style {
             ControlStyle::Mcpe => {
+                // The classic Bedrock HUD: every built-in control, in the MCPE look.
                 self.button_visibility = [0; 14];
+                // Drop the untouched factory Goy buttons so the editor does not
+                // draw two full sets; buttons the player made stay.
+                let factory = Self::default_goy_buttons();
+                if self.custom_buttons.len() == factory.len()
+                    && self
+                        .custom_buttons
+                        .iter()
+                        .zip(&factory)
+                        .all(|(a, b)| a.key == b.key && a.custom_label == b.custom_label)
+                {
+                    self.custom_buttons.clear();
+                }
             }
             ControlStyle::GoyControl => {
                 self.mode = Mode::Crosshair;
@@ -1140,13 +1153,11 @@ impl Settings {
         self.button_visibility = [0; 14];
         match clean.as_str() {
             "default" | "mcpe" | "pocket" => {
-                self.control_style = ControlStyle::GoyControl;
+                self.control_style = ControlStyle::Mcpe;
                 self.mode = Mode::Crosshair;
-                self.split_controls = true;
-                self.custom_buttons = Self::default_goy_buttons();
-                for c in Control::ALL {
-                    self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
-                }
+                self.split_controls = false;
+                self.custom_buttons.clear();
+                self.button_visibility = [0; 14];
             }
             "goycontrol" | "goy" => {
                 self.control_style = ControlStyle::GoyControl;
