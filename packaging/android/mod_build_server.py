@@ -291,8 +291,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         parts = urllib.parse.urlparse(self.path).path.strip("/").split("/")
         if parts == ["v1", "busy"]:
+            # A `hold` file: someone is working on the machine, and it stays on.
             with lock:
-                return self.answer(200, {"busy": bool(line)})
+                return self.answer(200, {"busy": bool(line) or (ROOT / "hold").exists()})
         if len(parts) < 3 or parts[:2] != ["v1", "job"] or not re.fullmatch(r"[0-9a-f]{24}", parts[2]):
             return self.answer(404, {"error": "No such thing here."})
         key = parts[2]

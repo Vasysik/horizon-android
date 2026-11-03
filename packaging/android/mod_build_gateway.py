@@ -105,19 +105,27 @@ def wake():
 
 def sleeper():
     """Puts back to sleep what this started, when it has been idle. A machine someone else started
-    is left alone."""
+    is left alone, and so is one whose service answered and then stopped: someone is working on it,
+    or it is already off."""
     global started_at
+    answered = False
     while True:
         time.sleep(60)
         with lock:
             started, active = started_at, last_activity
         if started is None:
+            answered = False
             continue
         now = time.time()
         busy = backend_status()
         if busy is None:
+            if answered:
+                with lock:
+                    started_at = None
+                continue
             give_up = now - started > START_SECONDS
         else:
+            answered = True
             give_up = not busy and now - active > IDLE_SECONDS and now - started > IDLE_SECONDS
         if give_up and power("deallocate"):
             with lock:
