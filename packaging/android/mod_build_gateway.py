@@ -68,7 +68,12 @@ def power(action):
 
 
 def connection(timeout):
-    return http.client.HTTPConnection(BACKEND.hostname, BACKEND.port, timeout=timeout)
+    """To the service, connected: a sleeping machine doesn't refuse, it says nothing, so the connecting
+    has a short wait of its own."""
+    c = http.client.HTTPConnection(BACKEND.hostname, BACKEND.port, timeout=4)
+    c.connect()
+    c.sock.settimeout(timeout)
+    return c
 
 
 def backend_status():
