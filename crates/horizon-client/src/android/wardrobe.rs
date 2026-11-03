@@ -363,10 +363,9 @@ impl Wardrobe {
             .get(&self.key)
             .cloned()
             .unwrap_or_default();
-        let path = |id: &Option<String>| {
-            id.as_deref()
-                .and_then(|id| Library::image(&self.root, id).ok())
-        };
+        let root = self.root.clone();
+        let path =
+            |id: &Option<String>| id.as_deref().and_then(|id| Library::image(&root, id).ok());
         let chosen = path(&selection.skin)
             .or_else(|| self.cache.skin.clone())
             .and_then(|p| skins::read_file(&p).ok())
