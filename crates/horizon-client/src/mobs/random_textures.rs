@@ -268,6 +268,8 @@ mod tests {
             entity_tags: Default::default(),
             pois: Default::default(),
             species_placements: Default::default(),
+            armor_atlases: Default::default(),
+            equipment: Default::default(),
         }
     }
 

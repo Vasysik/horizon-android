@@ -50,8 +50,20 @@ pub mod component {
     pub const WEAPON: i32 = 29;
     /// `AttackRange`: six floats, in the record's field order.
     pub const ATTACK_RANGE: i32 = 30;
+    pub const ENCHANTABLE: i32 = 31;
     pub const EQUIPPABLE: i32 = 32;
+    pub const REPAIRABLE: i32 = 33;
     pub const GLIDER: i32 = 34;
+    pub const TOOLTIP_STYLE: i32 = 35;
+    pub const DEATH_PROTECTION: i32 = 36;
+    pub const BLOCKS_ATTACKS: i32 = 37;
+    pub const PIERCING_WEAPON: i32 = 38;
+    pub const KINETIC_WEAPON: i32 = 39;
+    pub const ATTACK_ANIMATION: i32 = 40;
+    pub const INTERACT_ANIMATION: i32 = 41;
+    pub const ADDITIONAL_TRADE_COST: i32 = 42;
+    pub const BLOCK_TRANSFORMER: i32 = 43;
+    pub const VILLAGER_FOOD: i32 = 44;
     pub const STORED_ENCHANTMENTS: i32 = 45;
     pub const DYE: i32 = 46;
     pub const DYED_COLOR: i32 = 47;

@@ -3017,6 +3017,8 @@ mod tests {
             blinks: Default::default(),
             pois: Default::default(),
             species_placements: Default::default(),
+            armor_atlases: Default::default(),
+            equipment: Default::default(),
         };
         let atlas = |name: &str| {
             Some(if name.contains("copper_golem_eyes") {
@@ -3189,6 +3191,8 @@ mod tests {
             blinks: Default::default(),
             pois: Default::default(),
             species_placements: Default::default(),
+            armor_atlases: Default::default(),
+            equipment: Default::default(),
         };
         let atlas = |_: &str| Some([0.0, 0.0, 0.25, 0.25]);
         let part = &kind.model;
@@ -3498,6 +3502,8 @@ mod scroll_tests {
             blinks: Default::default(),
             pois: Default::default(),
             species_placements: Default::default(),
+            armor_atlases: Default::default(),
+            equipment: Default::default(),
         };
         let atlas = |name: &str| {
             let h = name.len() as f32 / 64.0;
@@ -3653,6 +3659,8 @@ mod emissive_tests {
             blinks: RwLock::new(blinks),
             pois: Default::default(),
             species_placements: Default::default(),
+            armor_atlases: Default::default(),
+            equipment: Default::default(),
         }
     }
 
@@ -3931,6 +3939,8 @@ mod random_texture_tests {
             entity_tags: Default::default(),
             pois: Default::default(),
             species_placements: Default::default(),
+            armor_atlases: Default::default(),
+            equipment: Default::default(),
         }
     }
 

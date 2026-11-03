@@ -32,6 +32,7 @@ impl BlockCollisionWorld for OpenAir {
             large_collision_shape: false,
             moving_piston: false,
             empty_shape: true,
+            full_block: false,
         })
     }
     fn is_suffocating(&mut self, _: (), _: CollisionBlock, _: BlockPos) -> io::Result<bool> {

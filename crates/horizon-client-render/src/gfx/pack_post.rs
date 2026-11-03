@@ -4403,6 +4403,7 @@ mod tests {
             samplers: Vec::new(),
             outputs: vec![0],
             draw: false,
+            alpha_cut: None,
             images: vec![
                 image("mask", "uimage3D", "r32ui", 1),
                 image("other", "uimage3D", "r32ui", 2),

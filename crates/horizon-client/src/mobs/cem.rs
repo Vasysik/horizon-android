@@ -791,6 +791,8 @@ mod tests {
             blinks: Default::default(),
             pois: Default::default(),
             species_placements: Default::default(),
+            armor_atlases: Default::default(),
+            equipment: Default::default(),
         };
         // Sprite i spans u and v from 0.2 i to 0.2 i + 0.1.
         let atlas = |name: &str| -> Option<[f32; 4]> {
