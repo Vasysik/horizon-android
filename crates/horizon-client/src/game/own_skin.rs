@@ -257,12 +257,14 @@ impl Game<'_> {
             let mut downloads = self.skin_downloads.borrow_mut();
             horizon_client::skins::lookup(&textures, false, |kind, url| downloads.state(kind, url))
         };
-        // In its atlas slot (again, if the slot went to another skin).
-        let Some(location) = location.filter(|l| self.again_skin(l)) else {
+        // The title screen has nothing else to put a download in the atlas: without this the skin
+        // only came once a world had stored it.
+        self.store_ready_skins();
+        let Some(location) = location else {
             return Worn::Default;
         };
-        self.store_ready_skins();
-        if self.gui.atlas.sprites.contains_key(&location) {
+        // In its atlas slot; if not, queued again (the slot went to another skin) for the next frame.
+        if self.again_skin(&location) {
             Worn::Skin(location, textures.slim)
         } else {
             Worn::Waiting

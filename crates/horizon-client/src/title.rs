@@ -800,7 +800,8 @@ impl Title {
     /// Vanilla bypasses the selector when there are no saves.
     pub fn enter_singleplayer(&mut self) {
         self.search.clear();
-        self.search_focused = true;
+        // On a phone the focus opens the keyboard: there the box waits for a tap.
+        self.search_focused = !cfg!(target_os = "android");
         self.scroll.set(crate::ui::Scroll::default());
         let worlds = list_worlds(&self.saves);
         self.create_return_to_main = worlds.is_empty();

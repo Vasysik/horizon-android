@@ -20807,8 +20807,9 @@ fn start_game<'a>(
             .with_user(|| game.options.player_name());
             title.last_server = game.settings.file.string("lastServer");
             title.skip_multiplayer_warning = game.settings.file.bool("skipMultiplayerWarning");
-            // Gui.addInitialScreens: the accessibility onboarding comes first.
-            if game.settings.file.bool("onboardAccessibility") {
+            // Gui.addInitialScreens: the accessibility onboarding comes first. Not on Android,
+            // which has no narrator, and whose players' options all still ask for it.
+            if !cfg!(target_os = "android") && game.settings.file.bool("onboardAccessibility") {
                 title.start_onboarding();
             }
             game.title = Some(title);
