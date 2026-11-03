@@ -363,7 +363,6 @@ impl TouchControls {
             }
             let p = self.placement(control);
             let size = p.size * h;
-            let (x, y) = (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0);
             let opacity = if self.editor.is_some() {
                 p.opacity.max(0.25)
             } else {
