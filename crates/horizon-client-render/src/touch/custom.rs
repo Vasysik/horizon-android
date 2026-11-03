@@ -16,6 +16,13 @@ pub struct CustomButton {
 fn default_text_scale() -> f32 {
     1.0
 }
+pub(super) fn token_label(token: &str) -> String {
+    if let Some(action) = token.strip_prefix("action:") {
+        crate::text::Text::translate(action, &[]).plain()
+    } else {
+        crate::keybinds::display_name(token).plain()
+    }
+}
 impl CustomButton {
     pub fn new(key: String, index: usize) -> Self {
         Self {

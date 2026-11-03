@@ -203,7 +203,7 @@ impl Opt {
             Opt::TouchSensitivityHorizontal => "Horizontal sensitivity",
             Opt::TouchSensitivityVertical => "Vertical sensitivity",
             Opt::TouchOffhand => "Swap hands button",
-            Opt::TouchShield => "Raise shield with",
+            Opt::TouchShield => "Shield button",
             Opt::TouchButtonScale => "Control button size",
             Opt::TouchInteract => "Interact button",
             Opt::TouchLeftHand => "Left handed",
@@ -548,14 +548,7 @@ impl Opt {
                 Some(format!("{:.0}%", s.touch.sensitivity_vertical * 100.0))
             }
             Opt::TouchOffhand => Some(if s.touch.offhand_button { "On" } else { "Off" }.into()),
-            Opt::TouchShield => Some(
-                if s.touch.shield_button {
-                    "Button"
-                } else {
-                    "Sneak"
-                }
-                .into(),
-            ),
+            Opt::TouchShield => Some(if s.touch.shield_button { "ON" } else { "OFF" }.into()),
             Opt::TouchMouseSensitivity => {
                 Some(format!("{:.0}%", s.touch.virtual_mouse_sensitivity * 100.0))
             }

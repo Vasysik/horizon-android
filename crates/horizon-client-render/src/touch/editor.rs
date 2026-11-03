@@ -122,12 +122,12 @@ impl TouchControls {
                 e.selected_custom = None;
                 e.key_picker = false;
                 e.drag = None;
-            } else if layout::contains([0.37, 0.04, 0.14, 0.075], p) {
+            } else if layout::contains([0.69, 0.04, 0.14, 0.075], p) {
                 match serde_json::to_string_pretty(&self.settings) {
                     Ok(json) => crate::clipboard::clipboard_set(&json),
                     Err(error) => e.error = Some(error.to_string()),
                 }
-            } else if layout::contains([0.52, 0.04, 0.14, 0.075], p) {
+            } else if layout::contains([0.84, 0.04, 0.14, 0.075], p) {
                 let imported = crate::clipboard::clipboard_get()
                     .filter(|text| text.len() <= 1024 * 1024)
                     .and_then(|text| serde_json::from_str::<Settings>(&text).ok());
@@ -174,8 +174,18 @@ impl TouchControls {
                 };
                 let index = self.settings.custom_buttons.len();
                 let mut button = CustomButton::new(token.into(), index);
-                let slot = self.settings.slot(control);
-                button.layouts = std::array::from_fn(|i| self.settings.layouts[i][slot]);
+                button.layouts = std::array::from_fn(|i| {
+                    let slot = if i == Mode::Dpad.index() && self.settings.swap_jump_sneak {
+                        match control {
+                            Control::Jump => Control::Sneak as usize,
+                            Control::Sneak => Control::Jump as usize,
+                            _ => control as usize,
+                        }
+                    } else {
+                        control as usize
+                    };
+                    self.settings.layouts[i][slot]
+                });
                 self.settings.custom_buttons.push(button);
                 self.settings.button_visibility[control as usize] = 2;
                 e.selected_custom = Some(index);
@@ -276,8 +286,8 @@ impl TouchControls {
             ([0.135, 0.04, 0.105, 0.075], "Cancel"),
             ([0.25, 0.04, 0.105, 0.075], "Reset"),
             ([0.02, 0.13, 0.335, 0.075], "Add buttons..."),
-            ([0.37, 0.04, 0.14, 0.075], "Copy layout"),
-            ([0.52, 0.04, 0.14, 0.075], "Paste layout"),
+            ([0.69, 0.04, 0.14, 0.075], "Copy layout"),
+            ([0.84, 0.04, 0.14, 0.075], "Paste layout"),
         ] {
             plate(b, a, rect, label, false);
         }
@@ -894,10 +904,7 @@ impl TouchControls {
                     &format!(
                         "{}: {}",
                         if binding.toggle { "Toggle" } else { "Hold" },
-                        binding
-                            .token
-                            .strip_prefix("action:")
-                            .unwrap_or(&binding.token)
+                        super::custom::token_label(&binding.token)
                     ),
                     binding.toggle,
                 );

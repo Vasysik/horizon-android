@@ -558,12 +558,20 @@ impl TouchControls {
             if let Some(e) = &self.editor
                 && e.selected == Some(control)
             {
+                let [nx, ny, nw, nh] = p.rect(self.aspect());
+                let (x, y, width, height) = (nx * w, ny * h, nw * w, nh * h);
                 let green = rgba(255, 255, 255, 255);
                 for (p, q) in [
-                    ([x - 1.0, y - 1.0], [x + size + 1.0, y - 1.0]),
-                    ([x - 1.0, y + size + 1.0], [x + size + 1.0, y + size + 1.0]),
-                    ([x - 1.0, y - 1.0], [x - 1.0, y + size + 1.0]),
-                    ([x + size + 1.0, y - 1.0], [x + size + 1.0, y + size + 1.0]),
+                    ([x - 1.0, y - 1.0], [x + width + 1.0, y - 1.0]),
+                    (
+                        [x - 1.0, y + height + 1.0],
+                        [x + width + 1.0, y + height + 1.0],
+                    ),
+                    ([x - 1.0, y - 1.0], [x - 1.0, y + height + 1.0]),
+                    (
+                        [x + width + 1.0, y - 1.0],
+                        [x + width + 1.0, y + height + 1.0],
+                    ),
                 ] {
                     line(b, a, p, q, green);
                 }
