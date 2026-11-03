@@ -7375,6 +7375,21 @@ impl Game<'_> {
             self.keys.remove(&key);
         }
     }
+    /// A touch or pad button on sneak or sprint: the mapping always takes the
+    /// press, even while a screen is open. `mapped_key` drops a press behind a
+    /// screen, which is why the on-screen Sneak and Sprint buttons went dead.
+    fn hold_toggle(&mut self, slot: usize, down: bool) -> Result<()> {
+        use horizon_client::keymapping::KeyAction;
+        let needs_toggle = [self.settings.toggle_crouch, self.settings.toggle_sprint][slot];
+        let action = if down {
+            KeyAction::Press
+        } else {
+            KeyAction::Release
+        };
+        self.toggles.key(slot, action, false, needs_toggle);
+        self.sync_toggle(slot);
+        Ok(())
+    }
     /// Let a held sneak, sprint or modifier key go when the keyboard reports
     /// its modifier up. A release does not always reach the mapping: a screen
     /// reads presses only, and an unfocused window is given no release at all,
@@ -14917,9 +14932,7 @@ impl Game<'_> {
                 &profile_name,
                 None,
             );
-        } else if (crate::touch_visible() || self.settings.keypad.enabled)
-            && (!self.pad_in_menu() || self.android_inventory_controls())
-        {
+        } else if self.player.is_some() || self.settings.keypad.enabled {
             self.pad.touch.context_use =
                 self.pad.touch.settings.contextual_interact && self.touch_context_use();
             self.pad.touch.vertical_movement = self.player.as_ref().is_some_and(|p| p.flying);
@@ -14932,7 +14945,7 @@ impl Game<'_> {
         }
         #[cfg(target_os = "android")]
         {
-            if (crate::touch_visible() || self.settings.keypad.enabled)
+            if (self.player.is_some() || self.settings.keypad.enabled)
                 && self.pad.touch.editor.is_none()
             {
                 self.pad
@@ -15864,15 +15877,14 @@ impl Game<'_> {
                 let frame_dt = Duration::from_secs_f32((self.frame_ticks / 20.0).max(0.0));
                 let interactive = self.screen != Screen::Playing
                     || self.last_input.elapsed() < Duration::from_millis(120);
-                let mut budget =
-                    horizon_client::gfx::upload_budget::UploadBudget::with_frame_state(
-                        g.chunk_updates as usize,
-                        u64::from(g.upload_budget_kib) * 1024,
-                        mobile_uploads,
-                        renderer.last_wait,
-                        frame_dt,
-                        interactive,
-                    );
+                let mut budget = horizon_client::gfx::upload_budget::UploadBudget::with_frame_state(
+                    g.chunk_updates as usize,
+                    u64::from(g.upload_budget_kib) * 1024,
+                    mobile_uploads,
+                    renderer.last_wait,
+                    frame_dt,
+                    interactive,
+                );
                 let upload_started = Instant::now();
                 let mut uploaded = false;
                 horizon_client::spans::time("upload", || {
@@ -16372,10 +16384,7 @@ impl Game<'_> {
                 if delta[0] != 0.0 || delta[1] != 0.0 {
                     self.tutorial
                         .mouse(f64::from(delta[0]), f64::from(delta[1]));
-                    self.turn_player(
-                        f64::from(delta[0]) / 0.15,
-                        f64::from(delta[1]) / 0.15,
-                    );
+                    self.turn_player(f64::from(delta[0]) / 0.15, f64::from(delta[1]) / 0.15);
                 }
                 if self.pad.touch.chat_requested {
                     self.audio.play_button_click();
@@ -20523,9 +20532,25 @@ fn loading_app(
     Ok(App::Loading(Box::new(loading)))
 }
 
+/// GoyControl is the factory touch layout: a first launch writes it once, so
+/// the on-screen buttons exist before the first frame.
+#[cfg(target_os = "android")]
+fn ensure_factory_touch_layout() {
+    let path = std::path::Path::new("horizon-touch.json");
+    if path.exists() {
+        return;
+    }
+    let mut settings = horizon_client::touch::Settings::default();
+    settings.set_control_style(horizon_client::touch::ControlStyle::GoyControl);
+    if let Err(error) = settings.save_to(path) {
+        log::warn!("Cannot write the factory touch layout: {error}");
+    }
+}
+
 #[cfg(target_os = "android")]
 pub(crate) fn android_game(arguments: Vec<String>) -> Result<Box<dyn ApplicationHandler>> {
     horizon_client::auth::clear_current();
+    ensure_factory_touch_layout();
     let mut options = Options::read_arguments(arguments)?.ok_or("missing Android options")?;
     if crate::performance::active() {
         options.spikes = Some(50.0);

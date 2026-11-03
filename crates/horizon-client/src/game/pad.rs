@@ -211,10 +211,7 @@ impl Game<'_> {
                 }
                 horizon_client::android_runtime::clear_keypad();
             }
-            if (self.pad_in_menu() && !self.android_inventory_controls())
-                || !self.focused
-                || (!crate::touch_visible() && !self.settings.keypad.enabled)
-            {
+            if (self.pad_in_menu() && !self.android_inventory_controls()) || !self.focused {
                 self.pad.touch.clear();
                 horizon_client::android_runtime::clear_keypad();
             }
@@ -541,7 +538,8 @@ impl Game<'_> {
             }
             #[cfg(target_os = "android")]
             "key.sprint" => {
-                self.mapped_key(KeyCode::ControlLeft, down, false)?;
+                // The touch button must always land, screen or not.
+                self.hold_toggle(1, down)?;
                 if !down
                     && crate::touch_visible()
                     && self.settings.touch.sprint_toggle
@@ -567,6 +565,8 @@ impl Game<'_> {
                 self.sync_toggle(SNEAK);
                 self.key_pressed(KeyCode::ShiftLeft)
             }
+            // The touch button must always land, screen or not.
+            "key.sneak" => self.hold_toggle(0, down),
             _ => {
                 let default = KeyBinds::default_of(action);
                 if let Some(button) = mouse_button(default) {

@@ -89,6 +89,19 @@ impl Launcher {
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
         horizon_client::ui_theme::set_ui_scale_percent(catalog.config.ui_scale_percent);
+        // First run: the launcher's control editor and the game both start
+        // from the GoyControl factory layout.
+        let touch_file = catalog.config.game_home(&home).join("horizon-touch.json");
+        if !touch_file.exists() {
+            let mut touch = horizon_client::touch::Settings::default();
+            touch.set_control_style(horizon_client::touch::ControlStyle::GoyControl);
+            if let Some(dir) = touch_file.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Err(error) = touch.save_to(&touch_file) {
+                log::warn!("Cannot write the factory touch layout: {error}");
+            }
+        }
         Self {
             home,
             controller_edges: Default::default(),

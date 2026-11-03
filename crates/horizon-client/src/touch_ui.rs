@@ -98,14 +98,6 @@ const KEYS: [(&str, KeyCode); 28] = [
     ("F3+T", KeyCode::KeyT),
 ];
 
-// Shared draw/hit rectangles: utility-style buttons at the lower right.
-fn mouse_button_rects(w: f32, h: f32) -> [([f32; 4], bool); 2] {
-    [
-        ([w - 53.0, h - 51.0, 50.0, 20.0], false),
-        ([w - 53.0, h - 27.0, 50.0, 20.0], true),
-    ]
-}
-
 /// Shared outlined pointer for virtual mouse and controller menus.
 pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
     let (x, y) = (cursor.0, cursor.1);
@@ -327,21 +319,8 @@ impl TouchUi {
             Gesture::None
         }
     }
-    pub fn action(&self, w: f32, h: f32, p: [f32; 2], menu: bool) -> Option<Action> {
-        if menu && self.virtual_mouse {
-            for ([x, y, width, height], right) in mouse_button_rects(w, h) {
-                if (x..x + width).contains(&p[0]) && (y..y + height).contains(&p[1]) {
-                    return Some(Action::MouseButton(right));
-                }
-            }
-        }
-        if menu && (3.0..23.0).contains(&p[1]) && (w - 108.0..w - 56.0).contains(&p[0]) {
-            return Some(Action::VirtualMouse);
-        }
+    pub fn action(&self, _w: f32, _h: f32, p: [f32; 2], _menu: bool) -> Option<Action> {
         if (3.0..23.0).contains(&p[1]) {
-            if menu && (w - 53.0..w - 3.0).contains(&p[0]) {
-                return Some(Action::Key(KeyCode::Escape));
-            }
             if (3.0..36.0).contains(&p[0]) {
                 return Some(Action::More);
             }
@@ -371,7 +350,7 @@ impl TouchUi {
         }
         None
     }
-    pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas, menu: bool) {
+    pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas, _menu: bool) {
         for (label, x, width) in [
             ("...", 3.0, 33.0),
             ("F3", 39.0, 33.0),
@@ -394,28 +373,6 @@ impl TouchUi {
                 3.0,
                 width,
             );
-        }
-        if menu {
-            button(
-                b,
-                a,
-                if self.virtual_mouse {
-                    "Mouse ON"
-                } else {
-                    "Mouse"
-                },
-                b.width - 108.0,
-                3.0,
-                50.0,
-            );
-        }
-        if menu && self.virtual_mouse {
-            for ([x, y, width, _], right) in mouse_button_rects(b.width, b.height) {
-                button(b, a, if right { "RMB" } else { "LMB" }, x, y, width);
-            }
-        }
-        if menu {
-            button(b, a, "Back", b.width - 53.0, 3.0, 50.0);
         }
         if self.expanded {
             button(
@@ -708,19 +665,8 @@ impl TouchUi {
             return Some(InGameMenuAction::OpenControlEditor);
         }
 
-        // Row 1: Control Engine Switcher (MCPE Style vs GoyControl)
+        // Row 1: GoyControl is the one engine, always on.
         let ey = dy + 56.0;
-        let ew = (dw - 28.0 - 8.0) * 0.5;
-        if inside([dx + 14.0, ey, ew, 28.0]) {
-            return Some(InGameMenuAction::SetControlStyle(
-                crate::touch::ControlStyle::Mcpe,
-            ));
-        }
-        if inside([dx + 14.0 + ew + 8.0, ey, ew, 28.0]) {
-            return Some(InGameMenuAction::SetControlStyle(
-                crate::touch::ControlStyle::GoyControl,
-            ));
-        }
 
         // Row 2: Presets
         let py = ey + 44.0;
@@ -886,50 +832,26 @@ impl TouchUi {
             "Close",
         );
 
-        // Row 1: Control Style (MCPE Style vs GoyControl)
+        // Row 1: GoyControl is the one engine and is always on in game.
         ui.text(
             Face::SemiBold,
             9.5,
             dx + 14.0,
             dy + 42.0,
             accent,
-            "CONTROL ENGINE & STYLE",
+            "CONTROL ENGINE",
         );
         let ey = dy + 56.0;
-        let ew = (dw - 28.0 - 8.0) * 0.5;
-        let is_mcpe = settings.control_style == crate::touch::ControlStyle::Mcpe;
-        for (i, (lbl, active)) in [
-            ("MCPE Style Touch Controls", is_mcpe),
-            ("GoyControl (Custom Static)", !is_mcpe),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let rx = dx + 14.0 + i as f32 * (ew + 8.0);
-            ui.rounded(
-                rx,
-                ey,
-                ew,
-                28.0,
-                8.0,
-                if active { accent_soft } else { bg_hi },
-            );
-            ui.border(
-                rx,
-                ey,
-                ew,
-                28.0,
-                8.0,
-                if active { accent } else { border_c },
-            );
-            ui.centered_fit(
-                Face::SemiBold,
-                10.5,
-                [rx + 4.0, ey, ew - 8.0, 28.0],
-                if active { accent } else { text_c },
-                lbl,
-            );
-        }
+        ui.rounded(dx + 14.0, ey, dw - 28.0, 28.0, 8.0, accent_soft);
+        ui.border(dx + 14.0, ey, dw - 28.0, 28.0, 8.0, accent);
+        ui.centered_fit(
+            Face::SemiBold,
+            10.5,
+            [dx + 18.0, ey, dw - 36.0, 28.0],
+            accent,
+            "GoyControl (Custom Static) — always on",
+        );
+        let _ = settings;
 
         // Row 2: Presets
         ui.text(
@@ -943,7 +865,7 @@ impl TouchUi {
         let py = ey + 44.0;
         let pw = (dw - 28.0 - 16.0) / 5.0;
         for (i, (id, title)) in [
-            ("default", "MCPE Default"),
+            ("default", "Goy Default"),
             ("goycontrol", "GoyControl"),
             ("pvp", "PvP Claw"),
             ("building", "Builder"),
@@ -2545,7 +2467,7 @@ pub fn draw_hud_editor(
         let py = ey + 48.0;
         let pw = (dw - 28.0 - 16.0) / 5.0;
         for (i, (id, title)) in [
-            ("default", "MCPE Default"),
+            ("default", "Goy Default"),
             ("goycontrol", "GoyControl"),
             ("pvp", "PvP Claw"),
             ("building", "Builder"),

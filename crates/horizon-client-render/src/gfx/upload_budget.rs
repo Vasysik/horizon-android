@@ -37,9 +37,7 @@ impl UploadBudget {
                 budget.time_limit = Some(Duration::from_micros(900));
             } else {
                 budget.byte_limit = budget.byte_limit.min(2 << 20);
-                budget.time_limit = budget
-                    .time_limit
-                    .map(|t| t.min(Duration::from_millis(2)));
+                budget.time_limit = budget.time_limit.map(|t| t.min(Duration::from_millis(2)));
             }
         }
         budget

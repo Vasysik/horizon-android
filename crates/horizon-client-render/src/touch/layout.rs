@@ -89,10 +89,10 @@ impl Control {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ControlStyle {
-    /// Default MCPE style (Bedrock D-Pad/Joystick & icon sprites).
-    #[default]
+    /// Removed look, kept only so older profile files still deserialize.
     Mcpe,
     /// GoyControl style (customizable static buttons, custom joystick, up to 3 events, no icons).
+    #[default]
     GoyControl,
 }
 impl ControlStyle {
@@ -518,7 +518,7 @@ impl Default for Settings {
             vertical_margin: 0.0,
             active_profile: default_profile_name(),
             default_profile: default_profile_name(),
-            control_style: ControlStyle::Mcpe,
+            control_style: ControlStyle::GoyControl,
             joystick_style: JoystickStyle::default(),
             floating_menu_pos: default_floating_pos(),
             snap_to_grid: false,
@@ -536,6 +536,33 @@ impl Settings {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         s.sanitize();
+        // GoyControl is the only touch look now: an older MCPE profile adopts it once.
+        if s.control_style == ControlStyle::Mcpe {
+            s.set_control_style(ControlStyle::GoyControl);
+        }
+        // Sneak and sprint used to latch raw keys, so a tap left them dead.
+        // They hold the game action now, like the vanilla keys do.
+        for button in &mut s.custom_buttons {
+            let label = button.custom_label.trim().to_ascii_lowercase();
+            match button.key.as_str() {
+                "key.keyboard.left.shift" if label == "sneak" => {
+                    button.key = "action:key.sneak".into();
+                    for p in &mut button.layouts {
+                        p.toggleable = false;
+                    }
+                }
+                "key.keyboard.left.control" if label == "sprint" => {
+                    button.key = "action:key.sprint".into();
+                    if button.second_key == "key.keyboard.w" {
+                        button.second_key.clear();
+                    }
+                    for p in &mut button.layouts {
+                        p.toggleable = false;
+                    }
+                }
+                _ => {}
+            }
+        }
         // Restore the original top-row spacing without moving custom layouts.
         for row in &mut s.layouts {
             for (control, old, new) in [
@@ -812,7 +839,7 @@ impl Settings {
             ),
             make(
                 "SNEAK",
-                "key.keyboard.left.shift",
+                "action:key.sneak",
                 "",
                 0.76,
                 0.84,
@@ -820,20 +847,20 @@ impl Settings {
                 1.10,
                 0.95,
                 false,
-                true,
+                false,
                 0,
             ),
             make(
                 "SPRINT",
-                "key.keyboard.left.control",
-                "key.keyboard.w",
+                "action:key.sprint",
+                "",
                 0.89,
                 0.54,
                 0.115,
                 1.10,
                 0.95,
                 false,
-                true,
+                false,
                 0,
             ),
             make(
@@ -957,21 +984,18 @@ impl Settings {
         ]
     }
 
-    pub fn set_control_style(&mut self, style: ControlStyle) {
-        self.control_style = style;
-        if style == ControlStyle::GoyControl {
-            self.mode = Mode::Crosshair;
-            self.split_controls = true;
-            if self.custom_buttons.is_empty() {
-                self.custom_buttons = Self::default_goy_buttons();
-            }
-            // In GoyControl mode, only Move (the customizable GoyControl Joystick) is shown from built-ins by default;
-            // all actions come from the customizable GoyControl static buttons.
-            for c in Control::ALL {
-                self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
-            }
-        } else {
-            self.button_visibility = [0; 14];
+    pub fn set_control_style(&mut self, _style: ControlStyle) {
+        // One style ships now; the MCPE look was removed.
+        self.control_style = ControlStyle::GoyControl;
+        self.mode = Mode::Crosshair;
+        self.split_controls = true;
+        if self.custom_buttons.is_empty() {
+            self.custom_buttons = Self::default_goy_buttons();
+        }
+        // In GoyControl mode, only Move (the customizable GoyControl Joystick) is shown from built-ins by default;
+        // all actions come from the customizable GoyControl static buttons.
+        for c in Control::ALL {
+            self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
         }
         self.sanitize();
     }
@@ -983,11 +1007,13 @@ impl Settings {
         self.button_visibility = [0; 14];
         match clean.as_str() {
             "default" | "mcpe" | "pocket" => {
-                self.control_style = ControlStyle::Mcpe;
-                self.mode = Mode::Dpad;
-                self.split_controls = false;
-                self.offhand_button = true;
-                self.sprint_button = true;
+                self.control_style = ControlStyle::GoyControl;
+                self.mode = Mode::Crosshair;
+                self.split_controls = true;
+                self.custom_buttons = Self::default_goy_buttons();
+                for c in Control::ALL {
+                    self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
+                }
             }
             "goycontrol" | "goy" => {
                 self.control_style = ControlStyle::GoyControl;
@@ -1018,7 +1044,7 @@ impl Settings {
                 }
             }
             "building" | "split" => {
-                self.control_style = ControlStyle::Mcpe;
+                self.control_style = ControlStyle::GoyControl;
                 self.mode = Mode::Crosshair;
                 self.split_controls = true;
                 self.offhand_button = true;

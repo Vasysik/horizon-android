@@ -150,6 +150,15 @@ impl Game<'_> {
     pub(super) fn android_custom_events(&mut self) {
         for (name, down) in self.pad.touch.key_events() {
             if let Some(mapping) = name.strip_prefix("action:") {
+                // Sneak and sprint hold their mapping directly, so the touch
+                // buttons work even while a screen or overlay is open.
+                if mapping == "key.sneak" || mapping == "key.sprint" {
+                    let slot = usize::from(mapping == "key.sprint");
+                    if let Err(error) = self.hold_toggle(slot, down) {
+                        log::warn!("Custom touch toggle: {error}");
+                    }
+                    continue;
+                }
                 let default = horizon_client::keybinds::KeyBinds::default_of(mapping);
                 let result = if let Some(key) = horizon_client::keybinds::key_code(default) {
                     self.mapped_key(key, down, false)
@@ -216,6 +225,15 @@ impl Game<'_> {
             }
             self.mod_key(key, down, false);
             self.native_key_event(key, down, false);
+            // Raw Shift and Control are the touch Sneak and Sprint buttons:
+            // hold them through the mapping, never through a screen rule.
+            if matches!(key, KeyCode::ShiftLeft | KeyCode::ControlLeft) {
+                let slot = usize::from(key == KeyCode::ControlLeft);
+                if let Err(error) = self.hold_toggle(slot, down) {
+                    log::warn!("Custom touch toggle: {error}");
+                }
+                continue;
+            }
             let action = if down {
                 KeyAction::Press
             } else {
