@@ -204,6 +204,7 @@ def main():
     assets.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(ROOT / 'LICENSE', assets / 'LICENSE.txt')
     shutil.copyfile(ROOT / 'THIRD_PARTY_NOTICES.md', assets / 'THIRD_PARTY_NOTICES.md')
+    shutil.copyfile(ROOT / 'crates/horizon-theme/fonts/OFL-NotoSansSC.txt', assets / 'OFL-NotoSansSC.txt')
     shutil.copyfile(engine_data(args.public), assets / 'engine-data.zip')
     controls = ROOT / '.local/android/bedrock-controls.zip'
     if not args.public and not controls.is_file():

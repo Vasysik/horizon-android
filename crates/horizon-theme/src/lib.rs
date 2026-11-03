@@ -20,6 +20,8 @@ pub const PIXEL: &str = "Pixelify Sans";
 
 /// The bundled font files.
 pub mod fonts {
+    /// Offline Simplified Chinese fallback (SIL OFL, see OFL-NotoSansSC.txt).
+    pub const NOTO_SANS_SC: &[u8] = include_bytes!("../fonts/NotoSansSC-Regular.ttf");
     pub const GEIST_REGULAR: &[u8] = include_bytes!("../fonts/Geist-Regular.ttf");
     pub const GEIST_MEDIUM: &[u8] = include_bytes!("../fonts/Geist-Medium.ttf");
     pub const GEIST_SEMIBOLD: &[u8] = include_bytes!("../fonts/Geist-SemiBold.ttf");

@@ -10,8 +10,12 @@
 //! `id`. Clicks run the same layout with [`Ui::dry`] and read [`Ui::hit`]: one
 //! function draws and hit-tests, so they never disagree.
 use crate::hud::{HudAtlas, HudBatch, Rect};
-use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _};
+use ab_glyph::{Font as _, ScaleFont as _};
 use std::{cell::RefCell, collections::HashMap, path::Path};
+#[path = "ui_fonts.rs"]
+mod fonts;
+pub use fonts::Face;
+use fonts::Fonts;
 
 /// A Horizon-only preference from `horizon.txt` beside `options.txt`
 /// (`key:value` lines), so vanilla's options file stays exactly as vanilla
@@ -78,43 +82,9 @@ pub(crate) const MICRO: f32 = horizon_theme::MICRO.px;
 pub(crate) const RADIUS: f32 = horizon_theme::RADIUS;
 pub(crate) const RADIUS_PLATE: f32 = horizon_theme::RADIUS_PLATE;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Face {
-    Regular,
-    Medium,
-    /// The wordmark and page titles (the design system's 500).
-    SemiBold,
-    /// Counts, timestamps and the boot screen's console lines.
-    Mono,
-}
-struct Fonts {
-    faces: [FontRef<'static>; 4],
-}
-impl Fonts {
-    fn load() -> Self {
-        let f = |b: &'static [u8]| FontRef::try_from_slice(b).expect("bundled font");
-        Self {
-            faces: [
-                f(horizon_theme::fonts::GEIST_REGULAR),
-                f(horizon_theme::fonts::GEIST_MEDIUM),
-                f(horizon_theme::fonts::GEIST_SEMIBOLD),
-                f(horizon_theme::fonts::GEIST_MONO),
-            ],
-        }
-    }
-    fn face(&self, f: Face) -> &FontRef<'static> {
-        &self.faces[f as usize]
-    }
-    /// The ab_glyph scale for an em size in pixels.
-    fn scale(&self, f: Face, px: f32) -> PxScale {
-        let font = self.face(f);
-        let upem = font.units_per_em().unwrap_or(1000.0);
-        PxScale::from(px * font.height_unscaled() / upem)
-    }
-}
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Key {
-    Glyph(Face, u16, u16),
+    Glyph(usize, u16, u16),
     /// A quarter disc (`false`) or a 1px quarter ring of this radius in pixels.
     Corner(u16, bool),
 }
@@ -209,15 +179,15 @@ impl Cache {
             h,
         })
     }
-    fn glyph(&mut self, atlas: &HudAtlas, face: Face, id: ab_glyph::GlyphId, px: f32) -> Cached {
+    fn glyph(&mut self, atlas: &HudAtlas, font: usize, id: ab_glyph::GlyphId, px: f32) -> Cached {
         let size = (px * 4.0).round() as u16;
-        let key = Key::Glyph(face, id.0, size);
+        let key = Key::Glyph(font, id.0, size);
         if let Some(c) = self.entries.get(&key) {
             return *c;
         }
-        let scale = self.fonts.scale(face, f32::from(size) / 4.0);
+        let scale = self.fonts.scale_at(font, f32::from(size) / 4.0);
         let glyph = id.with_scale_and_position(scale, ab_glyph::point(0.0, 0.0));
-        let made = match self.fonts.face(face).outline_glyph(glyph) {
+        let made = match self.fonts.font(font).outline_glyph(glyph) {
             Some(outline) => {
                 let b = outline.px_bounds();
                 let (w, h) = (b.width() as u32, b.height() as u32);
@@ -350,13 +320,15 @@ impl<'a> Ui<'a> {
         }
         let px = (size * self.density * 4.0).round() / 4.0;
         with_cache(self.atlas, |cache| {
-            let font = cache.fonts.face(face);
-            let scaled = font.as_scaled(cache.fonts.scale(face, px));
             crate::ui_text::fit(text, width * self.density, |previous, ch| {
-                let id = font.glyph_id(ch);
-                previous.map_or(0.0, |p| scaled.kern(font.glyph_id(p), id)) + scaled.h_advance(id)
+                let glyph = cache.fonts.glyph(face, previous, ch, px);
+                glyph.kern + glyph.advance
             })
         })
+    }
+    /// Word wrapping with character boundaries for Chinese and long filenames.
+    pub fn wrap_text(&self, face: Face, size: f32, text: &str, width: f32) -> Vec<String> {
+        wrapping_lines(self, face, size, text, width)
     }
     /// Move rasterized glyphs into the batch's atlas uploads (real frames only).
     pub fn finish(self) {
@@ -468,17 +440,12 @@ impl<'a> Ui<'a> {
     pub fn measure(&self, face: Face, size: f32, text: &str) -> f32 {
         let px = (size * self.density * 4.0).round() / 4.0;
         with_cache(self.atlas, |c| {
-            let font = c.fonts.face(face);
-            let scaled = font.as_scaled(c.fonts.scale(face, px));
             let mut w = 0.0;
             let mut prev = None;
             for ch in text.chars() {
-                let id = font.glyph_id(ch);
-                if let Some(p) = prev {
-                    w += scaled.kern(p, id);
-                }
-                w += scaled.h_advance(id);
-                prev = Some(id);
+                let glyph = c.fonts.glyph(face, prev, ch, px);
+                w += glyph.kern + glyph.advance;
+                prev = Some(ch);
             }
             w / self.density
         })
@@ -513,21 +480,16 @@ impl<'a> Ui<'a> {
             let mut pen = x0;
             let mut prev = None;
             for ch in text.chars() {
-                let (id, advance, kern) = {
-                    let font = c.fonts.face(face);
-                    let id = font.glyph_id(ch);
-                    let f = font.as_scaled(scale);
-                    (id, f.h_advance(id), prev.map_or(0.0, |p| f.kern(p, id)))
-                };
-                pen += kern;
+                let glyph = c.fonts.glyph(face, prev, ch, px);
+                pen += glyph.kern;
                 if real && !ch.is_whitespace() {
-                    let g = c.glyph(atlas, face, id, px);
+                    let g = c.glyph(atlas, glyph.font, glyph.id, px);
                     if let Some(rect) = g.rect {
                         quads.push(((pen + g.left).round(), baseline + g.top, rect));
                     }
                 }
-                pen += advance;
-                prev = Some(id);
+                pen += glyph.advance;
+                prev = Some(ch);
             }
             (pen - x0) / density
         });
@@ -655,10 +617,11 @@ fn wrapping_lines(ui: &Ui, face: Face, size: f32, text: &str, max_w: f32) -> Vec
                 // The word alone does not fit: hard-break it at the edge.
                 let mut end = 0;
                 for (i, ch) in word.char_indices() {
-                    if i > 0 && ui.measure(face, size, &word[..i]) > max_w {
+                    let next = i + ch.len_utf8();
+                    if end > 0 && ui.measure(face, size, &word[..next]) > max_w {
                         break;
                     }
-                    end = i + ch.len_utf8();
+                    end = next;
                 }
                 lines.push(word[..end].to_owned());
                 word = &word[end..];
@@ -678,6 +641,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chinese_text_draws_and_fits_before_game_resources_are_installed() {
+        reset_atlas();
+        let atlas = HudAtlas::boot();
+        for size in [[360, 640], [960, 540], [1440, 900]] {
+            let mut batch = HudBatch::new(size);
+            let mut ui = Ui::mobile(&atlas, &mut batch, (0.0, 0.0));
+            for face in [Face::Regular, Face::Medium, Face::SemiBold, Face::Mono] {
+                let text = "启动器语言：简体中文 / English";
+                let measured = ui.measure(face, 16.0, text);
+                let drawn = ui.text(face, 16.0, 0.0, 0.0, color::TEXT, text);
+                assert!((measured - drawn).abs() < 0.01);
+                let fit = ui.fit_text(face, 16.0, text, 120.0);
+                assert!(fit.ends_with("..."));
+                assert!(ui.measure(face, 16.0, &fit) <= 120.0);
+                let chinese = "这是没有空格的中文安装提示，文件下载完成后即可开始游戏。";
+                let lines = ui.wrap_text(face, 14.0, chinese, 120.0);
+                assert!(lines.len() > 1);
+                assert_eq!(lines.concat(), chinese);
+                assert!(
+                    lines
+                        .iter()
+                        .all(|line| ui.measure(face, 14.0, line) <= 120.0)
+                );
+            }
+            ui.finish();
+            assert!(!batch.vertices.is_empty());
+            assert!(!batch.patches.is_empty());
+        }
+        reset_atlas();
+    }
+
+    #[test]
     fn atlas_reload_regenerates_text_and_corners_at_the_same_address() {
         let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
         reset_atlas();
@@ -685,7 +680,7 @@ mod tests {
             let glyph = cache.fonts.face(Face::Regular).glyph_id('A');
             assert!(
                 cache
-                    .glyph(&atlas, Face::Regular, glyph, 16.0)
+                    .glyph(&atlas, Face::Regular as usize, glyph, 16.0)
                     .rect
                     .is_some()
             );

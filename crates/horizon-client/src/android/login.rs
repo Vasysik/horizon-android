@@ -1,6 +1,7 @@
 //! Native account panel; authentication is shared with the desktop launcher.
 use super::pages::{Action, button};
 use crate::account::{self, Account, Accounts, Secrets, SignIn, SignInState};
+use crate::i18n::{Message, tr, trf};
 use horizon_client::ui_theme::{Face, Ui, color};
 
 pub(super) struct Login {
@@ -10,7 +11,7 @@ pub(super) struct Login {
     task: Option<SignIn>,
     auto_open_device: bool,
     state: Option<SignInState>,
-    message: String,
+    message: Message,
 }
 impl Login {
     pub fn new() -> Self {
@@ -21,7 +22,7 @@ impl Login {
             task: None,
             auto_open_device: false,
             state: None,
-            message: String::new(),
+            message: Message::default(),
         };
         login.refresh_status();
         login
@@ -39,11 +40,13 @@ impl Login {
     }
     pub fn status(&self, offline_name: &str) -> String {
         match (&self.profile, self.signed_in) {
-            (Some(name), true) => format!("Signed in: {name}"),
-            (Some(name), false) => format!("Sign in required: {name}"),
-            _ if self.pending() => "Signing in...".into(),
-            _ if !offline_name.trim().is_empty() => format!("Offline: {offline_name}"),
-            _ => "Offline / Sign in".into(),
+            (Some(name), true) => trf("Signed in: {name}", &[("name", name)]),
+            (Some(name), false) => trf("Sign in required: {name}", &[("name", name)]),
+            _ if self.pending() => tr("Signing in...").into(),
+            _ if !offline_name.trim().is_empty() => {
+                trf("Offline: {name}", &[("name", offline_name)])
+            }
+            _ => tr("Offline / Sign in").into(),
         }
     }
 
@@ -93,8 +96,8 @@ impl Login {
             self.state = Some(task.state());
             if let Some(SignInState::Done(result)) = &self.state {
                 self.message = match result {
-                    Ok(a) => format!("Signed in as {}", a.name),
-                    Err(e) => e.clone(),
+                    Ok(a) => Message::formatted("Signed in as {name}", &[("name", &a.name)]),
+                    Err(e) => e.clone().into(),
                 };
                 self.task = None;
                 self.refresh_status();
@@ -115,7 +118,7 @@ impl Login {
                 .and_then(|_| accounts.save())
             {
                 Ok(()) => "Signed out. Offline play is available.".into(),
-                Err(e) => e,
+                Err(e) => e.into(),
             };
         }
         self.refresh_status();
@@ -140,13 +143,13 @@ impl Login {
                 .unwrap_or_else(|| code.verification_uri.clone());
             self.copy_code();
             if let Err(e) = crate::platform::open_login_url(&url) {
-                self.message = e;
+                self.message = e.into();
             }
         }
     }
     pub fn review_app(&mut self) {
         if let Err(e) = crate::platform::open_login_url("https://aka.ms/mce-reviewappid") {
-            self.message = e;
+            self.message = e.into();
         }
     }
     pub fn session(id: &str) -> Result<Option<(Account, Secrets)>, String> {
@@ -183,7 +186,7 @@ impl Login {
                 x + 20.0,
                 y + 20.0,
                 color::TEXT,
-                "Offline player name",
+                tr("Offline player name"),
             );
             ui.text(
                 Face::Regular,
@@ -191,7 +194,7 @@ impl Login {
                 x + 20.0,
                 y + 66.0,
                 color::MUTED,
-                "Used when signed out of Microsoft.",
+                tr("Used when signed out of Microsoft."),
             );
             button(
                 ui,
@@ -205,7 +208,7 @@ impl Login {
                 ui,
                 targets,
                 [x + 20.0, y + h - 56.0, w - 40.0, 36.0],
-                "Done",
+                tr("Done"),
                 Action::FinishNameEdit,
                 true,
             );
@@ -218,7 +221,7 @@ impl Login {
             x + 20.0,
             y + 18.0,
             color::TEXT,
-            "Accounts",
+            tr("Accounts"),
         );
         ui.text(
             Face::Medium,
@@ -237,60 +240,49 @@ impl Login {
                 ui,
                 targets,
                 [x + 20.0, y + 96.0, w - 40.0, 48.0],
-                &format!("{}    /    Copy code", code.user_code),
+                &trf("{code} / Copy code", &[("code", &code.user_code)]),
                 Action::CopyLoginCode,
                 false,
             );
         } else {
-            ui.text(
-                Face::Regular,
-                16.0,
-                x + 20.0,
-                y + 104.0,
-                color::TEXT,
-                if self.signed_in {
-                    "Account saved securely. Sessions renew automatically."
-                } else {
-                    "Your password is entered in Microsoft's browser."
-                },
-            );
-        }
-        let text = match &self.state {
-            Some(SignInState::Starting) => "Requesting a sign-in code...",
-            _ => &self.message,
-        };
-        let limit = ((w - 40.0) / 7.5).max(20.0) as usize;
-        let mut line = String::new();
-        let mut row = 0;
-        for word in text.split_whitespace() {
-            if line.len() + word.len() + 1 > limit {
+            let detail = if self.signed_in {
+                tr("Account saved securely. Sessions renew automatically.")
+            } else {
+                tr("Your password is entered in Microsoft's browser.")
+            };
+            for (row, line) in ui
+                .wrap_text(Face::Regular, 16.0, detail, w - 40.0)
+                .iter()
+                .take(2)
+                .enumerate()
+            {
                 ui.text(
                     Face::Regular,
-                    14.0,
+                    16.0,
                     x + 20.0,
-                    y + 166.0 + row as f32 * 20.0,
+                    y + 104.0 + row as f32 * 23.0,
                     color::TEXT,
-                    &line,
+                    line,
                 );
-                row += 1;
-                line.clear();
-                if row >= 5 {
-                    break;
-                }
             }
-            if !line.is_empty() {
-                line.push(' ');
-            }
-            line.push_str(word);
         }
-        if row < 5 {
+        let text = match &self.state {
+            Some(SignInState::Starting) => tr("Requesting a sign-in code...").to_owned(),
+            _ => self.message.render(),
+        };
+        for (row, line) in ui
+            .wrap_text(Face::Regular, 14.0, &text, w - 40.0)
+            .iter()
+            .take(5)
+            .enumerate()
+        {
             ui.text(
                 Face::Regular,
                 14.0,
                 x + 20.0,
                 y + 166.0 + row as f32 * 20.0,
                 color::TEXT,
-                &line,
+                line,
             );
         }
         if !self.pending() {
@@ -300,14 +292,14 @@ impl Login {
                 x + 20.0,
                 y + h - 247.0,
                 color::MUTED,
-                "Offline player name",
+                tr("Offline player name"),
             );
             button(
                 ui,
                 targets,
                 [x + 20.0, y + h - 226.0, w - 40.0, 38.0],
                 if offline_name.is_empty() {
-                    "Enter an offline name"
+                    tr("Enter an offline name")
                 } else {
                     offline_name
                 },
@@ -321,21 +313,21 @@ impl Login {
                 ui,
                 targets,
                 [x + 20.0, y + h - 183.0, w - 40.0, 30.0],
-                "Request Minecraft API approval",
+                tr("Request Minecraft API approval"),
                 Action::ReviewApp,
                 false,
             );
         }
         let (label, action) = if matches!(self.state, Some(SignInState::Code(_))) {
-            ("Copy code and open browser", Action::LoginLink)
+            (tr("Copy code and open browser"), Action::LoginLink)
         } else if self.pending() {
-            ("Restart browser sign-in", Action::SignIn)
+            (tr("Restart browser sign-in"), Action::SignIn)
         } else {
             (
                 if self.signed_in {
-                    "Switch Microsoft account"
+                    tr("Switch Microsoft account")
                 } else {
-                    "Sign in with browser"
+                    tr("Sign in with browser")
                 },
                 Action::SignIn,
             )
@@ -352,7 +344,7 @@ impl Login {
             ui,
             targets,
             [x + 20.0, y + h - 98.0, half, 38.0],
-            "Use a device code instead",
+            tr("Use a device code instead"),
             Action::DeviceSignIn,
             false,
         );
@@ -361,12 +353,12 @@ impl Login {
             targets,
             [x + 32.0 + half, y + h - 98.0, half, 38.0],
             if self.pending() {
-                "Cancel sign-in"
+                tr("Cancel sign-in")
             } else {
                 if self.profile.is_some() {
-                    "Sign out"
+                    tr("Sign out")
                 } else {
-                    "Close"
+                    tr("Close")
                 }
             },
             if self.pending() {
@@ -385,9 +377,9 @@ impl Login {
             targets,
             [x + 20.0, y + h - 52.0, w - 40.0, 36.0],
             if self.pending() {
-                "Back (sign-in continues)"
+                tr("Back (sign-in continues)")
             } else {
-                "Done"
+                tr("Done")
             },
             Action::CloseLogin,
             false,

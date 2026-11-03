@@ -2,7 +2,7 @@
 use horizon_client::osk::Output;
 use jni::{
     JNIEnv, JavaVM,
-    objects::{GlobalRef, JObject, JValue},
+    objects::{GlobalRef, JObject, JString, JValue},
 };
 use std::cell::RefCell;
 thread_local! {
@@ -12,6 +12,60 @@ thread_local! {
     static VIBRATING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static PAD_VIBRATOR: RefCell<Option<GlobalRef>> = const { RefCell::new(None) };
     static PAD_HAPTIC_DEVICE: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Read Android's configured language list (API 24+), rather than desktop
+/// environment variables, which are usually absent in a NativeActivity.
+pub fn locales() -> Vec<String> {
+    crate::APP.with(|slot| {
+        let app = slot.borrow();
+        let Some(app) = app.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(vm) = (unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }) else {
+            return Vec::new();
+        };
+        let Ok(mut env) = vm.attach_current_thread() else {
+            return Vec::new();
+        };
+        let result = env.with_local_frame(16, |env| -> jni::errors::Result<Vec<String>> {
+            let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
+            let resources = env
+                .call_method(
+                    &activity,
+                    "getResources",
+                    "()Landroid/content/res/Resources;",
+                    &[],
+                )?
+                .l()?;
+            let config = env
+                .call_method(
+                    resources,
+                    "getConfiguration",
+                    "()Landroid/content/res/Configuration;",
+                    &[],
+                )?
+                .l()?;
+            let locales = env
+                .call_method(config, "getLocales", "()Landroid/os/LocaleList;", &[])?
+                .l()?;
+            let tags = JString::from(
+                env.call_method(locales, "toLanguageTags", "()Ljava/lang/String;", &[])?
+                    .l()?,
+            );
+            let tags: String = env.get_string(&tags)?.into();
+            Ok(tags
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect())
+        });
+        result.unwrap_or_else(|error| {
+            let _ = env.exception_clear();
+            log::warn!("Reading Android languages: {error}");
+            Vec::new()
+        })
+    })
 }
 
 fn with_vibrator(f: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> jni::errors::Result<()>) {

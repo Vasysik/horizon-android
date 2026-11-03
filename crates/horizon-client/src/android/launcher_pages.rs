@@ -1,4 +1,5 @@
 use super::*;
+use crate::i18n::{Message, tr, trf};
 use horizon_client::{osk::Output, ui_theme::color};
 use winit::{
     event::{KeyEvent, Touch},
@@ -7,6 +8,8 @@ use winit::{
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Action {
+    Language,
+    ChooseLanguage(crate::i18n::Preference),
     Page(Page),
     Play,
     Search,
@@ -74,6 +77,11 @@ pub(super) fn button(
     action: Action,
     accent: bool,
 ) {
+    let label = if matches!(action, Action::Field("name" | "server" | "render_scale")) {
+        label
+    } else {
+        tr(label)
+    };
     let [x, y, w, h] = rect;
     ui.rounded(
         x,
@@ -120,7 +128,7 @@ fn toggle(
         x,
         y + 11.0,
         color::TEXT,
-        if on { "On" } else { "Off" },
+        if on { tr("On") } else { tr("Off") },
     );
     ui.rounded(
         x + w - 52.0,
@@ -269,12 +277,12 @@ impl Launcher {
                 [x, 88.0, tab_width - 4.0, 42.0],
                 if w < 700.0 {
                     match page {
-                        Page::Installed => "Files",
-                        Page::Settings => "Setup",
-                        _ => page.name(),
+                        Page::Installed => tr("Files"),
+                        Page::Settings => tr("Setup"),
+                        _ => tr(page.name()),
                     }
                 } else {
-                    page.name()
+                    tr(page.name())
                 },
                 Action::Page(*page),
                 *page == self.catalog.page,
@@ -295,14 +303,14 @@ impl Launcher {
                 top,
                 color::TEXT,
                 if installing {
-                    "Getting your game ready"
+                    tr("Getting your game ready")
                 } else if installed {
-                    "Ready to play"
+                    tr("Ready to play")
                 } else {
                     if compact {
-                        "Your Java worlds"
+                        tr("Your Java worlds")
                     } else {
-                        "Your Java worlds, on Android"
+                        tr("Your Java worlds, on Android")
                     }
                 },
             );
@@ -312,7 +320,10 @@ impl Launcher {
                 32.0,
                 top + 47.0,
                 color::MUTED,
-                &format!("Minecraft 26.3  /  Profile {}", self.catalog.config.profile),
+                &trf(
+                    "Minecraft 26.3 / Profile {profile}",
+                    &[("profile", &self.catalog.config.profile.to_string())],
+                ),
             );
             if installing {
                 let current = InstallStage::ALL
@@ -324,9 +335,15 @@ impl Launcher {
                     for (index, stage) in InstallStage::ALL.iter().enumerate() {
                         let y = top + 90.0 + index as f32 * row_height;
                         let label = if index < current {
-                            format!("{:02}  {}  - done", index + 1, stage.label())
+                            trf(
+                                "{number}  {stage}  - done",
+                                &[
+                                    ("number", &format!("{:02}", index + 1)),
+                                    ("stage", tr(stage.label())),
+                                ],
+                            )
                         } else {
-                            format!("{:02}  {}", index + 1, stage.label())
+                            format!("{:02}  {}", index + 1, tr(stage.label()))
                         };
                         ui.text(
                             Face::Regular,
@@ -348,7 +365,7 @@ impl Launcher {
                         32.0,
                         top + 100.0,
                         color::TEXT,
-                        progress.stage.label(),
+                        tr(progress.stage.label()),
                     );
                     ui.text(
                         Face::Regular,
@@ -356,7 +373,7 @@ impl Launcher {
                         32.0,
                         top + 138.0,
                         color::MUTED,
-                        &format!("Step {} of 6", current + 1),
+                        &trf("Step {step} of 6", &[("step", &(current + 1).to_string())]),
                     );
                 }
                 let fraction = if progress.total > 0 {
@@ -371,16 +388,26 @@ impl Launcher {
                     ui.rounded(32.0, bar_y, (w - 64.0) * overall, 4.0, 2.0, color::ACCENT);
                 }
                 let detail = match progress.stage {
-                    InstallStage::Download => format!(
-                        "{:.1} / {:.1} MiB  - verified downloads",
-                        progress.done as f64 / 1048576.0,
-                        progress.total as f64 / 1048576.0
+                    InstallStage::Download => trf(
+                        "{done} / {total} MiB - verified downloads",
+                        &[
+                            ("done", &format!("{:.1}", progress.done as f64 / 1048576.0)),
+                            (
+                                "total",
+                                &format!("{:.1}", progress.total as f64 / 1048576.0),
+                            ),
+                        ],
                     ),
-                    InstallStage::Controls => format!(
-                        "{} / {} control files verified",
-                        progress.done, progress.total
+                    InstallStage::Controls => trf(
+                        "{done} / {total} control files verified",
+                        &[
+                            ("done", &progress.done.to_string()),
+                            ("total", &progress.total.to_string()),
+                        ],
                     ),
-                    _ => "Please keep Horizon open. Downloaded files are kept for retry.".into(),
+                    _ => {
+                        tr("Please keep Horizon open. Downloaded files are kept for retry.").into()
+                    }
                 };
                 ui.text(
                     Face::Regular,
@@ -393,15 +420,15 @@ impl Launcher {
             } else {
                 let rows = if installed {
                     [
-                        "01  Open a world or join a Java server",
-                        "02  Touch setup: Options > Controls",
-                        "03  Find packs and .hmod in the tabs",
+                        tr("01  Open a world or join a Java server"),
+                        tr("02  Touch setup: Options > Controls"),
+                        tr("03  Find packs and .hmod in the tabs"),
                     ]
                 } else {
                     [
-                        "01  Download resources from Mojang",
-                        "02  Install and verify on this phone",
-                        "03  Play offline or sign in for servers",
+                        tr("01  Download resources from Mojang"),
+                        tr("02  Install and verify on this phone"),
+                        tr("03  Play offline or sign in for servers"),
                     ]
                 };
                 for (index, line) in rows.iter().enumerate() {
@@ -422,7 +449,7 @@ impl Launcher {
                     32.0,
                     h - 90.0,
                     color::TEXT,
-                    progress.stage.label(),
+                    tr(progress.stage.label()),
                 );
             } else {
                 button(
@@ -430,11 +457,11 @@ impl Launcher {
                     &mut self.targets,
                     [32.0, h - 100.0, 320.0, 60.0],
                     if installed {
-                        "Play"
+                        tr("Play")
                     } else if self.error.is_some() {
-                        "Retry installation"
+                        tr("Retry installation")
                     } else {
-                        "Download Minecraft 26.3"
+                        tr("Download Minecraft 26.3")
                     },
                     Action::Play,
                     true,
@@ -448,25 +475,28 @@ impl Launcher {
                 142.0,
                 color::TEXT,
                 if page == Page::Mods {
-                    "Horizon Mods"
+                    tr("Horizon Mods")
                 } else if page == Page::Shaders {
-                    if w < 360.0 { "Shaders" } else { "Shader Packs" }
+                    if w < 360.0 {
+                        tr("Shaders")
+                    } else {
+                        tr("Shader Packs")
+                    }
                 } else {
-                    "Resource Packs"
+                    tr("Resource Packs")
                 },
             );
             button(
                 &mut ui,
                 &mut self.targets,
                 [32.0, 174.0, w - 240.0, 44.0],
-                &format!(
-                    "{}{}",
+                &trf(
                     if page == Page::Mods {
-                        "Search / .hmod URL: "
+                        "Search / .hmod URL: {query}"
                     } else {
-                        "Search: "
+                        "Search: {query}"
                     },
-                    self.catalog.query
+                    &[("query", &self.catalog.query)],
                 ),
                 Action::Field("search"),
                 false,
@@ -476,9 +506,9 @@ impl Launcher {
                 &mut self.targets,
                 [w - 190.0, 174.0, 158.0, 44.0],
                 if page == Page::Mods && self.catalog.query.trim().starts_with("https://") {
-                    "Import .hmod"
+                    tr("Import .hmod")
                 } else {
-                    "Search"
+                    tr("Search")
                 },
                 Action::Search,
                 true,
@@ -515,17 +545,17 @@ impl Launcher {
                     if self.catalog.config.mod_source
                         == crate::shader_catalog::Origin::Modrinth =>
                 {
-                    "Modrinth Java mods are browse-only; Fabric/Forge/NeoForge cannot run here"
+                    tr("Modrinth Java mods are browse-only; Fabric/Forge/NeoForge cannot run here")
                 }
-                Page::Mods => "Search Horizon mods or paste an HTTPS .hmod link",
+                Page::Mods => tr("Search Horizon mods or paste an HTTPS .hmod link"),
                 Page::Shaders
                     if self.catalog.config.shader_source
                         == crate::shader_catalog::Origin::Modrinth =>
                 {
-                    "Modrinth shader ZIPs / experimental compatibility; some packs may not work"
+                    tr("Modrinth shader ZIPs / experimental compatibility; some packs may not work")
                 }
-                Page::Shaders => "Horizon native .hshader packs",
-                _ => "Verified downloads / enable in Installed",
+                Page::Shaders => tr("Horizon native .hshader packs"),
+                _ => tr("Verified downloads / enable in Installed"),
             };
             let hint = ui.fit_text(Face::Regular, 14.0, hint, w - 64.0);
             ui.text(Face::Regular, 14.0, 32.0, 270.0, color::MUTED, &hint);
@@ -539,7 +569,7 @@ impl Launcher {
                 &mut ui,
                 &mut self.targets,
                 [32.0, 222.0, file_button_width, 38.0],
-                "Open folder",
+                tr("Open folder"),
                 Action::OpenFolder(kind),
                 false,
             );
@@ -547,7 +577,7 @@ impl Launcher {
                 &mut ui,
                 &mut self.targets,
                 [w - 32.0 - file_button_width, 222.0, file_button_width, 38.0],
-                "Import file",
+                tr("Import file"),
                 Action::Import(kind),
                 false,
             );
@@ -603,9 +633,9 @@ impl Launcher {
                     &mut self.targets,
                     [w - 150.0, y, 118.0, 42.0],
                     if self.catalog.bundled_enabled.contains(*id) {
-                        "Disable"
+                        tr("Disable")
                     } else {
-                        "Enable"
+                        tr("Enable")
                     },
                     Action::ToggleBundled(id),
                     false,
@@ -630,7 +660,14 @@ impl Launcher {
                 ui.text(Face::Medium, 19.0, 32.0, y, color::TEXT, &title);
                 ui.text(Face::Regular, 14.0, 32.0, y + 29.0, color::MUTED, &summary);
                 if let Some(state) = download {
-                    ui.text(Face::Medium, 16.0, w - 150.0, y + 12.0, color::TEXT, &state);
+                    ui.text(
+                        Face::Medium,
+                        16.0,
+                        w - 150.0,
+                        y + 12.0,
+                        color::TEXT,
+                        tr(&state),
+                    );
                 } else if p.kind == crate::browser::Kind::Mod
                     && p.source == crate::browser::SourceId::Modrinth
                 {
@@ -640,7 +677,7 @@ impl Launcher {
                         w - 150.0,
                         y + 12.0,
                         color::MUTED,
-                        "Java mod",
+                        tr("Java mod"),
                     );
                 } else if crate::catalog::source_only_mod(p) {
                     ui.text(
@@ -649,7 +686,7 @@ impl Launcher {
                         w - 150.0,
                         y + 12.0,
                         color::MUTED,
-                        ".hnmod: later",
+                        tr(".hnmod: later"),
                     );
                 } else if p.kind == crate::browser::Kind::Mod && !cfg!(target_pointer_width = "64")
                 {
@@ -659,7 +696,7 @@ impl Launcher {
                         w - 150.0,
                         y + 12.0,
                         color::MUTED,
-                        "64-bit required",
+                        tr("64-bit required"),
                     );
                 } else {
                     button(
@@ -676,7 +713,7 @@ impl Launcher {
                 &mut ui,
                 &mut self.targets,
                 [32.0, h - 100.0, 120.0, 40.0],
-                "Previous",
+                tr("Previous"),
                 Action::Previous,
                 false,
             );
@@ -684,7 +721,7 @@ impl Launcher {
                 &mut ui,
                 &mut self.targets,
                 [166.0, h - 100.0, 120.0, 40.0],
-                "Next",
+                tr("Next"),
                 Action::Next,
                 false,
             );
@@ -719,7 +756,7 @@ impl Launcher {
                     } else {
                         "+"
                     },
-                    kind.label()
+                    tr(kind.label())
                 );
                 self.list_targets
                     .push(([32.0, y, w - 210.0, 40.0], Action::ToggleSection(section)));
@@ -738,7 +775,7 @@ impl Launcher {
                         &mut ui,
                         &mut self.targets,
                         [w - 165.0, y, 133.0, 40.0],
-                        "Import",
+                        tr("Import"),
                         Action::Import(kind),
                         false,
                     );
@@ -785,7 +822,7 @@ impl Launcher {
                         32.0,
                         y + 28.0,
                         color::MUTED,
-                        kind.label(),
+                        tr(kind.label()),
                     );
                     if kind == Kind::Mods && !cfg!(target_pointer_width = "64") {
                         ui.text(
@@ -794,7 +831,7 @@ impl Launcher {
                             if compact { 32.0 } else { w - 300.0 },
                             y + if compact { 62.0 } else { 12.0 },
                             color::MUTED,
-                            "64-bit required",
+                            tr("64-bit required"),
                         );
                     } else {
                         toggle(
@@ -814,7 +851,7 @@ impl Launcher {
                         &mut ui,
                         &mut self.targets,
                         [w - 165.0, y + if compact { 55.0 } else { 0.0 }, 133.0, 40.0],
-                        "Remove",
+                        tr("Remove"),
                         Action::DeleteLocal(i),
                         false,
                     );
@@ -828,22 +865,22 @@ impl Launcher {
                 32.0,
                 156.0,
                 color::TEXT,
-                "Launch settings",
+                tr("Launch settings"),
             );
             let row_height = if compact { 82.0 } else { 66.0 };
-            self.catalog.scroll = self
-                .catalog
-                .scroll
-                .clamp(0.0, (18.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
-            self.list_view = Some([
-                195.0,
-                h - 130.0,
-                (18.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
-            ]);
-            for (i, (title, value, action)) in [
-                ("Rendering", c.renderer.label().to_owned(), Action::Renderer),
+            let rows = [
                 (
-                    "Client resolution",
+                    tr("Launcher language / Language"),
+                    c.language.label().to_owned(),
+                    Action::Language,
+                ),
+                (
+                    tr("Rendering"),
+                    c.renderer.label().to_owned(),
+                    Action::Renderer,
+                ),
+                (
+                    tr("Client resolution"),
                     if self.catalog.editing == Some("render_scale") {
                         self.catalog.render_scale_text.clone()
                     } else {
@@ -852,113 +889,139 @@ impl Launcher {
                     Action::RenderScale,
                 ),
                 (
-                    "Chunk worker limit",
+                    tr("Chunk worker limit"),
                     if c.worker_limit == 0 {
-                        "No additional limit".into()
+                        tr("No additional limit").into()
                     } else {
                         c.worker_limit.to_string()
                     },
                     Action::WorkerLimit,
                 ),
                 (
-                    "Reusable RAM cache",
+                    tr("Reusable RAM cache"),
                     if c.cache_budget_mib == 0 {
-                        "Engine default (80 MiB)".into()
+                        tr("Engine default (80 MiB)").into()
                     } else {
                         format!("{} MiB", c.cache_budget_mib)
                     },
                     Action::CacheBudget,
                 ),
                 (
-                    "Game files",
-                    "Open in system Files".into(),
+                    tr("Game files"),
+                    tr("Open in system Files").into(),
                     Action::GameFiles,
                 ),
                 (
-                    "World files",
-                    "Import / copy / back up in Files".into(),
+                    tr("World files"),
+                    tr("Import / copy / back up in Files").into(),
                     Action::WorldFiles,
                 ),
-                ("Profile", format!("Profile {}", c.profile), Action::Profile),
                 (
-                    "Orientation",
+                    tr("Profile"),
+                    trf("Profile {profile}", &[("profile", &c.profile.to_string())]),
+                    Action::Profile,
+                ),
+                (
+                    tr("Orientation"),
                     c.orientation.label().to_owned(),
                     Action::Orientation,
                 ),
-                ("Input", c.input_host.label().to_owned(), Action::InputHost),
                 (
-                    "Immersive fullscreen",
-                    if c.screen.immersive { "On" } else { "Off" }.into(),
+                    tr("Input"),
+                    c.input_host.label().to_owned(),
+                    Action::InputHost,
+                ),
+                (
+                    tr("Immersive fullscreen"),
+                    if c.screen.immersive {
+                        tr("On")
+                    } else {
+                        tr("Off")
+                    }
+                    .into(),
                     Action::Immersive,
                 ),
                 (
-                    "Avoid camera cutout",
-                    if c.screen.avoid_cutout { "On" } else { "Off" }.into(),
+                    tr("Avoid camera cutout"),
+                    if c.screen.avoid_cutout {
+                        tr("On")
+                    } else {
+                        tr("Off")
+                    }
+                    .into(),
                     Action::Cutout,
                 ),
                 (
-                    "Aspect ratio",
+                    tr("Aspect ratio"),
                     c.screen.aspect.label().into(),
                     Action::Aspect,
                 ),
                 (
-                    "Display refresh rate",
-                    c.device.display_label(),
+                    tr("Display refresh rate"),
+                    if c.device.display_hz == 0 {
+                        tr(&c.device.display_label()).to_owned()
+                    } else {
+                        trf(
+                            "{hz} Hz (request)",
+                            &[("hz", &c.device.display_hz.to_string())],
+                        )
+                    },
                     Action::DisplayHz,
                 ),
                 (
-                    "Performance hints",
+                    tr("Performance hints"),
                     if c.device.performance_hints {
-                        "On (ADPF)"
+                        tr("On (ADPF)")
                     } else {
-                        "Off"
+                        tr("Off")
                     }
                     .into(),
                     Action::PerformanceHints,
                 ),
                 (
-                    "GPU profiling",
+                    tr("GPU profiling"),
                     if c.device.gpu_profile {
-                        "On / included in report"
+                        tr("On / included in report")
                     } else {
-                        "Off"
+                        tr("Off")
                     }
                     .into(),
                     Action::GpuProfile,
                 ),
                 (
-                    "Performance recording",
+                    tr("Performance recording"),
                     if c.record_performance {
-                        "On / up to 30 min"
+                        tr("On / up to 30 min")
                     } else {
-                        "Off"
+                        tr("Off")
                     }
                     .into(),
                     Action::RecordPerformance,
                 ),
                 (
-                    "Diagnostic report",
-                    "Export one ZIP to share".into(),
+                    tr("Diagnostic report"),
+                    tr("Export one ZIP to share").into(),
                     Action::ExportDiagnostics,
                 ),
                 (
-                    "Raw performance data",
-                    "Advanced / JSONL in Reports".into(),
+                    tr("Raw performance data"),
+                    tr("Advanced / JSONL in Reports").into(),
                     Action::ExportPerformance,
                 ),
                 (
-                    "Server",
+                    tr("Server"),
                     if c.server.is_empty() {
-                        "Singleplayer / tap to enter server".into()
+                        tr("Singleplayer / tap to enter server").into()
                     } else {
                         c.server.clone()
                     },
                     Action::Field("server"),
                 ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
+            ];
+            let maximum = (rows.len() as f32 * row_height - (h - 130.0 - 195.0)).max(0.0);
+            self.catalog.scroll = self.catalog.scroll.clamp(0.0, maximum);
+            self.list_view = Some([195.0, h - 130.0, maximum]);
+            for (i, (title, value, action)) in rows.into_iter().enumerate() {
                 let y = 195.0 + i as f32 * row_height - self.catalog.scroll;
                 self.list_targets.push((
                     [
@@ -978,7 +1041,7 @@ impl Launcher {
                     32.0,
                     y + if compact { 0.0 } else { 13.0 },
                     color::MUTED,
-                    title,
+                    tr(title),
                 );
                 if matches!(
                     action,
@@ -1013,10 +1076,15 @@ impl Launcher {
                         ],
                         &format!(
                             "{} {}",
-                            value,
+                            if action == Action::Field("server") && !c.server.is_empty() {
+                                value.as_str()
+                            } else {
+                                tr(&value)
+                            },
                             if matches!(
                                 action,
-                                Action::Renderer
+                                Action::Language
+                                    | Action::Renderer
                                     | Action::Aspect
                                     | Action::DisplayHz
                                     | Action::RenderScale
@@ -1046,7 +1114,7 @@ impl Launcher {
                 &mut ui,
                 &mut self.targets,
                 [w * 0.5 + 6.0, h - 114.0, w * 0.5 - 38.0, 42.0],
-                "Microsoft / Xbox account",
+                tr("Microsoft / Xbox account"),
                 Action::Account,
                 true,
             );
@@ -1054,16 +1122,19 @@ impl Launcher {
                 &mut ui,
                 &mut self.targets,
                 [32.0, h - 114.0, w * 0.5 - 38.0, 42.0],
-                "Diagnostics",
+                tr("Diagnostics"),
                 Action::Logs,
                 false,
             );
         }
-        let status = self.error.as_deref().unwrap_or(&self.catalog.status);
-        for (i, line) in status
-            .chars()
-            .collect::<Vec<_>>()
-            .chunks(110)
+        let status = self
+            .error
+            .as_ref()
+            .map(|error| tr(error).to_owned())
+            .unwrap_or_else(|| self.catalog.status.render());
+        for (i, line) in ui
+            .wrap_text(Face::Regular, 14.0, &status, (w - 210.0).max(40.0))
+            .iter()
             .take(2)
             .enumerate()
         {
@@ -1073,12 +1144,7 @@ impl Launcher {
                 32.0,
                 h - 47.0 + i as f32 * 18.0,
                 color::MUTED,
-                &ui.fit_text(
-                    Face::Regular,
-                    14.0,
-                    &line.iter().collect::<String>(),
-                    (w - 210.0).max(40.0),
-                ),
+                line,
             );
         }
         button(
@@ -1126,7 +1192,7 @@ impl Launcher {
                 "name" => self.catalog.config.name.clone(),
                 "server" => self.catalog.config.server.clone(),
                 "render_scale" => self.catalog.render_scale_text.clone(),
-                _ => format!("Search: {}", self.catalog.query),
+                _ => trf("Search: {query}", &[("query", &self.catalog.query)]),
             };
             for ([x, y, w, _], action) in &self.targets {
                 if *action == Action::Field(name)
@@ -1160,14 +1226,14 @@ impl Launcher {
                 x + 20.0,
                 y + 24.0,
                 color::TEXT,
-                "Exit application?",
+                tr("Exit application?"),
             );
             let bw = (width - 52.0) * 0.5;
             button(
                 &mut ui,
                 &mut self.targets,
                 [x + 20.0, y + 92.0, bw, 44.0],
-                "Cancel",
+                tr("Cancel"),
                 Action::Dismiss,
                 false,
             );
@@ -1175,7 +1241,7 @@ impl Launcher {
                 &mut ui,
                 &mut self.targets,
                 [x + 32.0 + bw, y + 92.0, bw, 44.0],
-                "Exit",
+                tr("Exit"),
                 Action::ConfirmExit,
                 false,
             );
@@ -1287,6 +1353,17 @@ impl Launcher {
             audio.play_button_click();
         }
         match action {
+            Some(Action::Language) => self.open_chooser(chooser::Kind::Language),
+            Some(Action::ChooseLanguage(language)) => {
+                let previous = self.catalog.config.language;
+                self.catalog.config.language = language;
+                if let Err(error) = self.catalog.config.save(&self.home) {
+                    self.catalog.config.language = previous;
+                    return Err(error.into());
+                }
+                crate::i18n::set(language, &crate::platform::locales());
+                self.chooser = None;
+            }
             Some(Action::ConfirmExit) => {
                 events.exit();
             }
@@ -1328,9 +1405,13 @@ impl Launcher {
                 std::fs::create_dir_all(&game)?;
                 std::fs::write(game.join(horizon_client::mod_list::FILE), list.serialize())?;
                 self.catalog.refresh(&self.home);
-                self.catalog.status = format!(
-                    "Bundled {id} {}. Applies on Play; settings are in Options > Mods.",
-                    if enabled { "disabled" } else { "enabled" }
+                self.catalog.status = Message::formatted(
+                    if enabled {
+                        "Bundled {id} disabled. Applies on Play; settings are in Options > Mods."
+                    } else {
+                        "Bundled {id} enabled. Applies on Play; settings are in Options > Mods."
+                    },
+                    &[("id", id)],
                 );
             }
             Some(Action::GameFiles) => {
@@ -1402,7 +1483,7 @@ impl Launcher {
                 crate::platform::hide();
                 let home = self.catalog.config.game_home(&self.home);
                 if let Err(e) = crate::documents::begin(kind, home) {
-                    self.catalog.status = e;
+                    self.catalog.status = e.into();
                 }
             }
             Some(Action::ToggleSection(i)) => {
@@ -1556,13 +1637,14 @@ impl Launcher {
                 }
             }
             Some(Action::Logs) => {
-                self.catalog.status = crate::diagnostics::summary(&self.home);
+                self.catalog.status = crate::diagnostics::summary(&self.home).into();
                 if let Ok(error) = std::fs::read_to_string(self.home.join("android-error.txt")) {
                     self.catalog.status = format!(
                         "Last handled error: {}. {}",
                         crate::diagnostics::redact(&error),
                         self.catalog.status
-                    );
+                    )
+                    .into();
                 }
             }
             Some(Action::ExportDiagnostics) if self.diagnostic_export.is_none() => {
@@ -1595,7 +1677,7 @@ impl Launcher {
             Some(Action::ExportPerformance) => {
                 self.catalog.status = match crate::performance::export(&self.home) {
                     Ok(()) => "Reports opened in Files. Copy or share a report from there.".into(),
-                    Err(e) => e,
+                    Err(e) => e.into(),
                 };
             }
             None => {}

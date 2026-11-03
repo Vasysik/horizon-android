@@ -1,5 +1,17 @@
 # Third-party notices
 
+## Noto Sans SC
+
+`crates/horizon-theme/fonts/NotoSansSC-Regular.ttf` is a static weight-400 instance
+of Google's [Noto Sans SC](https://github.com/google/fonts/tree/2fe1e8c6b137fb13041a7cfca6fdcd8a910ea4dc/ofl/notosanssc),
+copyright 2014–2021 Adobe, under the SIL Open Font License 1.1
+(`crates/horizon-theme/fonts/OFL-NotoSansSC.txt`). It supplies offline Chinese
+glyphs for the native UI, including the Android installer's first launch.
+Only font data was used; no external program source was copied.
+The source variable font's SHA-256 is
+`a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da`.
+Regenerate with `tools/bake_android_font.py` and fontTools 4.68.0.
+
 ## wgpu-hal
 
 `third_party/wgpu-hal` is [wgpu-hal](https://github.com/gfx-rs/wgpu) 30.0.1 by the gfx-rs

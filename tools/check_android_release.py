@@ -16,7 +16,7 @@ import zipfile
 ASSETS = {'assets/engine-data.zip', 'assets/bedrock-controls.zip'}
 # AndroidX build-time optimization profiles, not player/account profiles.
 BUILD_ASSETS = {'assets/dexopt/baseline.prof', 'assets/dexopt/baseline.profm'}
-LICENSE_ASSETS = {'assets/LICENSE.txt', 'assets/THIRD_PARTY_NOTICES.md'}
+LICENSE_ASSETS = {'assets/LICENSE.txt', 'assets/THIRD_PARTY_NOTICES.md', 'assets/OFL-NotoSansSC.txt'}
 PRIVATE_PARTS = {'accounts', 'accounts.json', 'session.json', 'session-file.json',
                  'control.json', 'servers.dat', 'level.dat', 'options.txt',
                  'android-launch.json', 'android-launcher.json', 'saves', 'profiles',
