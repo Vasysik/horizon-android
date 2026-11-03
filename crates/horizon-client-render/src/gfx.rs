@@ -105,12 +105,45 @@ fn fog_culled_radius(
     }
 }
 
-/// Whether distance fog alone covers what lies past `fog_culled_radius`.
+/// Whether distance fog alone covers what lies past `fog_culled_radius` with
+/// the same colour the frame clears to.
 ///
-/// Not with Distant terrain on (even before its first tiles exist), tiles
-/// already drawn or fading, a shader pack's own fog, or the title screen.
-fn fog_is_only_cover(distant_terrain: bool, tiles_live: bool, packs: bool, title: bool) -> bool {
-    !(distant_terrain || tiles_live || packs || title)
+/// Gated to the Nether with ordinary atmospheric fog and a fog-colour
+/// background (no sky pass, shader pack, Distant terrain, or title screen).
+#[derive(Clone, Copy, Debug)]
+struct FogCullCover {
+    /// The Nether (`Frame::nether_lighting` and `Frame::environment_fog`).
+    nether: bool,
+    /// Ordinary atmospheric fog: not in water, lava, or powder snow, and no
+    /// blindness or darkness (`!Frame::underwater && !Frame::sky_blocked`).
+    atmospheric: bool,
+    /// No sky pass draws over the fog-colour clear (`!Frame::skybox && !Frame::end_sky`).
+    fog_background: bool,
+    distant_terrain: bool,
+    tiles_live: bool,
+    packs: bool,
+    title: bool,
+}
+
+impl FogCullCover {
+    fn from_frame(frame: &Frame, tiles_live: bool, packs: bool) -> Self {
+        Self {
+            nether: frame.nether_lighting && frame.environment_fog.is_some(),
+            atmospheric: !frame.underwater && !frame.sky_blocked,
+            fog_background: !frame.skybox && !frame.end_sky,
+            distant_terrain: frame.distant_terrain,
+            tiles_live,
+            packs,
+            title: frame.title,
+        }
+    }
+}
+
+fn fog_is_only_cover(cover: FogCullCover) -> bool {
+    cover.nether
+        && cover.atmospheric
+        && cover.fog_background
+        && !(cover.distant_terrain || cover.tiles_live || cover.packs || cover.title)
 }
 
 mod animate;
@@ -5610,12 +5643,11 @@ impl Renderer {
             .map(|(plane, eye)| 2.0 * (plane - frame.camera.y as f32) - eye.y);
         let culling = !frame.title && frame.cave_culling;
         // Sections wholly inside distance fog are not drawn (`fog_culled_radius`).
-        let own_fog = !fog_is_only_cover(
-            frame.distant_terrain,
+        let own_fog = !fog_is_only_cover(FogCullCover::from_frame(
+            frame,
             !self.lods.is_empty() || !self.lod_cutout.is_empty() || !self.lod_leaving.is_empty(),
             self.native.is_some() || self.pack_post.is_some(),
-            frame.title,
-        );
+        ));
         let visible_radius = fog_culled_radius(frame.detail_distance, frame.fog.as_ref(), own_fog);
         // The occlusion search keeps the full radius: its graph answers `false` beyond the
         // radius it searched, so a radius that follows the fog would hide sections for the
@@ -8523,6 +8555,17 @@ mod tests {
             cloud_end: 192.0,
         }
     }
+    fn nether_cover() -> super::FogCullCover {
+        super::FogCullCover {
+            nether: true,
+            atmospheric: true,
+            fog_background: true,
+            distant_terrain: false,
+            tiles_live: false,
+            packs: false,
+            title: false,
+        }
+    }
     #[test]
     fn fog_bounds_the_drawn_radius_to_where_it_turns_opaque() {
         // 96 blocks of Nether fog: 6 chunks, plus the camera's own chunk.
@@ -8538,11 +8581,145 @@ mod tests {
     }
     #[test]
     fn distant_terrain_keeps_the_full_radius_before_its_tiles_exist() {
-        assert!(super::fog_is_only_cover(false, false, false, false));
-        assert!(!super::fog_is_only_cover(true, false, false, false));
+        let base = nether_cover();
+        assert!(super::fog_is_only_cover(base));
+        let with_lod = super::FogCullCover {
+            distant_terrain: true,
+            ..base
+        };
+        assert!(!super::fog_is_only_cover(with_lod));
         let fog = nether_fog(96.0);
-        let own_fog = !super::fog_is_only_cover(true, false, false, false);
+        let own_fog = !super::fog_is_only_cover(with_lod);
         assert_eq!(super::fog_culled_radius(192.0, Some(&fog), own_fog), 12);
+    }
+    #[test]
+    fn end_sky_passes_and_non_atmospheric_fog_keep_the_full_radius() {
+        let base = nether_cover();
+        let fog = nether_fog(96.0);
+        // The End (clears to black and draws end_sky, or even with sky off) keeps its draw radius.
+        for end_sky_on in [true, false] {
+            let end = super::FogCullCover {
+                nether: false,
+                fog_background: !end_sky_on,
+                ..base
+            };
+            assert!(!super::fog_is_only_cover(end));
+            assert_eq!(
+                super::fog_culled_radius(192.0, Some(&fog), !super::fog_is_only_cover(end)),
+                12
+            );
+            assert_eq!(
+                super::fog_culled_radius(256.0, Some(&fog), !super::fog_is_only_cover(end)),
+                16
+            );
+        }
+        // Overworld skybox, non-atmospheric fog (lava/powder snow/blindness/darkness/water),
+        // shader packs, live LOD tiles, and title screen all keep the full radius.
+        for case in [
+            super::FogCullCover {
+                nether: false,
+                fog_background: false,
+                ..base
+            },
+            super::FogCullCover {
+                atmospheric: false,
+                ..base
+            },
+            super::FogCullCover {
+                fog_background: false,
+                ..base
+            },
+            super::FogCullCover {
+                tiles_live: true,
+                ..base
+            },
+            super::FogCullCover {
+                packs: true,
+                ..base
+            },
+            super::FogCullCover {
+                title: true,
+                ..base
+            },
+        ] {
+            assert!(!super::fog_is_only_cover(case), "{case:?}");
+            assert_eq!(
+                super::fog_culled_radius(192.0, Some(&fog), !super::fog_is_only_cover(case)),
+                12
+            );
+        }
+    }
+    #[test]
+    fn fixed_camera_nether_at_12_chunks_culls_sections_while_end_keeps_full_radius() {
+        use glam::{DVec3, Vec3};
+        let mut sections = super::resident::Resident::default();
+        for x in -12..=12 {
+            for z in -12..=12 {
+                for y in 0..8 {
+                    sections.insert((x, y, z), ());
+                }
+            }
+        }
+        let camera = DVec3::new(8.0, 64.0, 8.0);
+        let proj = super::world_projection(70.0, 16.0 / 9.0, 512.0);
+        let view = crate::camera::view_matrix(0.0, 0.0);
+        let frustum = super::Frustum {
+            planes: super::frustum(proj * view),
+        };
+        let fog = nether_fog(96.0);
+        let detail_distance = 192.0; // 12 chunks
+        let end_cover = super::FogCullCover {
+            nether: false,
+            fog_background: false,
+            ..nether_cover()
+        };
+        let end_radius = super::fog_culled_radius(
+            detail_distance,
+            Some(&fog),
+            !super::fog_is_only_cover(end_cover),
+        );
+        let nether_radius = super::fog_culled_radius(
+            detail_distance,
+            Some(&fog),
+            !super::fog_is_only_cover(nether_cover()),
+        );
+        assert_eq!(end_radius, 12);
+        assert_eq!(nether_radius, 7);
+
+        let mut before_or_end = Vec::new();
+        sections.visible(
+            camera,
+            end_radius,
+            &frustum,
+            |_| true,
+            |_, _| false,
+            &mut before_or_end,
+        );
+        let mut after_nether = Vec::new();
+        sections.visible(
+            camera,
+            nether_radius,
+            &frustum,
+            |_| true,
+            |_, _| false,
+            &mut after_nether,
+        );
+        assert!(
+            after_nether.len() < before_or_end.len(),
+            "expected fewer visible sections in Nether ({}) than full 12-chunk radius ({})",
+            after_nether.len(),
+            before_or_end.len()
+        );
+        let kept: std::collections::HashSet<_> = after_nether.iter().map(|v| v.key).collect();
+        for v in &before_or_end {
+            if !kept.contains(&v.key) {
+                // Every culled section's nearest point to the camera is past 96-block fog end.
+                let min = Vec3::from(v.origin);
+                let max = min + Vec3::splat(16.0);
+                let nearest = Vec3::ZERO.clamp(min, max).length();
+                assert!(nearest >= 96.0, "culled section {:?} at {nearest}m", v.key);
+            }
+        }
     }
     #[test]
     fn own_fog_and_translucent_fog_keep_the_full_radius() {
