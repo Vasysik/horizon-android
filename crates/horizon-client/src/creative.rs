@@ -97,21 +97,6 @@ pub struct Creative {
     /// item list changes.
     lines_cache: Mutex<Option<(String, Arc<[Vec<String>]>)>>,
 }
-/// A copy fills its grid again when it is first drawn.
-impl Clone for Creative {
-    fn clone(&self) -> Self {
-        Self {
-            tabs: self.tabs.clone(),
-            selected: self.selected,
-            scroll: self.scroll,
-            scrolling: self.scrolling,
-            search: self.search.clone(),
-            search_items: self.search_items.clone(),
-            search_index: self.search_index.clone(),
-            shown: Mutex::new(None),
-        }
-    }
-}
 /// The grid's stacks for one tab, search text and language.
 struct Shown {
     tab: usize,
@@ -534,22 +519,6 @@ impl Creative {
     /// The search tab's stacks.
     pub fn search_items(&self) -> &[ItemStack] {
         &self.search_items
-    }
-    /// Item `index` of what tab `id` lists for `search` (the search tab's matches, in its
-    /// order; the other tabs ignore it), as a mod names it (`creative.click`).
-    pub fn listed(
-        &self,
-        id: &str,
-        search: &str,
-        index: usize,
-        names: &Names,
-    ) -> Option<&ItemStack> {
-        let tab = self.tabs.iter().find(|t| t.id == id)?;
-        if tab.search {
-            let i = *self.search_results(search, names).get(index)?;
-            return self.search_items.get(i);
-        }
-        tab.items.get(index)
     }
     /// Opening the screen: vanilla rebuilds CreativeModeInventoryScreen, whose
     /// init() makes a fresh search box and a zeroed scrollbar; only the tab
@@ -1459,32 +1428,6 @@ mod tests {
         assert_eq!(q("#hoe"), [2]);
         assert_eq!(q("#minecraft:enchantable/"), [2]);
         assert_eq!(q("#craft"), Vec::<usize>::new());
-    }
-
-    #[test]
-    fn a_mods_item_is_the_tabs_or_the_searchs() {
-        let c = creative(0);
-        let names = Names {
-            map: HashMap::new(),
-        };
-        let id = |s: Option<&ItemStack>| s.map(|s| s.item.to_string());
-        let listed = |tab, search, i| id(c.listed(tab, search, i, &names));
-        assert_eq!(
-            listed("minecraft:functional_blocks", "hoe", 1),
-            Some("minecraft:crafting_table".into())
-        );
-        assert_eq!(listed("minecraft:functional_blocks", "", 2), None);
-        assert_eq!(
-            listed("minecraft:search", "hoe", 0),
-            Some("minecraft:wooden_hoe".into())
-        );
-        assert_eq!(listed("minecraft:search", "hoe", 1), None);
-        assert_eq!(
-            listed("minecraft:search", "", 1),
-            Some("minecraft:crafting_table".into())
-        );
-        assert_eq!(listed("minecraft:inventory", "", 0), None);
-        assert_eq!(listed("minecraft:nothing", "", 0), None);
     }
 
     #[test]

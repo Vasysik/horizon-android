@@ -155,6 +155,7 @@ impl Kind {
             // A mount's inventory has no menu type: the server opens it with MountScreenOpen.
             Kind::Mount(_) => "mount",
             Kind::ItemPicker => "creative",
+            Kind::Mod(t) => return t.id.to_owned(),
         };
         format!("minecraft:{name}")
     }

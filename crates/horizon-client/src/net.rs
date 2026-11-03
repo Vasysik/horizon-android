@@ -889,7 +889,7 @@ fn configure(
     send: &Sender<Event>,
     cookies: &Cookies,
     resources: &Path,
-) -> Result<Dynamic, Reason> {
+) -> Result<Result<Dynamic, Reason>, Reason> {
     let mut registries = Dynamic::default();
     let mut content_verified = false;
     let reply = |p: cfg::Serverbound| -> Result<(), Reason> {
@@ -978,9 +978,9 @@ fn configure(
                     host: p.host,
                     port: p.port,
                 });
-                return Err(Reason::keyed("disconnect.transfer", lang));
+                return Ok(Err(Reason::keyed("disconnect.transfer", lang)));
             }
-            cfg::Clientbound::Disconnect(d) => return Err(Reason::tag(&d.reason, lang)),
+            cfg::Clientbound::Disconnect(d) => return Ok(Err(Reason::tag(&d.reason, lang))),
             cfg::Clientbound::FinishConfiguration(_) => {
                 registries.custom_components = content_verified;
                 let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
@@ -988,7 +988,7 @@ fn configure(
                 w.send(&cfg::Serverbound::FinishConfiguration(Empty).encode())
                     .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
                 configuring.store(false, Ordering::Relaxed);
-                return Ok(registries);
+                return Ok(Ok(registries));
             }
             _ => {}
         }

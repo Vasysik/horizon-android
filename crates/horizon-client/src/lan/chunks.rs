@@ -632,7 +632,7 @@ impl ChunkEncoder {
         for state in states {
             let i = state as usize;
             if let (Some(t), Some(f)) = (self.entity_types.get_mut(i), coder.flags.get_mut(i)) {
-                *t = MACHINE_ENTITY_TYPE as i16;
+                *t = MACHINE_ENTITY_TYPE;
                 *f |= ENTITY;
             }
         }

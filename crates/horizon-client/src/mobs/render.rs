@@ -1021,10 +1021,10 @@ fn own_equipment(m: &Mob, layer: &mut Layer, kind: &str, equipment: &crate::equi
         .and_then(|a| equipment.get(&a))
         .and_then(|k| k.get(kind));
     let Some((texture, undyed)) = found else {
-        layer.texture.clear();
+        layer.texture = "".into();
         return;
     };
-    layer.texture = texture.clone();
+    layer.texture = texture.clone().into();
     if let Some(undyed) = undyed {
         layer.color = armor_tint(Some(*undyed), stack.as_ref());
     }
@@ -1060,8 +1060,8 @@ fn humanoid_armor(m: &Mob, v: &mut Vec<Layer>) {
                 "humanoid"
             };
             v.push(Layer {
-                model: format!("{base}#{layer}"),
-                texture: format!("{OWN_EQUIPMENT}{folder}"),
+                model: format!("{base}#{layer}").into(),
+                texture: format!("{OWN_EQUIPMENT}{folder}").into(),
                 color: 0xFFFF_FFFF,
                 full_bright: false,
                 scroll: 0.0,
@@ -2158,7 +2158,7 @@ fn render_visible(
         // colour the layer carries; its animation runs on the mob's age.
         let mut color = layer.color;
         if armor_slot(&layer.model).is_some()
-            && let Some(armor) = armor_atlases.get(&layer.texture)
+            && let Some(armor) = armor_atlases.get(layer.texture.as_ref())
         {
             let c = layer.color;
             let rgb = (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF;

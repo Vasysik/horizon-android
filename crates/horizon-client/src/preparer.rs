@@ -146,6 +146,8 @@ fn run(resources: &Path) -> Result<(), String> {
             minecraft_dir: Some(crate::accounts::files_root()),
             server_jar: Some(server_jar),
             java_home: None,
+            inputs: Default::default(),
+            output: None,
         },
         &|line| {
             log::info!("Horizon: preparing: {line}");
@@ -308,7 +310,10 @@ fn unpack(bytes: &[u8], dir: &Path) -> Result<(), String> {
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let Some(name) = entry.enclosed_name() else {
-            return Err(format!("The app's archive names {}", entry.name()));
+            return Err(format!(
+                "The app's archive names {}",
+                entry.name().map_or_else(|e| e.to_string(), |n| n.into_owned())
+            ));
         };
         let path = dir.join(name);
         if entry.is_dir() {

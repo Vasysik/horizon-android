@@ -727,6 +727,7 @@ impl Mode {
             Self::MultiplayerWarning { .. } => "multiplayer_warning",
             Self::Onboarding(_) => "onboarding",
             Self::BanNotice(_) => "ban_notice",
+            Self::Account => "account",
         }
     }
 }
@@ -2343,6 +2344,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                     ),
                 ),
             ),
+            Mode::Account => ScreenInfo::new("account", "Microsoft Account"),
             Mode::Multiplayer(_) => return None,
         };
         Some(info)

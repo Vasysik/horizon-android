@@ -216,8 +216,6 @@ fn axis_of(v: [i32; 3]) -> usize {
 pub struct KineticTable {
     parts: Vec<Option<Arc<Part>>>,
     machines: Vec<Option<Machine>>,
-    /// The properties of blocks' own their templates do not place, by block (own-states.json).
-    own: HashMap<String, Vec<String>>,
     /// The models the game draws for blocks besides their own, by block (block-models.json).
     models: HashMap<String, Vec<String>>,
 }
@@ -261,10 +259,6 @@ impl KineticTable {
                 });
             }
         }
-        if let Some(bytes) = read(crate::mod_content::OWN_STATES) {
-            out.own = serde_json::from_slice(&bytes)
-                .map_err(|e| format!("{}: {e}", crate::mod_content::OWN_STATES))?;
-        }
         if let Some(bytes) = read(crate::mod_content::BLOCK_MODELS) {
             out.models = serde_json::from_slice(&bytes)
                 .map_err(|e| format!("{}: {e}", crate::mod_content::BLOCK_MODELS))?;
@@ -283,11 +277,6 @@ impl KineticTable {
     }
     pub fn is_empty(&self) -> bool {
         self.parts.iter().all(Option::is_none) && self.machines.iter().all(Option::is_none)
-    }
-    /// The properties of lock's own that the game sets when it is placed (its template
-    /// places the others), if any.
-    pub fn own_placement(&self, block: &str) -> Option<&[String]> {
-        self.own.get(block).map(Vec::as_slice)
     }
     /// The models the game draws for `block` besides its own, in its declared order.
     pub fn block_models(&self, block: &str) -> &[String] {

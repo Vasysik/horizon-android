@@ -16,12 +16,12 @@ pub use horizon_client_render::{
     extras, fast_hash, fog, font, gfx, graphics, graphics_style, graphics_ui, hdr_calibration, hud,
     hud_layout, hud_overlays, inventory_effects, java_text, jigsaw_block, json_folder,
     level_loading, light, lod, logging, menu_blur, mesher, minimap, mipmap, mod_list,
-    model_library, models, multiline_edit, native_emissive, options_file, options_fixes,
-    options_ui, overlay, pack_screen, packs, par, particles, poi_sections, post_chain,
+    model_library, models, multiline_edit, native_emissive, offline_name, options_file, options_fixes,
+    options_ui, overlay, own_skin, pack_screen, packs, par, particles, poi_sections, post_chain,
     potent_sulfur, preedit, providers, screen_draw, screen_effects, sculk, section_mask,
     server_terrain, settings, shader_options, shader_pack_list, signs, skins, sound_engine,
     sound_events, sound_preview, spans, split_layout, split_map, split_profiles, sprites,
-    streaming, structure_block, tab_list, telemetry, test_block, test_instance_block, testgen,
+    streaming, structure_block, system_stats, tab_list, telemetry, test_block, test_instance_block, testgen,
     title_edition, trims, ui, vault, weather, widgets, world, worldborder, zip,
 };
 pub mod attack_strength;
@@ -103,7 +103,6 @@ pub mod native_data;
 pub mod net;
 pub mod nether_portal;
 pub mod no_resources;
-pub mod offline_name;
 pub mod old_world;
 pub mod osk;
 pub mod patrol;

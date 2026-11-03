@@ -54,7 +54,11 @@ pub fn classify(path: &Path) -> (Kind, String) {
     let Some(names) = File::open(path)
         .ok()
         .and_then(|f| zip::ZipArchive::new(f).ok())
-        .map(|a| a.file_names().map(str::to_owned).collect::<Vec<_>>())
+        .map(|a| {
+            a.file_names()
+                .filter_map(|n| n.ok().map(|n| n.into_owned()))
+                .collect::<Vec<_>>()
+        })
     else {
         return (Kind::Unknown, String::new());
     };
