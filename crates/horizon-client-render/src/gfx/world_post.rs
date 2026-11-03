@@ -238,18 +238,10 @@ impl Post {
             ..Default::default()
         });
         Self {
-<<<<<<< HEAD
-            copy: pipeline("fs_copy"),
-            fxaa: pipeline("fs_fxaa"),
-            upscale: (std::env::var("HORIZON_WORLD_UPSCALE").as_deref() != Ok("off"))
-                .then(|| pipeline("fs_upscale")),
-||||||| f8988d5a7
-            copy: pipeline("fs_copy"),
-            fxaa: pipeline("fs_fxaa"),
-=======
             copy: pipeline("fs_copy", &pipeline_layout, format),
             fxaa: pipeline("fs_fxaa", &pipeline_layout, format),
->>>>>>> 31f83499b
+            upscale: (std::env::var("HORIZON_WORLD_UPSCALE").as_deref() != Ok("off"))
+                .then(|| pipeline("fs_upscale", &pipeline_layout, format)),
             layout,
             sampler,
             format,

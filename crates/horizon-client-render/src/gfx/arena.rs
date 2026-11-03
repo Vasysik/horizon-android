@@ -183,20 +183,10 @@ impl Arena {
         usage: wgpu::BufferUsages,
         page_bytes: u64,
     ) -> Self {
-<<<<<<< HEAD
-        // 256 MiB pages, or less where the device's buffers are smaller, or its storage bindings
-        // when shaders read pages whole (a phone's Adreno binds 128 MiB).
-        let limits = device.limits();
-        let mut bytes = limits.max_buffer_size.min(PAGE_BYTES);
-||||||| f8988d5a7
-        // 256 MiB pages, or less where the device's buffers are smaller.
-        let bytes = device.limits().max_buffer_size.min(PAGE_BYTES);
-=======
         // Pages of `page_bytes`, or less where the device's buffers (or the
         // storage bindings that read them whole) are smaller.
         let limits = device.limits();
         let mut bytes = limits.max_buffer_size.min(page_bytes);
->>>>>>> 31f83499b
         if usage.contains(wgpu::BufferUsages::STORAGE) {
             bytes = bytes.min(limits.max_storage_buffer_binding_size);
         }

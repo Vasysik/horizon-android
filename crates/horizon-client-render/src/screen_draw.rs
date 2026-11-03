@@ -555,29 +555,16 @@ pub fn button(
     } else {
         "widget/button"
     };
-<<<<<<< HEAD
     sprite(out, &crate::ui::button_take(sprite_id, x, y), x, y, w, h);
-    let (left, right) = (x + 2, x + w - 2);
-    let lw = m.width(label);
-    let top = (y + y + h - 9) / 2 + 1;
-    let cx = ((left + right) / 2).clamp(left + lw / 2, right - lw / 2);
     // A skin whose pressed buttons turn whiter writes on them in its dark ink, unshadowed.
-    let (color, shadow) = match crate::ui::pressed_label() {
-        Some(rgb) if active && highlighted => ((0xff00_0000 | rgb) as i32, false),
-        _ => (WHITE, true),
+    let label = match crate::ui::pressed_label() {
+        Some(rgb) if active && highlighted => label.clone().with_style(&Style {
+            shadow_color: Some(0),
+            ..Style::color(rgb)
+        }),
+        _ => label.clone(),
     };
-    text(out, label.clone(), center_left(cx, lw), top, color, shadow);
-||||||| f8988d5a7
-    sprite(out, sprite_id, x, y, w, h);
-    let (left, right) = (x + 2, x + w - 2);
-    let lw = m.width(label);
-    let top = (y + y + h - 9) / 2 + 1;
-    let cx = ((left + right) / 2).clamp(left + lw / 2, right - lw / 2);
-    text(out, label.clone(), center_left(cx, lw), top, WHITE, true);
-=======
-    sprite(out, sprite_id, x, y, w, h);
-    scrolling_string_over_contents(out, m, label, x, y, w, h, 2, now_ms);
->>>>>>> 31f83499b
+    scrolling_string_over_contents(out, m, &label, x, y, w, h, 2, now_ms);
 }
 /// `Tooltip.splitTooltip` of a widget's tooltip, shown under the mouse.
 pub fn tooltip(out: &mut Vec<Draw>, m: &Measure, message: &Text, mouse: (i32, i32)) {

@@ -549,33 +549,7 @@ impl Sprites {
             .as_deref()
             .map(AnimationMetadata::from_json)
             .transpose()?;
-<<<<<<< HEAD
-        let mut decoder = png::Decoder::new(BufReader::new(File::open(path)?));
-        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-        // A protected pack's wrong checksums, which Minecraft's STB never checks.
-        decoder.ignore_checksums(true);
-        let mut reader = decoder.read_info()?;
-        let mut bytes = vec![
-            0;
-            reader
-                .output_buffer_size()
-                .ok_or("sprite exceeds decoder limits")?
-        ];
-        let info = reader.next_frame(&mut bytes)?;
-||||||| f8988d5a7
-        let mut decoder = png::Decoder::new(BufReader::new(File::open(path)?));
-        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-        let mut reader = decoder.read_info()?;
-        let mut bytes = vec![
-            0;
-            reader
-                .output_buffer_size()
-                .ok_or("sprite exceeds decoder limits")?
-        ];
-        let info = reader.next_frame(&mut bytes)?;
-=======
         let (png_width, png_height, pixels) = read_rgba(path)?;
->>>>>>> 31f83499b
         let (width, height) = if let Some(animation) = &animation {
             let [width, height] =
                 animation.frame_size(i32::try_from(png_width)?, i32::try_from(png_height)?);

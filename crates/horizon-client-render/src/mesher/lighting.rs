@@ -8,21 +8,8 @@ use horizon_assets::model::Direction as D;
 /// `LightCoordsUtil.FULL_BRIGHT`.
 pub(super) const FULL_BRIGHT: u32 = 0x00F0_00F0;
 
-/// Which face shades the mesh bakes in its vertex colours.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Shading {
-    /// `CardinalLighting.NETHER`: brighter up and down faces.
-    pub(super) nether: bool,
-    /// None: a shader pack shades the faces itself.
-    pub(super) off: bool,
-}
-
 /// `CardinalLighting.DEFAULT`/`NETHER` by face.
-pub(super) fn cardinal(shading: Shading, face: D) -> f32 {
-    if shading.off {
-        return 1.0;
-    }
-    let nether = shading.nether;
+pub(super) fn cardinal(nether: bool, face: D) -> f32 {
     match face {
         D::Down if nether => 0.9,
         D::Up if nether => 0.9,
@@ -454,14 +441,8 @@ mod tests {
         assert_eq!(gray(0.8), 204);
         assert_eq!(scale(255, 0.5), 127);
         assert_eq!(scale(gray(0.6), 0.8), 122);
-        let shading = |nether, off| Shading { nether, off };
-        assert_eq!(cardinal(shading(true, false), D::Down), 0.9);
-        assert_eq!(cardinal(shading(false, false), D::Down), 0.5);
-        // A shader pack that shades faces itself gets none of the game's.
-        for face in [D::Down, D::Up, D::North, D::South, D::West, D::East] {
-            assert_eq!(cardinal(shading(false, true), face), 1.0);
-            assert_eq!(cardinal(shading(true, true), face), 1.0);
-        }
+        assert_eq!(cardinal(true, D::Down), 0.9);
+        assert_eq!(cardinal(false, D::Down), 0.5);
     }
     #[test]
     fn emission_raises_both_channels_and_drops_fractions() {

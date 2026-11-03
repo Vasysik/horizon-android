@@ -33,9 +33,7 @@ pub struct Span {
 pub fn enable(on: bool) {
     ENABLED.store(on, Ordering::Relaxed);
 }
-<<<<<<< HEAD
-/// Whether spans are being recorded (a caller summing many small timings itself).
-#[inline]
+/// Whether spans are being recorded.
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
@@ -43,18 +41,16 @@ pub fn enabled() -> bool {
 /// stands for its CPU time.
 pub fn add(name: &'static str, ms: f32) {
     if enabled() {
+        let depth = DEPTH.with(Cell::get);
         SPANS.with(|s| {
             s.borrow_mut().push(Span {
                 name,
                 ms,
                 cpu_ms: ms,
+                depth,
             })
         });
-||||||| f8988d5a7
-=======
-/// Whether spans are being recorded.
-pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed)
+    }
 }
 /// Record this thread's spans even with spans off, their wall time only (no CPU clock read):
 /// what the render thread's slow frames spent their time in, for the opt-in performance
@@ -75,7 +71,6 @@ fn cpu_if_enabled() -> Option<Duration> {
         thread_cpu()
     } else {
         None
->>>>>>> 31f83499b
     }
 }
 /// Run `f`, recording its duration under `name` when spans are enabled.

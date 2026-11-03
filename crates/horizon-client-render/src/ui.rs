@@ -97,10 +97,6 @@ pub fn pressed_label() -> Option<u32> {
 
 /// Read `gui.scaling` metadata for every GUI sprite under `root`.
 pub fn load_metadata(root: &Path) {
-<<<<<<< HEAD
-    load_skin(root);
-||||||| f8988d5a7
-=======
     set_metadata(read_metadata(root));
 }
 /// The GUI sprites' nine-slice metadata of a resource root, read off the
@@ -113,7 +109,7 @@ pub fn set_metadata(metadata: UiMetadata) {
 }
 /// Reads the metadata [`load_metadata`] puts in use, without putting it in use.
 pub fn read_metadata(root: &Path) -> UiMetadata {
->>>>>>> 31f83499b
+    load_skin(root);
     let mut map = HashMap::new();
     let base = root.join("assets/minecraft/textures");
     let sprites = base.join("gui/sprites");

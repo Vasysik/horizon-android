@@ -249,20 +249,12 @@ fn parse_click_event(e: &serde_json::Map<String, Value>) -> Option<crate::text::
         Some("show_dialog") => e.get("dialog").map(|dialog| {
             crate::text::ClickEvent::ShowDialog(crate::scoreboard::json_to_tag(dialog))
         }),
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        // ClickEvent.Custom.CODEC: an id and an optional payload, sent back as it came.
-        Some("custom") => text("id").map(|id| crate::text::ClickEvent::Custom {
-            id,
-            payload: e.get("payload").map(crate::scoreboard::json_to_tag),
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
         Some("custom") => Some(crate::text::ClickEvent::Custom {
             id: crate::identifier::parse_identifier(&text("id")?)?,
             payload: e
                 .get("payload")
                 .filter(|value| !value.is_null())
                 .map(crate::scoreboard::json_to_tag),
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         }),
         _ => None,
     }

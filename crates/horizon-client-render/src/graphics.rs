@@ -886,16 +886,8 @@ impl Graphics {
         g
     }
     pub fn serialize(&self) -> String {
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nhdrKey:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\nshadersProfile:{}\n",
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nhdrKey:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
-=======
         let mut text = format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nleafCulling:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nhdrKey:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\nbatchTranslucent:{}\n",
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nleafCulling:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiBrightness:{}\nhdrKey:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\nshadersProfile:{}\nbatchTranslucent:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -945,17 +937,12 @@ impl Graphics {
             bool_text(self.shadow_cache),
             self.api.name(),
             self.shader_pack,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
+            self.shader_pack,
             self.shader_profile,
-        )
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        )
-=======
             bool_text(self.translucent_batching),
         );
         text += &self.blue_map.serialize();
         text
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     }
     /// Binds Horizon's graphics key `name` (`HDR_KEY`); false for another name.
     pub fn set_key(&mut self, name: &str, value: String) -> bool {
@@ -1006,22 +993,10 @@ impl Graphics {
         // and render threads are raised above four cores, where vanilla
         // raises its server thread). Leaving two idled a core of a 4-thread
         // laptop while a world loaded: a teleport there took ~15% longer.
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         // A phone leaves two, as Starling was measured with: half its cores are small ones, and
         // a hot phone slows every core down.
         let spare = if cfg!(target_os = "android") { 2 } else { 1 };
-        let auto = std::thread::available_parallelism()
-            .map_or(2, |n| n.get())
-            .saturating_sub(spare)
-            .max(1);
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        let auto = std::thread::available_parallelism()
-            .map_or(2, |n| n.get())
-            .saturating_sub(1)
-            .max(1);
-=======
-        let auto = horizon_threads::worker_count().saturating_sub(1).max(1);
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+        let auto = horizon_threads::worker_count().saturating_sub(spare).max(1);
         if self.battery { auto.div_ceil(2) } else { auto }
     }
     /// The frame cap battery mode adds: 60 in a world, 30 in menus without a

@@ -1348,16 +1348,10 @@ fn pack_coords(coords: u32) -> u16 {
 pub struct Mesher<'a> {
     /// CardinalLighting.NETHER: brighter up/down faces.
     pub nether_shading: bool,
-<<<<<<< HEAD
-    /// A shader pack shades the faces itself: none of the game's in the vertex colours.
-    pub pack_shades_faces: bool,
-||||||| f8988d5a7
-=======
     /// A shader pack lights the faces (its `oldLighting` off): no face shading in the colours.
     pub shader_pack_lighting: bool,
     /// OptiFine/Iris separate ambient occlusion: vertex RGB does not include AO, and AO factor is passed in vertex alpha.
     pub separate_ao: bool,
->>>>>>> 31f83499b
     pub assets: &'a Assets,
     pub render: &'a RenderAssets,
     pub tables: &'a MeshTables,
@@ -1377,12 +1371,6 @@ pub struct Mesher<'a> {
     pub leaf_culling: LeafCullingMode,
 }
 impl Mesher<'_> {
-    fn shading(&self) -> lighting::Shading {
-        lighting::Shading {
-            nether: self.nether_shading,
-            off: self.pack_shades_faces,
-        }
-    }
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
     pub fn mesh(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> SectionMesh {
         self.mesh_reusing(
@@ -1451,20 +1439,12 @@ impl Mesher<'_> {
                     }
                     if state.fluid.kind() != FluidKind::Empty {
                         let water = tints.get(Resolver::Water, x, y, z);
-<<<<<<< HEAD
-                        let shading = self.shading();
-                        fluid::tesselate(self.tables, shading, &pad, water, &mut out, [x, y, z]);
-||||||| f8988d5a7
-                        let nether = self.nether_shading;
-                        fluid::tesselate(self.tables, nether, &pad, water, &mut out, [x, y, z]);
-=======
                         let shade = (
                             self.nether_shading,
                             self.shader_pack_lighting,
                             self.separate_ao,
                         );
                         fluid::tesselate(self.tables, shade, pad, water, &mut out, [x, y, z]);
->>>>>>> 31f83499b
                     }
                     if !state.model {
                         continue;
@@ -1606,15 +1586,6 @@ impl Mesher<'_> {
         // shines all over stays the block's.
         let tier = (state.tier & !WHOLE).max(hdr_tier("", q.light_emission)) | state.tier & WHOLE;
         let shade_face = q.shade_direction_override.unwrap_or(q.facing);
-<<<<<<< HEAD
-        let directional = lighting::cardinal(self.shading(), shade_face);
-        // Grey level per vertex before tinting, and vanilla light coords.
-        let (gray, coords) = if ao {
-||||||| f8988d5a7
-        let directional = lighting::cardinal(self.nether_shading, shade_face);
-        // Grey level per vertex before tinting, and vanilla light coords.
-        let (gray, coords) = if ao {
-=======
         let directional = if self.shader_pack_lighting {
             1.0
         } else {
@@ -1622,7 +1593,6 @@ impl Mesher<'_> {
         };
         // Grey level per vertex before tinting, vanilla light coords, and ambient occlusion factor.
         let (gray, coords, ao_factor) = if ao {
->>>>>>> 31f83499b
             let info = &self.tables.info;
             let (brightness, coords) =
                 lighting::ambient_occlusion(pad, info, state, pos, &q.positions, q.facing);

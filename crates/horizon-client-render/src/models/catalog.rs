@@ -55,19 +55,14 @@ pub struct StateModels {
     states: Vec<Option<(usize, SelectedModels)>>,
     /// Every transformed model once, with the variant it was baked from.
     baked: Vec<(Variant, BakedModel)>,
-<<<<<<< HEAD
     /// The kinetic parts' models no blockstate names, by model and turns: their place in `baked`.
     partials: BTreeMap<VariantKey, u32>,
-||||||| f8988d5a7
-=======
     /// Standalone models by id: their index in `baked`.
     standalone: BTreeMap<String, u32>,
->>>>>>> 31f83499b
 }
 fn key(variant: &Variant) -> VariantKey {
     (variant.model.clone(), variant.rotations, variant.uv_lock)
 }
-<<<<<<< HEAD
 /// The models the kinetic blocks of a content root turn or move besides their own (`half`,
 /// `extra`, `head`, `pole` and `models` in its kinetic.json, which horizon-client's mod_content
 /// writes); none for vanilla's.
@@ -92,8 +87,7 @@ fn partial_models(root: &Path) -> BTreeSet<String> {
         out.extend(blocks.into_values().flatten());
     }
     out
-||||||| f8988d5a7
-=======
+}
 /// Bakes model `name` of `library`, turned and UV-locked as a variant says.
 fn bake_variant(
     root: &Path,
@@ -166,7 +160,6 @@ fn topmost(layers: Vec<Vec<Option<SelectedModels>>>) -> Vec<Option<(usize, Selec
         }
     }
     picked
->>>>>>> 31f83499b
 }
 impl StateModels {
     pub fn load(
@@ -397,22 +390,16 @@ impl StateModels {
             choices,
             states,
             baked,
-<<<<<<< HEAD
             partials,
-||||||| f8988d5a7
-=======
             standalone: BTreeMap::new(),
->>>>>>> 31f83499b
         })
     }
-<<<<<<< HEAD
     /// A kinetic part's model no blockstate names, baked at these quarter turns about x and y
     /// (z 0).
     pub fn partial(&self, model: &str, turns: [u8; 3]) -> Option<&BakedModel> {
         let i = self.partials.get(&(model.to_owned(), turns, false))?;
         Some(&self.baked[*i as usize].1)
-||||||| f8988d5a7
-=======
+    }
     /// Bakes `names`, models no blockstate needs to name (vanilla's
     /// standalone models, NeoForge's `ModelEvent.RegisterStandalone`), as
     /// they are, unturned, for [`Self::standalone`]. One a block state
@@ -467,7 +454,6 @@ impl StateModels {
     pub fn standalone(&self, name: &str) -> Option<&BakedModel> {
         let &i = self.standalone.get(name)?;
         Some(&self.baked[i as usize].1)
->>>>>>> 31f83499b
     }
     pub fn collect(
         &self,

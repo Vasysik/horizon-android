@@ -1468,7 +1468,9 @@ pub enum Page {
     /// Horizon's shader packs, either kind (`shader_pack_list`): one on or none, and a
     /// `shaders/` pack's profile.
     ShaderPacks,
-<<<<<<< HEAD
+    /// The options of `s.shader_packs[.0]`, a Horizon pack: its `[[pages]]` entry `.1`, the
+    /// first the one the button opens.
+    NativePackOptions(usize, u8),
     /// The picked `shaders/` pack's options (`shader_options`), one of its screens at a time.
     ShaderOptions,
     /// The player's own touch buttons (`Settings::custom_buttons`), and what one of them does.
@@ -1477,14 +1479,6 @@ pub enum Page {
     CustomPick(u32, CustomPick),
     /// Drawing a custom button's own image.
     CustomDraw(u32),
-||||||| f8988d5a7
-=======
-    /// The options of `s.shader_packs[.0]`, a Horizon pack: its `[[pages]]` entry `.1`, the
-    /// first the one the button opens.
-    NativePackOptions(usize, u8),
-    /// The picked `shaders/` pack's options (`shader_options`), one of its screens at a time.
-    ShaderOptions,
->>>>>>> 31f83499b
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
@@ -1532,10 +1526,9 @@ enum Act {
     ToggleMod(usize),
     /// Pick `s.shader_packs[i]`, or turn it off when it is the pick (None: Off).
     PickShaderPack(Option<usize>),
-    /// The next profile of the chosen pack.
-    ShaderProfile,
+    /// The next profile of the chosen pack, on the Shader Packs page.
+    PackProfile,
     OpenShaderPackFolder,
-<<<<<<< HEAD
     /// The next of the resolutions the Shader Packs page offers.
     ShaderResolution,
     /// The next of the frame limits the Shader Packs page offers.
@@ -1554,24 +1547,6 @@ enum Act {
     CanvasClear,
     CanvasPlate,
     CanvasImport(u32),
-    /// Open the Shader Options page.
-    ShaderOptions,
-    /// A pack's option, its next value.
-    ShaderOption(String),
-    /// One of the pack's screens.
-    ShaderScreen(String),
-    /// The next of the profiles on the pack's own screen.
-    ShaderOptionsProfile,
-    /// All the pack's options back at what the profile says.
-    ShaderReset,
-    /// The mod's settings screen (`screens.set-config`, Mod Menu's config button).
-    ModConfig(usize),
-    /// The installed mod's own settings page (capability `ui`), shown as a
-    /// screen: `Event::ModSettings` has the game open it.
-||||||| f8988d5a7
-    /// The installed mod's own settings page (capability `ui`), shown as a
-    /// screen: `Event::ModSettings` has the game open it.
-=======
     /// Open the picked pack's Shader Options page.
     ShaderOptions,
     /// Open the options page of the Horizon pack `s.shader_packs[.0]`.
@@ -1587,7 +1562,6 @@ enum Act {
     ShaderProfile,
     ShaderReset,
     /// The installed native mod's settings page.
->>>>>>> 31f83499b
     ModSettings(usize),
     /// A native mod's key (mod, key) waits for a key; a button of its page.
     NativeKey(usize, usize),
@@ -1598,7 +1572,6 @@ enum Act {
     /// Credits & Attribution's Credits button (WinScreen without the poem).
     Credits,
     CopyAgentDetails,
-<<<<<<< HEAD
     /// Skin Customization: the next skin of `skins/`, the other model, the system's file picker
     /// (phones), the folder, Ely.by's skins.
     NextSkin,
@@ -1606,8 +1579,6 @@ enum Act {
     PickSkin,
     OpenSkinFolder,
     ElyBySkins,
-||||||| f8988d5a7
-=======
     /// AI Agent: start or stop the repro recording.
     ToggleRecording,
     /// AI Agent: write the repro bundle now.
@@ -1616,7 +1587,6 @@ enum Act {
     PlayMusicTrack(String, String),
     /// The Music page: turn this track off, or back on.
     MusicTrackOn(String, bool),
->>>>>>> 31f83499b
 }
 enum WKind {
     Button {
@@ -1631,12 +1601,7 @@ enum WKind {
         value: f32,
         opt: Opt,
     },
-<<<<<<< HEAD
-    /// A pack's option shown as a slider (`sliders=`): its place in its list of values.
-||||||| f8988d5a7
-=======
     /// An option of a shader pack the pack shows as a slider: its value's place in its list.
->>>>>>> 31f83499b
     ShaderSlider {
         label: Text,
         value: f32,
@@ -1729,8 +1694,6 @@ pub enum Event {
     /// Data Packs' Open Pack Folder: create the folder if needed and open it.
     OpenDataPackFolder(std::path::PathBuf),
     OpenModFolder,
-    /// Open mod `i`'s settings screen (`screens.set-config`) over the Mods page.
-    ModConfig(usize),
     /// The Shader Packs page opened: list `shaderpacks/` into `shader_packs`.
     ListShaderPacks,
     /// A shader pack or its profile was picked, or the pack turned off: save and apply it.
@@ -1833,17 +1796,11 @@ pub struct OptionsUi {
     pub stack: Vec<Page>,
     scroll: f32,
     pub(crate) dragging: Option<Opt>,
-<<<<<<< HEAD
-    /// The pack's option slider held, and where the finger holds it.
-    shader_dragging: Option<(String, f32)>,
-||||||| f8988d5a7
-=======
     /// The shader pack option whose slider is held, and the handle's own position: it follows
     /// the pointer while the option takes the nearest of its values.
     shader_dragging: Option<(String, f32)>,
     /// Shift is held during the click (it resets a shader pack option to its default).
     pub shift: bool,
->>>>>>> 31f83499b
     /// The pressed slider's own position (`AbstractSliderButton.value`) and
     /// when it last moved: the handle follows the pointer while the option
     /// keeps its stepped value, then snaps to it (`resetValue`).
@@ -1900,7 +1857,28 @@ pub struct OptionsUi {
     pub split_setup: crate::split_ui::SplitUi,
     /// The AI Agent page's status lines (set by the game while it shows).
     pub agent_status: Vec<String>,
-<<<<<<< HEAD
+    /// A repro recording is running: the AI Agent page's button says stop.
+    pub agent_recording: bool,
+    /// The Music page's groups (set by the game when it opens the page).
+    pub music_groups: Vec<MusicGroup>,
+    /// Keyboard focus: the interactive target currently focused.
+    focus: Option<FocusId>,
+    /// The focus came from keyboard or pad navigation, so the mouse wheel steps it
+    /// from anywhere (`wheel`). A click focuses its widget too, for the highlight,
+    /// but vanilla's wheel ignores that: only the hovered widget then reacts.
+    focus_from_keyboard: bool,
+    /// Whether a focused slider is in value-editing mode (`AbstractSliderButton.canChangeValue`).
+    pub(crate) can_change_value: bool,
+    /// The current GUI size (w, h).
+    pub size: (f32, f32),
+    /// The current window framebuffer dimensions [w, h].
+    pub framebuffer: [i32; 2],
+    /// Splitscreen: another player's options. Language and resource packs are the whole
+    /// process's (every player's text and textures), so they're P1's to change.
+    pub split_guest: bool,
+    /// The list's rows as last laid out: each row's top and bottom (GUI
+    /// pixels), for the narration's row under the mouse.
+    row_bands: Vec<[f32; 2]>,
     /// The Shader Packs page's chosen pack's profiles ("" first: its defaults).
     shader_profiles: Vec<String>,
     /// Whether Options opens Skin Customization: the game's options do; the menus before the
@@ -1942,31 +1920,6 @@ impl Default for SkinPage {
             actions: Vec::new(),
         }
     }
-||||||| f8988d5a7
-=======
-    /// A repro recording is running: the AI Agent page's button says stop.
-    pub agent_recording: bool,
-    /// The Music page's groups (set by the game when it opens the page).
-    pub music_groups: Vec<MusicGroup>,
-    /// Keyboard focus: the interactive target currently focused.
-    focus: Option<FocusId>,
-    /// The focus came from keyboard or pad navigation, so the mouse wheel steps it
-    /// from anywhere (`wheel`). A click focuses its widget too, for the highlight,
-    /// but vanilla's wheel ignores that: only the hovered widget then reacts.
-    focus_from_keyboard: bool,
-    /// Whether a focused slider is in value-editing mode (`AbstractSliderButton.canChangeValue`).
-    pub(crate) can_change_value: bool,
-    /// The current GUI size (w, h).
-    pub size: (f32, f32),
-    /// The current window framebuffer dimensions [w, h].
-    pub framebuffer: [i32; 2],
-    /// Splitscreen: another player's options. Language and resource packs are the whole
-    /// process's (every player's text and textures), so they're P1's to change.
-    pub split_guest: bool,
-    /// The list's rows as last laid out: each row's top and bottom (GUI
-    /// pixels), for the narration's row under the mouse.
-    row_bands: Vec<[f32; 2]>,
->>>>>>> 31f83499b
 }
 impl Default for OptionsUi {
     fn default() -> Self {
@@ -1982,11 +1935,7 @@ impl Default for OptionsUi {
             scroll: 0.0,
             dragging: None,
             shader_dragging: None,
-<<<<<<< HEAD
-||||||| f8988d5a7
-=======
             shift: false,
->>>>>>> 31f83499b
             slider_value: None,
             scrollbar_drag_y: None,
             selected_key: None,
@@ -2017,12 +1966,6 @@ impl Default for OptionsUi {
             calibration_fullscreen: None,
             split_setup: Default::default(),
             agent_status: Vec::new(),
-<<<<<<< HEAD
-            shader_profiles: Vec::new(),
-            skin_page: false,
-            skin: SkinPage::default(),
-||||||| f8988d5a7
-=======
             agent_recording: false,
             music_groups: Vec::new(),
             focus: None,
@@ -2032,7 +1975,9 @@ impl Default for OptionsUi {
             framebuffer: [1280, 720],
             split_guest: false,
             row_bands: Vec::new(),
->>>>>>> 31f83499b
+            shader_profiles: Vec::new(),
+            skin_page: false,
+            skin: SkinPage::default(),
         }
     }
 }
@@ -2102,68 +2047,6 @@ fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
         _ => return None,
     })
 }
-<<<<<<< HEAD
-/// The open screen of the picked pack: its title, then its items, one to a row on a phone, where
-/// long names fit and a finger finds them, else as the pack lays them out.
-fn shader_option_rows(s: &Settings) -> Vec<Row> {
-    let Some(options) = &s.shader_options else {
-        return vec![Row::Header("Reading the shader pack's options...")];
-    };
-    let columns = if cfg!(target_os = "android") {
-        1
-    } else {
-        options
-            .screens
-            .screen(options.screen())
-            .map_or(2, |(_, c)| c)
-    };
-    let width = if columns == 1 { 310.0 } else { 150.0 };
-    let widget = |item: &horizon_shaders::ScreenItem| -> Option<Widget> {
-        use horizon_shaders::ScreenItem;
-        Some(match item {
-            ScreenItem::Empty if columns != 2 => return None,
-            ScreenItem::Empty => Widget {
-                x: 0.0,
-                y: 0.0,
-                w: 150.0,
-                h: 20.0,
-                kind: WKind::Text {
-                    text: Text::literal(""),
-                    color: 0,
-                    centered: false,
-                },
-                list: false,
-            },
-            ScreenItem::Profile => button(
-                0.0,
-                0.0,
-                width,
-                options.profile_label(),
-                Act::ShaderOptionsProfile,
-            ),
-            ScreenItem::Screen(name) => button(
-                0.0,
-                0.0,
-                width,
-                options.screen_label(name),
-                Act::ShaderScreen(name.clone()),
-            ),
-            ScreenItem::Option(name) => match options.slider_position(name) {
-                Some(value) => Widget {
-                    x: 0.0,
-                    y: 0.0,
-                    w: width,
-                    h: 20.0,
-                    kind: WKind::ShaderSlider {
-                        label: options.option_label(name),
-                        value,
-                        name: name.clone(),
-                    },
-                    list: false,
-||||||| f8988d5a7
-=======
-/// The open screen of the picked pack: its title, then its items two to a row (one when the
-/// pack asks for a single column).
 /// A list's slot with nothing in it: text takes no clicks.
 fn blank_slot(w: f32) -> Widget {
     Widget {
@@ -2218,20 +2101,26 @@ fn native_pack_option_rows(s: &Settings, i: usize, at: u8) -> Vec<Row> {
     );
     rows
 }
+/// The open screen of the picked pack: its title, then its items, one to a row on a phone, where
+/// long names fit and a finger finds them, else as the pack lays them out.
 fn shader_option_rows(s: &Settings) -> Vec<Row> {
     let Some(options) = &s.shader_options else {
         return vec![Row::Header("horizon.shader_options.loading")];
     };
-    let columns = options
-        .screens
-        .screen(options.screen())
-        .map_or(2, |(_, c)| c);
+    let columns = if cfg!(target_os = "android") {
+        1
+    } else {
+        options
+            .screens
+            .screen(options.screen())
+            .map_or(2, |(_, c)| c)
+    };
     let blank = || blank_slot(150.0);
     let width = if columns == 1 { 310.0 } else { 150.0 };
     let widget = |item: &horizon_shaders::ScreenItem| -> Option<Widget> {
         use horizon_shaders::ScreenItem;
         Some(match item {
-            ScreenItem::Empty if columns > 2 => return None,
+            ScreenItem::Empty if columns > 2 || cfg!(target_os = "android") => return None,
             ScreenItem::Empty => blank(),
             ScreenItem::Profile => {
                 button(0.0, 0.0, width, options.profile_label(), Act::ShaderProfile)
@@ -2256,7 +2145,6 @@ fn shader_option_rows(s: &Settings) -> Vec<Row> {
                     },
                     list: false,
                     row: 0,
->>>>>>> 31f83499b
                 },
                 None => button(
                     0.0,
@@ -2518,7 +2406,6 @@ impl OptionsUi {
         self.settings_search.focused
             && matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds)
     }
-<<<<<<< HEAD
     /// Whether a text field shown now has the focus: the language and settings searches, the
     /// pack search, or Skin Customization's name.
     pub fn text_focused(&self) -> bool {
@@ -2589,8 +2476,7 @@ impl OptionsUi {
             page.saved
         ));
         page.name.set_value(&page.saved);
-||||||| f8988d5a7
-=======
+    }
     /// Whether the resource pack screen is open (not Create World's data packs on the same
     /// page).
     pub fn resource_packs_open(&self) -> bool {
@@ -2607,7 +2493,6 @@ impl OptionsUi {
             self.pack_reselected = true;
         }
         self.pack_infos = infos;
->>>>>>> 31f83499b
     }
     pub fn page(&self) -> Page {
         *self.stack.last().unwrap_or(&Page::Main)
@@ -2801,33 +2686,18 @@ impl OptionsUi {
             Page::Packs => "resourcePack.title",
             Page::Mods => "horizon.pages.mods",
             Page::NativeMod(_) => "Mod Settings",
-<<<<<<< HEAD
-            Page::ShaderPacks => "Shader Packs",
-            Page::ShaderOptions => "Shader Options",
+            Page::ShaderPacks => "horizon.pages.shader_packs",
+            Page::ShaderOptions | Page::NativePackOptions(..) => "horizon.pages.shader_options",
             Page::CustomButtons
             | Page::CustomButton(_)
             | Page::CustomPick(..)
             | Page::CustomDraw(_) => "Custom Buttons",
-            Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
-            Page::Controller => "Controller Settings",
-            Page::PadBinds => "Controller Binds",
-            Page::Extras => "Horizon Extras",
-||||||| f8988d5a7
-            Page::ShaderPacks => "Shader Packs",
-            Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
-            Page::Controller => "Controller Settings",
-            Page::PadBinds => "Controller Binds",
-            Page::Extras => "Horizon Extras",
-=======
-            Page::ShaderPacks => "horizon.pages.shader_packs",
-            Page::ShaderOptions | Page::NativePackOptions(..) => "horizon.pages.shader_options",
             Page::Graphics | Page::GraphicsAdvanced | Page::GraphicsHdr | Page::HdrCalibration => {
                 "options.videoTitle"
             }
             Page::Controller => "horizon.pages.controller",
             Page::PadBinds => "horizon.pages.controller_binds",
             Page::Extras => "horizon.pages.extras",
->>>>>>> 31f83499b
             Page::Credits => "credits_and_attribution.screen.title",
             Page::Horizon => "horizon.pages.settings",
             Page::Agent => "horizon.pages.agent",
@@ -3006,8 +2876,7 @@ impl OptionsUi {
                         let ai = if s.extras.no_ai {
                             self.extra_button(s, crate::extras::Item::NoAi)
                         } else {
-<<<<<<< HEAD
-                            open("AI Agent...", Page::Agent)
+                            open("horizon.pages.open.agent", Page::Agent)
                         };
                         // A phone has no Discord client to show the game in.
                         if cfg!(target_os = "android") {
@@ -3019,15 +2888,6 @@ impl OptionsUi {
                             )
                         }
                     },
-||||||| f8988d5a7
-                            open("AI Agent...", Page::Agent)
-                        }),
-                    ),
-=======
-                            open("horizon.pages.open.agent", Page::Agent)
-                        }),
-                    ),
->>>>>>> 31f83499b
                 ]
                 .into_iter()
                 .chain(
@@ -3202,7 +3062,6 @@ impl OptionsUi {
                     None,
                 ));
                 rows.push(Row::Header("options.video.display.header"));
-<<<<<<< HEAD
                 // A phone's app always fills its screen.
                 let display: &[Opt] = if cfg!(target_os = "android") {
                     &[
@@ -3213,38 +3072,19 @@ impl OptionsUi {
                         Opt::Gamma,
                     ]
                 } else {
+                    rows.push(Row::Big(Opt::ExclusiveMode));
                     &[
                         Opt::MaxFps,
                         Opt::Vsync,
                         Opt::InactivityFps,
                         Opt::GuiScale,
                         Opt::Fullscreen,
+                        Opt::ExclusiveFullscreen,
                         Opt::Gamma,
+                        Opt::GraphicsBackend,
                     ]
                 };
                 rows.extend(pairs(display));
-||||||| f8988d5a7
-                rows.extend(pairs(&[
-                    Opt::MaxFps,
-                    Opt::Vsync,
-                    Opt::InactivityFps,
-                    Opt::GuiScale,
-                    Opt::Fullscreen,
-                    Opt::Gamma,
-                ]));
-=======
-                rows.push(Row::Big(Opt::ExclusiveMode));
-                rows.extend(pairs(&[
-                    Opt::MaxFps,
-                    Opt::Vsync,
-                    Opt::InactivityFps,
-                    Opt::GuiScale,
-                    Opt::Fullscreen,
-                    Opt::ExclusiveFullscreen,
-                    Opt::Gamma,
-                    Opt::GraphicsBackend,
-                ]));
->>>>>>> 31f83499b
                 rows.push(Row::Header("options.video.quality.header"));
                 rows.push(Row::Big(Opt::Preset));
                 rows.extend(pairs(&[
@@ -3485,83 +3325,6 @@ impl OptionsUi {
                 if s.mods.installed.is_empty() {
                     return vec![Row::Header("horizon.mods.empty")];
                 }
-<<<<<<< HEAD
-                // Each mod: its switch (and its settings: Mod Menu's config button, or the page
-                // of a mod with capability `ui` or of a native mod), then what it is, readable
-                // without a mouse to hover.
-                let mut rows = Vec::new();
-                for (i, installed) in s.mods.installed.iter().enumerate() {
-                    let mut label = Text::literal(format!("{}: ", installed.title))
-                        .append(on_off(s.mods.is_on(i)));
-                    if installed.problem.is_some() {
-                        label = label.append(" (Stopped)");
-                    } else if installed.dev {
-                        label = label.append(" (Dev)");
-                    }
-                    let dead = installed.dev || installed.id.is_empty();
-                    let (width, side) = if installed.config.is_some() {
-                        let config =
-                            button(0.0, 0.0, 64.0, Text::literal("Config"), Act::ModConfig(i));
-                        (236.0, Some(config))
-                    } else if installed.has_settings || installed.native.is_some() {
-                        let settings = button(
-                            0.0,
-                            0.0,
-                            150.0,
-                            Text::literal("Settings"),
-                            Act::ModSettings(i),
-                        );
-                        (150.0, Some(settings))
-                    } else {
-                        (310.0, None)
-                    };
-                    let widget = button(0.0, 0.0, width, label, Act::ToggleMod(i));
-                    rows.push(Row::Buttons(
-                        if dead { inactive(widget) } else { widget },
-                        side,
-                    ));
-                    let about = installed.problem.as_deref().unwrap_or(&installed.summary);
-                    if !about.is_empty() {
-                        rows.push(Row::About(clipped(about, 52)));
-                    }
-                }
-                rows
-||||||| f8988d5a7
-                s.mods
-                    .installed
-                    .iter()
-                    .enumerate()
-                    .map(|(i, installed)| {
-                        let mut label = Text::literal(format!("{}: ", installed.title))
-                            .append(on_off(s.mods.is_on(i)));
-                        if installed.problem.is_some() {
-                            label = label.append(" (Stopped)");
-                        } else if installed.dev {
-                            label = label.append(" (Dev)");
-                        }
-                        let dead = installed.dev || installed.id.is_empty();
-                        // A running mod with a settings page (capability
-                        // `ui`) gets its own button beside the toggle.
-                        if installed.has_settings || installed.native.is_some() {
-                            let toggle = button(0.0, 0.0, 150.0, label, Act::ToggleMod(i));
-                            let settings = button(
-                                0.0,
-                                0.0,
-                                150.0,
-                                Text::literal("Settings"),
-                                Act::ModSettings(i),
-                            );
-                            Row::Buttons(
-                                if dead { inactive(toggle) } else { toggle },
-                                Some(settings),
-                            )
-                        } else {
-                            let widget = button(0.0, 0.0, 310.0, label, Act::ToggleMod(i));
-                            Row::Buttons(if dead { inactive(widget) } else { widget }, None)
-                        }
-                    })
-                    .collect()
-=======
                 s.mods
                     .installed
                     .iter()
@@ -3601,11 +3364,9 @@ impl OptionsUi {
                         }
                     })
                     .collect()
->>>>>>> 31f83499b
             }
             Page::NativeMod(i) => self.native_rows(s, i),
             Page::ShaderPacks => {
-<<<<<<< HEAD
                 use crate::shader_pack_list::Kind as PackKind;
                 let choice = s.horizon.shader_choice();
                 let pick = |on: bool, name: &str, act: Act| {
@@ -3650,71 +3411,35 @@ impl OptionsUi {
                             Act::ShaderFpsLimit,
                         )),
                     ));
-                    // Profiles are a `shaders/` pack's; Horizon's own have none.
-                    if !s
+                    // Profiles are a `shaders/` pack's; a Horizon pack has its own options page.
+                    let horizon = s
                         .shader_packs
                         .iter()
-                        .any(|p| p.file == *pack && p.kind == PackKind::Horizon)
-                    {
+                        .position(|p| p.file == *pack && p.kind == PackKind::Horizon);
+                    if let Some(i) = horizon.filter(|&i| !s.shader_packs[i].options.is_empty()) {
+                        let label = tr("horizon.shader_options.open");
+                        let act = Act::NativePackOptions(i);
+                        rows.push(Row::Buttons(button(0.0, 0.0, 310.0, label, act), None));
+                    }
+                    if horizon.is_none() {
                         let shown = match profile.as_str() {
                             "" => "Pack Default",
                             crate::graphics::AUTO_PROFILE => "Auto",
                             profile => profile,
-||||||| f8988d5a7
-                if s.shader_packs.is_empty() {
-                    return vec![Row::Header(
-                        "No shader packs: put them in the shaderpacks folder",
-                    )];
-                }
-                s.shader_packs
-                    .iter()
-                    .enumerate()
-                    .map(|(i, pack)| {
-                        let kind = match pack.kind {
-                            crate::shader_pack_list::Kind::Horizon => " (Horizon)",
-                            crate::shader_pack_list::Kind::Classic => "",
-=======
-                if s.shader_packs.is_empty() {
-                    return vec![Row::Header("horizon.shader_packs.empty")];
-                }
-                let picked = s
-                    .shader_packs
-                    .iter()
-                    .position(|p| p.file == s.horizon.shader_pack);
-                let options = picked.and_then(|i| {
-                    let pack = &s.shader_packs[i];
-                    let act = match pack.kind {
-                        crate::shader_pack_list::Kind::Classic => Act::ShaderOptions,
-                        _ if pack.options.is_empty() => return None,
-                        crate::shader_pack_list::Kind::Horizon => Act::NativePackOptions(i),
-                    };
-                    let label = tr("horizon.shader_options.open");
-                    Some(Row::Buttons(button(0.0, 0.0, 310.0, label, act), None))
-                });
-                options
-                    .into_iter()
-                    .chain(s.shader_packs.iter().enumerate().map(|(i, pack)| {
-                        let kind = match pack.kind {
-                            crate::shader_pack_list::Kind::Horizon => {
-                                lang::get("horizon.shader_packs.kind_horizon")
-                            }
-                            crate::shader_pack_list::Kind::Classic => String::new(),
->>>>>>> 31f83499b
                         };
-<<<<<<< HEAD
                         rows.push(Row::Buttons(
                             button(
                                 0.0,
                                 0.0,
                                 150.0,
                                 Text::literal(format!("Profile: {shown}")),
-                                Act::ShaderProfile,
+                                Act::PackProfile,
                             ),
                             Some(button(
                                 0.0,
                                 0.0,
                                 150.0,
-                                Text::literal("Shader Options..."),
+                                tr("horizon.shader_options.open"),
                                 Act::ShaderOptions,
                             )),
                         ));
@@ -3727,13 +3452,17 @@ impl OptionsUi {
                 rows.push(pick(choice.is_none(), "Off", Act::PickShaderPack(None)));
                 if s.shader_packs.is_empty() {
                     rows.push(Row::Header(
-                        "No shader packs: put them in the shaderpacks folder",
+                        "horizon.shader_packs.empty",
                     ));
                 }
                 for (i, pack) in s.shader_packs.iter().enumerate() {
                     let on = choice.as_ref().is_some_and(|(p, _)| *p == pack.file);
                     let name = match pack.kind {
-                        PackKind::Horizon => format!("{} (Horizon)", pack.title),
+                        PackKind::Horizon => format!(
+                            "{}{}",
+                            pack.title,
+                            lang::get("horizon.shader_packs.kind_horizon")
+                        ),
                         PackKind::Classic => pack.title.clone(),
                     };
                     rows.push(pick(on, &name, Act::PickShaderPack(Some(i))));
@@ -3741,6 +3470,7 @@ impl OptionsUi {
                 rows
             }
             Page::ShaderOptions => shader_option_rows(s),
+            Page::NativePackOptions(i, at) => native_pack_option_rows(s, i, at),
             Page::CustomButtons => {
                 let mut rows = vec![Row::Note(
                     "Buttons of your own: place them in Touch Controls".into(),
@@ -3842,20 +3572,8 @@ impl OptionsUi {
                             None,
                         )
                     })
-||||||| f8988d5a7
-                        let label = Text::literal(format!("{}{kind}: ", pack.title))
-                            .append(on_off(s.horizon.shader_pack == pack.file));
-                        Row::Buttons(button(0.0, 0.0, 310.0, label, Act::PickShaderPack(i)), None)
-                    })
-=======
-                        let label = Text::literal(format!("{}{kind}: ", pack.title))
-                            .append(on_off(s.horizon.shader_pack == pack.file));
-                        Row::Buttons(button(0.0, 0.0, 310.0, label, Act::PickShaderPack(i)), None)
-                    }))
->>>>>>> 31f83499b
                     .collect()
             }
-<<<<<<< HEAD
             Page::CustomPick(id, CustomPick::Keyboard) => keybinds::keyboard_keys()
                 .chunks(2)
                 .map(|pair| {
@@ -3899,18 +3617,12 @@ impl OptionsUi {
                 }
                 rows
             }
-||||||| f8988d5a7
-=======
-            Page::ShaderOptions => shader_option_rows(s),
-            Page::NativePackOptions(i, at) => native_pack_option_rows(s, i, at),
->>>>>>> 31f83499b
             _ => {
                 let _ = s;
                 Vec::new()
             }
         }
     }
-<<<<<<< HEAD
     /// The chosen pack's profiles (`profile.<name>` in its shaders.properties, in
     /// `shaderpacks/` beside `options.txt`), for the Shader Packs page.
     fn refresh_shader_profiles(&mut self, s: &Settings) {
@@ -3935,8 +3647,7 @@ impl OptionsUi {
                     .filter_map(|e| e.key.strip_prefix("profile.").map(str::to_owned)),
             );
         }
-||||||| f8988d5a7
-=======
+    }
     /// A section heading of a list (`Row::Header`, `Row::Heading`), at `y`.
     fn heading_row(&self, out: &mut Vec<Widget>, label: Text, y: &mut f32, w: f32, top: f32) {
         let padding = if *y + self.scroll <= top + 2.0 {
@@ -3963,7 +3674,6 @@ impl OptionsUi {
             row: 0,
         });
         *y += padding + 18.0;
->>>>>>> 31f83499b
     }
     /// Build every widget of the current page.
     fn layout(&mut self, s: &Settings, w: f32, h: f32) -> (Vec<Widget>, f32, f32, f32) {
@@ -4483,6 +4193,7 @@ impl OptionsUi {
                                     centered: false,
                                 },
                                 list: false,
+                                row: 0,
                             });
                             y += 13.0;
                         }
@@ -4498,6 +4209,7 @@ impl OptionsUi {
                                     centered: false,
                                 },
                                 list: false,
+                                row: 0,
                             });
                             // Drawn and edited by the page itself (`skin.name`).
                             let field = &mut self.skin.name;
@@ -4561,6 +4273,7 @@ impl OptionsUi {
                                     centered: true,
                                 },
                                 list: false,
+                                row: 0,
                             });
                             y += 16.0;
                         }
@@ -4570,22 +4283,13 @@ impl OptionsUi {
                 content = y + self.scroll - top + 2.0;
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
                 let folder = match page {
-<<<<<<< HEAD
-                    Page::Mods => Some(("Open Mod Folder", Act::OpenModFolder)),
-                    Page::ShaderPacks => Some(("Open Pack Folder", Act::OpenShaderPackFolder)),
-                    Page::ShaderOptions => Some(("Reset", Act::ShaderReset)),
-                    Page::Skin if self.skin_page => Some(("Open Skin Folder", Act::OpenSkinFolder)),
-||||||| f8988d5a7
-                    Page::Mods => Some(("Open Mod Folder", Act::OpenModFolder)),
-                    Page::ShaderPacks => Some(("Open Pack Folder", Act::OpenShaderPackFolder)),
-=======
                     Page::Mods => Some(("horizon.mods.open_folder", Act::OpenModFolder)),
                     Page::ShaderPacks => Some(("pack.openFolder", Act::OpenShaderPackFolder)),
                     Page::ShaderOptions => Some(("controls.reset", Act::ShaderReset)),
                     Page::NativePackOptions(i, _) => {
                         Some(("controls.reset", Act::NativePackReset(i)))
                     }
->>>>>>> 31f83499b
+                    Page::Skin if self.skin_page => Some(("Open Skin Folder", Act::OpenSkinFolder)),
                     _ => None,
                 };
                 if let Some((label, act)) = folder {
@@ -4613,18 +4317,14 @@ impl OptionsUi {
                 *active = self.in_world && self.minecart_improvements;
             }
         }
-<<<<<<< HEAD
         if page == Page::Skin && self.skin_page {
             self.skin.name.y += previous_scroll - self.scroll;
         }
-||||||| f8988d5a7
-=======
         self.row_bands = rows
             .bands
             .into_iter()
             .map(|band| band.map(|y| y + previous_scroll - self.scroll))
             .collect();
->>>>>>> 31f83499b
         (out, top, bottom, content)
     }
     fn clamp_scroll(&mut self, top: f32, bottom: f32, content: f32) {
@@ -4830,76 +4530,6 @@ impl OptionsUi {
                     act: Act::ShaderOption(name),
                     ..
                 }
-<<<<<<< HEAD
-                if let WKind::Button {
-                    act: Act::Push(page),
-                    ..
-                } = &wd.kind
-                    && let Some(text) = horizon_page_tooltip(*page)
-                {
-                    tooltip = Some(atlas.font.split(&Text::literal(text), 170.0));
-                }
-                if let Some(options) = &s.shader_options {
-                    let comment = match &wd.kind {
-                        WKind::Button {
-                            act: Act::ShaderOption(name),
-                            ..
-                        }
-                        | WKind::ShaderSlider { name, .. } => {
-                            options.comment(&format!("option.{name}"))
-                        }
-                        WKind::Button {
-                            act: Act::ShaderScreen(screen),
-                            ..
-                        } => options.comment(&format!("screen.{screen}")),
-                        WKind::Button {
-                            act: Act::ShaderOptionsProfile,
-                            ..
-                        } => options.comment("profile"),
-                        _ => None,
-                    };
-                    if let Some(comment) = comment {
-                        tooltip = Some(atlas.font.split(&comment, 200.0));
-                    }
-                }
-                let key = match &wd.kind {
-                    WKind::Button {
-                        act: Act::Cycle(opt),
-                        ..
-                    }
-                    | WKind::Slider { opt, .. } => Some(opt.tooltip_key(s)),
-                    WKind::Button {
-                        act: Act::Push(Page::Language),
-                        ..
-                    } => Some("options.language.tooltip".into()),
-                    WKind::Button {
-                        act: Act::Push(Page::Accessibility),
-                        ..
-                    } => Some("options.accessibility.tooltip".into()),
-||||||| f8988d5a7
-                if let WKind::Button {
-                    act: Act::Push(page),
-                    ..
-                } = &wd.kind
-                    && let Some(text) = horizon_page_tooltip(*page)
-                {
-                    tooltip = Some(atlas.font.split(&Text::literal(text), 170.0));
-                }
-                let key = match &wd.kind {
-                    WKind::Button {
-                        act: Act::Cycle(opt),
-                        ..
-                    }
-                    | WKind::Slider { opt, .. } => Some(opt.tooltip_key(s)),
-                    WKind::Button {
-                        act: Act::Push(Page::Language),
-                        ..
-                    } => Some("options.language.tooltip".into()),
-                    WKind::Button {
-                        act: Act::Push(Page::Accessibility),
-                        ..
-                    } => Some("options.accessibility.tooltip".into()),
-=======
                 | WKind::ShaderSlider { name, .. } => Some(name),
                 _ => None,
             };
@@ -4923,7 +4553,6 @@ impl OptionsUi {
                         },
                         _,
                     ) => o.comment("profile"),
->>>>>>> 31f83499b
                     _ => None,
                 };
                 let whole = option
@@ -4954,72 +4583,21 @@ impl OptionsUi {
                 tooltip_rect = (!pointer_over).then_some([wd.x, wd.y, wd.w, wd.h]);
             }
             match &wd.kind {
-<<<<<<< HEAD
                 WKind::Button {
-                    label,
-                    active,
-                    act,
-                    icon,
+                    label, active, icon, ..
                 } => {
                     match icon.as_deref().filter(|i| atlas.sprites.contains_key(*i)) {
                         Some(icon) => {
                             ui::sprite_sized(batch, atlas, icon, wd.x, wd.y, wd.w, wd.h, u32::MAX)
                         }
                         None => {
+                            let label = fitted.as_ref().map_or(label, |f| &f.0);
                             ui::button(batch, atlas, wd.x, wd.y, wd.w, wd.h, label, *active, hover);
                         }
                     }
-                    if hover && let Act::Key(name) = act {
-                        let conflicts = s.keys.conflicts(name);
-                        if !conflicts.is_empty() {
-                            let names = conflicts
-                                .iter()
-                                .map(|c| lang::get(c))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let full = Text::translate(
-                                "controls.keybinds.duplicateKeybinds",
-                                &[Text::literal(names)],
-                            );
-                            tooltip = Some(
-                                full.plain()
-                                    .split('\n')
-                                    .map(|l| Text::literal(l.to_owned()))
-                                    .collect::<Vec<_>>(),
-                            );
-                        }
-                    }
-||||||| f8988d5a7
-                WKind::Button { label, active, act } => {
-                    ui::button(batch, atlas, wd.x, wd.y, wd.w, wd.h, label, *active, hover);
-                    if hover && let Act::Key(name) = act {
-                        let conflicts = s.keys.conflicts(name);
-                        if !conflicts.is_empty() {
-                            let names = conflicts
-                                .iter()
-                                .map(|c| lang::get(c))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let full = Text::translate(
-                                "controls.keybinds.duplicateKeybinds",
-                                &[Text::literal(names)],
-                            );
-                            tooltip = Some(
-                                full.plain()
-                                    .split('\n')
-                                    .map(|l| Text::literal(l.to_owned()))
-                                    .collect::<Vec<_>>(),
-                            );
-                        }
-                    }
-=======
-                WKind::Button { label, active, .. } => {
-                    let label = fitted.as_ref().map_or(label, |f| &f.0);
-                    ui::button(batch, atlas, wd.x, wd.y, wd.w, wd.h, label, *active, hover);
                     crate::widgets::last_narratable(|n| {
                         narrate_widget(n, s, wd, hover, list_key, framebuffer);
                     });
->>>>>>> 31f83499b
                 }
                 WKind::ShaderSlider { label, value, name } => {
                     let held = self.shader_dragging.as_ref().filter(|(n, _)| n == name);
@@ -5369,7 +4947,6 @@ impl OptionsUi {
                 return events;
             }
         }
-<<<<<<< HEAD
         if !drag && !right && self.page() == Page::Skin && self.skin_page {
             let field = &mut self.skin.name;
             if ui::hovered((x, y), field.x, field.y, field.width, field.height)
@@ -5402,8 +4979,7 @@ impl OptionsUi {
                 return events;
             }
             field.focused = false;
-||||||| f8988d5a7
-=======
+        }
         if !drag && self.page() == Page::Language {
             let search = &mut self.language_search;
             search.focused = ui::hovered((x, y), search.x, search.y, search.width, search.height);
@@ -5415,7 +4991,7 @@ impl OptionsUi {
                 self.scroll = 0.0;
                 return events;
             }
->>>>>>> 31f83499b
+            }
         }
         if drag {
             if let Some(previous_y) = self.scrollbar_drag_y {
@@ -5561,7 +5137,7 @@ impl OptionsUi {
                                 events.push(Event::ShaderPack);
                             }
                         }
-                        Act::ShaderProfile => {
+                        Act::PackProfile => {
                             let now = s.horizon.shader_choice().map(|c| c.1).unwrap_or_default();
                             let list = &self.shader_profiles;
                             let at = list.iter().position(|p| *p == now).unwrap_or(0);
@@ -5623,7 +5199,6 @@ impl OptionsUi {
                             s.mods.toggle(i);
                             events.push(Event::Changed);
                         }
-                        Act::ModConfig(i) => events.push(Event::ModConfig(i)),
                         Act::ModSettings(i) => {
                             events.push(Event::ButtonClick);
                             self.push(Page::NativeMod(i));
@@ -5733,38 +5308,6 @@ impl OptionsUi {
                         }
                         Act::ShaderOption(name) => {
                             if let Some(options) = &mut s.shader_options {
-                                options.cycle(&name, right);
-                            }
-                        }
-<<<<<<< HEAD
-                        Act::ShaderScreen(screen) => {
-                            if let Some(options) = &mut s.shader_options {
-                                options.path.push(screen);
-                                self.scroll = 0.0;
-                            }
-                        }
-                        Act::ShaderOptionsProfile => {
-                            if let Some(options) = &mut s.shader_options {
-                                options.next_profile();
-                            }
-                        }
-                        Act::ShaderReset => {
-                            if let Some(options) = &mut s.shader_options {
-                                options.reset();
-                            }
-                        }
-                        Act::TouchLayout => events.push(Event::TouchLayout),
-||||||| f8988d5a7
-                        Act::OpenShaderPackFolder => events.push(Event::OpenShaderPackFolder),
-=======
-                        Act::OpenShaderPackFolder => events.push(Event::OpenShaderPackFolder),
-                        Act::ShaderOptions => {
-                            s.shader_options = None;
-                            self.push(Page::ShaderOptions);
-                            events.push(Event::OpenShaderOptions);
-                        }
-                        Act::ShaderOption(name) => {
-                            if let Some(options) = &mut s.shader_options {
                                 if self.shift {
                                     options.reset_option(&name);
                                 } else {
@@ -5804,10 +5347,9 @@ impl OptionsUi {
                                 events.push(Event::NativePackOptions(pack));
                             }
                         }
->>>>>>> 31f83499b
+                        Act::TouchLayout => events.push(Event::TouchLayout),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
-<<<<<<< HEAD
                         Act::NextSkin => {
                             let page = &mut self.skin;
                             page.choice.file =
@@ -5827,27 +5369,20 @@ impl OptionsUi {
                             page.actions.push(SkinAction::ElyBy(page.elyby));
                         }
                         Act::OpenSkinFolder => self.skin.actions.push(SkinAction::OpenFolder),
-||||||| f8988d5a7
-=======
                         Act::ToggleRecording => events.push(Event::ToggleRecording),
                         Act::ExportRepro => events.push(Event::ExportRepro),
->>>>>>> 31f83499b
                         Act::None => {}
                     }
                 }
                 WKind::ShaderSlider { name, .. } => {
                     let at = ui::slider_value(wd.x, wd.w, x);
                     if let Some(options) = &mut s.shader_options {
-<<<<<<< HEAD
-||||||| f8988d5a7
-=======
                         if self.shift {
                             // Sounds as a released slider does: no drag follows.
                             options.reset_option(&name);
                             events.extend([Event::ButtonClick, Event::Changed]);
                             break;
                         }
->>>>>>> 31f83499b
                         options.set_position(&name, at);
                     }
                     self.shader_dragging = Some((name, at));
@@ -6772,12 +6307,18 @@ impl OptionsUi {
                         Act::NativeButton(i, b) => events.push(Event::NativeButton(i, b)),
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::PickShaderPack(i) => {
-                            if let Some(pack) = s.shader_packs.get(i) {
-                                s.horizon.shader_pack = if s.horizon.shader_pack == pack.file {
+                            let pick = match i {
+                                Some(i) => s.shader_packs.get(i).map(|p| p.file.clone()),
+                                None => Some(String::new()),
+                            };
+                            if let Some(pick) = pick {
+                                s.horizon.shader_pack = if s.horizon.shader_pack == pick {
                                     String::new()
                                 } else {
-                                    pack.file.clone()
+                                    pick
                                 };
+                                s.horizon.shader_profile.clear();
+                                self.refresh_shader_profiles(s);
                                 events.push(Event::ShaderPack);
                             }
                         }
@@ -6838,6 +6379,27 @@ impl OptionsUi {
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
                         Act::ToggleRecording => events.push(Event::ToggleRecording),
                         Act::ExportRepro => events.push(Event::ExportRepro),
+                        // Starling's pages answer taps only.
+                        Act::PackProfile
+                        | Act::ShaderResolution
+                        | Act::ShaderFpsLimit
+                        | Act::CustomButtons
+                        | Act::CustomAdd
+                        | Act::CustomEdit(_)
+                        | Act::CustomDelete(_)
+                        | Act::CustomKey(..)
+                        | Act::CustomInput(..)
+                        | Act::CustomIcon(..)
+                        | Act::CustomDraw(_)
+                        | Act::CanvasClear
+                        | Act::CanvasPlate
+                        | Act::CanvasImport(_)
+                        | Act::TouchLayout
+                        | Act::NextSkin
+                        | Act::SkinModel
+                        | Act::PickSkin
+                        | Act::OpenSkinFolder
+                        | Act::ElyBySkins => {}
                         Act::None => {}
                     }
                     return events;
@@ -7319,55 +6881,6 @@ mod tests {
         ] {
             assert!(texts.iter().any(|t| t == want), "{want:?} not in {texts:?}");
         }
-    }
-
-    #[test]
-    fn mods_page_shows_what_a_mod_is_and_opens_its_settings() {
-        let atlas = atlas();
-        let mut s = Settings::default();
-        let mut ui = OptionsUi::default();
-        let size = (480.0, 240.0);
-        ui.show(Page::Mods);
-        s.mods.installed.push(crate::mod_list::Installed {
-            id: "keystrokes".into(),
-            title: "Keystrokes 0.1.0".into(),
-            description: "May draw on your screen.".into(),
-            summary: "Keys lit while held.".into(),
-            config: Some("keystrokes:settings".into()),
-            problem: None,
-            dev: false,
-            has_settings: false,
-            native: None,
-        });
-        let (widgets, ..) = ui.layout(&s, size.0, size.1);
-        assert!(widgets.iter().any(|w| {
-            matches!(&w.kind, WKind::Text { text, .. } if text.plain() == "Keys lit while held.")
-        }));
-        let config = widgets
-            .iter()
-            .find(|w| {
-                matches!(
-                    w.kind,
-                    WKind::Button {
-                        act: Act::ModConfig(0),
-                        ..
-                    }
-                )
-            })
-            .expect("a Config button beside the mod");
-        assert_eq!(
-            ui.click(
-                &mut s,
-                &atlas,
-                config.x + 1.0,
-                config.y + 1.0,
-                size,
-                [480, 240],
-                false,
-                false,
-            ),
-            vec![Event::ButtonClick, Event::ModConfig(0)]
-        );
     }
 
     #[test]
@@ -8898,7 +8411,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn custom_buttons_take_a_line_or_a_key_and_empty_ones_go() {
         use crate::settings::CustomAction;
         let atlas = atlas();
@@ -9139,8 +8651,9 @@ mod tests {
             .collect();
         assert!(acts.contains(&&Act::Cycle(Opt::ModelPart(0))));
         assert!(!acts.contains(&&Act::NextSkin) && !acts.contains(&&Act::OpenSkinFolder));
-||||||| f8988d5a7
-=======
+    }
+
+    #[test]
     fn sound_device_button_in_sound_page_and_cycles() {
         let mut s = Settings::default();
         let mut ui = OptionsUi::default();
@@ -9700,6 +9213,5 @@ mod tests {
         let events = ui.click(&mut s, &atlas, x, y, size, [854, 480], false, false);
         assert!(events.contains(&Event::Changed));
         assert!(s.extras.music_off.is_empty());
->>>>>>> 31f83499b
     }
 }

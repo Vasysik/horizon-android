@@ -833,9 +833,14 @@ fn builtin_touch_sprites(images: &[PackedImage]) -> Vec<PackedImage> {
         .collect()
 }
 
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
 /// `MissingTextureAtlasSprite`: what a sprite the atlas lacks draws as.
 pub const MISSING_SPRITE: &str = "horizon/missing";
+
+/// One of [`TOUCH_SPRITES`], as RGBA pixels: a place for a custom button's image to start from.
+pub fn touch_sprite(name: &str) -> Option<Vec<u8>> {
+    let (_, png) = TOUCH_SPRITES.iter().find(|(n, _)| *n == name)?;
+    decode_bytes(png).ok().map(|(_, _, pixels)| pixels)
+}
 
 /// The used width of each Standard Galactic letter (A-Z, a-z) in the
 /// `font/ascii_sga` sheet: one past its last column with a texel that isn't
@@ -849,25 +854,6 @@ fn galactic_widths(
     let mut widths = [0u16; 128];
     let Some(sheet) = sprites.get("font/ascii_sga") else {
         return widths;
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-/// The equipment layer textures of every namespace but vanilla's (a server's custom armour), as
-/// `<namespace>:entity/equipment/<kind>/<name>` (`equipment::sprite`).
-fn namespaced_equipment(root: &Path) -> Vec<PackedImage> {
-    let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
-        return Vec::new();
-=======
-/// One of [`TOUCH_SPRITES`], as RGBA pixels: a place for a custom button's image to start from.
-pub fn touch_sprite(name: &str) -> Option<Vec<u8>> {
-    let (_, png) = TOUCH_SPRITES.iter().find(|(n, _)| *n == name)?;
-    decode_bytes(png).ok().map(|(_, _, pixels)| pixels)
-}
-
-/// The equipment layer textures of every namespace but vanilla's (a server's custom armour), as
-/// `<namespace>:entity/equipment/<kind>/<name>` (`equipment::sprite`).
-fn namespaced_equipment(root: &Path) -> Vec<PackedImage> {
-    let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
-        return Vec::new();
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     };
     let cell = sheet.w / 16;
     let (px, py) = (
@@ -1280,7 +1266,17 @@ impl HudAtlas {
             }
         }
         let assets = root.join("assets");
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
+        // A native mod's particle type names its textures `<ns>:particle/<path>`
+        // and needn't ship content, so every namespace's folder is packed.
+        if folders.contains(&"particle")
+            && let Ok(namespaces) = fs::read_dir(&assets)
+        {
+            for ns in namespaces.flatten() {
+                if ns.file_name() != "minecraft" {
+                    walk(&ns.path().join("textures/particle"), &mut files);
+                }
+            }
+        }
         // Content mods' GUI textures, for their screens: `<namespace>:gui/...`, and packs' own
         // sprites such as `starling:touch/jump` (`<namespace>:gui/sprites/<path>`). Every other
         // namespace's equipment textures too: a server pack's custom armour.
@@ -1293,30 +1289,6 @@ impl HudAtlas {
                 walk(&ns.path().join("textures/gui"), &mut files);
                 if folders.contains(&"entity") && !namespaces.contains(&name) {
                     walk(&ns.path().join("textures/entity/equipment"), &mut files);
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        // Content mods' GUI textures, for their screens: `<namespace>:gui/...`.
-        if full && let Ok(namespaces) = fs::read_dir(&assets) {
-            for ns in namespaces.flatten() {
-                if ns.file_name() != "minecraft" {
-                    walk(&ns.path().join("textures/gui"), &mut files);
-=======
-        // A native mod's particle type names its textures `<ns>:particle/<path>`
-        // and needn't ship content, so every namespace's folder is packed.
-        if folders.contains(&"particle")
-            && let Ok(namespaces) = fs::read_dir(&assets)
-        {
-            for ns in namespaces.flatten() {
-                if ns.file_name() != "minecraft" {
-                    walk(&ns.path().join("textures/particle"), &mut files);
-                }
-            }
-        }
-        // Content mods' GUI textures, for their screens: `<namespace>:gui/...`.
-        if full && let Ok(namespaces) = fs::read_dir(&assets) {
-            for ns in namespaces.flatten() {
-                if ns.file_name() != "minecraft" {
-                    walk(&ns.path().join("textures/gui"), &mut files);
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
                 }
             }
         }

@@ -59,12 +59,6 @@ enum Source {
     ShadowDepth(usize, bool),
     /// `shadowcolor0/1` read outside the shadow programs (in them they are `Color`).
     ShadowColor(usize),
-    /// A `texture.*` image of the pack, with its `.mcmeta`'s filtering and wrapping.
-    Custom {
-        index: usize,
-        blur: bool,
-        clamp: bool,
-    },
 }
 
 #[derive(Clone)]
@@ -109,7 +103,6 @@ impl SamplerKind {
             Source::Shadow | Source::ShadowDepth(_, true) => Self::Comparison,
             // Blocks look as the game draws them: nearest texels.
             Source::Atlas => Self::NearestRepeat,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
             Source::Image(_) if filtering => Self::Linear,
             Source::Image(_) => Self::Nearest,
             Source::Custom { blur, clamp, .. } => match (blur && filtering, clamp) {
@@ -124,21 +117,6 @@ impl SamplerKind {
             | Source::Normals
             | Source::Specular
             | Source::Lightmap => Self::Linear,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-            Source::Color(_) | Source::ShadowColor(_) | Source::Dummy | Source::Lightmap => {
-                Self::Linear
-            }
-=======
-            Source::Custom { blur, clamp, .. } => match (blur && filtering, clamp) {
-                (true, true) => Self::Linear,
-                (false, true) => Self::Nearest,
-                (true, false) => Self::Repeat,
-                (false, false) => Self::NearestRepeat,
-            },
-            Source::Color(_) | Source::ShadowColor(_) | Source::Dummy | Source::Lightmap => {
-                Self::Linear
-            }
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         }
     }
 
@@ -590,7 +568,6 @@ pub struct PackPost {
     main: u16,
     targets: Option<Targets>,
     noise: wgpu::TextureView,
-    textures: Vec<pack_textures::PackTexture>,
     dummy: wgpu::TextureView,
     dummy_black: wgpu::TextureView,
     dummy_normal: wgpu::TextureView,
@@ -811,13 +788,6 @@ fn checked<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, St
         }
         None => value.map_err(|panic| format!("the shader compiler failed: {panic}")),
     }
-}
-
-/// Developers' aid while it is measured: `HORIZON_PACK_SKY_LAST` draws the sky after the terrain.
-fn sky_last() -> bool {
-    static SKY_LAST: std::sync::LazyLock<bool> =
-        std::sync::LazyLock::new(|| std::env::var_os("HORIZON_PACK_SKY_LAST").is_some());
-    *SKY_LAST
 }
 
 /// A full-screen helper pipeline of ours (`pack_post.wgsl`).
@@ -1041,9 +1011,6 @@ pub(super) struct Geometry<'a> {
     pub cull: bool,
     /// Drawn twice (`prepass`): depth only first, then the program over what stays in front.
     pub prepass: bool,
-    /// Lies on what is already drawn (a crack): pulled a little in front of it, as vanilla's
-    /// polygon offset of the same.
-    pub decal: bool,
 }
 
 /// How many frames one shadow map serves: `HORIZON_SHADER_SHADOW_EVERY`, else two on a phone. The
@@ -1105,7 +1072,6 @@ fn bindings(
     formats: &[wgpu::TextureFormat; BUFFERS],
     shadow: Option<&[wgpu::TextureFormat; 2]>,
     notes: &mut Vec<String>,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
     pack: &Resources<'_>,
 ) -> Option<(
     Vec<wgpu::BindGroupLayoutEntry>,
@@ -1120,48 +1086,6 @@ fn bindings(
         notes.push(format!("{name}: buffer {b} has no `bufferObject.{b}`"));
         return None;
     }
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-    geometry: Option<&Geometry<'_>>,
-    custom: &[String],
-    draws: &wgpu::BindGroupLayout,
-) -> Option<Pass> {
-    let features = device.features();
-    // The shadow pass clamps depth where it can: casters between the light and the shadow
-    // camera's near plane land on it instead of being cut off (gfx.rs `light_frustum`).
-    let unclipped_depth =
-        p.group == Group::Shadow && features.contains(wgpu::Features::DEPTH_CLIP_CONTROL);
-    // The frame's uniforms, then the pack's custom ones.
-    let index = |name: &str| {
-        pack_uniforms::index(name).or_else(|| {
-            let k = custom.iter().position(|c| c == name)?;
-            Some(pack_uniforms::NAMES.len() + k)
-        })
-    };
-    let mask = |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
-    let interface = &p.program.interface;
-    let draw = interface.draw;
-=======
-    geometry: Option<&Geometry<'_>>,
-    custom: &[String],
-    draws: &wgpu::BindGroupLayout,
-    textures: &[pack_textures::PackTexture],
-) -> Option<Pass> {
-    let features = device.features();
-    // The shadow pass clamps depth where it can: casters between the light and the shadow
-    // camera's near plane land on it instead of being cut off (gfx.rs `light_frustum`).
-    let unclipped_depth =
-        p.group == Group::Shadow && features.contains(wgpu::Features::DEPTH_CLIP_CONTROL);
-    // The frame's uniforms, then the pack's custom ones.
-    let index = |name: &str| {
-        pack_uniforms::index(name).or_else(|| {
-            let k = custom.iter().position(|c| c == name)?;
-            Some(pack_uniforms::NAMES.len() + k)
-        })
-    };
-    let mask = |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
-    let interface = &p.program.interface;
-    let draw = interface.draw;
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     let mut entries = vec![entry(
         0,
         wgpu::BindingType::Buffer {
@@ -1182,45 +1106,7 @@ fn bindings(
         None => 0,
     };
     for s in &interface.samplers {
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        let mut src = source(&s.name, p.group.shadow(), shadow.is_some(), watershadow);
-        let blank = match src {
-            // The shadow pass writes the shadow map.
-            Source::ShadowDepth(..) => p.group == Group::Shadow,
-            Source::Atlas => geometry.is_none(),
-            Source::Depth => geometry.is_some(),
-            // Translucent terrain reads the copy; opaque terrain would read itself.
-            Source::Depth1 => p.group == Group::Gbuffers,
-            Source::Color(n) => in_place & 1 << n != 0,
-            _ => false,
-        };
-=======
-        let mut src = match pack_textures::find(textures, p.group, &s.ty, &s.name) {
-            Some(i) => match textures[i].image {
-                pack_textures::Image::Lightmap => Source::Lightmap,
-                pack_textures::Image::Atlas => Source::Atlas,
-                pack_textures::Image::View(_) => Source::Custom {
-                    index: i,
-                    blur: textures[i].blur,
-                    clamp: textures[i].clamp,
-                },
-            },
-            None => source(&s.name, p.group.shadow(), shadow.is_some(), watershadow),
-        };
-        let blank = match src {
-            // The shadow pass writes the shadow map.
-            Source::ShadowDepth(..) => p.group == Group::Shadow,
-            Source::Atlas => geometry.is_none(),
-            Source::Depth => geometry.is_some(),
-            // Translucent terrain reads the copy; opaque terrain would read itself.
-            Source::Depth1 => p.group == Group::Gbuffers,
-            Source::Color(n) => in_place & 1 << n != 0,
-            _ => false,
-        };
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         let float = wgpu::TextureSampleType::Float { filterable: true };
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         // A stand-in of the sampler's own dimension.
         let stand_in = if s.ty.contains("1D") {
             wgpu::TextureViewDimension::D1
@@ -1228,66 +1114,6 @@ fn bindings(
             wgpu::TextureViewDimension::D3
         } else {
             wgpu::TextureViewDimension::D2
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        let mut sample_type = match src {
-            Source::Color(n) => formats[n]
-                .sample_type(None, Some(features))
-                .unwrap_or(float),
-            Source::ShadowColor(n) => shadow
-                .and_then(|f| f[n].sample_type(None, Some(features)))
-                .unwrap_or(float),
-            Source::Depth | Source::Depth1 | Source::ShadowDepth(..) => {
-                wgpu::TextureSampleType::Float { filterable: false }
-            }
-            // Unfilterable on WebGPU-level devices; the lightmap is sampled at texel centres.
-            Source::Lightmap => float,
-            _ => float,
-        };
-        let int = !matches!(sample_type, wgpu::TextureSampleType::Float { .. });
-        if s.ty == "sampler2DShadow" {
-            src = match src {
-                Source::ShadowDepth(n, _) => Source::ShadowDepth(n, true),
-                _ => Source::Shadow,
-            };
-            sample_type = wgpu::TextureSampleType::Depth;
-        }
-        let wanted = match s.ty.as_str() {
-            "sampler2DShadow" => true,
-            "sampler2D" => !int,
-            "isampler2D" => sample_type == wgpu::TextureSampleType::Sint,
-            "usampler2D" => sample_type == wgpu::TextureSampleType::Uint,
-            _ => false,
-=======
-        let mut sample_type = match src {
-            Source::Color(n) => formats[n]
-                .sample_type(None, Some(features))
-                .unwrap_or(float),
-            Source::ShadowColor(n) => shadow
-                .and_then(|f| f[n].sample_type(None, Some(features)))
-                .unwrap_or(float),
-            Source::Depth | Source::Depth1 | Source::ShadowDepth(..) => {
-                wgpu::TextureSampleType::Float { filterable: false }
-            }
-            Source::Custom { index, .. } => textures[index].sample_type,
-            // Unfilterable on WebGPU-level devices; the lightmap is sampled at texel centres.
-            Source::Lightmap => float,
-            _ => float,
-        };
-        let int = !matches!(sample_type, wgpu::TextureSampleType::Float { .. });
-        if s.ty == "sampler2DShadow" {
-            src = match src {
-                Source::ShadowDepth(n, _) => Source::ShadowDepth(n, true),
-                _ => Source::Shadow,
-            };
-            sample_type = wgpu::TextureSampleType::Depth;
-        }
-        let wanted = match s.ty.as_str() {
-            "sampler2DShadow" => true,
-            "sampler2D" => !int,
-            "isampler2D" => sample_type == wgpu::TextureSampleType::Sint,
-            "usampler2D" => sample_type == wgpu::TextureSampleType::Uint,
-            _ => false,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         };
         if let Some(def) = pack
             .left_out
@@ -1680,48 +1506,28 @@ fn build_pass(
             ],
             ..Default::default()
         });
-        // Developers' aids while these are measured: `HORIZON_PACK_VRS=2x2` shades the terrain
-        // coarser, `HORIZON_PACK_HALF=terrain` (or `all`) gives programs half precision.
-        let is_terrain = p.name.starts_with("gbuffers_terrain");
-        let half = match std::env::var("HORIZON_PACK_HALF").as_deref() {
-            Ok("all") => true,
-            Ok("terrain") => is_terrain,
-            _ => false,
-        };
-        let fragment_label = format!("{}{}", p.name, if half { "#half" } else { "" });
-        let pipeline_label = match std::env::var("HORIZON_PACK_VRS") {
-            Ok(rate) if is_terrain => format!("{}#vrs{rate}", p.name),
-            _ => p.name.clone(),
-        };
-        let module = |mut m: naga::Module, label: &str| {
+        let module = |mut m: naga::Module| {
             share_samplers(&mut m, &slots);
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
+                label: Some(&p.name),
                 source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(m)),
             })
         };
         // The depth pass keeps a little less than the program's own cut (Complementary's is 0.5,
         // vanilla's 0.1): a texel it kept and the program threw away would leave a hole.
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        let cut = interface.alpha_cut.unwrap_or(0.0).max(0.5) + 0.01;
+        let cut = program.interface.alpha_cut.unwrap_or(0.0).max(0.5) + 0.01;
         let (vs, fs) = (module(program.vertex), module(program.fragment));
-        // The depth pass: the atlas' alpha test at the texture's own binding and sampler. Not for
-        // a program with a geometry stage or storage writes, which the depth pass can't run.
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        let cut = p.program.interface.alpha_cut.unwrap_or(0.0).max(0.5) + 0.01;
-        let (vs, fs) = (module(p.program.vertex), module(p.program.fragment));
-        // The depth pass: the atlas' alpha test at the texture's own binding and sampler.
-=======
-        let cut = p.program.interface.alpha_cut.unwrap_or(0.0).max(0.5) + 0.01;
-        let (vs, fs) = (
-            module(p.program.vertex, &p.name),
-            module(p.program.fragment, &fragment_label),
-        );
-        // The depth pass: the atlas' alpha test at the texture's own binding and sampler.
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+        // The depth pass: the atlas' alpha test at the texture's own binding and sampler. A
+        // program with a geometry stage or storage writes of its own is drawn once.
         let atlas = samplers.iter().find(|b| b.source == Source::Atlas);
         let prepass = geometry
-            .filter(|g| g.prepass && g.depth_write && !storage && p.geometry_triangles == 0)
+            .filter(|g| {
+                g.prepass
+                    && g.depth_write
+                    && p.geometry_triangles == 0
+                    && interface.buffers.is_empty()
+                    && images.is_empty()
+            })
             .zip(atlas)
             .map(|(_, a)| {
                 let source = format!(
@@ -1776,7 +1582,7 @@ fn build_pass(
             })
             .map(|depth| (depth, cut));
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(&pipeline_label),
+            label: Some(&p.name),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &vs,
@@ -1802,13 +1608,7 @@ fn build_pass(
                 depth_write_enabled: Some(g.depth_write && prepass.is_none()),
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: Default::default(),
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
                 bias: if p.name == "gbuffers_damagedblock" {
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-                bias: Default::default(),
-=======
-                bias: if g.decal {
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
                     wgpu::DepthBiasState {
                         constant: -10,
                         slope_scale: -1.0,
@@ -2009,7 +1809,6 @@ fn build_compute(
         draw: false,
         atlas: None,
         ids: false,
-        prepass: None,
         groups: HashMap::new(),
         buffers: !interface.buffers.is_empty(),
         images,
@@ -2048,7 +1847,6 @@ impl PackPost {
             })
         });
         let mut notes = post.notes;
-        let textures = pack_textures::upload(device, queue, post.textures, &mut notes);
         notes.extend(post.config.notes);
         let mut sizes = post.sizes;
         // The blit writes colortex0 beside the depth buffer, at the render size.
@@ -2150,7 +1948,6 @@ impl PackPost {
         };
         let mut build = |mut p: horizon_shaders::PostProgram, geometry: Option<&Geometry<'_>>| {
             let in_shadow = p.group.shadow();
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
             let mut compute = std::mem::take(&mut p.compute);
             if !gpu.compute {
                 compute.clear();
@@ -2220,36 +2017,6 @@ impl PackPost {
                 image_copied |= p.image_copies;
                 snapshotted |= p.snapshots;
                 copied |= p.copies;
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-            let pass = build_pass(
-                device,
-                p,
-                if in_shadow { &shadow_space } else { &formats },
-                shadow_formats.as_ref(),
-                screen,
-                &mut notes,
-                geometry,
-                &custom_names,
-                &draws.layout,
-            )?;
-            if !in_shadow {
-                used |= pass.reads | pass.written | pass.flip;
-=======
-            let pass = build_pass(
-                device,
-                p,
-                if in_shadow { &shadow_space } else { &formats },
-                shadow_formats.as_ref(),
-                screen,
-                &mut notes,
-                geometry,
-                &custom_names,
-                &draws.layout,
-                &textures,
-            )?;
-            if !in_shadow {
-                used |= pass.reads | pass.written | pass.flip;
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             }
             Some(pass)
         };
@@ -2267,7 +2034,6 @@ impl PackPost {
             ids: block_ids.as_ref().map(|i| &i.0),
             cull: g.cull,
             prepass: false,
-            decal: false,
         });
         let solid_geometry = world.terrain.as_ref().map(|g| Geometry {
             buffers: g.buffers,
@@ -2277,7 +2043,6 @@ impl PackPost {
             ids: block_ids.as_ref().map(|i| &i.0),
             cull: g.cull,
             prepass: prepass_wanted(),
-            decal: false,
         });
         let terrain = post
             .terrain
@@ -2306,7 +2071,6 @@ impl PackPost {
                 ids: None,
                 cull: false,
                 prepass: false,
-                decal: false,
             };
             let basic = post.sky.and_then(|p| build(p, Some(&basic)));
             let textured = Geometry {
@@ -2317,7 +2081,6 @@ impl PackPost {
                 ids: None,
                 cull: false,
                 prepass: false,
-                decal: false,
             };
             let textured = post.sky_textured.and_then(|p| build(p, Some(&textured)));
             Sky {
@@ -2355,22 +2118,8 @@ impl PackPost {
             ids: None,
             cull: false,
             prepass: false,
-            decal: false,
         });
-        // Cracks lie on the terrain and leave its depth alone.
-        let crack_geometry = entity_vertices.as_ref().map(|e| Geometry {
-            buffers: &entity_buffers,
-            table: Some(&e.table),
-            depth_write: false,
-            atlas: world.celestial.clone(),
-            ids: None,
-            cull: false,
-            prepass: false,
-            decal: true,
-        });
-        let mut program = 0;
         let entity_passes = programs.map(|p| {
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
             p.zip(entity_geometry.as_ref()).and_then(|(p, g)| {
                 if p.name == "gbuffers_damagedblock" {
                     let decal = Geometry {
@@ -2380,24 +2129,13 @@ impl PackPost {
                         atlas: g.atlas.clone(),
                         ids: g.ids,
                         cull: false,
+                        prepass: false,
                     };
                     build(p, Some(&decal))
                 } else {
                     build(p, Some(g))
                 }
             })
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-            p.zip(entity_geometry.as_ref())
-                .and_then(|(p, g)| build(p, Some(g)))
-=======
-            let geometry = if program == super::pack_entities::CRACKS {
-                crack_geometry.as_ref()
-            } else {
-                entity_geometry.as_ref()
-            };
-            program += 1;
-            p.zip(geometry).and_then(|(p, g)| build(p, Some(g)))
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         });
         let shadow_entities = shadow_programs.map(|p| {
             p.zip(entity_geometry.as_ref())
@@ -2420,7 +2158,6 @@ impl PackPost {
             ids: None,
             cull: false,
             prepass: false,
-            decal: false,
         });
         let hides_clouds = post.clouds.is_some() && cloud_geometry.is_some();
         let weather_geometry = world.weather.then(|| Geometry {
@@ -2431,7 +2168,6 @@ impl PackPost {
             ids: None,
             cull: false,
             prepass: false,
-            decal: false,
         });
         let hand_geometry = world.hand.then(|| super::pack_hand::PackHand::new(device));
         let hand = post.hand.zip(hand_geometry).and_then(|(p, geometry)| {
@@ -2443,7 +2179,6 @@ impl PackPost {
                 ids: None,
                 cull: false,
                 prepass: false,
-                decal: false,
             };
             build(p, Some(&g)).map(|pass| (pass, geometry))
         });
@@ -2774,12 +2509,6 @@ impl PackPost {
             noise: pack_textures::noise(&textures)
                 .cloned()
                 .unwrap_or_else(|| noise(device, queue)),
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-            noise: noise(device, queue),
-=======
-            textures,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             dummy: texture(device, queue, "Shader pack stand-in", 1, &white),
             dummy_black: texture(device, queue, "Shader pack black stand-in", 1, &black),
             dummy_normal: texture(
@@ -3035,14 +2764,10 @@ impl PackPost {
                     Source::Normals => &self.dummy_normal,
                     Source::Specular => &self.dummy_black,
                     Source::Dummy => &self.dummy,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
                     Source::Image(k) if pass.image_copies & 1 << k != 0 => {
                         self.images[k].copy.as_ref().unwrap_or(&self.dummy)
                     }
                     Source::Image(k) => self.images[k].view.as_ref().unwrap_or(&self.dummy),
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
                     Source::Custom { index, .. } => match &self.textures[index].image {
                         pack_textures::Image::View(v) => v,
                         _ => &self.dummy,
@@ -3319,12 +3044,7 @@ impl PackPost {
                     .is_some_and(|p| p.writes == pass.writes);
                 if !same {
                     drop(open.take());
-                    let mut rp = self.begin(encoder, pass).forget_lifetime();
-                    if sky_last() {
-                        // At the far plane, it fills only what the terrain left.
-                        rp.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 1.0, 1.0);
-                    }
-                    open = Some((rp, i));
+                    open = Some((self.begin(encoder, pass).forget_lifetime(), i));
                 }
                 let rp = &mut open.as_mut().expect("open").0;
                 rp.set_pipeline(pass.render());
@@ -3454,12 +3174,7 @@ impl PackPost {
         queue: &wgpu::Queue,
         entities: &[super::Vertex],
         spans: &[super::pack_draw::EntitySpan],
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         crumbling: [f32; 4],
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
-        crack_size: [f32; 2],
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         rest: &mut Vec<super::Vertex>,
     ) {
         let shadow = self.shadow_casters();
@@ -3478,7 +3193,6 @@ impl PackPost {
             drawn,
             (crumbling, self.gui_size),
             shadow,
-            crack_size,
             rest,
         );
     }
@@ -3522,13 +3236,10 @@ impl PackPost {
         frame: &super::Frame,
         terrain: &mut TerrainDraw<'_>,
     ) {
-        if !sky_last() && super::sky_visible(frame) {
+        if super::sky_visible(frame) {
             self.draw_sky(device, queue, encoder, size, frame);
         }
         self.draw_terrain(device, queue, encoder, size, TerrainList::Solid, terrain);
-        if sky_last() && super::sky_visible(frame) {
-            self.draw_sky(device, queue, encoder, size, frame);
-        }
         self.draw_entities(device, queue, encoder, size, false);
         self.draw_clouds(device, queue, encoder, size);
         if let Some(t) = &self.targets {
@@ -3745,22 +3456,10 @@ impl PackPost {
         }
     }
 
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-    /// What the shadow camera draws of the terrain this frame, when the pack draws it.
-    pub fn shadow_view(&self, frame: &super::Frame) -> Option<ShadowView> {
-        if !self.has_shadow() {
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-    /// What the shadow camera draws of the terrain this frame, when the pack draws it.
-    pub fn shadow_view(&self, frame: &super::Frame) -> Option<ShadowView> {
-        self.shadow_targets.as_ref()?;
-        if self.shadow_terrain.is_none() && self.shadow_water.is_none() {
-=======
     /// What the shadow camera draws of the terrain this frame, when the pack draws it and this
     /// frame doesn't keep the last shadow map.
     pub fn shadow_view(&mut self, frame: &super::Frame) -> Option<ShadowView> {
-        self.shadow_targets.as_ref()?;
-        if self.shadow_terrain.is_none() && self.shadow_water.is_none() {
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+        if !self.has_shadow() {
             return None;
         }
         self.uniforms.keep_shadow = self.shadow_wait > 0 && self.uniforms.shadow_near(frame.camera);
@@ -3819,6 +3518,7 @@ impl PackPost {
     pub fn programs(&self) -> Vec<&str> {
         self.passes.iter().map(|p| p.name.as_str()).collect()
     }
+
     /// The programs that run and the notes of loading them.
     pub fn report(&self) -> (Vec<String>, Vec<String>) {
         let programs = self.programs().into_iter().map(str::to_owned).collect();
@@ -4016,6 +3716,9 @@ impl PackPost {
         terrain: &mut TerrainDraw<'_>,
         frame: &super::Frame,
     ) {
+        if self.uniforms.keep_shadow {
+            return;
+        }
         // Opt-in only (`horizon-graphics.txt` shadowCache). Off: always redraw, drop any cache.
         if !frame.shadow_cache {
             self.shadow_cache = ShadowCache::default();
@@ -4287,7 +3990,6 @@ impl PackPost {
         if self.targets.is_none() {
             return;
         }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         // Images start the frame cleared, before the shadow pass writes them.
         if let Some(dump) = &mut self.dump {
             dump.read(device);
@@ -4300,13 +4002,6 @@ impl PackPost {
             self.gpu.clear,
             &mut self.zeros,
         );
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        self.run_shadow(device, queue, encoder, terrain);
-=======
-        if !self.uniforms.keep_shadow {
-            self.run_shadow(device, queue, encoder, terrain);
-        }
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         let Some(targets) = &self.targets else { return };
         let main = |m: u16, i: usize| usize::from(m & 1 << i != 0);
         let view = |m: u16, i: usize, alt: bool| {
@@ -4588,15 +4283,10 @@ impl PackPost {
 }
 
 #[cfg(test)]
-#[path = "../../../../third_party/wgpu-hal/src/vulkan/relaxed.rs"]
-mod relaxed;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use wgpu::TextureFormat as T;
 
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
     #[test]
     fn shadow_cache_key_tracks_world_and_time_changes() {
         let key = ShadowCacheKey {
@@ -4625,84 +4315,6 @@ mod tests {
                 ..key
             }
         );
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
-    /// The decorations and arithmetic results half precision leaves on a fragment program.
-    fn relaxed_math(source: &str) -> (usize, usize) {
-        let module = naga::front::wgsl::parse_str(source).unwrap();
-        let info = naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap();
-        let spv = naga::back::spv::write_vec(&module, &info, &Default::default(), None).unwrap();
-        let out = relaxed::relax(&spv);
-        let walk = |words: &[u32], f: &mut dyn FnMut(u32, &[u32])| {
-            let mut at = 5;
-            while at < words.len() {
-                let count = (words[at] >> 16) as usize;
-                assert!(count > 0 && at + count <= words.len(), "cut at {at}");
-                f(words[at] & 0xffff, &words[at..at + count]);
-                at += count;
-            }
-        };
-        let mut decorated = std::collections::HashSet::new();
-        let mut types_started = false;
-        walk(&out, &mut |op, w| {
-            if (19..=33).contains(&op) {
-                types_started = true;
-            }
-            if op == 71 && w[2] == 0 {
-                assert!(!types_started, "a decoration among the types");
-                decorated.insert(w[1]);
-            }
-        });
-        let (mut math, mut relaxed_math) = (0, 0);
-        walk(&out, &mut |op, w| {
-            if matches!(op, 129 | 131 | 133 | 136 | 142) {
-                math += 1;
-                relaxed_math += usize::from(decorated.contains(&w[2]));
-            }
-        });
-        (math, relaxed_math)
-    }
-
-    #[test]
-    fn half_precision_goes_to_colours_only() {
-        let head = "@group(0) @binding(0) var t: texture_2d<f32>;\n\
-                    @group(0) @binding(1) var s: sampler;\n";
-        // Colour math.
-        let colour = format!(
-            "{head}@fragment fn main(@location(0) uv: vec2<f32>, @location(1) light: vec3<f32>) \
-             -> @location(0) vec4<f32> {{\n\
-             let albedo = textureSample(t, s, uv);\n\
-             return vec4(albedo.rgb * light * 1.5, 1.0);\n}}\n"
-        );
-        let (math, relaxed) = relaxed_math(&colour);
-        assert!(math >= 2 && relaxed == math, "{relaxed} of {math}");
-        // Where a texture is read.
-        let coordinates = format!(
-            "{head}@fragment fn main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {{\n\
-             return textureSample(t, s, uv * 2.0 + vec2(0.25));\n}}\n"
-        );
-        let (math, relaxed) = relaxed_math(&coordinates);
-        assert!(math >= 2 && relaxed == 0, "{relaxed} of {math}");
-        // The pixel's place on the screen, as dithering uses it.
-        let screen = "@fragment fn main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {\n\
-                      return vec4(p.x * 0.067 + 0.5);\n}\n";
-        let (math, relaxed) = relaxed_math(screen);
-        assert!(math >= 2 && relaxed == 0, "{relaxed} of {math}");
-        // What is compared.
-        let compared = format!(
-            "{head}@fragment fn main(@location(0) a: f32) -> @location(0) vec4<f32> {{\n\
-             let b = a * 2.0 + 1.0;\n\
-             if b > 0.5 {{ discard; }}\n\
-             return vec4(1.0);\n}}\n"
-        );
-        let (math, relaxed) = relaxed_math(&compared);
-        assert!(math >= 2 && relaxed == 0, "{relaxed} of {math}");
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     }
 
     /// Two textures with a sampler each become two textures sharing one sampler variable.

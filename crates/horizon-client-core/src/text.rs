@@ -55,13 +55,7 @@ pub enum ClickEvent {
     /// `ClickEvent.ShowDialog`: a `minecraft:dialog` registry id, or the
     /// dialog itself as the component carried it.
     ShowDialog(horizon_world::nbt::Tag),
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-    /// `ClickEvent.Custom`: back to the server (ServerboundCustomClickActionPacket), with
-    /// its payload as the component carried it.
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
     /// `ClickEvent.Custom`: a server-defined action with an optional NBT payload.
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     Custom {
         id: String,
         payload: Option<horizon_world::nbt::Tag>,

@@ -86,90 +86,6 @@ pub fn with_options(pack: &Pack, macros: &crate::Macros) -> crate::Macros {
     out
 }
 
-<<<<<<< HEAD
-/// An option the player can change (8.1): a switch (`values` are `false` and `true`), a value
-/// option or a `const` with the list of values it may take.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PackOption {
-    pub name: String,
-    pub default: String,
-    pub values: Vec<String>,
-    pub switch: bool,
-    /// A switch some file tests; value options always count as tested.
-    pub tested: bool,
-}
-
-/// A line that declares an option, as [`declaration`] reads it.
-struct Declaration<'a> {
-    name: &'a str,
-    /// The value and its byte offset in the line; `None` for a switch.
-    value: Option<(&'a str, usize)>,
-    /// Behind `//`: a switch that is off.
-    commented: bool,
-    /// The values in the comment's `[...]`.
-    values: Option<Vec<&'a str>>,
-    /// `const bool`: a switch written as a value.
-    boolean: bool,
-}
-
-/// `#define NAME`, `//#define NAME`, `#define NAME VALUE // [A B]`,
-/// `const TYPE NAME = VALUE; // [A B]` or `const bool NAME = true;`.
-fn declaration(line: &str) -> Option<Declaration<'_>> {
-    let body = line.trim_start();
-    let (commented, code) = match body.strip_prefix("//") {
-        Some(rest) => (true, rest.trim_start()),
-        None => (false, body),
-    };
-    let offset = |part: &str| part.as_ptr() as usize - line.as_ptr() as usize;
-    if let Some(rest) = code.strip_prefix('#') {
-        let rest = rest.trim_start().strip_prefix("define")?;
-        if !rest.starts_with(char::is_whitespace) {
-            return None;
-        }
-        let (code, comment) = rest.split_once("//").unwrap_or((rest, ""));
-        let mut words = code.split_whitespace();
-        let name = words.next()?;
-        let value = words.next();
-        if words.next().is_some() {
-            return None;
-        }
-        return Some(Declaration {
-            name,
-            value: value.map(|v| (v, offset(v))),
-            commented,
-            values: list(comment),
-            boolean: false,
-        });
-    }
-    if commented {
-        return None;
-    }
-    // `const float shadowDistance = 128.0; // [64.0 128.0]`, `const bool x = true;`
-    let rest = code.strip_prefix("const")?;
-    let (decl, comment) = rest.split_once("//").unwrap_or((rest, ""));
-    let (left, right) = decl.split_once('=')?;
-    let mut words = left.split_whitespace();
-    let (Some(ty), Some(name), None) = (words.next(), words.next(), words.next()) else {
-        return None;
-    };
-    let value = right.trim().strip_suffix(';')?.trim_end();
-    if value.is_empty() || value.contains(char::is_whitespace) {
-        return None;
-    }
-    let boolean = ty == "bool" && matches!(value, "true" | "false");
-    Some(Declaration {
-        name,
-        value: Some((value, offset(value))),
-        commented: false,
-        values: if boolean {
-            Some(vec!["false", "true"])
-        } else {
-            Some(list(comment)?)
-        },
-        boolean,
-    })
-||||||| f8988d5a7
-=======
 /// A pack's `shaders.properties` as the game reads it before the programs: parsed with the
 /// pack's options over `macros` (the standard set and the renderer's), after which `macros` gets
 /// the features the pack turns on (`iris.features.*`, `Macros::define_features`). Returns the
@@ -278,7 +194,6 @@ fn list_with_default<'a>(comment: &'a str, default: Option<&'a str>) -> Option<V
         values.insert(0, default);
     }
     Some(values)
->>>>>>> 31f83499b
 }
 
 /// The values in a comment's `[...]`.

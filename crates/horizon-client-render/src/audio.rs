@@ -1237,13 +1237,8 @@ impl Audio {
     pub fn reload(&mut self, root: &Path) {
         self.reload_with(root, SoundRegistry::load(root));
     }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-    /// `reload` with the sound events already read from `root` (off the main thread).
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
     /// [`Self::reload`] with the root's sound events already read
     /// (`SoundRegistry::load`, which a pack reload runs off the render thread).
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     pub fn reload_with(&mut self, root: &Path, registry: SoundRegistry) {
         self.stop_all();
         self.engine.registry = registry;

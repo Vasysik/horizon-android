@@ -112,12 +112,7 @@ struct Region {
     cursor: (u32, u32),
     row: u32,
     pending: Vec<Patch>,
-<<<<<<< HEAD
-    /// A placement found no room (`glyph_of` then starts the region again).
-||||||| f8988d5a7
-=======
     /// A glyph did not fit since the last `Font::begin_frame`.
->>>>>>> 31f83499b
     full: bool,
 }
 struct Cache {
@@ -754,27 +749,6 @@ impl Font {
         if let Some(g) = sets[i].1.glyphs.get(&c) {
             return *g;
         }
-<<<<<<< HEAD
-        region.full = false;
-        let mut glyph = self.resolve(&mut sets[i].1, region, c);
-        // A server pack's menu backgrounds and HUD images fill the run-time rows as they are
-        // drawn: once full, the rows start again and what they held is placed again when next
-        // drawn, rather than every new glyph missing for the rest of the session.
-        if glyph.is_none() && region.full {
-            region.cursor = (0, 0);
-            region.row = 0;
-            let top = self.region.0 as f32 / self.atlas.1 as f32;
-            for (_, set) in sets.iter_mut() {
-                set.glyphs.retain(|_, g| g.rect.is_none_or(|r| r.v0 < top));
-            }
-            glyph = self.resolve(&mut sets[i].1, region, c);
-        }
-        let glyph = glyph.unwrap_or(self.missing);
-        sets[i].1.glyphs.insert(c, glyph);
-||||||| f8988d5a7
-        let glyph = self.resolve(set, region, c).unwrap_or(self.missing);
-        set.glyphs.insert(c, glyph);
-=======
         let was_full = std::mem::replace(&mut region.full, false);
         let found = self.resolve(set, region, c);
         // No room: the missing glyph for now, not remembered, so the
@@ -786,7 +760,6 @@ impl Font {
         }
         let glyph = found.unwrap_or(self.missing);
         set.glyphs.insert(c, glyph);
->>>>>>> 31f83499b
         glyph
     }
     fn resolve(&self, set: &mut FontSet, region: &mut Region, c: char) -> Option<Glyph> {
@@ -1509,28 +1482,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
-    fn a_full_glyph_region_starts_again_instead_of_missing_glyphs() {
-        // Three 2048 x 200 glyphs: the 512 run-time rows hold two.
-        let sheet = png(2048, 600, |_, _| true);
-        let def = br#"{"providers":[{"type":"bitmap","file":"minecraft:font/big.png","ascent":7,"height":8,"chars":["a","b","c"]}]}"#;
-        let root = root(
-            "full",
-            &[
-                ("assets/minecraft/font/default.json", def),
-                ("assets/minecraft/textures/font/big.png", &sheet),
-            ],
-        );
-        let font = load(&root);
-        let _ = std::fs::remove_dir_all(&root);
-        let a = font.glyph('a').rect.expect("a fits");
-        assert!(font.glyph('b').rect.is_some());
-        let c = font.glyph('c').rect.expect("c takes the rows again");
-        assert_eq!(c.v0, a.v0);
-        // 'a' went with the rows and is placed again.
-        assert!(font.glyph('a').rect.is_some_and(|r| r.v0 != c.v0));
-||||||| f8988d5a7
-=======
     fn a_full_glyph_region_recovers_at_the_next_frame() {
         // Two 8x8 glyphs from a sheet outside the atlas; the region holds one row.
         let sheet = png(16, 8, |x, _| x % 8 < 4);
@@ -1580,6 +1531,5 @@ mod tests {
         assert!(font.glyph('z').rect.is_none());
         font.begin_frame();
         assert_eq!(font.epoch(), epoch);
->>>>>>> 31f83499b
     }
 }

@@ -261,13 +261,8 @@ impl<G: ChunkGenerator> Saves for G {
 #[derive(Clone)]
 struct MeshSettings {
     nether: bool,
-<<<<<<< HEAD
-    pack_shades_faces: bool,
-||||||| f8988d5a7
-=======
     shader_pack_lighting: bool,
     separate_ao: bool,
->>>>>>> 31f83499b
     zoom: BiomeZoom,
     blend_radius: i32,
     smooth_lighting: bool,
@@ -511,18 +506,12 @@ pub struct Streaming {
     /// Dimension flags: sky light, Nether face shading.
     pub sky_light: bool,
     pub nether_shading: bool,
-<<<<<<< HEAD
-    /// A shader pack draws that shades the faces itself (Iris, unless it asks for `oldLighting`).
-    pub pack_shades_faces: bool,
-||||||| f8988d5a7
-=======
     /// A shader pack lights the faces: sections mesh without face shading
     /// (`Mesher::shader_pack_lighting`).
     pub shader_pack_lighting: bool,
     /// OptiFine/Iris separate ambient occlusion: vertex RGB has pure tint and alpha holds AO factor
     /// (`Mesher::separate_ao`).
     pub separate_ao: bool,
->>>>>>> 31f83499b
     /// `BiomeManager`'s zoom seed (the hashed world seed) and `biomeBlendRadius`.
     pub biome_zoom: BiomeZoom,
     pub biome_blend: i32,
@@ -989,192 +978,6 @@ impl Streaming {
         });
         let light_tables = context.light.clone();
         let saves: Arc<dyn Saves> = generator.clone();
-<<<<<<< HEAD
-        let threads = (0..threads.max(1))
-            .map(|i| {
-                let shared = shared.clone();
-                let send = send.clone();
-                let generator = generator.clone();
-                let light = context.light.clone();
-                thread::Builder::new()
-                    .name(format!("horizon-worker-{i}"))
-                    .spawn(move || {
-                        // Ticks and frames come first (horizon_threads).
-                        horizon_threads::behind_server();
-                        let mut worker = generator.worker();
-                        // The face visibility table and its occlusion cache stay with
-                        // the worker across mesh jobs, like vanilla's per-thread cache:
-                        // cloning it per job copied every state and face shape.
-                        let mut faces: Option<(Arc<MeshTables>, FaceVisibility)> = None;
-                        loop {
-                            let job = {
-                                let mut queue = shared.queue.lock().unwrap();
-                                loop {
-                                    if shared.stop.load(Ordering::Relaxed) {
-                                        return;
-                                    }
-                                    if let Some(job) = queue.pop() {
-                                        break job.job;
-                                    }
-                                    queue = shared.ready.wait(queue).unwrap();
-                                }
-                            };
-                            let done = match job {
-                                Job::Generate(x, z) => match generator.load(x, z) {
-                                    Some(chunk) => {
-                                        generator.prepare_loaded(&mut worker, &chunk);
-                                        Done::Generated(chunk)
-                                    }
-                                    None => {
-                                        let proto = generator.proto(&mut worker, x, z);
-                                        let decorated = generator.is_decorated(&proto);
-                                        Done::Proto(x, z, proto, decorated)
-                                    }
-                                },
-                                Job::Decorate(x, z, mut region) => {
-                                    generator.decorate(&mut worker, &mut region);
-                                    Done::Decorated(x, z, region)
-                                }
-                                Job::Finish(proto) => Done::Generated(generator.finish(proto)),
-                                Job::Save(protos) => {
-                                    let refs: Vec<&Proto> = protos.iter().map(|(_, p)| p).collect();
-                                    generator.save_protos(&refs);
-                                    Done::Saved(protos)
-                                }
-                                Job::Light(x, z, region, seq, sky) => {
-                                    Done::Lit(x, z, light_chunk(&borrow(&region), &light, sky), seq)
-                                }
-                                Job::Mesh(x, sy, z, region, seq, settings) => {
-                                    let context = shared.context.read().unwrap().clone();
-                                    let visibility = match faces.take() {
-                                        Some((tables, visibility))
-                                            if Arc::ptr_eq(&tables, &context.tables) =>
-                                        {
-                                            visibility
-                                        }
-                                        _ => context.tables.visibility.clone(),
-                                    };
-                                    let mut mesher = Mesher {
-                                        nether_shading: settings.nether,
-                                        pack_shades_faces: settings.pack_shades_faces,
-                                        zoom: settings.zoom,
-                                        blend_radius: settings.blend_radius,
-                                        smooth_lighting: settings.smooth_lighting,
-                                        cutout_leaves: settings.cutout_leaves,
-                                        assets: &context.assets,
-                                        render: &context.render,
-                                        tables: &context.tables,
-                                        biomes: &context.biomes,
-                                        visibility,
-                                    };
-                                    let mut mesh = mesher.mesh(&borrow(&region), sy);
-                                    mesh.sort_solid();
-                                    faces = Some((context.tables.clone(), mesher.visibility));
-                                    Done::Meshed(x, sy, z, mesh, seq)
-                                }
-                            };
-                            if send.send(done).is_err() {
-                                return;
-                            }
-                        }
-                    })
-                    .expect("spawn worker")
-            })
-            .collect();
-        let light_view = {
-||||||| f8988d5a7
-        let threads = (0..threads.max(1))
-            .map(|i| {
-                let shared = shared.clone();
-                let send = send.clone();
-                let generator = generator.clone();
-                let light = context.light.clone();
-                thread::Builder::new()
-                    .name(format!("horizon-worker-{i}"))
-                    .spawn(move || {
-                        // Ticks and frames come first (horizon_threads).
-                        horizon_threads::behind_server();
-                        let mut worker = generator.worker();
-                        // The face visibility table and its occlusion cache stay with
-                        // the worker across mesh jobs, like vanilla's per-thread cache:
-                        // cloning it per job copied every state and face shape.
-                        let mut faces: Option<(Arc<MeshTables>, FaceVisibility)> = None;
-                        loop {
-                            let job = {
-                                let mut queue = shared.queue.lock().unwrap();
-                                loop {
-                                    if shared.stop.load(Ordering::Relaxed) {
-                                        return;
-                                    }
-                                    if let Some(job) = queue.pop() {
-                                        break job.job;
-                                    }
-                                    queue = shared.ready.wait(queue).unwrap();
-                                }
-                            };
-                            let done = match job {
-                                Job::Generate(x, z) => match generator.load(x, z) {
-                                    Some(chunk) => {
-                                        generator.prepare_loaded(&mut worker, &chunk);
-                                        Done::Generated(chunk)
-                                    }
-                                    None => {
-                                        let proto = generator.proto(&mut worker, x, z);
-                                        let decorated = generator.is_decorated(&proto);
-                                        Done::Proto(x, z, proto, decorated)
-                                    }
-                                },
-                                Job::Decorate(x, z, mut region) => {
-                                    generator.decorate(&mut worker, &mut region);
-                                    Done::Decorated(x, z, region)
-                                }
-                                Job::Finish(proto) => Done::Generated(generator.finish(proto)),
-                                Job::Save(protos) => {
-                                    let refs: Vec<&Proto> = protos.iter().map(|(_, p)| p).collect();
-                                    generator.save_protos(&refs);
-                                    Done::Saved(protos)
-                                }
-                                Job::Light(x, z, region, seq, sky) => {
-                                    Done::Lit(x, z, light_chunk(&borrow(&region), &light, sky), seq)
-                                }
-                                Job::Mesh(x, sy, z, region, seq, settings) => {
-                                    let context = shared.context.read().unwrap().clone();
-                                    let visibility = match faces.take() {
-                                        Some((tables, visibility))
-                                            if Arc::ptr_eq(&tables, &context.tables) =>
-                                        {
-                                            visibility
-                                        }
-                                        _ => context.tables.visibility.clone(),
-                                    };
-                                    let mut mesher = Mesher {
-                                        nether_shading: settings.nether,
-                                        zoom: settings.zoom,
-                                        blend_radius: settings.blend_radius,
-                                        smooth_lighting: settings.smooth_lighting,
-                                        cutout_leaves: settings.cutout_leaves,
-                                        assets: &context.assets,
-                                        render: &context.render,
-                                        tables: &context.tables,
-                                        biomes: &context.biomes,
-                                        visibility,
-                                    };
-                                    let mut mesh = mesher.mesh(&borrow(&region), sy);
-                                    mesh.sort_solid();
-                                    faces = Some((context.tables.clone(), mesher.visibility));
-                                    Done::Meshed(x, sy, z, mesh, seq)
-                                }
-                            };
-                            if send.send(done).is_err() {
-                                return;
-                            }
-                        }
-                    })
-                    .expect("spawn worker")
-            })
-            .collect();
-        let light_view = {
-=======
         let pool = horizon_threads::jobs::pool();
         let source = Arc::new(Jobs {
             shared: shared.clone(),
@@ -1187,7 +990,6 @@ impl Streaming {
         // use: the pool's, or fewer when asked (tests, a placeholder).
         let workers = threads.clamp(1, pool.threads());
         let non_air_sections = {
->>>>>>> 31f83499b
             let generator = generator.clone();
             Arc::new(move |p: &Proto| generator.non_air_sections(p))
         };
@@ -1242,13 +1044,8 @@ impl Streaming {
             paused: false,
             sky_light: true,
             nether_shading: false,
-<<<<<<< HEAD
-            pack_shades_faces: false,
-||||||| f8988d5a7
-=======
             shader_pack_lighting: false,
             separate_ao: false,
->>>>>>> 31f83499b
             biome_zoom: BiomeZoom::new(0),
             biome_blend: 2,
             smooth_lighting: true,
@@ -2228,13 +2025,8 @@ impl Streaming {
                         self.sequence,
                         MeshSettings {
                             nether: self.nether_shading,
-<<<<<<< HEAD
-                            pack_shades_faces: self.pack_shades_faces,
-||||||| f8988d5a7
-=======
                             shader_pack_lighting: self.shader_pack_lighting,
                             separate_ao: self.separate_ao,
->>>>>>> 31f83499b
                             zoom: self.biome_zoom,
                             blend_radius: self.biome_blend,
                             smooth_lighting: self.smooth_lighting,

@@ -47,13 +47,7 @@ pub use lang::Lang;
 pub use macros::{MC_VERSION, Macros, RENDER_STAGES, render_stage};
 pub use options::{
     PackOption, apply as apply_options, chosen_file, chosen_text, options, parse_chosen,
-<<<<<<< HEAD
-    switches_on, value_options, with_options,
-||||||| f8988d5a7
-pub use options::switches_on;
-=======
     read_properties, switches_on, value_options, with_options,
->>>>>>> 31f83499b
 };
 pub use pack::{Pack, PackError};
 pub use post::{
@@ -64,17 +58,6 @@ pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties};
 pub use screens::{Item as ScreenItem, Screens};
 pub use textures::{
-<<<<<<< HEAD
-    CustomTexture, Dim as TextureDim, Texels, Texture, TextureSource, decode_png, load_textures,
-};
-pub use translate::{
-    AlphaTest, DRAW_UNIFORMS, Error, GbuffersInputs, Interface, Program, Sampler, Target, Uniform,
-    translate_composite, translate_gbuffers, translate_shadow,
-||||||| f8988d5a7
-pub use translate::{
-    AlphaTest, DRAW_UNIFORMS, Error, GbuffersInputs, Interface, Program, Sampler, Target, Uniform,
-    translate_composite, translate_gbuffers, translate_shadow,
-=======
     CustomTexture, Dim as TextureDim, EVERY_STAGE, Texels, Texture, TextureSource, decode_png,
     load_textures, resolve_resources,
 };
@@ -82,6 +65,5 @@ pub use translate::{
     AlphaTest, ComputeProgram, DRAW_UNIFORMS, Error, GbuffersInputs, GeometryInputs, Image,
     Interface, Program, Sampler, Target, Uniform, translate_composite, translate_compute,
     translate_gbuffers, translate_geometry, translate_shadow,
->>>>>>> 31f83499b
 };
 pub use values::Values;

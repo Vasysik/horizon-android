@@ -193,13 +193,7 @@ impl FluidFlowWorld for FlowView<'_> {
 /// lights the faces (`Mesher::shader_pack_lighting`), and whether to keep pure alpha for separate AO.
 pub(super) fn tesselate(
     tables: &MeshTables,
-<<<<<<< HEAD
-    shading: lighting::Shading,
-||||||| f8988d5a7
-    nether: bool,
-=======
     (nether, shader_pack_lighting, separate_ao): (bool, bool, bool),
->>>>>>> 31f83499b
     pad: &Padded,
     water_color: u32,
     out: &mut SectionMesh,
@@ -396,13 +390,7 @@ pub(super) fn tesselate(
                 ([fx + 1.0, fy + ne, fz], uv[3]),
             ],
             layer,
-<<<<<<< HEAD
-            color(lighting::cardinal(shading, D::Up)),
-||||||| f8988d5a7
-            color(lighting::cardinal(nether, D::Up)),
-=======
             color(cardinal(D::Up)),
->>>>>>> 31f83499b
             light([x, y, z]),
             backward,
             Direction::Up as usize,
@@ -418,26 +406,14 @@ pub(super) fn tesselate(
                 ([fx, y0, fz + 1.0], [0.0, 1.0]),
             ],
             still,
-<<<<<<< HEAD
-            color(lighting::cardinal(shading, D::Down)),
-||||||| f8988d5a7
-            color(lighting::cardinal(nether, D::Down)),
-=======
             color(cardinal(D::Down)),
->>>>>>> 31f83499b
             light([x, y - 1, z]),
             false,
             Direction::Down as usize,
         );
     }
     let side_light = light([x, y, z]);
-<<<<<<< HEAD
-    let up_shade = lighting::cardinal(shading, D::Up);
-||||||| f8988d5a7
-    let up_shade = lighting::cardinal(nether, D::Up);
-=======
     let up_shade = cardinal(D::Up);
->>>>>>> 31f83499b
     for (i, d) in [
         Direction::North,
         Direction::South,
@@ -472,21 +448,9 @@ pub(super) fn tesselate(
             _ => (flow, false),
         };
         let side = if matches!(d, Direction::North | Direction::South) {
-<<<<<<< HEAD
-            lighting::cardinal(shading, D::North)
-||||||| f8988d5a7
-            lighting::cardinal(nether, D::North)
-=======
             cardinal(D::North)
->>>>>>> 31f83499b
         } else {
-<<<<<<< HEAD
-            lighting::cardinal(shading, D::West)
-||||||| f8988d5a7
-            lighting::cardinal(nether, D::West)
-=======
             cardinal(D::West)
->>>>>>> 31f83499b
         };
         let (v0, v1) = ((1.0 - h0) * 0.5, (1.0 - h1) * 0.5);
         quad(

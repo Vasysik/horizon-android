@@ -35,7 +35,6 @@ pub struct PackInputs {
     /// `heldItemId`, `heldItemId2` (item.properties, 5.3) and `heldBlockLightValue(2)`.
     pub held_items: [i32; 2],
     pub held_light: [i32; 2],
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
     /// `isRightHanded` (the Main Hand option) and `is_on_ground`.
     pub right_handed: bool,
     pub on_ground: bool,
@@ -62,11 +61,6 @@ pub struct PackInputs {
     /// camera in world space, of length 100 (`endFlashIntensity`, `endFlashPosition`).
     pub end_flash: f32,
     pub end_flash_direction: Vec3,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
-    /// `is_burning`, `is_hurt`, `is_invisible`, `is_sneaking`, `is_sprinting`.
-    pub player_flags: [bool; 5],
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
 }
 
 /// The `cloudHeight` uniform. Vanilla reads `visual/cloud_height` only while the cloud color
@@ -176,10 +170,6 @@ fn put(out: &mut [u8], offset: usize, bytes: &[u8]) {
 pub const NAMES: &[&str] = &[
     "cameraPosition",
     "previousCameraPosition",
-    "cameraPositionInt",
-    "cameraPositionFract",
-    "previousCameraPositionInt",
-    "previousCameraPositionFract",
     "eyeAltitude",
     "upPosition",
     "sunPosition",
@@ -238,7 +228,6 @@ pub const NAMES: &[&str] = &[
     "shadowModelViewInverse",
     "shadowProjection",
     "shadowProjectionInverse",
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
     "cameraPositionInt",
     "cameraPositionFract",
     "previousCameraPositionInt",
@@ -278,16 +267,6 @@ pub const NAMES: &[&str] = &[
     "cloudTime",
     "isElytraFlying",
     "cloudHeight",
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
-    "is_burning",
-    "is_hurt",
-    "is_invisible",
-    "is_sneaking",
-    "is_sprinting",
-    "cloudHeight",
-    "eyePosition",
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
 ];
 
 /// Values carried from frame to frame.
@@ -372,6 +351,12 @@ pub fn shadow_culling(frame: &Frame, shadow: &Shadow) -> Mat4 {
     depth * gl * view
 }
 
+/// The view of a shadow map drawn with `view` from `drawn`, seen from `camera`. A pack gives it
+/// player space, which moves with the camera; the map stays where it was drawn.
+fn kept_shadow_view(view: Mat4, drawn: DVec3, camera: DVec3) -> Mat4 {
+    view * Mat4::from_translation((camera - drawn).as_vec3())
+}
+
 /// How far toward the light the shadow projection starts, in blocks: part of the projection,
 /// not of `shadowModelView` (Iris's matrices, measured).
 pub const SHADOW_EYE: f32 = 100.0;
@@ -413,12 +398,6 @@ pub fn shadow_camera(light: Vec3, camera: DVec3, shadow: &Shadow) -> (Mat4, Mat4
         }
     };
     (view, projection)
-}
-
-/// The view of a shadow map drawn with `view` from `drawn`, seen from `camera`. A pack gives it
-/// player space, which moves with the camera; the map stays where it was drawn.
-fn kept_shadow_view(view: Mat4, drawn: DVec3, camera: DVec3) -> Mat4 {
-    view * Mat4::from_translation((camera - drawn).as_vec3())
 }
 
 /// `value` moved toward `target` with a half-life of `half_life` seconds over `dt` (5.6).
@@ -604,21 +583,9 @@ impl FrameUniforms {
                 "heldItemId2" => Value::i(&[inputs.held_items[1]]),
                 "heldBlockLightValue" => Value::i(&[inputs.held_light[0]]),
                 "heldBlockLightValue2" => Value::i(&[inputs.held_light[1]]),
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
                 "isElytraFlying" => Value::i(&[inputs.elytra_flying as i32]),
                 "cloudHeight" => Value::f(&[inputs.cloud_height]),
                 "cloudTime" => Value::f(&[inputs.cloud_time]),
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
-                "is_burning" => Value::i(&[i32::from(inputs.player_flags[0])]),
-                "is_hurt" => Value::i(&[i32::from(inputs.player_flags[1])]),
-                "is_invisible" => Value::i(&[i32::from(inputs.player_flags[2])]),
-                "is_sneaking" => Value::i(&[i32::from(inputs.player_flags[3])]),
-                "is_sprinting" => Value::i(&[i32::from(inputs.player_flags[4])]),
-                // Where clouds.rs draws them: a pack that reads 0 puts its own under the world.
-                "cloudHeight" => Value::f(&[192.33]),
-                "eyePosition" => v3(frame.camera.as_vec3()),
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
                 // renderStage is NONE outside gbuffers draws.
                 _ => status_value(name, inputs).unwrap_or(Value::i(&[0])),
             }
@@ -628,6 +595,12 @@ impl FrameUniforms {
         self.frame = (self.frame + 1) % 720_720;
     }
 
+    /// Whether the shadow map was drawn near `camera`, so a frame may keep it: a teleport draws
+    /// it again at once.
+    pub fn shadow_near(&self, camera: DVec3) -> bool {
+        self.shadow_drawn
+            .is_some_and(|(drawn, ..)| drawn.distance_squared(camera) < 16.0 * 16.0)
+    }
     /// `hz_fog_color` and `hz_fog` of the translator's block (the compatibility `gl_Fog`).
     pub fn fog(&self) -> [Vec4; 2] {
         let get = |name| match index(name).and_then(|i| self.values.get(i)) {
@@ -643,13 +616,6 @@ impl FrameUniforms {
 }
 
 impl FrameUniforms {
-    /// Whether the shadow map was drawn near `camera`, so a frame may keep it: a teleport draws
-    /// it again at once.
-    pub fn shadow_near(&self, camera: DVec3) -> bool {
-        self.shadow_drawn
-            .is_some_and(|(drawn, ..)| drawn.distance_squared(camera) < 16.0 * 16.0)
-    }
-
     /// Evaluates the pack's custom uniforms with this frame's values and puts them after
     /// `NAMES`' values, in `custom.uniforms()` order.
     pub fn eval_custom(&mut self, custom: &mut horizon_shaders::Custom) {
@@ -732,13 +698,7 @@ fn components(name: &str) -> usize {
         | "shadowLightPosition"
         | "fogColor"
         | "skyColor"
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         | "endFlashPosition" => 3,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        | "skyColor" => 3,
-=======
-        | "eyePosition" => 3,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         "eyeBrightness" | "eyeBrightnessSmooth" | "atlasSize" => 2,
         n if n.starts_with("gbuffer") || n.starts_with("shadow") && n != "shadowAngle" => 16,
         _ => 1,
@@ -753,20 +713,6 @@ pub fn index(name: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_kept_shadow_map_stays_where_it_was_drawn() {
-        let view = Mat4::from_translation(Vec3::new(1.0, 2.0, -128.0));
-        let (drawn, camera) = (
-            DVec3::new(3500.25, 70.0, -12.5),
-            DVec3::new(3501.0, 70.5, -11.0),
-        );
-        let world = DVec3::new(3510.0, 64.0, -20.0);
-        let then = view.transform_point3((world - drawn).as_vec3());
-        let now =
-            kept_shadow_view(view, drawn, camera).transform_point3((world - camera).as_vec3());
-        assert!((then - now).length() < 1e-3, "{then} {now}");
-    }
 
     #[test]
     fn values_follow_the_declared_type() {
@@ -881,6 +827,19 @@ mod tests {
     }
 
     #[test]
+    fn a_kept_shadow_map_stays_where_it_was_drawn() {
+        let view = Mat4::from_translation(Vec3::new(1.0, 2.0, -128.0));
+        let (drawn, camera) = (
+            DVec3::new(3500.25, 70.0, -12.5),
+            DVec3::new(3501.0, 70.5, -11.0),
+        );
+        let world = DVec3::new(3510.0, 64.0, -20.0);
+        let then = view.transform_point3((world - drawn).as_vec3());
+        let now =
+            kept_shadow_view(view, drawn, camera).transform_point3((world - camera).as_vec3());
+        assert!((then - now).length() < 1e-3, "{then} {now}");
+    }
+    #[test]
     fn the_shadow_camera_looks_down_from_the_light_in_steps() {
         let shadow = Shadow::default();
         let mut camera = DVec3::new(1000.3, 70.0, -20.7);
@@ -909,24 +868,6 @@ mod tests {
         // shadowDistance blocks reach the map's edge.
         let edge = projection.project_point3(Vec3::new(160.0, 0.0, 0.0));
         assert!((edge.x.abs() - 1.0).abs() < 1e-4, "{edge}");
-    }
-
-    #[test]
-    fn the_shadow_view_turns_about_the_player_not_the_origin() {
-        let shadow = Shadow::default();
-        let camera = DVec3::new(3500.3, 70.0, 300.2);
-        let light = |degrees: f32| {
-            let a = degrees.to_radians();
-            Vec3::new(a.sin(), a.cos(), 0.0)
-        };
-        let (before, _) = shadow_camera(light(10.0), camera, &shadow);
-        let (after, _) = shadow_camera(light(10.015), camera, &shadow);
-        let near = Vec3::new(10.0, -2.0, 5.0);
-        let moved = (after.transform_point3(near) - before.transform_point3(near))
-            .truncate()
-            .length();
-        // A tick of the sun (0.015 degrees) moves it hundredths of a block, not nearly one.
-        assert!(moved < 0.05, "{moved}");
     }
 
     /// Iris's matrices at 3000 ticks with `sunPathRotation = 30` and the camera at

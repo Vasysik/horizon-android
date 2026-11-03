@@ -40,13 +40,7 @@ flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", 
 glam = "0.30"
 log = "0.4"
 miniz_oxide = "0.8"
-<<<<<<< HEAD
-naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }
-||||||| f8988d5a7
-naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }
-=======
 naga = { version = "30.0.1", features = ["wgsl-in", "glsl-in", "hlsl-out"] }
->>>>>>> 31f83499b
 half = "2"
 png = "0.18"
 pollster = "0.4"

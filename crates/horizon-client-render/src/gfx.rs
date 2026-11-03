@@ -35,11 +35,11 @@ fn entity_shader() -> String {
     crate::overlay::wgsl_constants() + include_str!("entity.wgsl")
 }
 
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
 /// What `PackPost::new` reads of the renderer (`pack_post::World`), owned.
 struct PackWorld {
     atlas: Option<(wgpu::TextureView, [u32; 2])>,
     lightmap: wgpu::TextureView,
+    gui_size: [u32; 2],
     /// The pack can draw terrain (its block atlas fits).
     terrain: bool,
     /// Flat terrain's set 1 (`Renderer::pack_terrain_flat`).
@@ -74,6 +74,7 @@ impl PackWorld {
         let world = pack_post::World {
             atlas: self.atlas,
             lightmap: self.lightmap,
+            gui_size: self.gui_size,
             terrain: self.terrain.then(|| pack_post::Geometry {
                 buffers: if flat { &buffers[..1] } else { &buffers },
                 table: self.table.as_ref(),
@@ -82,7 +83,6 @@ impl PackWorld {
                 ids: None,
                 cull: true,
                 prepass: false,
-                decal: false,
             }),
             block_ids,
             celestial: self.celestial,
@@ -92,13 +92,12 @@ impl PackWorld {
         };
         pack_post::PackPost::new(device, queue, &self.adapter, post, self.screen, world)
     }
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
+}
+
 /// The static block-entity vertex entry point shares entity shading but lives
 /// in its own source file and pipeline.
 fn static_entity_shader() -> String {
     entity_shader() + include_str!("static_entity.wgsl")
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
 }
 
 #[cfg(test)]
@@ -212,13 +211,7 @@ mod pack_post;
 mod pack_shadow;
 mod pack_sky;
 mod pack_textures;
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
 pub(crate) mod pack_timing;
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-mod pack_timing;
-=======
-mod pack_timing;
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
 pub mod pack_uniforms;
 mod pack_weather;
 mod page_runs;
@@ -1152,14 +1145,10 @@ pub struct Renderer {
     pack_atlas: Option<pack_atlas::PackAtlas>,
     /// The pack's terrain program reads flat draws' vertices (`pack_terrain_inputs`).
     pack_terrain_flat: bool,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
     /// The pack being made on its own thread, for a dimension (`start_shader_pack`).
     pack_loading: Option<(i32, std::sync::mpsc::Receiver<pack_post::PackPost>)>,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
     /// OptiFine/Iris separate ambient occlusion: pass vertex alpha to hz_Color.a.
     pub separate_ao: bool,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
@@ -1917,21 +1906,10 @@ async fn open_backend(
         label: Some("Horizon device"),
         required_features: features,
         required_limits: limits,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        // A phone's GPU memory is the system's: blocks of 256 MiB held 400 to 800 MiB
-        // more than the game used (Adreno 740, render distance 2 to 16).
-        memory_hints: if cfg!(target_os = "android") {
-            wgpu::MemoryHints::MemoryUsage
-        } else {
-            wgpu::MemoryHints::Performance
-        },
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
         // Video memory in blocks of 8-64 MiB instead of 128-256 MiB (Vulkan and DirectX 12):
         // with the larger blocks a few small buffers kept whole blocks the arena's pages had
         // left, and over half the video memory reserved was unused (1,344 MiB for 500).
         memory_hints: wgpu::MemoryHints::MemoryUsage,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         ..Default::default()
     };
     #[cfg(not(target_os = "macos"))]
@@ -1947,31 +1925,6 @@ async fn open_backend(
     };
     match opened {
         Ok((device, queue)) => {
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-            // Errors on a lost device are dropped by wgpu: say why it was lost.
-            device.set_device_lost_callback(|reason, message| {
-                // Called from the wgpu call that lost it: the backtrace names the pipeline
-                // or resource a driver could not make.
-                log::error!(
-                    "Horizon renderer: the GPU device was lost ({reason:?}): {message}\n{}",
-                    std::backtrace::Backtrace::force_capture()
-                );
-            });
-            Ok(Opened {
-                instance,
-                surface,
-                adapter,
-                device,
-                queue,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        Ok((device, queue)) => Ok(Opened {
-            instance,
-            surface,
-            adapter,
-            device,
-            queue,
-        }),
-=======
             let device_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let lost = device_lost.clone();
             device.set_device_lost_callback(move |reason, message| {
@@ -1991,7 +1944,6 @@ async fn open_backend(
                 device,
                 queue,
                 device_lost,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             })
         }
         Err(e) => Err(NoDevice::Failed(format!("{name} device: {e}"))),
@@ -3936,14 +3888,7 @@ impl Renderer {
             flat_wanted,
         );
         // Sections as one index list per frame where multi-draw is emulated.
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        let started_flat = std::time::Instant::now();
-        let flat = flat_wanted.then(|| {
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        let flat = flat_wanted.then(|| {
-=======
         let mut flat = flat_wanted.then(|| {
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             let buffers = [Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<TerrainVertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
@@ -3972,24 +3917,6 @@ impl Renderer {
                 },
             )
         });
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        if let Some(flat) = &flat {
-            log::info!(
-                "flat section draws for {}, {} vertices a page, ready in {} ms",
-                if flat.min_sections == usize::MAX {
-                    "shader packs"
-                } else {
-                    "every frame"
-                },
-                arena.page_vertices(),
-                started_flat.elapsed().as_millis()
-            );
-        }
-        let sorted_indices = arena::Arena::indices(&device, 1 << 16, flat.is_some());
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        let sorted_indices = arena::Arena::indices(&device, 1 << 16, flat.is_some());
-=======
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         let multi_draw = device
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
@@ -4279,12 +4206,8 @@ impl Renderer {
             pack_weather: None,
             pack_atlas: None,
             pack_terrain_flat: false,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
             pack_loading: None,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
             separate_ao: false,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             hud,
             menu_blur: None,
             post_effects: None,
@@ -5650,83 +5573,8 @@ impl Renderer {
             self.pack_atlas = None;
         }
         let post = pack.map(|post| {
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
             self.pack_world()
                 .build(&self.device, &self.queue, post, block_ids)
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-            let world = pack_post::World {
-                atlas: self.pack_atlas.as_ref().map(|a| (a.view.clone(), a.size())),
-                lightmap: self.lightmap_view.clone(),
-                terrain: self.pack_atlas.as_ref().map(|_| pack_post::Geometry {
-                    buffers: if flat { &buffers[..1] } else { &buffers },
-                    table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
-                    depth_write: true,
-                    atlas: None,
-                    ids: None,
-                    cull: true,
-                }),
-                block_ids,
-                celestial: self
-                    .hud
-                    .atlas_texture
-                    .as_ref()
-                    .map(|t| t.create_view(&Default::default())),
-                clouds: Some(&self.cloud_bindings),
-                weather: true,
-                hand: true,
-            };
-            pack_post::PackPost::new(
-                &self.device,
-                &self.queue,
-                &self.adapter,
-                post,
-                self.config.format.remove_srgb_suffix(),
-                world,
-            )
-        });
-        let report = post.as_ref().map(|p| {
-            let programs = p.programs().into_iter().map(str::to_owned).collect();
-            (programs, p.notes.clone())
-=======
-            let world = pack_post::World {
-                atlas: self.pack_atlas.as_ref().map(|a| (a.view.clone(), a.size())),
-                lightmap: self.lightmap_view.clone(),
-                gui_size: self
-                    .hud
-                    .atlas_texture
-                    .as_ref()
-                    .map_or([1, 1], |t| [t.width(), t.height()]),
-                terrain: self.pack_atlas.as_ref().map(|_| pack_post::Geometry {
-                    buffers: if flat { &buffers[..1] } else { &buffers },
-                    table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
-                    depth_write: true,
-                    atlas: None,
-                    ids: None,
-                    cull: true,
-                }),
-                block_ids,
-                celestial: self
-                    .hud
-                    .atlas_texture
-                    .as_ref()
-                    .map(|t| t.create_view(&Default::default())),
-                clouds: Some(&self.cloud_bindings),
-                weather: true,
-                hand: true,
-            };
-            pack_post::PackPost::new(
-                &self.device,
-                &self.queue,
-                &self.adapter,
-                post,
-                self.config.format.remove_srgb_suffix(),
-                world,
-            )
-        });
-        let report = post.as_ref().map(|p| {
-            let programs = p.programs().into_iter().map(str::to_owned).collect();
-            (programs, p.notes.clone())
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         });
         let report = post.as_ref().map(pack_post::PackPost::report);
         self.pack_post = Some((dimension, post));
@@ -5791,6 +5639,11 @@ impl Renderer {
         PackWorld {
             atlas: self.pack_atlas.as_ref().map(|a| (a.view.clone(), a.size())),
             lightmap: self.lightmap_view.clone(),
+            gui_size: self
+                .hud
+                .atlas_texture
+                .as_ref()
+                .map_or([1, 1], |t| [t.width(), t.height()]),
             terrain: self.pack_atlas.is_some(),
             table: self
                 .flat
@@ -7312,12 +7165,7 @@ impl Renderer {
                 &self.queue,
                 frame.entities,
                 frame.entity_spans,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
                 frame.crumbling_sprite,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
-                [frame.crumbling_sprite[2], frame.crumbling_sprite[3]],
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
                 &mut self.pack_entity_rest,
             );
             entities = &self.pack_entity_rest;

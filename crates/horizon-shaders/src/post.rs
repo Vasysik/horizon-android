@@ -447,9 +447,6 @@ pub struct Post {
     pub custom: Custom,
     /// `texture.*`: the textures the pack binds to sampler names.
     pub textures: Vec<crate::CustomTexture>,
-<<<<<<< HEAD
-||||||| f8988d5a7
-=======
     /// `size.buffer.*`, by buffer.
     pub sizes: [Option<BufferSize>; crate::BUFFERS],
     /// `bufferObject.*`, by binding.
@@ -459,7 +456,6 @@ pub struct Post {
     /// `shadow.culling`: `false` draws everything within the shadow distance, every face, not
     /// only what casts a shadow into view; `reversed` within `voxelDistance` of the player.
     pub shadow_culling: ShadowCulling,
->>>>>>> 31f83499b
     pub config: Config,
     /// Programs skipped and why, as `program: message` or `file:line: message`.
     pub notes: Vec<String>,
@@ -585,9 +581,6 @@ pub fn load_post(
         particles_late: false,
         custom: Custom::parse(properties),
         textures: Vec::new(),
-<<<<<<< HEAD
-||||||| f8988d5a7
-=======
         sizes: [None; crate::BUFFERS],
         buffer_objects: Default::default(),
         images: Vec::new(),
@@ -596,13 +589,9 @@ pub fn load_post(
             Some("reversed") => ShadowCulling::Reversed,
             _ => ShadowCulling::On,
         },
->>>>>>> 31f83499b
         config: Config::default(),
         notes: Vec::new(),
     };
-<<<<<<< HEAD
-||||||| f8988d5a7
-=======
     let options = crate::with_options(pack, macros);
     for e in &properties.entries {
         if let Some(n) = e.key.strip_prefix("bufferObject.") {
@@ -629,7 +618,6 @@ pub fn load_post(
                 .push(format!("`{}`: not a buffer and a size", e.key)),
         }
     }
->>>>>>> 31f83499b
     let (textures, notes) = crate::load_textures(pack, properties);
     post.textures = textures;
     post.notes.extend(notes);

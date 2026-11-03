@@ -242,16 +242,10 @@ pub struct Settings {
     /// The packs in `shaderpacks/`, listed when the Shader Packs page opens; the pick is
     /// `horizon.shader_pack`.
     pub shader_packs: Vec<crate::shader_pack_list::Entry>,
-<<<<<<< HEAD
-    /// The Shader Options page's pack, while it is open.
+    /// The picked pack's options while its Shader Options page is open.
     pub shader_options: Option<crate::shader_options::ShaderOptions>,
     /// The touch layout's own buttons while the Custom Buttons page shows them.
     pub custom_buttons: Vec<CustomButton>,
-||||||| f8988d5a7
-=======
-    /// The picked pack's options while its Shader Options page is open.
-    pub shader_options: Option<crate::shader_options::ShaderOptions>,
->>>>>>> 31f83499b
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -336,11 +330,7 @@ impl Default for Settings {
             mods: Default::default(),
             shader_packs: Vec::new(),
             shader_options: None,
-<<<<<<< HEAD
             custom_buttons: Vec::new(),
-||||||| f8988d5a7
-=======
->>>>>>> 31f83499b
         }
     }
 }
@@ -526,11 +516,7 @@ impl Settings {
             mods: Default::default(),
             shader_packs: Vec::new(),
             shader_options: None,
-<<<<<<< HEAD
             custom_buttons: Vec::new(),
-||||||| f8988d5a7
-=======
->>>>>>> 31f83499b
             auto_jump: f.bool("autoJump"),
             language: f.string("lang"),
             force_unicode: f.bool("forceUnicodeFont"),
