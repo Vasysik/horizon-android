@@ -150,66 +150,34 @@ fn mouse_button_rects(w: f32, h: f32) -> [([f32; 4], bool); 2] {
 
 /// Shared outlined pointer for virtual mouse and controller menus.
 pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
-    // A desktop arrow: a black outline, white inside, and the classic notched tail.
-    // The hotspot is the top-left tip, so the drawn point is exactly the cursor.
-    let (x, y) = (cursor.0, cursor.1);
-    const ARROW: [u8; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 5, 4, 3, 2];
-    // Outline first, one pixel wider than the fill on every row.
-    for (i, &w) in ARROW.iter().enumerate() {
-        let extra = if i < 8 { 1.0 } else { 0.0 };
-        batch.fill(
-            atlas,
-            x - 1.0,
-            y + i as f32,
-            f32::from(w) + 1.0 + extra,
-            1.0,
-            rgba(0, 0, 0, 235),
-        );
+    // The desktop arrow: straight left edge, 45 degree right edge, classic
+    // notched tail, hotspot at the tip. Every row is a black edge plus a white
+    // span, and the tail is three runs per step, so the whole cursor is a few
+    // dozen quads and costs nothing to draw each frame. It scales with the HUD
+    // so it stays a thumb-sized target on high-DPI phones.
+    const OUTLINE: u32 = 0x000000EE;
+    const FILL: u32 = 0xFFFFFFFF;
+    let s = (batch.height / 240.0).clamp(1.0, 2.0).round();
+    let (x, y) = (cursor.0.round(), cursor.1.round());
+    for row in 0..11u32 {
+        let top = y + row as f32 * s;
+        let right = (row + 1) as f32;
+        batch.fill(atlas, x, top, s, s, OUTLINE);
+        batch.fill(atlas, x + (right - 1.0) * s, top, s, s, OUTLINE);
+        if row >= 2 {
+            batch.fill(atlas, x + s, top, (right - 2.0) * s, s, FILL);
+        }
     }
-    // Tail: a short diagonal from the arrow's waist down-right.
-    for i in 0..4 {
-        batch.fill(
-            atlas,
-            x + 3.0 + i as f32,
-            y + 9.0 + i as f32,
-            2.0,
-            2.0,
-            rgba(0, 0, 0, 235),
-        );
-    }
-    for (i, &w) in ARROW.iter().enumerate().take(10) {
-        batch.fill(
-            atlas,
-            x,
-            y + i as f32,
-            f32::from(w),
-            1.0,
-            rgba(255, 255, 255, 255),
-        );
-    }
-    for i in 0..3 {
-        batch.fill(
-            atlas,
-            x + 4.0 + i as f32,
-            y + 10.0 + i as f32,
-            1.0,
-            1.0,
-            rgba(255, 255, 255, 255),
-        );
-    }
-    // Outline the tail's right edge so the pointer reads on light HUDs too.
-    for i in 0..4 {
-        batch.fill(
-            atlas,
-            x + 5.0 + i as f32,
-            y + 11.0 + i as f32,
-            1.0,
-            1.0,
-            rgba(0, 0, 0, 235),
-        );
+    // Bottom edge of the head, where the tail begins.
+    batch.fill(atlas, x, y + 11.0 * s, 10.0 * s, s, OUTLINE);
+    for step in 0..8u32 {
+        let tx = x + 4.0 * s + step as f32 * 0.62 * s;
+        let ty = y + (11.0 + step as f32) * s;
+        batch.fill(atlas, tx, ty, s, s, OUTLINE);
+        batch.fill(atlas, tx + 0.62 * s, ty, s * 0.75, s, FILL);
+        batch.fill(atlas, tx + 1.62 * s, ty, s * 0.75, s, OUTLINE);
     }
 }
-
 impl TouchUi {
     pub fn refresh_presets_cache(&mut self, style: crate::touch::ControlStyle) {
         self.cached_presets =
@@ -919,7 +887,7 @@ impl TouchUi {
                     let sl_x = cx + 8.0;
                     let sl_w = (cw - 16.0).max(40.0);
                     let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
-                    let sens = (0.20 + t * 1.80).clamp(0.20, 2.00);
+                    let sens = (0.10 + t * 2.90).clamp(0.10, 3.00);
                     return Some(InGameMenuAction::SetTouchSensitivity(sens));
                 }
                 TouchPhase::Ended | TouchPhase::Cancelled => {
@@ -1087,7 +1055,7 @@ impl TouchUi {
                     let sl_x = cx + 8.0;
                     let sl_w = (cw - 16.0).max(40.0);
                     let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
-                    let sens = (0.20 + t * 1.80).clamp(0.20, 2.00);
+                    let sens = (0.10 + t * 2.90).clamp(0.10, 3.00);
                     return Some(InGameMenuAction::SetTouchSensitivity(sens));
                 }
 
@@ -1453,7 +1421,7 @@ impl TouchUi {
                 let sl_x = cx + 6.0;
                 let sl_w = (cw - 12.0).max(40.0);
                 let sl_y = sens_y + 22.0;
-                let frac = ((settings.sensitivity - 0.20) / 1.80).clamp(0.0, 1.0);
+                let frac = ((settings.sensitivity - 0.10) / 2.90).clamp(0.0, 1.0);
                 ui.rounded(sl_x, sl_y, sl_w, 6.0, 3.0, card_bg);
                 ui.rounded(sl_x, sl_y, (sl_w * frac).max(6.0), 6.0, 3.0, accent);
                 let thumb_x = sl_x + sl_w * frac;
@@ -1908,51 +1876,39 @@ impl TouchUi {
             );
             ui.centered_fit(Face::SemiBold, 10.0, cancel_r, text_c, "Cancel");
 
-            let name_r = [mdx + 14.0, mdy + 42.0, (mdw - 36.0) * 0.45, 32.0];
+            let name_r = [mdx + 14.0, mdy + 42.0, (mdw - 36.0) * 0.45, 48.0];
             let desc_r = [
                 mdx + 22.0 + (mdw - 36.0) * 0.45,
                 mdy + 42.0,
                 (mdw - 36.0) * 0.55,
-                32.0,
+                48.0,
             ];
-            for (r, lbl, val, focused) in [
-                (
-                    name_r,
-                    "Preset Name",
-                    dlg.name_input.as_str(),
-                    !dlg.editing_desc,
-                ),
-                (
-                    desc_r,
-                    "Description",
-                    dlg.desc_input.as_str(),
-                    dlg.editing_desc,
-                ),
-            ] {
-                ui.rounded(r[0], r[1], r[2], r[3], 8.0, card_bg);
-                ui.stroke_rounded(
-                    r[0],
-                    r[1],
-                    r[2],
-                    r[3],
-                    8.0,
-                    if focused { 1.6 } else { 1.0 },
-                    if focused { accent } else { border_c },
-                );
-                ui.text(Face::SemiBold, 8.0, r[0] + 8.0, r[1] + 2.0, accent_hi, lbl);
-                let shown = if focused {
-                    format!("{val}|")
-                } else {
-                    val.to_owned()
-                };
-                ui.text(Face::Medium, 9.8, r[0] + 8.0, r[1] + 14.0, text_c, &shown);
-            }
+            ui.text_field(
+                name_r[0],
+                name_r[1],
+                name_r[2],
+                name_r[3],
+                "PRESET NAME",
+                dlg.name_input.as_str(),
+                "Tap to type",
+                !dlg.editing_desc,
+            );
+            ui.text_field(
+                desc_r[0],
+                desc_r[1],
+                desc_r[2],
+                desc_r[3],
+                "DESCRIPTION",
+                dlg.desc_input.as_str(),
+                "Tap to type",
+                dlg.editing_desc,
+            );
 
             ui.text(
                 Face::Regular,
                 9.0,
                 mdx + 14.0,
-                mdy + 84.0,
+                mdy + 96.0,
                 muted_c,
                 "Tap a field to type with the Android keyboard.",
             );
@@ -1960,7 +1916,7 @@ impl TouchUi {
                 Face::Regular,
                 8.6,
                 mdx + 14.0,
-                mdy + 98.0,
+                mdy + 110.0,
                 muted_c,
                 "Enter closes the keyboard; then tap the button below.",
             );
@@ -3530,72 +3486,34 @@ pub fn draw_hud_editor(
         let iy = dy + 100.0;
         let nw = (dw - 28.0 - 8.0) * 0.44;
         let desc_w = (dw - 28.0 - 8.0) - nw;
-        let name_box = [dx + 14.0, iy, nw, 28.0];
-        let desc_box = [dx + 14.0 + nw + 8.0, iy, desc_w, 28.0];
+        let name_box = [dx + 14.0, iy, nw, 46.0];
+        let desc_box = [dx + 14.0 + nw + 8.0, iy, desc_w, 46.0];
         let name_focus = !ed.editing_save_desc;
-        ui.rounded(
+        ui.text_field(
             name_box[0],
             name_box[1],
             name_box[2],
             name_box[3],
-            8.0,
-            if name_focus { accent_soft } else { bg_hi },
+            "NEW PRESET NAME",
+            ed.save_name_input.as_str(),
+            "Tap to type",
+            name_focus,
         );
-        ui.border(
-            name_box[0],
-            name_box[1],
-            name_box[2],
-            name_box[3],
-            8.0,
-            if name_focus { accent } else { border_c },
-        );
-        let name_disp = if ed.save_name_input.is_empty() {
-            "Name: (tap to type)".to_owned()
-        } else {
-            format!("Name: {}|", ed.save_name_input)
-        };
-        ui.centered_fit(
-            Face::Medium,
-            9.5,
-            [name_box[0] + 6.0, name_box[1], name_box[2] - 12.0, 28.0],
-            text_c,
-            &name_disp,
-        );
-
-        ui.rounded(
+        ui.text_field(
             desc_box[0],
             desc_box[1],
             desc_box[2],
             desc_box[3],
-            8.0,
-            if !name_focus { accent_soft } else { bg_hi },
+            "DESCRIPTION",
+            ed.save_desc_input.as_str(),
+            "Tap to type",
+            !name_focus,
         );
-        ui.border(
-            desc_box[0],
-            desc_box[1],
-            desc_box[2],
-            desc_box[3],
-            8.0,
-            if !name_focus { accent } else { border_c },
-        );
-        let desc_disp = if ed.save_desc_input.is_empty() {
-            "Desc: (tap to type)".to_owned()
-        } else {
-            format!("Desc: {}|", ed.save_desc_input)
-        };
-        ui.centered_fit(
-            Face::Medium,
-            9.5,
-            [desc_box[0] + 6.0, desc_box[1], desc_box[2] - 12.0, 28.0],
-            text_c,
-            &desc_disp,
-        );
-
         ui.text(
             Face::Regular,
             9.0,
             dx + 14.0,
-            iy + 36.0,
+            iy + 54.0,
             muted_c,
             "Tap Name or Desc to type with the Android keyboard.",
         );
@@ -3603,7 +3521,7 @@ pub fn draw_hud_editor(
             Face::Regular,
             8.6,
             dx + 14.0,
-            iy + 50.0,
+            iy + 68.0,
             muted_c,
             "Enter closes the keyboard; then tap Create New Preset.",
         );

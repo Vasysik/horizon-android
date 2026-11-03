@@ -1426,7 +1426,7 @@ impl Loading {
                         }
                     }
                     InGameMenuAction::SetTouchSensitivity(sens) => {
-                        self.menu.controls.settings.sensitivity = sens.clamp(0.10, 2.50);
+                        self.menu.controls.settings.sensitivity = sens.clamp(0.10, 3.00);
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
@@ -1490,7 +1490,8 @@ impl Loading {
                                 self.startup_mouse_button(event_loop, right, false)?;
                             }
                             self.menu.touch.cancel();
-                            self.menu.touch.virtual_mouse = !self.menu.touch.virtual_mouse;
+                            self.menu.touch.pointer_off = !self.menu.touch.pointer_off;
+                            self.menu.touch.virtual_mouse = !self.menu.touch.pointer_off;
                             if self.menu.touch.virtual_mouse
                                 && ((self.menu.cursor.0 <= 2.0 && self.menu.cursor.1 <= 2.0)
                                     || self.menu.cursor.0 >= b.width
@@ -1554,7 +1555,8 @@ impl Loading {
                             self.startup_mouse_button(event_loop, right, false)?;
                         }
                         self.menu.touch.cancel();
-                        self.menu.touch.virtual_mouse ^= true;
+                        self.menu.touch.pointer_off = !self.menu.touch.pointer_off;
+                        self.menu.touch.virtual_mouse = !self.menu.touch.pointer_off;
                         if self.menu.touch.virtual_mouse
                             && ((self.menu.cursor.0 <= 2.0 && self.menu.cursor.1 <= 2.0)
                                 || self.menu.cursor.0 >= b.width

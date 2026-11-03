@@ -596,13 +596,13 @@ impl Game<'_> {
                     self.android_sync_pointer();
                 }
                 InGameMenuAction::SetTouchSensitivity(sens) => {
-                    self.pad.touch.settings.sensitivity = sens.clamp(0.10, 2.50);
+                    self.pad.touch.settings.sensitivity = sens.clamp(0.10, 3.00);
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::StepTouchSensitivity(dir) => {
                     self.pad.touch.settings.sensitivity =
-                        (self.pad.touch.settings.sensitivity + dir as f32 * 0.10).clamp(0.2, 2.5);
+                        (self.pad.touch.settings.sensitivity + dir as f32 * 0.15).clamp(0.10, 3.0);
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }

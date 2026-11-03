@@ -2305,7 +2305,7 @@ impl Launcher {
         match cat {
             SettingsCategory::Video => {
                 let c = &self.catalog.config;
-                let count = 8;
+                let count = 7;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
@@ -2319,9 +2319,8 @@ impl Launcher {
                 let hz_str = format!("{} v", c.device.display_label());
                 let aspect_str = format!("{} v", c.screen.aspect.label());
                 let orient_str = format!("{} v", c.orientation.label());
-                let ui_scale_str = format!("{} v", c.ui_scale_label());
 
-                let rows: [(&str, &str, SettingControl<'_>); 8] = [
+                let rows: [(&str, &str, SettingControl<'_>); 7] = [
                     (
                         "Rendering backend (Vulkan / GLES)",
                         "Hardware GPU driver pipeline used when launching Minecraft",
@@ -2357,11 +2356,6 @@ impl Launcher {
                         "Inset HUD away from punch-hole cameras and curved display edges",
                         SettingControl::Toggle(c.screen.avoid_cutout, Action::Cutout),
                     ),
-                    (
-                        "Launcher UI scale (Phone DPI)",
-                        "Adapts launcher cards, text and buttons to your screen DPI",
-                        SettingControl::Button(&ui_scale_str, Action::UiScale, false),
-                    ),
                 ];
 
                 ui.set_clip(Some([
@@ -2392,16 +2386,13 @@ impl Launcher {
             }
             SettingsCategory::Launcher => {
                 let c = &self.catalog.config;
-                let count = 12;
+                let count = 7;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
-                let renderer_str = format!("{} v", c.renderer.label());
                 let ui_scale_str = format!("{} v", c.ui_scale_label());
                 let profile_str = format!("Profile {} v", c.profile + 1);
-                let orient_str = format!("{} v", c.orientation.label());
-                let aspect_str = format!("{} v", c.screen.aspect.label());
                 let input_str = format!("{} v", c.input_host.label());
                 let worker_str = if c.worker_limit == 0 {
                     "Auto (All cores) v".to_owned()
@@ -2419,12 +2410,7 @@ impl Launcher {
                     c.server.clone()
                 };
 
-                let rows: [(&str, &str, SettingControl<'_>); 12] = [
-                    (
-                        "Rendering backend (Vulkan / GLES)",
-                        "Hardware GPU driver pipeline used when launching Minecraft",
-                        SettingControl::Button(&renderer_str, Action::Renderer, true),
-                    ),
+                let rows: [(&str, &str, SettingControl<'_>); 7] = [
                     (
                         "Launcher UI scale (Phone DPI)",
                         "Adapts launcher cards, text and buttons to your screen DPI",
@@ -2434,26 +2420,6 @@ impl Launcher {
                         "Active game profile",
                         "Each profile isolates its own worlds, mods and options",
                         SettingControl::Button(&profile_str, Action::Profile, false),
-                    ),
-                    (
-                        "Screen orientation",
-                        "Sensor landscape, locked landscape or portrait layout",
-                        SettingControl::Button(&orient_str, Action::Orientation, false),
-                    ),
-                    (
-                        "Display aspect ratio",
-                        "Native fullscreen, 16:9 widescreen, 4:3 classic or square",
-                        SettingControl::Button(&aspect_str, Action::Aspect, false),
-                    ),
-                    (
-                        "Immersive fullscreen",
-                        "Hide Android status and navigation bars during play",
-                        SettingControl::Toggle(c.screen.immersive, Action::Immersive),
-                    ),
-                    (
-                        "Avoid camera cutout / notch",
-                        "Inset HUD away from punch-hole cameras and curved edges",
-                        SettingControl::Toggle(c.screen.avoid_cutout, Action::Cutout),
                     ),
                     (
                         "Input host mode",
@@ -2509,7 +2475,7 @@ impl Launcher {
                 ui.set_clip(None);
             }
             SettingsCategory::Controls => {
-                let count = 15;
+                let count = 14;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
@@ -2584,35 +2550,7 @@ impl Launcher {
                 let scheme_str = touch_cfg.mode.label();
                 let invert_y_active = opts.invert_y || touch_cfg.invert_y;
 
-                let rows: [(&str, &str, SettingControl<'_>); 15] = [
-                    (
-                        "Control Mode: MCPE (Default)",
-                        "Vanilla Minecraft/MCPE-style touch controls (default on fresh install)",
-                        SettingControl::Button(
-                            if is_mcpe {
-                                "● Active"
-                            } else {
-                                "○ Select MCPE"
-                            },
-                            Action::SelectControlMode(horizon_client::touch::ControlStyle::Mcpe),
-                            is_mcpe,
-                        ),
-                    ),
-                    (
-                        "Control Mode: GoyControl",
-                        "Independent custom touch control system with its own layouts & editor",
-                        SettingControl::Button(
-                            if is_goy {
-                                "● Active"
-                            } else {
-                                "○ Select GoyControl"
-                            },
-                            Action::SelectControlMode(
-                                horizon_client::touch::ControlStyle::GoyControl,
-                            ),
-                            is_goy,
-                        ),
-                    ),
+                let rows: [(&str, &str, SettingControl<'_>); 13] = [
                     (
                         &editor_title,
                         editor_sub,
@@ -2703,6 +2641,91 @@ impl Launcher {
                     ),
                 ];
 
+                // The same two radio cards as the in-game floating menu, so
+                // choosing a control system looks identical in both places.
+                let picker_y = list_top - self.catalog.scroll;
+                if picker_y + 58.0 >= list_top && picker_y <= list_bottom {
+                    let half_w = (content_w - 8.0) * 0.5;
+                    for (i, (title, sub, selected, action)) in [
+                        (
+                            "MCPE (Default)",
+                            "Vanilla touch controls",
+                            is_mcpe,
+                            Action::SelectControlMode(horizon_client::touch::ControlStyle::Mcpe),
+                        ),
+                        (
+                            "GoyControl",
+                            "Custom layout with more options",
+                            is_goy,
+                            Action::SelectControlMode(
+                                horizon_client::touch::ControlStyle::GoyControl,
+                            ),
+                        ),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let rx = content_x + i as f32 * (half_w + 8.0);
+                        let rect = [rx, picker_y, half_w, 58.0];
+                        self.targets.push((rect, action));
+                        self.list_targets.push((rect, action));
+                        ui.rounded(
+                            rx,
+                            picker_y,
+                            half_w,
+                            58.0,
+                            14.0,
+                            if selected { MY3_SURFACE } else { MY3_CARD_BG },
+                        );
+                        ui.border(
+                            rx,
+                            picker_y,
+                            half_w,
+                            58.0,
+                            14.0,
+                            if selected {
+                                MY3_ACCENT
+                            } else {
+                                MY3_CARD_BORDER
+                            },
+                        );
+                        let rad_x = rx + 14.0;
+                        let rad_y = picker_y + 21.0;
+                        ui.stroke_rounded(
+                            rad_x,
+                            rad_y,
+                            16.0,
+                            16.0,
+                            8.0,
+                            1.6,
+                            if selected { MY3_ACCENT } else { MY3_MUTED },
+                        );
+                        if selected {
+                            ui.rounded(rad_x + 4.0, rad_y + 4.0, 8.0, 8.0, 4.0, MY3_ACCENT);
+                        }
+                        let text_x = rx + 38.0;
+                        let max_w = (half_w - 46.0).max(40.0);
+                        let fitted = ui.fit_text(Face::SemiBold, 14.0, title, max_w);
+                        ui.text(
+                            Face::SemiBold,
+                            14.0,
+                            text_x,
+                            picker_y + 12.0,
+                            MY3_TEXT,
+                            &fitted,
+                        );
+                        let fitted_sub = ui.fit_text(Face::Regular, 11.5, sub, max_w);
+                        ui.text(
+                            Face::Regular,
+                            11.5,
+                            text_x,
+                            picker_y + 33.0,
+                            MY3_MUTED,
+                            &fitted_sub,
+                        );
+                    }
+                }
+
                 ui.set_clip(Some([
                     content_x - 2.0,
                     list_top,
@@ -2710,7 +2733,7 @@ impl Launcher {
                     (list_bottom - list_top).max(1.0),
                 ]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
-                    let y = list_top + i as f32 * step_y - self.catalog.scroll;
+                    let y = list_top + 66.0 + i as f32 * step_y - self.catalog.scroll;
                     if y + card_h < list_top || y > list_bottom {
                         continue;
                     }
@@ -3297,7 +3320,7 @@ impl Launcher {
             }
             Some(Action::TouchSensDelta(delta)) => {
                 self.modify_touch_settings(|t| {
-                    t.sensitivity = (t.sensitivity + delta).clamp(0.25, 2.5);
+                    t.sensitivity = (t.sensitivity + delta).clamp(0.10, 3.0);
                 });
             }
             Some(Action::VirtualMouseSpeedDelta(delta)) => {

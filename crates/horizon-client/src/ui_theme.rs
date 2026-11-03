@@ -1010,13 +1010,80 @@ impl<'a> Ui<'a> {
         self.icon(Icon::HorizonLogo, x, y, size, primary);
     }
 
-    /// Draw a 3D isometric Minecraft player head with top crown, front face (eyes, hair, skin),
-    /// shaded side face, and 3D hat overlay layer.
-    /// Draw a real Minecraft head: the classic 8x8 Steve face with its top and
-    /// right side as a small 3D cube. Offline (cracked) accounts are Steve,
-    /// which is what the launcher shows until a signed-in skin is available.
+    /// The account's real head from its skin, with the drawn Steve head only
+    /// as the offline fallback while the profile is being fetched.
     pub fn avatar_head_3d(&mut self, x: f32, y: f32, size: f32, player_name: &str) {
-        let _ = player_name;
+        match crate::skin_head::head(player_name) {
+            Some(skin) => self.skin_head_3d(x, y, size, &skin),
+            None => self.steve_head_3d(x, y, size),
+        }
+    }
+
+    /// The real skin's top, right side and face, plus its hat layer.
+    fn skin_head_3d(&mut self, x: f32, y: f32, size: f32, skin: &crate::skin_head::HeadSkin) {
+        self.rounded(x, y, size, size, size * 0.28, color::hex(0x231E38, 255));
+        self.border(x, y, size, size, size * 0.28, color::hex(0x4E4275, 255));
+        self.rounded(
+            x + size * 0.18,
+            y + size * 0.78,
+            size * 0.64,
+            size * 0.12,
+            size * 0.06,
+            color::hex(0x08060E, 175),
+        );
+        let pw = size * 0.088;
+        let face = pw * 8.0;
+        let cx = x + (size - face - pw * 3.2) * 0.5 + pw * 1.6;
+        let cy = y + (size - face) * 0.53;
+        let shade = |rgb: u32, k: f32| {
+            let ch = |v: u32| ((v as f32 * k).min(255.0)) as u32;
+            color::hex(
+                (ch((rgb >> 16) & 0xFF) << 16) | (ch((rgb >> 8) & 0xFF) << 8) | ch(rgb & 0xFF),
+                255,
+            )
+        };
+        for row in 0..8 {
+            for col in 0..8 {
+                let px = cx + col as f32 * pw + row as f32 * pw * 0.42;
+                let py = cy - row as f32 * pw * 0.48 - pw * 0.48;
+                self.fill(
+                    px,
+                    py,
+                    pw + 0.5,
+                    pw * 0.5 + 0.5,
+                    shade(skin.top[row][col], 1.1),
+                );
+            }
+        }
+        for row in 0..8 {
+            for col in 0..8 {
+                let px = cx + face + row as f32 * pw * 0.42;
+                let py = cy + col as f32 * pw - row as f32 * pw * 0.48;
+                self.fill(px, py, pw + 0.5, pw + 0.5, shade(skin.side[row][col], 0.74));
+            }
+        }
+        for row in 0..8 {
+            for col in 0..8 {
+                let px = cx + col as f32 * pw;
+                let py = cy + row as f32 * pw;
+                self.fill(px, py, pw + 0.5, pw + 0.5, shade(skin.front[row][col], 1.0));
+                let hat = skin.hat[row][col];
+                if hat >> 24 != 0 {
+                    self.fill(
+                        px,
+                        py,
+                        pw + 0.5,
+                        pw + 0.5,
+                        color::hex(hat & 0xFFFFFF, (hat >> 24) as u8),
+                    );
+                }
+            }
+        }
+    }
+
+    /// The bundled Steve head: shown for offline names and while a real skin
+    /// is still being fetched.
+    fn steve_head_3d(&mut self, x: f32, y: f32, size: f32) {
         self.rounded(x, y, size, size, size * 0.28, color::hex(0x231E38, 255));
         self.border(x, y, size, size, size * 0.28, color::hex(0x4E4275, 255));
         self.rounded(
@@ -1221,6 +1288,84 @@ impl<'a> Ui<'a> {
         );
         self.emit_clipped_uv(x0, y0, x1, y1, rect.u0, rect.v0, rect.u1, rect.v1, u32::MAX);
         true
+    }
+
+    /// A filled text field: inset surface, small caps label, value (or muted
+    /// placeholder) and a caret while `focused`. The Android IME is routed by
+    /// the caller; this only paints it, so every naming box looks the same.
+    pub fn text_field(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        label: &str,
+        value: &str,
+        placeholder: &str,
+        focused: bool,
+    ) {
+        let accent = color::hex(0x9A7BFF, 255);
+        self.rounded(
+            x,
+            y,
+            w,
+            h,
+            10.0,
+            if focused {
+                color::hex(0x241D3D, 255)
+            } else {
+                color::hex(0x171326, 255)
+            },
+        );
+        self.stroke_rounded(
+            x,
+            y,
+            w,
+            h,
+            10.0,
+            if focused { 1.8 } else { 1.0 },
+            if focused {
+                accent
+            } else {
+                color::hex(0x3A3454, 255)
+            },
+        );
+        self.text(
+            Face::SemiBold,
+            8.2,
+            x + 10.0,
+            y + 5.0,
+            if focused {
+                accent
+            } else {
+                color::hex(0x8D85AD, 255)
+            },
+            label,
+        );
+        let empty = value.is_empty();
+        let shown = if empty { placeholder } else { value };
+        let fitted = self.fit_text(
+            Face::Medium,
+            11.0,
+            shown,
+            (w - 20.0 - if focused { 3.0 } else { 0.0 }).max(8.0),
+        );
+        let tw = self.text(
+            Face::Medium,
+            11.0,
+            x + 10.0,
+            y + h - 20.0,
+            if empty {
+                color::hex(0x6E6889, 255)
+            } else {
+                color::hex(0xF3EFFF, 255)
+            },
+            &fitted,
+        );
+        if focused {
+            let cx = (x + 10.0 + tw + 1.5).min(x + w - 7.0);
+            self.fill(cx, y + h - 20.5, 1.6, 14.0, accent);
+        }
     }
 
     // ---- text ----

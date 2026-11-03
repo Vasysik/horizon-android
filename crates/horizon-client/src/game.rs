@@ -14988,8 +14988,10 @@ impl Game<'_> {
         }
         #[cfg(target_os = "android")]
         {
-            // The touch pointer follows the mouse lock: free in menus, gone in play.
-            self.pad.touch_ui.virtual_mouse = !self.pad.touch_ui.pointer_off && !self.captured;
+            // The touch pointer follows the mouse lock: free in menus, gone in
+            // play. One helper owns the state, so a "Mouse ON" label can never
+            // disagree with the pointer that is drawn.
+            self.android_sync_pointer();
             if self.pad.touch.editor.is_none() {
                 self.pad.touch_ui.goy_mode = self.pad.touch.settings.control_style
                     == horizon_client::touch::ControlStyle::GoyControl;
@@ -15001,9 +15003,11 @@ impl Game<'_> {
                     &self.gui.atlas,
                     &self.pad.touch.settings,
                 );
-                if self.pad.touch_ui.virtual_mouse && !self.pad.touch_ui.floating_menu {
-                    horizon_client::touch_ui::draw_pointer(&mut hud, &self.gui.atlas, self.cursor);
-                }
+            }
+            // Above every overlay, including the control editor and the floating
+            // menu: that is where the pointer is needed most.
+            if self.pad.touch_ui.virtual_mouse {
+                horizon_client::touch_ui::draw_pointer(&mut hud, &self.gui.atlas, self.cursor);
             }
         }
         self.flush_ime(&mut hud);
