@@ -1168,38 +1168,6 @@ impl Codec<Explode> for Explode {
         w.bool(v.play_sound);
     }
 }
-// ClientboundCustomChatCompletionsPacket: 0 adds, 1 removes, 2 sets the chat's extra suggestions
-// (a server's @names and emoji).
-packet!(CustomChatCompletions { action: i32 => VarInt, entries: Vec<String> => List<Str> });
-/// ClientboundPlayerLookAtPacket: turn the player's `from` anchor (0 feet, 1 eyes) to a point, or
-/// to an entity's anchor.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PlayerLookAt {
-    pub from: i32,
-    pub at: [f64; 3],
-    pub entity: Option<(i32, i32)>,
-}
-impl Codec<PlayerLookAt> for PlayerLookAt {
-    fn read(r: &mut Reader) -> Result<Self> {
-        let from = r.varint()?;
-        let at = [r.f64()?, r.f64()?, r.f64()?];
-        let entity = if r.bool()? {
-            Some((r.varint()?, r.varint()?))
-        } else {
-            None
-        };
-        Ok(Self { from, at, entity })
-    }
-    fn write(v: &Self, w: &mut Writer) {
-        w.varint(v.from);
-        v.at.iter().for_each(|c| w.f64(*c));
-        w.bool(v.entity.is_some());
-        if let Some((id, anchor)) = v.entity {
-            w.varint(id);
-            w.varint(anchor);
-        }
-    }
-}
 /// `ClientboundSetPlayerTeamPacket.Parameters`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TeamParameters {
@@ -2041,8 +2009,6 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetTime(SetTime) = SET_TIME,
     SetTitleText(Text) = SET_TITLE_TEXT,
     SetTitlesAnimation(TitlesAnimation) = SET_TITLES_ANIMATION,
-    CustomChatCompletions(CustomChatCompletions) = CUSTOM_CHAT_COMPLETIONS,
-    PlayerLookAt(PlayerLookAt) = PLAYER_LOOK_AT,
     Sound(Sound) = SOUND,
     SoundEntity(SoundEntity) = SOUND_ENTITY,
     StopSound(StopSound) = STOP_SOUND,

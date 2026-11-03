@@ -743,10 +743,10 @@ impl Font {
         let Cache { sets, region, .. } = &mut *cache;
         // FontManager.getFontSetRaw: a font that doesn't exist draws every
         // character as the missing glyph.
-        let Some(i) = sets.iter().position(|(k, _)| k == id) else {
+        let Some((_, set)) = sets.iter_mut().find(|(k, _)| k == id) else {
             return self.missing;
         };
-        if let Some(g) = sets[i].1.glyphs.get(&c) {
+        if let Some(g) = set.glyphs.get(&c) {
             return *g;
         }
         let was_full = std::mem::replace(&mut region.full, false);

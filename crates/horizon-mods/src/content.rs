@@ -98,7 +98,6 @@ pub struct BlockProperties {
     /// boxes, and it hides none of its neighbours' faces nor their light.
     pub shape: Option<Vec<[f32; 6]>>,
 }
-}
 
 /// The render shapes a block may declare.
 pub const RENDER_SHAPES: [&str; 3] = ["MODEL", "INVISIBLE", "ENTITYBLOCK_ANIMATED"];

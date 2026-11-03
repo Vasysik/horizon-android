@@ -8984,7 +8984,8 @@ impl Renderer {
             );
             self.pack_post = Some((dimension, Some(post)));
             if upscale {
-                self.world_post.finish_pack(&mut encoder, &view_target);
+                self.world_post
+                    .finish_pack(&mut encoder, &view_target, self.own_timing.as_mut());
             }
         } else if let Some((color, depth)) = &scaled
             && native_post

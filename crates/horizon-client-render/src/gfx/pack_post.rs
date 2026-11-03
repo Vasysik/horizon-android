@@ -1809,6 +1809,7 @@ fn build_compute(
         draw: false,
         atlas: None,
         ids: false,
+        prepass: None,
         groups: HashMap::new(),
         buffers: !interface.buffers.is_empty(),
         images,

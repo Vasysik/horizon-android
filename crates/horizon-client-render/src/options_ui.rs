@@ -1698,10 +1698,6 @@ pub enum Event {
     ListShaderPacks,
     /// A shader pack or its profile was picked, or the pack turned off: save and apply it.
     ShaderPack,
-    /// The Shader Options page opened: read the picked pack's options into `shader_options`.
-    OpenShaderOptions,
-    /// The Shader Options page closed with changes: save them and load the pack again.
-    ShaderOptions,
     /// The Shader Packs page's folder (on a phone without the Starling folder, its offer).
     OpenShaderPackFolder,
     /// The Shader Options page opened: read the picked pack's options into `shader_options`.
@@ -2304,7 +2300,9 @@ fn narrate_widget(
     framebuffer: [i32; 2],
 ) {
     use crate::widgets::What;
-    if let WKind::Button { label, active, act } = &wd.kind {
+    if let WKind::Button {
+        label, active, act, ..
+    } = &wd.kind {
         let t = |key: &str, args: &[Text]| Text::translate(key, args).plain();
         let bind = |name: Text, bound: bool| {
             if bound {
@@ -4599,21 +4597,6 @@ impl OptionsUi {
                         narrate_widget(n, s, wd, hover, list_key, framebuffer);
                     });
                 }
-                WKind::ShaderSlider { label, value, name } => {
-                    let held = self.shader_dragging.as_ref().filter(|(n, _)| n == name);
-                    let dragging = held.is_some();
-                    ui::slider(
-                        batch,
-                        atlas,
-                        wd.x,
-                        wd.y,
-                        wd.w,
-                        label,
-                        held.map_or(*value, |h| h.1),
-                        hover || dragging,
-                        true,
-                    );
-                }
                 WKind::Slider { label, value, opt } => {
                     let dragging = self.dragging == Some(*opt);
                     let shown = self.slider_shown(*opt, *value);
@@ -4990,7 +4973,6 @@ impl OptionsUi {
                 search.click(atlas, x, false, false);
                 self.scroll = 0.0;
                 return events;
-            }
             }
         }
         if drag {
@@ -5738,13 +5720,6 @@ impl OptionsUi {
                         self.pack_selection = ids.clone();
                         events.push(Event::Packs(ids));
                     }
-                }
-            }
-            Page::ShaderOptions => {
-                if s.shader_options.as_ref().is_some_and(|o| o.changed) {
-                    events.push(Event::ShaderOptions);
-                } else {
-                    s.shader_options = None;
                 }
             }
             // Done or Escape with the name box focused keeps what it holds, as leaving it does.

@@ -937,7 +937,6 @@ impl Graphics {
             bool_text(self.shadow_cache),
             self.api.name(),
             self.shader_pack,
-            self.shader_pack,
             self.shader_profile,
             bool_text(self.translucent_batching),
         );

@@ -555,7 +555,6 @@ impl Settings {
             main_hand: i32::from(!self.main_hand_left),
             particle_status: i32::from(self.particles),
             allows_listing: self.file.bool("allowServerListing"),
-            particle_status: i32::from(self.particles),
             ..ClientInformation::new(view_distance)
         }
     }

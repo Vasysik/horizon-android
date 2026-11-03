@@ -1330,6 +1330,9 @@ impl Audio {
                 looping: false,
                 at: [0.0; 3],
                 relative: true,
+                owner: 0,
+                world: 0,
+                started: None,
             },
         );
     }

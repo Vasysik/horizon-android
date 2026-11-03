@@ -59,7 +59,7 @@ pub struct Post {
     fxaa: wgpu::RenderPipeline,
     /// The world drawn below the screen's size, sharper than the bilinear copy.
     /// `HORIZON_WORLD_UPSCALE=off` keeps the copy.
-    upscale: Option<wgpu::RenderPipeline>,
+    sharp: Option<wgpu::RenderPipeline>,
     format: wgpu::TextureFormat,
     /// World resolution relative to the window (0.5..=2.0).
     pub scale: f32,
@@ -240,7 +240,7 @@ impl Post {
         Self {
             copy: pipeline("fs_copy", &pipeline_layout, format),
             fxaa: pipeline("fs_fxaa", &pipeline_layout, format),
-            upscale: (std::env::var("HORIZON_WORLD_UPSCALE").as_deref() != Ok("off"))
+            sharp: (std::env::var("HORIZON_WORLD_UPSCALE").as_deref() != Ok("off"))
                 .then(|| pipeline("fs_upscale", &pipeline_layout, format)),
             layout,
             sampler,
@@ -539,13 +539,18 @@ impl Post {
 
     /// A shader pack's `final` goes into the world's target, to go up with [`Self::finish_pack`].
     pub fn upscales_pack(&self) -> bool {
-        self.upscale.is_some() && self.scale < 1.0
+        self.sharp.is_some() && self.scale < 1.0
     }
 
     /// Draw a shader pack's `final`, made in the world's target, onto `screen`.
-    pub fn finish_pack(&self, encoder: &mut wgpu::CommandEncoder, screen: &wgpu::TextureView) {
-        if let (Some(target), Some(upscale)) = (&self.target, &self.upscale) {
-            self.draw(encoder, screen, &target.group, upscale);
+    pub fn finish_pack(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        screen: &wgpu::TextureView,
+        timing: Option<&mut super::pack_timing::PassTiming>,
+    ) {
+        if let (Some(target), Some(sharp)) = (&self.target, &self.sharp) {
+            self.draw(encoder, screen, &target.group, sharp, timing);
         }
     }
 
@@ -560,12 +565,12 @@ impl Post {
         let pipeline = if self.antialias {
             &self.fxaa
         } else {
-            self.upscale
+            self.sharp
                 .as_ref()
                 .filter(|_| self.scale < 1.0)
                 .unwrap_or(&self.copy)
         };
-        self.draw(encoder, screen, group, pipeline);
+        self.draw(encoder, screen, group, pipeline, timing);
     }
 
     fn draw(
@@ -574,6 +579,7 @@ impl Post {
         screen: &wgpu::TextureView,
         group: &wgpu::BindGroup,
         pipeline: &wgpu::RenderPipeline,
+        timing: Option<&mut super::pack_timing::PassTiming>,
     ) {
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: screen,

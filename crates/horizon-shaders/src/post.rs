@@ -187,23 +187,6 @@ const PARTICLES: [&str; 4] = [
     "gbuffers_basic",
 ];
 
-/// `gbuffers_damagedblock` and its fallbacks (2.3).
-const DAMAGED_BLOCK: [&str; 5] = [
-    "gbuffers_damagedblock",
-    "gbuffers_terrain",
-    "gbuffers_textured_lit",
-    "gbuffers_textured",
-    "gbuffers_basic",
-];
-
-/// A crack's default blend: it multiplies what is under it, as vanilla's crumbling does.
-pub const CRACK_BLEND: Blend = [
-    Factor::DstColor,
-    Factor::SrcColor,
-    Factor::One,
-    Factor::Zero,
-];
-
 /// The sun and moon's default blend: added to the sky, as vanilla draws them.
 pub const CELESTIAL_BLEND: Blend = [
     Factor::SrcAlpha,
@@ -415,7 +398,6 @@ pub struct Post {
     pub entities_translucent: Option<PostProgram>,
     /// What draws particles.
     pub particles: Option<PostProgram>,
-    pub damaged_block: Option<PostProgram>,
     /// What draws the game's clouds.
     pub clouds: Option<PostProgram>,
     /// What draws rain and snow, after deferred.
@@ -474,7 +456,6 @@ impl Post {
             &self.block,
             &self.entities_translucent,
             &self.particles,
-            &self.damaged_block,
             &self.clouds,
             &self.weather,
             &self.hand,
@@ -565,7 +546,6 @@ pub fn load_post(
         damaged_block: None,
         entities_translucent: None,
         particles: None,
-        damaged_block: None,
         clouds: None,
         weather: None,
         hand: None,
@@ -730,17 +710,6 @@ pub fn load_post(
     let mut gbuffers_dyn = |names: &[&str], i: &GbuffersInputs| gbuffers(names, Group::Gbuffers, i);
     let entities_translucent = translucent(&ENTITIES_TRANSLUCENT, 0.0, &mut gbuffers_dyn);
     let particles = translucent(&PARTICLES, 0.1, &mut gbuffers_dyn);
-    let damaged_block = inputs.entities.as_ref().and_then(|i| {
-        let mut i = i.clone();
-        i.alpha_test = Some(crate::AlphaTest {
-            op: ">",
-            reference: 0.004,
-        });
-        gbuffers_dyn(&DAMAGED_BLOCK, &i).map(|mut p| {
-            p.blend = blend(properties, &p.name).unwrap_or(Some(CRACK_BLEND));
-            p
-        })
-    });
     // Clouds blend, as vanilla's do (OQ-23).
     let clouds = inputs
         .clouds
@@ -795,7 +764,6 @@ pub fn load_post(
     loader.post.damaged_block = damaged_block;
     loader.post.entities_translucent = entities_translucent;
     loader.post.particles = particles;
-    loader.post.damaged_block = damaged_block;
     loader.post.clouds = clouds;
     loader.post.weather = weather;
     loader.post.hand = hand;
@@ -838,7 +806,6 @@ fn load_shadow(
         &post.damaged_block,
         &post.entities_translucent,
         &post.particles,
-        &post.damaged_block,
         &post.clouds,
         &post.weather,
         &post.hand,
