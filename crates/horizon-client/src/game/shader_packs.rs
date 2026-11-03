@@ -321,7 +321,7 @@ impl Game<'_> {
                         let mut macros = Macros::standard();
                         renderer.define_pack_macros(&mut macros);
                         // Its conditionals test the pack's options too.
-                        let (properties, notes) =
+                        let (mut properties, notes) =
                             horizon_shaders::read_properties(&pack, &mut macros);
                         for note in notes {
                             log::warn!("shader pack {name}: {note}");
@@ -343,6 +343,12 @@ impl Game<'_> {
                         );
                         if !values.is_empty() {
                             pack.set_values(values);
+                            // A profile can switch on what shaders.properties tests (`image.*`,
+                            // `program.*.enabled`, features): read it again with the values in,
+                            // or the stage files and the properties disagree about the options.
+                            macros = Macros::standard();
+                            renderer.define_pack_macros(&mut macros);
+                            properties = horizon_shaders::read_properties(&pack, &mut macros).0;
                         }
                         let separate_ao = properties
                             .get("separateAo")

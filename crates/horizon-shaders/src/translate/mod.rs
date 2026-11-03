@@ -36,6 +36,7 @@ mod interface_blocks;
 mod ordering;
 mod rewrite;
 mod scan;
+mod shadowed_types;
 
 pub use geometry::{GeometryInputs, translate_geometry};
 
@@ -246,6 +247,8 @@ fn translate(
     // as plain varyings (`interface_blocks`).
     let flat = |pp: &Preprocessed| {
         let named = anonymous_structs::name(&pp.code);
+        let code = named.as_deref().unwrap_or(&pp.code);
+        let named = shadowed_types::rename(code).or(named);
         let code = named.as_deref().unwrap_or(&pp.code);
         interface_blocks::flatten(code)
             .or(named)
@@ -654,7 +657,9 @@ fn resources(
 
 /// Translates a compute program (`.csh`).
 pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<Error>> {
-    let named = anonymous_structs::name(&compute.code).map(|code| Preprocessed {
+    let named = anonymous_structs::name(&compute.code);
+    let named = shadowed_types::rename(named.as_deref().unwrap_or(&compute.code)).or(named);
+    let named = named.map(|code| Preprocessed {
         code,
         ..compute.clone()
     });

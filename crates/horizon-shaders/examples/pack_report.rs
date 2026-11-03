@@ -7,6 +7,7 @@
 //!   PACK        a .zip, a pack folder (or its parent holding `shaders/`), or a folder of packs
 //!   --programs  one line per program (default: only the totals and the causes)
 //!   --backends  also write every module with the SPIR-V writer wgpu uses on Vulkan (Android)
+//!   --stress    also load it with its options at extremes (all switches on or off, values highest or lowest)
 //!   --dims 0,-1,1   dimensions to load (default: each distinct folder of the three)
 //!   --example N     show up to N full messages per cause (default 1)
 //! ```
@@ -23,6 +24,7 @@ use horizon_shaders::{
 struct Options {
     programs: bool,
     backends: bool,
+    stress: bool,
     dims: Vec<i32>,
     examples: usize,
 }
@@ -32,6 +34,7 @@ fn main() {
     let mut opts = Options {
         programs: false,
         backends: false,
+        stress: false,
         dims: vec![0, -1, 1],
         examples: 1,
     };
@@ -40,6 +43,7 @@ fn main() {
         match a.as_str() {
             "--programs" => opts.programs = true,
             "--backends" => opts.backends = true,
+            "--stress" => opts.stress = true,
             "--dims" => {
                 opts.dims = args
                     .next()
@@ -326,6 +330,9 @@ fn report(name: &str, path: &Path, opts: &Options) {
         "== {name}: total {total_ok} translate, {total_fail} fail, {total_unused} unused, {} ms",
         start.elapsed().as_millis()
     );
+    if opts.stress {
+        stress(name, path);
+    }
     let mut causes: Vec<_> = causes.into_iter().collect();
     causes.sort_by_key(|c| std::cmp::Reverse(c.1.0));
     for (cause, (n, programs, example)) in causes.iter() {
@@ -335,6 +342,72 @@ fn report(name: &str, path: &Path, opts: &Options) {
             println!("         e.g. {example}");
         }
     }
+}
+
+/// The pack with its options pushed to extremes (every switch on, every switch off, every valued
+/// option at its highest and at its lowest value): the branches other packs' players reach by
+/// choosing options, which the defaults do not. Prints what fails in each.
+fn stress(name: &str, path: &Path) {
+    let Ok(base) = Pack::open(path) else { return };
+    let options = horizon_shaders::options(&base);
+    for variant in [
+        "switches on",
+        "switches off",
+        "values highest",
+        "values lowest",
+    ] {
+        let Ok(mut pack) = Pack::open(path) else {
+            return;
+        };
+        let mut values = horizon_shaders::Values::default();
+        for o in options.values() {
+            match variant {
+                "switches on" if o.switch && o.tested && !o.name.ends_with("_SHADER") => {
+                    values.set(&o.name, "true")
+                }
+                "switches off" if o.switch && o.tested && !o.name.ends_with("_SHADER") => {
+                    values.set(&o.name, "false")
+                }
+                "values highest" if !o.switch => {
+                    if let Some(v) = o.values.last() {
+                        values.set(&o.name, v);
+                    }
+                }
+                "values lowest" if !o.switch => {
+                    if let Some(v) = o.values.first() {
+                        values.set(&o.name, v);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // `GAME_ORDER=1` reads shaders.properties before the values, as the game did; otherwise
+        // after, so that `image.*` and `program.*.enabled`, which test the options, see them.
+        let mut macros = Macros::standard();
+        macros.define_renderer(4);
+        let early = std::env::var_os("GAME_ORDER")
+            .map(|_| horizon_shaders::read_properties(&pack, &mut macros).0);
+        pack.set_values(values);
+        let shaders =
+            early.unwrap_or_else(|| horizon_shaders::read_properties(&pack, &mut macros).0);
+        let folder = dimension_folder(&pack, 0);
+        let t = Instant::now();
+        let post = load_post(&pack, &folder, &shaders, &macros, &game_inputs());
+        let n = loaded(&post).len();
+        println!(
+            "   stress `{variant}`: {n} translate, {} fail, {} ms",
+            post.skipped.len(),
+            t.elapsed().as_millis()
+        );
+        for s in &post.skipped {
+            println!(
+                "      FAIL {}: {}",
+                s.name,
+                s.reasons.first().map_or("", String::as_str)
+            );
+        }
+    }
+    let _ = name;
 }
 
 /// Every module through the SPIR-V writer (Vulkan, what Android runs), counting the failures.
