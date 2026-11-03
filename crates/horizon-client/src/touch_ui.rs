@@ -4001,15 +4001,13 @@ pub fn touch_hud_editor(
             let desc_w = (dw - 28.0 - 8.0) - nw;
             if inside([dx + 14.0, iy, nw, 28.0]) {
                 ed.editing_save_desc = false;
-                #[cfg(target_os = "android")]
-                crate::platform::show(&ed.save_name_input);
+                ed.keyboard_request = true;
                 tc.clicked = true;
                 return false;
             }
             if inside([dx + 14.0 + nw + 8.0, iy, desc_w, 28.0]) {
                 ed.editing_save_desc = true;
-                #[cfg(target_os = "android")]
-                crate::platform::show(&ed.save_desc_input);
+                ed.keyboard_request = true;
                 tc.clicked = true;
                 return false;
             }

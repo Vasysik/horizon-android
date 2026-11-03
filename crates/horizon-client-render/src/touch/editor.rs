@@ -85,6 +85,8 @@ pub struct Editor {
     pub editing_save_desc: bool,
     /// True when the Editor Save Dialog (Option A: Replace existing preset, Option B: Create new preset as...) is open.
     pub save_dialog_open: bool,
+    /// A naming field was tapped: the game opens the system keyboard.
+    pub keyboard_request: bool,
     /// True when Option B (Create a new preset as...) is selected in the Save Dialog.
     pub save_create_new_mode: bool,
 }
@@ -135,6 +137,7 @@ impl TouchControls {
             editing_save_name: false,
             editing_save_desc: false,
             save_dialog_open: false,
+            keyboard_request: false,
             save_create_new_mode: is_default,
         });
     }

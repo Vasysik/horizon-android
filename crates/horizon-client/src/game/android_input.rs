@@ -873,6 +873,16 @@ impl Game<'_> {
     pub(super) fn android_poll_keyboard(&mut self) {
         self.android_custom_events();
         self.android_sync_pointer();
+        if let Some(ed) = self.pad.touch.editor.as_mut()
+            && std::mem::take(&mut ed.keyboard_request)
+        {
+            let text = if ed.editing_save_desc {
+                ed.save_desc_input.clone()
+            } else {
+                ed.save_name_input.clone()
+            };
+            crate::platform::show(&text);
+        }
         if let Some(notice) = crate::documents::poll() {
             if notice.changed {
                 self.refresh_pack_lists();
