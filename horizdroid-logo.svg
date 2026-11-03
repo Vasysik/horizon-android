@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<title id="title">HorizDroid</title><desc id="desc">Android robot head above the Horizon H mark.</desc>
+<rect width="512" height="512" fill="#000"/>
+<g fill="#3ddc84"><path d="M146 145 116 101a7 7 0 0 1 11-8l34 49a128 128 0 0 1 190 0l34-49a7 7 0 0 1 11 8l-30 44a126 126 0 0 1 40 93H106a126 126 0 0 1 40-93Z"/></g>
+<g fill="#000"><circle cx="193" cy="193" r="10"/><circle cx="319" cy="193" r="10"/></g>
+<g fill="#fff" opacity=".86"><rect x="190" y="300" width="34" height="68"/><rect x="288" y="300" width="34" height="68"/><rect x="190" y="376" width="34" height="68"/><rect x="288" y="376" width="34" height="68"/></g>
+<rect x="160" y="360" width="192" height="16" fill="#8b5cf6"/></svg>
