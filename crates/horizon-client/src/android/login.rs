@@ -191,7 +191,7 @@ impl Login {
                 x + 20.0,
                 y + 66.0,
                 color::MUTED,
-                "Used when signed out of Microsoft.",
+                "Used when signed out of Microsoft. Maximum 16 characters.",
             );
             button(
                 ui,

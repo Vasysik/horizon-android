@@ -346,7 +346,7 @@ impl Launcher {
                     .join(horizon_core::VANILLA_VERSION),
                 game_home,
                 session_file: self.prepared_session.take(),
-                offline_name: self.catalog.config.name.clone(),
+                offline_name: crate::catalog::truncate_player_name(&self.catalog.config.name),
                 server: self.catalog.config.server.clone(),
                 control_socket: (!crate::PUBLIC_BUILD).then(|| self.home.join("control.json")),
                 extra_arguments,
