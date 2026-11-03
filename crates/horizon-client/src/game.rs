@@ -14878,9 +14878,23 @@ impl Game<'_> {
             "gui/container/creative_inventory/tab_items"
         };
         if let Some(mut r) = self.gui.atlas.sprites.get(background).copied() {
+            let whole = r;
             r.u1 = r.u0 + (r.u1 - r.u0) * Creative::WIDTH / r.w as f32;
             r.v1 = r.v0 + (r.v1 - r.v0) * Creative::HEIGHT / r.h as f32;
             batch.rect_uv(ox, oy, Creative::WIDTH, Creative::HEIGHT, r, u32::MAX);
+            // Bedrock Inventory's sixth row of items goes right under the fifth: the texture's
+            // row again, then the gap it has above the hotbar's, up to the scrollbar's track.
+            if !tab.inventory && CREATIVE_SHIFT.get() != 0.0 {
+                const ACROSS: f32 = 172.0;
+                for (from, to, height) in [(89.0, 107.0, 18.0), (107.0, 125.0, 4.0)] {
+                    let mut band = whole;
+                    let (u, v) = (whole.u1 - whole.u0, whole.v1 - whole.v0);
+                    band.u1 = whole.u0 + u * ACROSS / whole.w as f32;
+                    band.v0 = whole.v0 + v * from / whole.h as f32;
+                    band.v1 = whole.v0 + v * (from + height) / whole.h as f32;
+                    batch.rect_uv(ox, oy + to, ACROSS, height, band, u32::MAX);
+                }
+            }
         }
         if panel {
             // The crafting grid the window lacks, and the result's slot, as the game's windows
@@ -14980,13 +14994,7 @@ impl Game<'_> {
                     let Some(stack) = items.get((first + r) * 9 + c).filter(|s| s.count > 0) else {
                         continue;
                     };
-                    // The sixth row sits where the window has the hotbar's.
-                    let row_y = if r == 5 {
-                        112.0
-                    } else {
-                        18.0 + r as f32 * 18.0
-                    };
-                    let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + row_y);
+                    let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
                     let over = hovered_slot == Some(Creative::DISPLAY + r * 9 + c);
                     if over {
                         self.draw_slot_highlight(batch, false, x, y);

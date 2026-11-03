@@ -231,23 +231,18 @@ impl Creative {
         (Self::DISPLAY..Self::DISPLAY + 45).chain(0..9)
     }
 
-    /// Bedrock Inventory's item window: six rows of items, the last where the hotbar row was.
+    /// Bedrock Inventory's item window: six rows of items, the last right under the fifth.
     pub fn six_row_slots() -> impl Iterator<Item = usize> {
         Self::DISPLAY..Self::DISPLAY + 54
     }
 
-    /// ItemPickerMenu's slot positions (a sixth row of items takes the hotbar row's place).
+    /// ItemPickerMenu's slot positions (a sixth row of items goes on after the fifth).
     pub fn tab_slot_position(slot: usize) -> Option<(f32, f32)> {
         match slot {
             0..9 => Some((9.0 + slot as f32 * 18.0, 112.0)),
             _ if (Self::DISPLAY..Self::DISPLAY + 54).contains(&slot) => {
                 let i = slot - Self::DISPLAY;
-                let y = if i >= 45 {
-                    112.0
-                } else {
-                    18.0 + (i / 9) as f32 * 18.0
-                };
-                Some((9.0 + (i % 9) as f32 * 18.0, y))
+                Some((9.0 + (i % 9) as f32 * 18.0, 18.0 + (i / 9) as f32 * 18.0))
             }
             _ => None,
         }
@@ -1232,6 +1227,16 @@ mod tests {
              "icon": "{count:1,id:\"minecraft:chest\"}", "visible": true, "items": []}
         ]});
         Creative::from_json(&raw).unwrap()
+    }
+
+    #[test]
+    fn six_rows_of_items_have_no_gap() {
+        for (slot, expected) in [(0, (9.0, 18.0)), (44, (153.0, 90.0)), (45, (9.0, 108.0))] {
+            assert_eq!(
+                Creative::tab_slot_position(Creative::DISPLAY + slot),
+                Some(expected)
+            );
+        }
     }
 
     #[test]

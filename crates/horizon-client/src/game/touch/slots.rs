@@ -625,7 +625,13 @@ impl Game<'_> {
         button: MouseButton,
         shift: bool,
     ) {
-        let held = shift && self.physical_keys.insert(KeyCode::ShiftLeft);
+        let held = shift.then(|| {
+            horizon_client_input::modifiers::hold(
+                &mut self.modifiers,
+                &mut self.physical_keys,
+                KeyCode::ShiftLeft,
+            )
+        });
         self.handle_window_event(
             event_loop,
             id,
@@ -647,8 +653,12 @@ impl Game<'_> {
                 InputOrigin::User,
             );
         }
-        if held {
-            self.physical_keys.remove(&KeyCode::ShiftLeft);
+        if let Some(held) = held {
+            horizon_client_input::modifiers::restore(
+                &mut self.modifiers,
+                &mut self.physical_keys,
+                held,
+            );
         }
     }
 
