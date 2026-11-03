@@ -23,6 +23,19 @@ const MODIFIERS: [(ModifiersState, [KeyCode; 2]); 4] = [
     ),
 ];
 
+/// Independent input sources contribute modifiers without overwriting the OS word.
+pub fn with_keys(
+    mut os: ModifiersState,
+    keys: impl IntoIterator<Item = KeyCode>,
+) -> ModifiersState {
+    for key in keys {
+        if let Some((bit, _)) = MODIFIERS.iter().find(|(_, pair)| pair.contains(&key)) {
+            os.insert(*bit);
+        }
+    }
+    os
+}
+
 /// A synthesized key updates the same modifier word as window events.
 /// Releasing one side must preserve the other side's hold.
 pub fn set_key(

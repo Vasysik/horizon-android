@@ -209,6 +209,36 @@ impl Clicks {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn independent_modifiers_drive_quick_move_and_release_without_another_click() {
+        use horizon_client_input::modifiers::with_keys;
+        use winit::keyboard::{KeyCode, ModifiersState};
+        for button in [Button::Left, Button::Right] {
+            for os in [ModifiersState::empty(), ModifiersState::SHIFT] {
+                let mut clicks = Clicks::default();
+                let target = Target::Slot(12);
+                let held = with_keys(os, [KeyCode::ShiftLeft]);
+                assert_eq!(
+                    clicks.press(&target, button, true, held.shift_key(), false),
+                    Some(Input::QuickMove)
+                );
+                assert_eq!(
+                    clicks.release(&target, button, true, false, false, false),
+                    Release::Nothing
+                );
+                let released_touch = with_keys(os, []);
+                assert_eq!(released_touch.shift_key(), os.shift_key());
+                assert_eq!(
+                    clicks.press(&target, button, true, released_touch.shift_key(), false),
+                    Some(if os.shift_key() {
+                        Input::QuickMove
+                    } else {
+                        Input::Pickup
+                    })
+                );
+            }
+        }
+    }
 
     const INV: Image = Image {
         left: 100,

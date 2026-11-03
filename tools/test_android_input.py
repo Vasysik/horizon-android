@@ -26,6 +26,8 @@ pub use horizon_client_core::text;
 #[path = "../../../../crates/horizon-client-render/src/android_runtime.rs"] mod android_runtime;
 #[path = "../../../../crates/horizon-client-render/src/keypad.rs"] mod keypad;
 #[path = "../../../../crates/horizon-client-render/src/widgets.rs"] mod widgets;
+#[path = "../../../../crates/horizon-client-render/src/touch/gestures.rs"] mod touch_gestures;
+#[path = "../../../../crates/horizon-client-render/src/touch/drop_gesture.rs"] mod drop_gesture;
 mod graphics { pub enum GraphicsApi {OpenGl, Vulkan} }
 ''', encoding='utf-8')
     subprocess.run(['cargo', 'test', '--manifest-path', str(harness / 'Cargo.toml'), '--', '--test-threads=1'], cwd=ROOT, check=True)

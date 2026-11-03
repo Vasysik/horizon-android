@@ -27,7 +27,18 @@ pub(super) const HELP: &[&str] = &[
 #[derive(Default)]
 pub(super) struct Pads {
     #[cfg(target_os = "android")]
+    pub(super) item_touch: Option<super::android_drop::ItemTouch>,
+    #[cfg(target_os = "android")]
+    pub(super) item_cancelled: std::collections::BTreeSet<u64>,
+    #[cfg(target_os = "android")]
+    last_touch_screen: Option<Screen>,
+    #[cfg(target_os = "android")]
     pub(super) custom_keys: std::collections::HashSet<KeyCode>,
+    #[cfg(target_os = "android")]
+    pub(super) custom_outputs: std::collections::HashMap<
+        std::result::Result<KeyCode, winit::event::MouseButton>,
+        std::collections::BTreeSet<String>,
+    >,
     #[cfg(target_os = "android")]
     pub(super) hardware_keys: std::collections::HashSet<KeyCode>,
     #[cfg(target_os = "android")]
@@ -201,6 +212,14 @@ impl Game<'_> {
                 &crate::backend::game_home(),
             );
             self.pad.touch.inventory_mode = self.android_inventory_controls();
+            if self
+                .pad
+                .last_touch_screen
+                .replace(self.screen)
+                .is_some_and(|old| old != self.screen)
+            {
+                self.android_release_touch_keys(false);
+            }
             self.android_virtual_mouse_clicks(event_loop);
             let active = horizon_client::android_runtime::active_input();
             if self.pad.last_input_mode.replace(active).is_some_and(|old| {
@@ -219,6 +238,7 @@ impl Game<'_> {
                 horizon_client::android_runtime::clear_keypad();
             }
             self.android_custom_events();
+            self.android_poll_item_touch();
         }
         #[cfg(target_os = "android")]
         if self.pad_in_menu() && self.android_inventory_controls() {
@@ -264,15 +284,21 @@ impl Game<'_> {
             {
                 self.sync_toggle(SNEAK);
             }
+            if crate::touch_visible()
+                && self.screen == Screen::Playing
+                && self.android_touch_descending()
+            {
+                self.pad
+                    .touch
+                    .drop_sneak_toggles(self.settings.keys.get("key.sneak"));
+                self.android_custom_events();
+            }
             let mut touch = self.pad.touch.poll_state();
             self.pad.touch_shield = crate::touch_visible()
                 && !self.pad_in_menu()
                 && self.touch_shield_available()
-                && if self.settings.touch.shield_button {
-                    self.pad.touch.shield_held()
-                } else {
-                    self.pad.touch.sneaking || touch.held(Button::RightStick)
-                };
+                && self.settings.touch.shield_button
+                && self.pad.touch.shield_held();
             if self.pad.touch_shield {
                 touch.triggers[0] = 1.0;
             }
@@ -511,7 +537,7 @@ impl Game<'_> {
     /// Touch fly/swim down and dismount are held even when ground sneaking
     /// is toggled. Any water counts, not only the sprint-swim pose: a toggled
     /// crouch there sinks the player (#71).
-    fn android_touch_descending(&self) -> bool {
+    pub(super) fn android_touch_descending(&self) -> bool {
         #[cfg(target_os = "android")]
         {
             self.pad.touch.vertical_movement

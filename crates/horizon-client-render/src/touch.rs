@@ -7,7 +7,9 @@ use std::{
 };
 const HOLD_DELAY: Duration = Duration::from_millis(350);
 mod custom;
+pub mod drop_gesture;
 mod editor;
+pub mod gestures;
 pub use custom::CustomButton;
 pub mod layout;
 pub use layout::{Control, Mode, Settings};
@@ -132,7 +134,7 @@ pub struct TouchControls {
     pub inventory_mode: bool,
     pub editor: Option<editor::Editor>,
     fingers: BTreeMap<u64, (Role, [f32; 2])>,
-    custom_fingers: BTreeMap<u64, String>,
+    custom_runtime: gestures::Runtime,
     custom_events: Vec<(String, bool)>,
     pending: PadState,
     pub aim: Option<[f32; 2]>,
@@ -155,6 +157,7 @@ pub struct TouchControls {
     pub holding_use: bool,
     pub holding: bool,
     pub break_progress: f32,
+    pub drop_indicator: Option<([f32; 2], [f32; 2])>,
     last_marker: Option<([f32; 2], Instant)>,
     last_sneak_tap: Option<Instant>,
     sprint_latched: bool,
@@ -165,7 +168,11 @@ impl TouchControls {
     }
 
     pub fn viewport(&mut self, width: u32, height: u32) {
-        self.aspect = width.max(1) as f32 / height.max(1) as f32;
+        let aspect = width.max(1) as f32 / height.max(1) as f32;
+        if self.aspect > 0.0 && (self.aspect - aspect).abs() > 0.001 {
+            self.clear();
+        }
+        self.aspect = aspect;
         if !self.loaded {
             self.settings = Settings::load();
             self.loaded = true;
@@ -247,7 +254,7 @@ impl TouchControls {
         self.holding_use = false;
     }
     pub fn owns_pointer(&self, id: u64) -> bool {
-        self.fingers.contains_key(&id) || self.custom_fingers.contains_key(&id)
+        self.fingers.contains_key(&id) || self.custom_runtime.owns(id)
     }
     pub fn ignore(&mut self, id: u64) {
         self.fingers.insert(id, (Role::Ignore, [0.0; 2]));
@@ -356,7 +363,6 @@ impl TouchControls {
             }
             let p = self.placement(control);
             let size = p.size * h;
-            let (x, y) = (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0);
             let opacity = if self.editor.is_some() {
                 p.opacity.max(0.25)
             } else {
@@ -380,7 +386,7 @@ impl TouchControls {
                 });
                 let dynamic = self.dynamic_joystick();
                 let (x, y) = match anchor {
-                    Some(anchor) if dynamic => {
+                    Some(anchor) if dynamic || self.settings.following_joystick => {
                         (anchor[0] * w - size / 2.0, anchor[1] * h - size / 2.0)
                     }
                     _ => (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0),
@@ -458,6 +464,9 @@ impl TouchControls {
                     );
                 }
             } else {
+                let [nx, ny, nw, nh] = p.rect(self.aspect());
+                let (x, y, width, height) = (nx * w, ny * h, nw * w, nh * h);
+                let bounds = [x, y, width, height];
                 let pressed = held
                     || self
                         .fingers
@@ -471,9 +480,9 @@ impl TouchControls {
                     Control::Perspective => Some("perspective"),
                     _ => None,
                 };
-                if themed.is_some_and(|name| {
-                    theme_button(b, a, name, [x, y, size, size], pressed, color, false)
-                }) {
+                if themed
+                    .is_some_and(|name| theme_button(b, a, name, bounds, pressed, color, false))
+                {
                     continue;
                 }
                 let name = match control {
@@ -496,7 +505,6 @@ impl TouchControls {
                     Control::Offhand | Control::Shield => "ui/joystick_knob",
                     _ => continue,
                 };
-                let bounds = [x, y, size, size];
                 match control {
                     Control::Chat => region(b, a, "gui", [200.0, 82.0, 18.0, 18.0], bounds, color),
                     Control::Debug => region(b, a, "gui", [236.0, 82.0, 18.0, 18.0], bounds, color),
@@ -517,7 +525,7 @@ impl TouchControls {
                             b,
                             a,
                             name,
-                            [x + size * 0.2, y + size * 0.2, size * 0.6, size * 0.6],
+                            [x + width * 0.2, y + height * 0.2, width * 0.6, height * 0.6],
                             color,
                         );
                     }
@@ -528,7 +536,12 @@ impl TouchControls {
                             b,
                             a,
                             name,
-                            [x + size * 0.23, y + size * 0.23, size * 0.54, size * 0.54],
+                            [
+                                x + width * 0.23,
+                                y + height * 0.23,
+                                width * 0.54,
+                                height * 0.54,
+                            ],
                             color,
                         );
                     }
@@ -544,12 +557,20 @@ impl TouchControls {
             if let Some(e) = &self.editor
                 && e.selected == Some(control)
             {
+                let [nx, ny, nw, nh] = p.rect(self.aspect());
+                let (x, y, width, height) = (nx * w, ny * h, nw * w, nh * h);
                 let green = rgba(255, 255, 255, 255);
                 for (p, q) in [
-                    ([x - 1.0, y - 1.0], [x + size + 1.0, y - 1.0]),
-                    ([x - 1.0, y + size + 1.0], [x + size + 1.0, y + size + 1.0]),
-                    ([x - 1.0, y - 1.0], [x - 1.0, y + size + 1.0]),
-                    ([x + size + 1.0, y - 1.0], [x + size + 1.0, y + size + 1.0]),
+                    ([x - 1.0, y - 1.0], [x + width + 1.0, y - 1.0]),
+                    (
+                        [x - 1.0, y + height + 1.0],
+                        [x + width + 1.0, y + height + 1.0],
+                    ),
+                    ([x - 1.0, y - 1.0], [x - 1.0, y + height + 1.0]),
+                    (
+                        [x + width + 1.0, y - 1.0],
+                        [x + width + 1.0, y + height + 1.0],
+                    ),
                 ] {
                     line(b, a, p, q, green);
                 }
@@ -591,6 +612,14 @@ impl TouchControls {
                 .values()
                 .any(|(role, _)| matches!(role, Role::Shield))
     }
+    pub fn draw_drop_indicator(&self, b: &mut HudBatch, a: &HudAtlas) {
+        if let Some((point, progress)) = self.drop_indicator {
+            let center = [point[0] * b.width, point[1] * b.height];
+            ring(b, a, center, 14.0, rgba(255, 255, 255, 200));
+            ring(b, a, center, 13.0 * progress[0], rgba(255, 210, 80, 255));
+            ring(b, a, center, 17.0 * progress[1], rgba(255, 100, 60, 255));
+        }
+    }
     pub fn pointer(&self) -> Option<[f32; 2]> {
         if self.crosshair() {
             return None;
@@ -606,7 +635,18 @@ impl TouchControls {
     }
     /// Coordinates are fractions of the drawable surface. Returns a look delta.
     pub fn update(&mut self, id: u64, point: [f32; 2], started: bool, ended: bool) -> [f32; 2] {
+        let previous = self.fingers.get(&id).map(|(_, p)| *p);
+        let mining = self.settings.mine_button_look
+            && !self.inventory_mode
+            && self.custom_runtime.finger_has(id, "action:key.attack");
         if self.custom_update(id, point, started, ended) {
+            if mining
+                && !started
+                && !ended
+                && let Some(previous) = previous
+            {
+                return [point[0] - previous[0], point[1] - previous[1]];
+            }
             return [0.0; 2];
         }
         if ended {
@@ -722,7 +762,22 @@ impl TouchControls {
             return [0.0; 2];
         }
         let aspect = self.aspect();
+        let following = self.settings.following_joystick && self.settings.mode != Mode::Dpad;
+        let radius = self.placement(Control::Move).size / 2.0;
+        let area = self.dynamic_area();
         if let Some((role, previous)) = self.fingers.get_mut(&id) {
+            if following && let Role::Move(anchor) = role {
+                let offset = [(point[0] - anchor[0]) * aspect, point[1] - anchor[1]];
+                let distance = offset[0].hypot(offset[1]);
+                if distance > radius {
+                    *anchor = [
+                        (point[0] - offset[0] * radius / distance / aspect)
+                            .clamp(area[0], area[0] + area[2]),
+                        (point[1] - offset[1] * radius / distance)
+                            .clamp(area[1], area[1] + area[3]),
+                    ];
+                }
+            }
             let delta = if let Role::Look {
                 start,
                 dragged,
@@ -740,6 +795,10 @@ impl TouchControls {
                 } else {
                     [0.0; 2]
                 }
+            } else if self.settings.mine_button_look
+                && matches!(role, Role::Button(Button::RightTrigger))
+            {
+                [point[0] - previous[0], point[1] - previous[1]]
             } else {
                 [0.0; 2]
             };
@@ -749,6 +808,7 @@ impl TouchControls {
         [0.0; 2]
     }
     pub fn clear(&mut self) {
+        self.drop_indicator = None;
         self.clear_custom();
         self.fingers.clear();
         self.last_sneak_tap = None;
@@ -927,6 +987,19 @@ fn text_button(
     color: u32,
     themed: bool,
 ) {
+    text_button_scaled(b, a, bounds, label, pressed, color, themed, 1.0);
+}
+#[allow(clippy::too_many_arguments)]
+fn text_button_scaled(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    bounds: [f32; 4],
+    label: &str,
+    pressed: bool,
+    color: u32,
+    themed: bool,
+    text_scale: f32,
+) {
     let custom_art = themed && theme_button(b, a, "button", bounds, pressed, color, true);
     if !custom_art {
         let [r, g, blue, alpha] = color.to_le_bytes();
@@ -954,7 +1027,8 @@ fn text_button(
         label_color,
         false,
     );
-    let scale = ((w - 6.0).max(1.0) / width.max(1.0)).min(((h - 6.0).max(1.0) / 8.0).min(1.0));
+    let scale =
+        ((w - 6.0).max(1.0) / width.max(1.0)).min(((h - 6.0).max(1.0) / 8.0).min(text_scale));
     b.scale_since(start, x + w / 2.0, y + h / 2.0 + offset, scale, scale);
 }
 
@@ -1151,6 +1225,58 @@ fn line(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mine_finger_turns_without_transferring_ownership() {
+        for enabled in [false, true] {
+            let mut t = TouchControls::default();
+            t.viewport(1920, 1080);
+            t.settings.mine_button_look = enabled;
+            let start = t.placement(Control::Attack).center;
+            t.update(1, start, true, false);
+            assert_eq!(t.poll_state().triggers[1], 1.0);
+            let delta = t.update(1, [start[0] + 0.05, start[1] - 0.2], false, false);
+            assert_eq!(delta != [0.0; 2], enabled);
+            assert_eq!(t.poll_state().triggers, [0.0, 1.0]);
+            t.update(1, start, false, true);
+            assert_eq!(t.poll_state().triggers, [0.0; 2]);
+        }
+    }
+    #[test]
+    fn following_starts_at_radius_and_keeps_speed_bounded_and_other_fingers() {
+        for mirrored in [false, true] {
+            let mut t = TouchControls::default();
+            t.viewport(1920, 1080);
+            t.settings.left_handed = mirrored;
+            t.settings.following_joystick = true;
+            let start = t.placement(Control::Move).center;
+            let radius = t.placement(Control::Move).size / 2.0;
+            let direction = if mirrored { -1.0 } else { 1.0 };
+            t.update(1, start, true, false);
+            t.update(2, [0.5, 0.3], true, false);
+            for multiple in [0.5, 0.999, 1.001, 2.0, 4.0] {
+                t.update(
+                    1,
+                    [
+                        start[0] + direction * radius * multiple / t.aspect(),
+                        start[1],
+                    ],
+                    false,
+                    false,
+                );
+                let state = t.poll_state();
+                assert!(state.left[0] * direction > 0.0);
+                assert!(state.left[0].hypot(state.left[1]) <= 1.00001);
+                assert!(t.owns_pointer(2));
+                if multiple < 1.0 {
+                    assert!(matches!(t.fingers[&1].0, Role::Move(anchor) if anchor == start));
+                }
+            }
+            t.update(1, start, false, true);
+            assert_eq!(t.poll_state().left, [0.0; 2]);
+            t.viewport(1080, 1920);
+            assert!(!t.owns_pointer(2));
+        }
+    }
     #[test]
     fn factory_swap_stays_beside_inventory_without_covering_action_buttons() {
         for (w, h) in [(2560, 1600), (2400, 1080), (1080, 2400), (240, 320)] {

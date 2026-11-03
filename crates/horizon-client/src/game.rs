@@ -56,6 +56,8 @@ mod agent_settings;
 mod allays;
 mod android_bundled;
 #[cfg(target_os = "android")]
+mod android_drop;
+#[cfg(target_os = "android")]
 mod android_input;
 mod armor_stands;
 mod atlas_slots;
@@ -7397,6 +7399,11 @@ impl Game<'_> {
     /// Shifts, or both Controls, are.
     fn heal_hold_latches(&mut self) {
         let (shift, control) = (self.modifiers.shift_key(), self.modifiers.control_key());
+        #[cfg(target_os = "android")]
+        let (shift, control) = {
+            let _ = (shift, control);
+            (self.has_shift_down(), self.has_control_down())
+        };
         if !shift {
             for key in [KeyCode::ShiftLeft, KeyCode::ShiftRight] {
                 self.physical_keys.remove(&key);
@@ -7429,7 +7436,21 @@ impl Game<'_> {
     /// keyboard and controllers both end here).
     fn mapped_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) -> Result<()> {
         #[cfg(target_os = "android")]
-        if !pressed && self.android_custom_key_held(key) {
+        if !pressed
+            && (self.android_custom_key_held(key)
+                || self.pad.hardware_keys.iter().any(|physical| {
+                    self.settings
+                        .keys
+                        .translate_all(*physical)
+                        .contains(&Ok(key))
+                })
+                || horizon_client::keybinds::MAPPINGS
+                    .iter()
+                    .any(|(action, default, _)| {
+                        horizon_client::keybinds::key_code(default) == Some(key)
+                            && self.pad.holds_action(&self.settings.controller, action)
+                    }))
+        {
             return Ok(());
         }
         // Sneak and sprint are ToggleKeyMappings: a press (or a key
@@ -9653,7 +9674,8 @@ impl Game<'_> {
             (Some(n), _) => self.menu_click(Some(slot), n as i32, Input::Swap),
             (None, KeyCode::KeyF) => self.menu_click(Some(slot), 40, Input::Swap),
             (None, KeyCode::KeyQ) => {
-                let all = drop_whole_stack(self.modifiers);
+                let all = drop_whole_stack(self.modifiers)
+                    || (cfg!(target_os = "android") && self.has_control_down());
                 self.menu_click(Some(slot), i32::from(all), Input::Throw)
             }
             _ => false,
@@ -9892,11 +9914,25 @@ impl Game<'_> {
     /// and a sneak the key no longer held: #4166's in-game report), so a
     /// cached key set is not vanilla's answer.
     pub(super) fn has_shift_down(&self) -> bool {
-        self.modifiers.shift_key()
+        #[cfg(target_os = "android")]
+        {
+            self.android_modifiers().shift_key()
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            self.modifiers.shift_key()
+        }
     }
-    /// The same live word for Control (`InputWithModifiers.hasControlDown`).
+    /// The same live word for Control plus independently held Android sources.
     pub(super) fn has_control_down(&self) -> bool {
-        self.modifiers.control_key()
+        #[cfg(target_os = "android")]
+        {
+            self.android_modifiers().control_key()
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            self.modifiers.control_key()
+        }
     }
     /// Real events word the modifiers by their own `ModifiersChanged`; a
     /// control socket's `key` is synthesized, so it words the bit directly
@@ -14933,6 +14969,10 @@ impl Game<'_> {
             }
         }
         self.flush_ime(&mut hud);
+        #[cfg(target_os = "android")]
+        self.pad
+            .touch
+            .draw_drop_indicator(&mut hud, &self.gui.atlas);
         let title = self.shows_panorama();
         let (yaw, pitch) = if title {
             // PanoramaRenderer: the title cube spins at 0.1 degrees per tick, pitched 10 degrees.
@@ -15525,7 +15565,8 @@ impl Game<'_> {
                 self.using = None;
             }
             KeyCode::KeyQ if self.screen == Screen::Playing => {
-                let all = drop_whole_stack(self.modifiers);
+                let all = drop_whole_stack(self.modifiers)
+                    || (cfg!(target_os = "android") && self.has_control_down());
                 self.drop_held(all);
             }
             KeyCode::Digit1
@@ -15578,7 +15619,16 @@ impl Game<'_> {
     /// A mouse button while playing (window or control socket).
     fn play_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
         #[cfg(target_os = "android")]
-        if !pressed && self.android_custom_mouse_held(button) {
+        if !pressed
+            && (self.android_custom_mouse_held(button)
+                || self.physical_buttons.contains(&button)
+                || horizon_client::keybinds::MAPPINGS
+                    .iter()
+                    .any(|(action, default, _)| {
+                        horizon_client::keybinds::mouse_button(default) == Some(button)
+                            && self.pad.holds_action(&self.settings.controller, action)
+                    }))
+        {
             return Ok(());
         }
         // A mod's claimed item takes the use button (capability `input`).
@@ -16080,6 +16130,20 @@ impl Game<'_> {
         }
         #[cfg(target_os = "android")]
         if let WindowEvent::KeyboardInput { event, .. } = &event
+            && self.pad.touch.editing_label()
+        {
+            if event.state == ElementState::Pressed && !crate::platform::active() {
+                let key = event.physical_key;
+                self.pad.touch.edit_label(
+                    event.text.as_deref(),
+                    key == PhysicalKey::Code(KeyCode::Backspace),
+                    matches!(key, PhysicalKey::Code(KeyCode::Enter | KeyCode::Escape)),
+                );
+            }
+            return;
+        }
+        #[cfg(target_os = "android")]
+        if let WindowEvent::KeyboardInput { event, .. } = &event
             && event.state == ElementState::Pressed
             && let PhysicalKey::Code(key) = event.physical_key
             && let Some(name) = horizon_client::keybinds::key_name(key)
@@ -16226,6 +16290,10 @@ impl Game<'_> {
                 }
                 if self.pad.touch.editor.is_none() {
                     self.settings.touch = self.pad.touch.settings.clone();
+                    crate::platform::hide();
+                }
+                if let Some(text) = self.pad.touch.take_label_request() {
+                    crate::platform::show(&text);
                 }
                 if std::mem::take(&mut self.pad.touch.clicked) {
                     self.audio.play_button_click();
@@ -16239,6 +16307,9 @@ impl Game<'_> {
                     log::error!("Android input: {error}");
                     return;
                 }
+            }
+            if self.android_item_touch(touch, event_loop, id) {
+                return;
             }
             if touch.phase == TouchPhase::Cancelled {
                 self.pad.touch.clear();

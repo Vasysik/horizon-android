@@ -91,6 +91,11 @@ pub struct Placement {
     pub center: [f32; 2],
     pub size: f32,
     pub opacity: f32,
+    /// Zero inherits the legacy square size.
+    #[serde(default)]
+    pub width: f32,
+    #[serde(default)]
+    pub height: f32,
 }
 impl Placement {
     pub(super) fn new(x: f32, y: f32, size: f32) -> Self {
@@ -98,18 +103,27 @@ impl Placement {
             center: [x, y],
             size,
             opacity: 0.65,
+            width: 0.0,
+            height: 0.0,
         }
     }
     pub fn rect(self, aspect: f32) -> [f32; 4] {
-        let sx = self.size / aspect.max(0.1);
+        let sx = self.width() / aspect.max(0.1);
         [
             self.center[0] - sx / 2.0,
-            self.center[1] - self.size / 2.0,
+            self.center[1] - self.height() / 2.0,
             sx,
-            self.size,
+            self.height(),
         ]
     }
     pub fn sanitize(&mut self) {
+        for dimension in [&mut self.width, &mut self.height] {
+            *dimension = if dimension.is_finite() && *dimension > 0.0 {
+                dimension.clamp(0.045, 0.45)
+            } else {
+                0.0
+            };
+        }
         if !self.size.is_finite() {
             self.size = 0.15;
         }
@@ -124,6 +138,20 @@ impl Placement {
             } else {
                 0.5
             };
+        }
+    }
+    pub fn width(self) -> f32 {
+        if self.width > 0.0 {
+            self.width
+        } else {
+            self.size
+        }
+    }
+    pub fn height(self) -> f32 {
+        if self.height > 0.0 {
+            self.height
+        } else {
+            self.size
         }
     }
 }
@@ -154,6 +182,8 @@ pub struct Settings {
     pub gyro_sensitivity: f32,
     pub attack_indicator_left: bool,
     pub dynamic_joystick: bool,
+    pub following_joystick: bool,
+    pub mine_button_look: bool,
     /// Fraction of the width, from the movement edge inward, where a dynamic
     /// joystick may start.
     pub dynamic_area_x: f32,
@@ -240,6 +270,8 @@ impl Default for Settings {
             gyro_sensitivity: 1.0,
             attack_indicator_left: true,
             dynamic_joystick: false,
+            following_joystick: false,
+            mine_button_look: true,
             dynamic_area_x: 0.25,
             dynamic_area_y: 1.0,
             button_visibility: [0; 14],
@@ -353,6 +385,18 @@ impl Settings {
         self.custom_buttons
             .retain(|b| super::CustomButton::valid_token(&b.key));
         for button in &mut self.custom_buttons {
+            button.gestures.sanitize(super::CustomButton::valid_token);
+            button.text = button
+                .text
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(32)
+                .collect();
+            button.text_scale = if button.text_scale.is_finite() {
+                button.text_scale.clamp(0.5, 3.0)
+            } else {
+                1.0
+            };
             for p in &mut button.layouts {
                 p.sanitize();
             }
@@ -413,6 +457,27 @@ pub fn contains([x, y, w, h]: [f32; 4], p: [f32; 2]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_square_and_rectangular_multibind_layouts_roundtrip() {
+        let legacy: Placement =
+            serde_json::from_str(r#"{"center":[0.4,0.5],"size":0.12,"opacity":0.6}"#).unwrap();
+        assert_eq!(legacy.rect(2.0), [0.37, 0.44, 0.06, 0.12]);
+        let mut settings = Settings::default();
+        let mut button = super::super::CustomButton::new("key.keyboard.unknown".into(), 0);
+        button.layouts[0].width = 0.2;
+        button.layouts[0].height = 0.08;
+        button.gestures.single = vec![super::super::gestures::Binding {
+            token: "action:key.jump".into(),
+            toggle: true,
+        }];
+        settings.custom_buttons.push(button);
+        settings.sanitize();
+        let restored: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(restored.custom_buttons[0].layouts[0].width(), 0.2);
+        assert_eq!(restored.custom_buttons[0].layouts[0].height(), 0.08);
+        assert!(restored.custom_buttons[0].gestures.single[0].toggle);
+    }
     #[test]
     fn gyro_preferences_roundtrip_and_reject_bad_values() {
         let mut s = super::Settings::default();

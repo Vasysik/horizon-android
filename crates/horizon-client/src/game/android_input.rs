@@ -8,6 +8,36 @@ use horizon_client::{
 use winit::event::{Touch, TouchPhase};
 
 impl Game<'_> {
+    pub(super) fn android_modifiers(&self) -> winit::keyboard::ModifiersState {
+        let utility = [
+            KeyCode::ShiftLeft,
+            KeyCode::ShiftRight,
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::AltLeft,
+            KeyCode::AltRight,
+            KeyCode::SuperLeft,
+            KeyCode::SuperRight,
+        ]
+        .into_iter()
+        .filter(|key| self.pad.touch_ui.key_held(*key));
+        let custom = self.pad.touch.held_custom_tokens().filter_map(|token| {
+            let key = token
+                .strip_prefix("action:")
+                .map(horizon_client::keybinds::KeyBinds::default_of)
+                .unwrap_or(token);
+            horizon_client::keybinds::key_code(key)
+        });
+        horizon_client_input::modifiers::with_keys(
+            self.modifiers,
+            self.pad
+                .hardware_keys
+                .iter()
+                .copied()
+                .chain(utility)
+                .chain(custom),
+        )
+    }
     pub(crate) fn android_apply_display_scale(&mut self) {
         if let (Some(window), Some(renderer)) = (&self.window, &mut self.renderer)
             && let Err(error) = crate::display::apply(window, renderer)
@@ -148,13 +178,18 @@ impl Game<'_> {
         })
     }
     pub(super) fn android_custom_events(&mut self) {
+        if self.screen == Screen::Playing && self.android_touch_descending() {
+            self.pad
+                .touch
+                .drop_sneak_toggles(self.settings.keys.get("key.sneak"));
+        }
         for (name, down) in self.pad.touch.key_events() {
             if let Some(mapping) = name.strip_prefix("action:") {
                 let default = horizon_client::keybinds::KeyBinds::default_of(mapping);
                 let result = if let Some(key) = horizon_client::keybinds::key_code(default) {
-                    self.mapped_key(key, down, false)
+                    self.android_custom_output(&name, Ok(key), down)
                 } else if let Some(button) = horizon_client::keybinds::mouse_button(default) {
-                    self.android_custom_mouse(button, down)
+                    self.android_custom_output(&name, Err(button), down)
                 } else {
                     Ok(())
                 };
@@ -174,34 +209,32 @@ impl Game<'_> {
             } else {
                 self.pad.custom_keys.remove(&key);
             }
-            if self.pad.hardware_keys.contains(&key) {
-                continue;
-            }
-            if (!self.pad_in_menu() || !down)
+            let physical_held = self.pad.hardware_keys.contains(&key);
+            if !physical_held
+                && (!self.pad_in_menu() || !down)
                 && horizon_client::android_runtime::keypad_key(key, down)
             {
                 continue;
             }
-            if down {
-                self.physical_keys.insert(key);
-            } else {
-                self.physical_keys.remove(&key);
+            if !physical_held {
+                if down {
+                    self.physical_keys.insert(key);
+                } else {
+                    self.physical_keys.remove(&key);
+                }
+                self.mod_key(key, down, false);
+                self.native_key_event(key, down, false);
             }
-            self.mod_key(key, down, false);
-            self.native_key_event(key, down, false);
             let action = if down {
                 KeyAction::Press
             } else {
                 KeyAction::Release
             };
-            if self.debug_key(key, action) {
+            if !physical_held && self.debug_key(key, action) {
                 continue;
             }
             for mapped in self.settings.keys.translate_all(key) {
-                let result = match mapped {
-                    Ok(code) => self.mapped_key(code, down, false),
-                    Err(button) => self.android_custom_mouse(button, down),
-                };
+                let result = self.android_custom_output(&name, mapped, down);
                 if let Err(error) = result {
                     log::warn!("Custom touch key: {error}");
                 }
@@ -213,7 +246,63 @@ impl Game<'_> {
         }
     }
 
+    fn android_custom_output(
+        &mut self,
+        source: &str,
+        output: std::result::Result<KeyCode, MouseButton>,
+        down: bool,
+    ) -> Result<()> {
+        let owners = self.pad.custom_outputs.entry(output).or_default();
+        let was = !owners.is_empty();
+        if down {
+            owners.insert(source.into());
+        } else {
+            owners.remove(source);
+        }
+        let held = !owners.is_empty();
+        if !held {
+            self.pad.custom_outputs.remove(&output);
+        }
+        if was == held {
+            return Ok(());
+        }
+        match output {
+            Ok(key) => {
+                if self.pad.hardware_keys.iter().any(|physical| {
+                    self.settings
+                        .keys
+                        .translate_all(*physical)
+                        .contains(&Ok(key))
+                }) {
+                    return Ok(());
+                }
+                self.mapped_key(key, held, false)
+            }
+            Err(button) => {
+                if self.physical_buttons.contains(&button)
+                    || self
+                        .pad
+                        .touch_ui
+                        .mouse_button_held(button == MouseButton::Right)
+                {
+                    return Ok(());
+                }
+                self.android_custom_mouse(button, held)
+            }
+        }
+    }
+
     fn android_custom_mouse(&mut self, button: MouseButton, down: bool) -> Result<()> {
+        if !down
+            && (self.android_custom_mouse_held(button)
+                || self.physical_buttons.contains(&button)
+                || self
+                    .pad
+                    .touch_ui
+                    .mouse_button_held(button == MouseButton::Right))
+        {
+            return Ok(());
+        }
         if !matches!(self.screen, Screen::Inventory | Screen::Creative) {
             return self.play_mouse(button, down);
         }
@@ -240,7 +329,7 @@ impl Game<'_> {
         Ok(())
     }
 
-    fn android_menu_mouse(
+    pub(super) fn android_menu_mouse(
         &mut self,
         events: &dyn super::event_loop::EventLoopCtl,
         id: WindowId,
@@ -296,6 +385,11 @@ impl Game<'_> {
             }
             return Ok(true);
         }
+        // Moving across a utility button cannot steal another control's finger
+        // or swallow its release (in particular a mining/camera finger).
+        if t.phase != TouchPhase::Started {
+            return Ok(false);
+        }
         let size = self.window.as_ref().unwrap().inner_size();
         let b = HudBatch::new([size.width, size.height]);
         let p = [t.location.x as f32 / b.scale, t.location.y as f32 / b.scale];
@@ -305,7 +399,6 @@ impl Game<'_> {
             .action(b.width, b.height, p, self.pad_in_menu())
         {
             if t.phase == TouchPhase::Started {
-                self.pad.touch.clear();
                 self.pad.touch.ignore(t.id);
                 match action {
                     Action::LatchF3 => {
@@ -376,11 +469,10 @@ impl Game<'_> {
                             key,
                             KeyCode::Tab | KeyCode::ShiftLeft | KeyCode::ControlLeft
                         ) {
-                            let down = !self.physical_keys.remove(&key);
-                            if down {
-                                self.physical_keys.insert(key);
+                            let down = self.pad.touch_ui.toggle_key(key);
+                            if !self.pad_in_menu() {
+                                self.mapped_key(key, down, false)?;
                             }
-                            self.mapped_key(key, down, false)?;
                         } else {
                             if !self.pad.touch_ui.key_down(t.id, key) {
                                 return Ok(true);
@@ -481,6 +573,21 @@ impl Game<'_> {
             ));
         }
         for out in crate::platform::poll() {
+            if self.pad.touch.editing_label() {
+                let done = matches!(out, Output::Close | Output::Enter);
+                self.pad.touch.edit_label(
+                    match &out {
+                        Output::Text(text) => Some(text),
+                        _ => None,
+                    },
+                    matches!(out, Output::Backspace),
+                    done,
+                );
+                if done {
+                    crate::platform::hide();
+                }
+                continue;
+            }
             let next_sign_line = self.sign_edit.is_some() && matches!(out, Output::Enter);
             let done =
                 matches!(out, Output::Close) || (matches!(out, Output::Enter) && !next_sign_line);
@@ -493,7 +600,7 @@ impl Game<'_> {
         }
         // Title screens also use Playing: their focused text fields must keep
         // the IME until the user confirms or closes the editor.
-        if !self.pad_in_menu() && crate::platform::active() {
+        if !self.pad_in_menu() && !self.pad.touch.editing_label() && crate::platform::active() {
             crate::platform::hide();
         }
     }
@@ -534,14 +641,22 @@ impl Game<'_> {
             "streaming":self.streaming.stages().into_iter().collect::<std::collections::BTreeMap<_,_>>()})
     }
     pub(super) fn android_key_up(&mut self, key: KeyCode) {
-        if self.pad.custom_keys.contains(&key) {
+        if self.pad.custom_keys.contains(&key) || self.pad.hardware_keys.contains(&key) {
             return;
+        }
+        if let Err(error) = self.mapped_key(key, false, false) {
+            log::warn!("Release touch key: {error}");
         }
         self.physical_keys.remove(&key);
         self.keys.remove(&key);
         self.debug_key(key, KeyAction::Release);
     }
     pub(super) fn android_release_touch_keys(&mut self, cancelled: bool) {
+        if let Some(pending) = self.pad.item_touch.take() {
+            self.pad.item_cancelled.insert(pending.id());
+        }
+        self.pad.touch.drop_indicator = None;
+        self.pad.touch.clear();
         if cancelled && matches!(self.screen, Screen::Inventory | Screen::Creative) {
             self.inv_clicks = Default::default();
             self.inv_drag = None;

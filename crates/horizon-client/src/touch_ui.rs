@@ -20,6 +20,7 @@ pub struct TouchUi {
     gesture: Option<(u64, [f32; 2], [f32; 2], bool)>,
     pointer_drag: Option<u64>,
     held_keys: BTreeMap<u64, KeyCode>,
+    latched_keys: std::collections::BTreeSet<KeyCode>,
     pub f3_latched: bool,
 }
 struct RelativeTouch {
@@ -113,6 +114,9 @@ pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) 
 }
 
 impl TouchUi {
+    pub fn mouse_button_held(&self, right: bool) -> bool {
+        self.mouse_buttons.values().any(|v| *v == right)
+    }
     pub fn key_down(&mut self, id: u64, key: KeyCode) -> bool {
         let first = !self.key_held(key);
         self.held_keys.insert(id, key);
@@ -126,10 +130,19 @@ impl TouchUi {
         self.held_keys.contains_key(&id)
     }
     pub fn key_held(&self, key: KeyCode) -> bool {
-        (key == KeyCode::F3 && self.f3_latched) || self.held_keys.values().any(|k| *k == key)
+        (key == KeyCode::F3 && self.f3_latched)
+            || self.latched_keys.contains(&key)
+            || self.held_keys.values().any(|k| *k == key)
+    }
+    pub fn toggle_key(&mut self, key: KeyCode) -> bool {
+        if !self.latched_keys.remove(&key) {
+            self.latched_keys.insert(key);
+        }
+        self.key_held(key)
     }
     pub fn release_keys(&mut self) -> Vec<KeyCode> {
         let mut keys: Vec<_> = std::mem::take(&mut self.held_keys).into_values().collect();
+        keys.extend(std::mem::take(&mut self.latched_keys));
         if self.f3_latched {
             keys.push(KeyCode::F3);
         }
@@ -430,6 +443,19 @@ fn button(b: &mut HudBatch, a: &HudAtlas, label: &str, x: f32, y: f32, w: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn modifier_toggle_and_finger_hold_release_independently() {
+        let mut ui = TouchUi::default();
+        assert!(ui.toggle_key(KeyCode::ShiftLeft));
+        assert!(!ui.key_down(1, KeyCode::ShiftLeft));
+        assert!(ui.toggle_key(KeyCode::ShiftLeft));
+        assert!(ui.key_held(KeyCode::ShiftLeft));
+        assert_eq!(ui.key_up(1), Some(KeyCode::ShiftLeft));
+        assert!(!ui.key_held(KeyCode::ShiftLeft));
+        assert!(ui.toggle_key(KeyCode::ControlLeft));
+        assert_eq!(ui.release_keys(), [KeyCode::ControlLeft]);
+        assert!(!ui.key_held(KeyCode::ControlLeft));
+    }
     #[test]
     fn explicit_mouse_drag_does_not_generate_an_extra_tap_or_hold_click() {
         let mut ui = TouchUi::default();
