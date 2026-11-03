@@ -451,6 +451,9 @@ pub struct Settings {
     pub analog_movement: bool,
     pub sprint_button: bool,
     pub sprint_toggle: bool,
+    /// The sprint control latches: a tap keeps sprinting until tapped again.
+    #[serde(default)]
+    pub toggle_sprint: bool,
     pub inventory_controls: bool,
     pub virtual_mouse_sensitivity: f32,
     pub crosshair_gestures: bool,
@@ -585,6 +588,7 @@ impl Default for Settings {
             analog_movement: false,
             sprint_button: true,
             sprint_toggle: false,
+            toggle_sprint: false,
             inventory_controls: false,
             virtual_mouse_sensitivity: 1.0,
             crosshair_gestures: false,
