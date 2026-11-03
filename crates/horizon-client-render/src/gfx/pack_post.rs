@@ -1054,6 +1054,14 @@ struct Resources<'a> {
     storable: u16,
     /// The formats and dimensions of the images no `image.*` gives, for their stand-ins.
     stand_ins: &'a std::cell::RefCell<Vec<(wgpu::TextureFormat, wgpu::TextureViewDimension)>>,
+    /// The stage being built and the buffers its passes wrote so far (`overridden`).
+    stage_written: &'a std::cell::Cell<(Group, u16)>,
+}
+
+/// `texture.<stage>.colortex<n>` stands in for the buffer until a pass of the stage writes it, as
+/// in Iris: then the buffer is read. superDuperVanilla's clouds and bloom share `colortex0`.
+fn overridden(src: Source, written_before: u16) -> bool {
+    !matches!(src, Source::Color(n) if written_before & 1 << n != 0)
 }
 
 /// A program's bind group layout (its uniform block, samplers and images) and how each sampler
@@ -1123,7 +1131,14 @@ fn bindings(
             ));
             return None;
         }
-        let custom = pack_textures::find(textures, group, &s.ty, &s.name);
+        let written_before = match pack.stage_written.get() {
+            (stage, written) if stage == group => written,
+            _ => 0,
+        };
+        let custom = pack_textures::find(textures, group, &s.ty, &s.name).filter(|_| {
+            let buffer = source(&s.name, group.shadow(), shadow.is_some(), watershadow);
+            overridden(buffer, written_before)
+        });
         let image = pack
             .images
             .iter()
@@ -1935,6 +1950,7 @@ impl PackPost {
             })
         });
         let stand_ins = std::cell::RefCell::new(Vec::new());
+        let stage_written = std::cell::Cell::new((Group::Final, 0u16));
         let pack = Resources {
             textures: &textures,
             images: &images,
@@ -1944,6 +1960,7 @@ impl PackPost {
             gpu,
             storable,
             stand_ins: &stand_ins,
+            stage_written: &stage_written,
         };
         let mut build = |mut p: horizon_shaders::PostProgram, geometry: Option<&Geometry<'_>>| {
             let in_shadow = p.group.shadow();
@@ -1990,6 +2007,11 @@ impl PackPost {
                 )?
             };
             pass.compute.append(&mut computes);
+            let before = match stage_written.get() {
+                (stage, written) if stage == group => written,
+                _ => 0,
+            };
+            stage_written.set((group, before | pass.written));
             // A pass's attachments share a size: the depth buffer's, for the passes that draw
             // the world.
             let size =
@@ -4426,6 +4448,7 @@ mod tests {
             gpu: Gpu::of(&adapter, device.features()),
             storable: 0,
             stand_ins: &stand_ins,
+            stage_written: &std::cell::Cell::new((Group::Final, 0)),
         };
         let mut notes = Vec::new();
         let (.., images) = bindings(
@@ -4522,6 +4545,14 @@ mod tests {
         let g = |name| texture_format(Format::parse(name).unwrap(), all);
         assert_eq!(g("RGBA16"), T::Rgba16Unorm);
         assert_eq!(g("R11F_G11F_B10F"), T::Rg11b10Ufloat);
+    }
+
+    #[test]
+    fn a_written_buffer_takes_back_its_name_from_a_custom_texture() {
+        assert!(overridden(Source::Color(0), 0));
+        assert!(overridden(Source::Color(0), 1 << 4));
+        assert!(!overridden(Source::Color(0), 1));
+        assert!(overridden(Source::Noise, 1));
     }
 
     #[test]
