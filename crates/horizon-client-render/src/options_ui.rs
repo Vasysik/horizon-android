@@ -1541,6 +1541,9 @@ enum Act {
     CustomDelete(u32),
     CustomKey(u32, &'static str),
     CustomInput(u32, &'static str),
+    /// A native mod's key (the mod's index in the installed list, the key's in its page) as the
+    /// button's keyboard key: the key the player has set for it now.
+    CustomModKey(u32, usize, usize),
     CustomIcon(u32, Option<&'static str>),
     /// Its own image, and what the drawing page does to the canvas.
     CustomDraw(u32),
@@ -3558,7 +3561,7 @@ impl OptionsUi {
                     ca.cmp(&cb)
                         .then_with(|| lang::get(a.0).cmp(&lang::get(b.0)))
                 });
-                mappings
+                let mut rows: Vec<Row> = mappings
                     .into_iter()
                     .map(|(name, _)| {
                         let label = Text::literal(lang::get(name));
@@ -3567,7 +3570,21 @@ impl OptionsUi {
                             None,
                         )
                     })
-                    .collect()
+                    .collect();
+                // The keys native mods register, after the game's own.
+                for (i, m) in s.mods.installed.iter().enumerate() {
+                    let Some(page) = &m.native else {
+                        continue;
+                    };
+                    for (k, [_, label, _]) in page.keys.iter().enumerate() {
+                        let label = Text::literal(format!("{}: {label}", m.title));
+                        rows.push(Row::Buttons(
+                            button(0.0, 0.0, 310.0, label, Act::CustomModKey(id, i, k)),
+                            None,
+                        ));
+                    }
+                }
+                rows
             }
             Page::CustomPick(id, CustomPick::Keyboard) => keybinds::keyboard_keys()
                 .chunks(2)
@@ -5257,6 +5274,21 @@ impl OptionsUi {
                             self.custom_send.focused = false;
                             events.extend(self.back(s));
                         }
+                        Act::CustomModKey(id, i, k) => {
+                            let key = s.mods.installed.get(i).and_then(|m| {
+                                let [name, _, default] = m.native.as_ref()?.keys.get(k)?;
+                                let chosen = s.mods.keys.get(&m.id).and_then(|c| c.get(name));
+                                Some(chosen.unwrap_or(default).clone())
+                            });
+                            if let Some(key) = key
+                                && let Some(b) = s.custom_buttons.iter_mut().find(|b| b.id == id)
+                            {
+                                b.action = crate::settings::CustomAction::Input(key);
+                            }
+                            self.custom_send.set_value("");
+                            self.custom_send.focused = false;
+                            events.extend(self.back(s));
+                        }
                         Act::CustomIcon(id, icon) => {
                             if let Some(b) = s.custom_buttons.iter_mut().find(|b| b.id == id) {
                                 b.icon = icon.map(str::to_owned);
@@ -6356,6 +6388,7 @@ impl OptionsUi {
                         | Act::CustomDelete(_)
                         | Act::CustomKey(..)
                         | Act::CustomInput(..)
+                        | Act::CustomModKey(..)
                         | Act::CustomIcon(..)
                         | Act::CustomDraw(_)
                         | Act::CanvasClear
