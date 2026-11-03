@@ -4,6 +4,15 @@ use crate::account::{self, Account, Accounts, Secrets, SignIn, SignInState};
 use horizon_client::ui_theme::{Face, Ui, color};
 
 pub(super) struct Login {
+    pub choosing: bool,
+    pub providers: bool,
+    pub offline: bool,
+    pub saved_accounts: Vec<Account>,
+    pub account_offset: usize,
+    pub ely: bool,
+    pub username: String,
+    pub password: String,
+    pub otp: String,
     pub visible: bool,
     pub signed_in: bool,
     pub profile: Option<String>,
@@ -15,6 +24,15 @@ pub(super) struct Login {
 impl Login {
     pub fn new() -> Self {
         let mut login = Self {
+            choosing: false,
+            providers: false,
+            offline: false,
+            saved_accounts: vec![],
+            account_offset: 0,
+            ely: false,
+            username: String::new(),
+            password: String::new(),
+            otp: String::new(),
             visible: false,
             signed_in: false,
             profile: None,
@@ -27,11 +45,13 @@ impl Login {
         login
     }
     pub(super) fn refresh_status(&mut self) {
-        let account = Accounts::load().selected().cloned();
+        let accounts = Accounts::load();
+        let account = accounts.selected().cloned();
+        self.saved_accounts = accounts.accounts;
         self.profile = account.as_ref().map(|a| a.name.clone());
         self.signed_in = account.is_some_and(|a| {
             account::store()
-                .get(&a.uuid)
+                .get(&a.key())
                 .ok()
                 .flatten()
                 .is_some_and(|s| serde_json::from_str::<Secrets>(&s).is_ok())
@@ -46,25 +66,18 @@ impl Login {
             _ => "Offline / Sign in".into(),
         }
     }
-    pub fn account_label(&self, offline_name: &str) -> String {
-        if let Some(name) = &self.profile {
-            name.clone()
-        } else if self.pending() {
-            "Signing in...".into()
-        } else if !offline_name.trim().is_empty() {
-            offline_name.trim().to_owned()
-        } else {
-            "vasysik1".into()
-        }
-    }
 
     pub fn pending(&self) -> bool {
         self.task.is_some()
     }
     pub fn hide(&mut self) {
+        self.password.clear();
+        self.otp.clear();
         self.visible = false;
     }
     pub fn close(&mut self) {
+        self.password.clear();
+        self.otp.clear();
         self.auto_open_device = false;
         if let Some(task) = self.task.take() {
             task.cancel();
@@ -78,6 +91,8 @@ impl Login {
     }
     pub fn start_device(&mut self, id: &str) {
         self.close();
+        self.ely = false;
+        self.choosing = false;
         self.visible = true;
         let id = id.trim();
         if !account::legacy_client(id)
@@ -99,7 +114,10 @@ impl Login {
         self.task = Some(SignIn::start_with_client_id(Some(id.into())));
         self.state = Some(SignInState::Starting);
     }
-    pub fn poll(&mut self) {
+    /// Reports completion so views can switch their provider-scoped selection,
+    /// including when the account panel was closed during browser sign-in.
+    pub fn poll(&mut self) -> bool {
+        let mut completed = false;
         if let Some(task) = &self.task {
             self.state = Some(task.state());
             if let Some(SignInState::Done(result)) = &self.state {
@@ -109,12 +127,52 @@ impl Login {
                 };
                 self.task = None;
                 self.refresh_status();
+                completed = true;
             }
         }
         if self.auto_open_device && matches!(self.state, Some(SignInState::Code(_))) {
             self.auto_open_device = false;
             self.open_link();
         }
+        completed
+    }
+    pub fn start_ely(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.cancel();
+        }
+        self.message.clear();
+        self.task = Some(SignIn::start_ely(
+            self.username.clone(),
+            std::mem::take(&mut self.password),
+            std::mem::take(&mut self.otp),
+        ));
+        self.state = Some(SignInState::Starting);
+    }
+    pub fn field(&self, name: &str) -> Option<&str> {
+        match name {
+            "ely_username" => Some(&self.username),
+            "ely_password" => Some(&self.password),
+            "ely_otp" => Some(&self.otp),
+            _ => None,
+        }
+    }
+    pub fn edit(&mut self, field: Option<&str>, output: &horizon_client::osk::Output) -> bool {
+        let value = match field {
+            Some("ely_username") => &mut self.username,
+            Some("ely_password") => &mut self.password,
+            Some("ely_otp") => &mut self.otp,
+            _ => return false,
+        };
+        match output {
+            horizon_client::osk::Output::Text(text) if value.len() + text.len() <= 1024 => {
+                value.push_str(text);
+            }
+            horizon_client::osk::Output::Backspace => {
+                value.pop();
+            }
+            _ => {}
+        }
+        true
     }
     pub fn sign_out(&mut self) {
         self.close();
@@ -122,7 +180,7 @@ impl Login {
         let mut accounts = Accounts::load();
         if let Some(a) = accounts.selected().cloned() {
             self.message = match accounts
-                .remove(account::store(), &a.uuid)
+                .remove_when_idle(account::store(), &a.key())
                 .and_then(|_| accounts.save())
             {
                 Ok(()) => "Signed out. Offline play is available.".into(),
@@ -161,153 +219,264 @@ impl Login {
         }
     }
     pub fn session(id: &str) -> Result<Option<(Account, Secrets)>, String> {
-        let mut accounts = Accounts::load();
-        let Some(a) = accounts.selected().cloned() else {
-            return Ok(None);
-        };
-        let secrets = account::store()
-            .get(&a.uuid)?
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .ok_or("Session ended. Sign in again, or sign out to play offline.")?;
-        let (a, secrets) = account::fresh(&account::Endpoints::live(), id.trim(), &a, secrets)?;
-        accounts.add(account::store(), a.clone(), &secrets)?;
-        accounts.save()?;
-        Ok(Some((a, secrets)))
+        account::session::selected_session(id.trim())
     }
     pub fn draw(
         &self,
         ui: &mut Ui,
         targets: &mut Vec<([f32; 4], Action)>,
         offline_name: &str,
-        last_name_changed: &str,
-        editing_name: bool,
+        editing: Option<&str>,
     ) {
-        use horizon_client::ui_theme::Icon;
         targets.clear();
-        let (sw, sh) = (ui.w, ui.h);
-        ui.rounded(0.0, 0.0, sw, sh, 0.0, color::hex(0x05040A, 205));
-
-        let w = (sw - 24.0).min(528.0);
-        let h = (sh - 16.0).min(392.0).max(264.0);
-        let x = (sw - w) * 0.5;
-        let y = (sh - h) * 0.5;
-
-        // Material You 3 Extra-Large Modal Surface + Elevation Shadow
-        ui.rounded(x + 2.0, y + 6.0, w, h, 24.0, color::hex(0x000000, 150));
-        ui.rounded(x, y, w, h, 24.0, color::hex(0x151320, 255));
-        ui.stroke_rounded(x, y, w, h, 24.0, 1.5, color::hex(0x36304E, 255));
-
-        let inner_x = x + 18.0;
-        let inner_w = w - 36.0;
-
-        // Top Bar: Title + Status Pill + Close Button
-        let header_y = y + 12.0;
-        ui.rounded(
-            inner_x,
-            header_y + 2.0,
-            28.0,
-            28.0,
-            9.0,
-            color::hex(0x332854, 255),
-        );
-        ui.icon(
-            Icon::MicrosoftGrid,
-            inner_x + 6.0,
-            header_y + 8.0,
-            16.0,
-            color::hex(0x9A7BFF, 255),
-        );
-        ui.text(
-            Face::SemiBold,
-            16.5,
-            inner_x + 36.0,
-            header_y + 3.0,
-            color::TEXT,
-            "Player Identity & Microsoft Account",
-        );
-
-        let close_rect = [x + w - 48.0, header_y, 30.0, 30.0];
-        ui.rounded(
-            close_rect[0],
-            close_rect[1],
-            close_rect[2],
-            close_rect[3],
-            15.0,
-            color::hex(0x252136, 255),
-        );
-        ui.border(
-            close_rect[0],
-            close_rect[1],
-            close_rect[2],
-            close_rect[3],
-            15.0,
-            color::hex(0x3B3554, 255),
-        );
-        ui.icon(
-            Icon::Close,
-            close_rect[0] + 8.0,
-            close_rect[1] + 8.0,
-            14.0,
-            color::TEXT,
-        );
-        targets.push((close_rect, Action::CloseLogin));
-
-        let active_name = self.account_label(offline_name);
-        let mut cy = header_y + 36.0;
-
-        if editing_name {
-            // Focused Name Editing View with 3D Head Preview
-            let hero_h = 84.0;
-            ui.rounded(
-                inner_x,
-                cy,
-                inner_w,
-                hero_h,
-                16.0,
-                color::hex(0x1E1B2E, 255),
-            );
-            ui.border(
-                inner_x,
-                cy,
-                inner_w,
-                hero_h,
-                16.0,
-                color::hex(0x9A7BFF, 255),
-            );
-            ui.avatar_head_3d(inner_x + 12.0, cy + 10.0, 64.0, &active_name);
-            ui.text(
-                Face::SemiBold,
-                15.5,
-                inner_x + 88.0,
-                cy + 12.0,
-                color::TEXT,
-                "Editing Player Name",
-            );
-            ui.text(
-                Face::Regular,
-                12.0,
-                inner_x + 88.0,
-                cy + 34.0,
-                color::MUTED,
-                "Updates your 3D Minecraft head preview and offline profile identity.",
-            );
-            let change_line = format!("Last changed: {last_name_changed}");
-            let fitted_chg = ui.fit_text(Face::Medium, 11.5, &change_line, inner_w - 98.0);
+        let w = (ui.w - 32.0).min(720.0);
+        let h = (ui.h - 24.0).min(550.0);
+        let x = (ui.w - w) / 2.0;
+        let y = (ui.h - h) / 2.0;
+        ui.rounded(x, y, w, h, 8.0, color::BG);
+        if self.providers {
             ui.text(
                 Face::Medium,
-                11.5,
-                inner_x + 88.0,
-                cy + 54.0,
-                color::hex(0x9A7BFF, 255),
-                &fitted_chg,
+                24.0,
+                x + 20.0,
+                y + 20.0,
+                color::TEXT,
+                "Accounts",
             );
-
+            for (index, (label, action)) in [
+                ("Offline", Action::OfflineAccount),
+                ("Microsoft", Action::MicrosoftAccount),
+                ("Ely.by", Action::ElySignIn),
+                ("Saved accounts", Action::SavedAccounts),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                button(
+                    ui,
+                    targets,
+                    [x + 20.0, y + 62.0 + index as f32 * 42.0, w - 40.0, 36.0],
+                    label,
+                    action,
+                    false,
+                );
+            }
             button(
                 ui,
                 targets,
-                [inner_x, cy + hero_h + 14.0, inner_w, 40.0],
+                [x + 20.0, y + h - 52.0, w - 40.0, 36.0],
+                "Close",
+                Action::CloseLogin,
+                false,
+            );
+            return;
+        }
+        if self.choosing {
+            ui.text(
+                Face::Medium,
+                24.0,
+                x + 20.0,
+                y + 20.0,
+                color::TEXT,
+                "Choose account",
+            );
+            button(
+                ui,
+                targets,
+                [x + 20.0, y + 62.0, w - 40.0, 36.0],
+                &format!("Offline: {offline_name}"),
+                Action::SelectOffline,
+                false,
+            );
+            for (index, account) in self
+                .saved_accounts
+                .iter()
+                .enumerate()
+                .skip(self.account_offset)
+                .take(5)
+            {
+                let label = format!(
+                    "{} · {}",
+                    account.name,
+                    if account.provider == account::Provider::Ely {
+                        "Ely.by"
+                    } else {
+                        "Microsoft"
+                    }
+                );
+                button(
+                    ui,
+                    targets,
+                    [
+                        x + 20.0,
+                        y + 110.0 + (index - self.account_offset) as f32 * 42.0,
+                        w - 40.0,
+                        36.0,
+                    ],
+                    &label,
+                    Action::SelectAccount(index),
+                    false,
+                );
+            }
+            button(
+                ui,
+                targets,
+                [x + 20.0, y + h - 96.0, (w - 48.0) * 0.5, 32.0],
+                "Previous",
+                Action::SavedPage(false),
+                false,
+            );
+            button(
+                ui,
+                targets,
+                [x + w * 0.5 + 4.0, y + h - 96.0, (w - 48.0) * 0.5, 32.0],
+                "Next",
+                Action::SavedPage(true),
+                false,
+            );
+            button(
+                ui,
+                targets,
+                [x + 20.0, y + h - 52.0, w - 40.0, 36.0],
+                "Back",
+                Action::Account,
+                false,
+            );
+            return;
+        }
+        if self.ely {
+            ui.text(
+                Face::Medium,
+                24.0,
+                x + 20.0,
+                y + 18.0,
+                color::TEXT,
+                "Ely.by account",
+            );
+            ui.text(
+                Face::Regular,
+                13.0,
+                x + 20.0,
+                y + 54.0,
+                color::MUTED,
+                "Credentials go only to authserver.ely.by.",
+            );
+            for (index, (label, name, value, secret)) in [
+                (
+                    "Username or email",
+                    "ely_username",
+                    self.username.as_str(),
+                    false,
+                ),
+                (
+                    "Password (not saved)",
+                    "ely_password",
+                    self.password.as_str(),
+                    true,
+                ),
+                (
+                    "Two-factor code (optional)",
+                    "ely_otp",
+                    self.otp.as_str(),
+                    true,
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let active = editing.is_some_and(|field| field.starts_with("ely_"));
+                if active && editing != Some(name) {
+                    continue;
+                }
+                let top = y + 86.0 + if active { 0.0 } else { index as f32 * 72.0 };
+                ui.text(Face::Regular, 13.0, x + 20.0, top, color::MUTED, label);
+                let display = if secret {
+                    "*".repeat(value.chars().count().min(40))
+                } else {
+                    value.into()
+                };
+                button(
+                    ui,
+                    targets,
+                    [x + 20.0, top + 20.0, w - 40.0, 38.0],
+                    &display,
+                    Action::Field(name),
+                    false,
+                );
+            }
+            if editing.is_some_and(|field| field.starts_with("ely_")) {
+                button(
+                    ui,
+                    targets,
+                    [x + 20.0, y + h - 52.0, w - 40.0, 36.0],
+                    "Done editing",
+                    Action::FinishNameEdit,
+                    true,
+                );
+                return;
+            }
+            let message = ui.fit_text(Face::Regular, 13.0, &self.message, w - 40.0);
+            ui.text(
+                Face::Regular,
+                13.0,
+                x + 20.0,
+                y + 310.0,
+                color::TEXT,
+                &message,
+            );
+            button(
+                ui,
+                targets,
+                [x + 20.0, y + h - 142.0, w - 40.0, 38.0],
+                if self.pending() {
+                    "Signing in..."
+                } else {
+                    "Sign in to Ely.by"
+                },
+                Action::SubmitEly,
+                true,
+            );
+            button(
+                ui,
+                targets,
+                [x + 20.0, y + h - 96.0, w - 40.0, 36.0],
+                "Back to accounts",
+                Action::Account,
+                false,
+            );
+            button(
+                ui,
+                targets,
+                [x + 20.0, y + h - 52.0, w - 40.0, 36.0],
+                "Done",
+                Action::CloseLogin,
+                false,
+            );
+            return;
+        }
+        if self.offline {
+            ui.text(
+                Face::Medium,
+                24.0,
+                x + 20.0,
+                y + 20.0,
+                color::TEXT,
+                "Offline player name",
+            );
+            ui.text(
+                Face::Regular,
+                16.0,
+                x + 20.0,
+                y + 66.0,
+                color::MUTED,
+                "Maximum 16 characters.",
+            );
+            button(
+                ui,
+                targets,
+                [x + 20.0, y + 100.0, w - 40.0, 44.0],
                 if offline_name.is_empty() {
-                    "Type player name..."
+                    "Enter an offline name"
                 } else {
                     offline_name
                 },
@@ -317,228 +486,174 @@ impl Login {
             button(
                 ui,
                 targets,
-                [inner_x, y + h - 48.0, inner_w, 36.0],
-                "Save Player Name",
-                Action::FinishNameEdit,
+                [x + 20.0, y + h - 56.0, w - 40.0, 36.0],
+                "Use offline account",
+                Action::SelectOffline,
                 true,
+            );
+            button(
+                ui,
+                targets,
+                [x + 20.0, y + h - 100.0, w - 40.0, 36.0],
+                "Back to accounts",
+                Action::Account,
+                false,
             );
             return;
         }
 
-        // Section 1: 3D Minecraft Head Identity Hero Card (3D Head + Username + Status Badge + Last Name Change + Quick Edit)
-        let hero_h = 82.0;
-        ui.rounded(
-            inner_x,
-            cy,
-            inner_w,
-            hero_h,
-            16.0,
-            color::hex(0x1D1A2B, 255),
-        );
-        ui.border(
-            inner_x,
-            cy,
-            inner_w,
-            hero_h,
-            16.0,
-            color::hex(0x322D4A, 255),
-        );
-
-        // 3D Isometric Minecraft Head on the left
-        ui.avatar_head_3d(inner_x + 10.0, cy + 9.0, 64.0, &active_name);
-
-        let info_x = inner_x + 84.0;
-        let edit_btn_w = 96.0;
-        let info_max_w = (inner_w - 94.0 - edit_btn_w - 8.0).max(90.0);
-
-        let fitted_name = ui.fit_text(Face::SemiBold, 16.5, &active_name, info_max_w);
-        ui.text(
-            Face::SemiBold,
-            16.5,
-            info_x,
-            cy + 8.0,
-            color::TEXT,
-            &fitted_name,
-        );
-
-        let acct_type = if self.signed_in {
-            "Microsoft Xbox Live • Session Active"
-        } else if self.profile.is_some() {
-            "Microsoft Account • Renewal Needed"
-        } else {
-            "Offline / Local Profile • Ready to Play"
-        };
-        let fitted_type = ui.fit_text(Face::Medium, 11.5, acct_type, info_max_w);
         ui.text(
             Face::Medium,
-            11.5,
-            info_x,
-            cy + 31.0,
-            if self.signed_in {
-                color::hex(0x6EE7B7, 255)
-            } else {
-                color::hex(0x9A7BFF, 255)
-            },
-            &fitted_type,
+            24.0,
+            x + 20.0,
+            y + 18.0,
+            color::TEXT,
+            "Microsoft account",
         );
-
-        let history_line = format!("Last name change: {last_name_changed}");
-        let fitted_hist = ui.fit_text(Face::Regular, 11.0, &history_line, inner_w - 94.0);
         ui.text(
-            Face::Regular,
-            11.0,
-            info_x,
-            cy + 52.0,
-            color::MUTED,
-            &fitted_hist,
+            Face::Medium,
+            18.0,
+            x + 20.0,
+            y + 58.0,
+            if self.signed_in {
+                color::ACCENT
+            } else {
+                color::MUTED
+            },
+            &self.status(offline_name),
         );
-
-        // Quick "Change Name" button inside Hero Card
-        let edit_rect = [
-            inner_x + inner_w - edit_btn_w - 10.0,
-            cy + 10.0,
-            edit_btn_w,
-            30.0,
-        ];
-        button(
-            ui,
-            targets,
-            edit_rect,
-            "Change Name",
-            Action::Field("name"),
-            false,
-        );
-
-        cy += hero_h + 8.0;
-
-        // Reserve bottom space for Offline Name Card + 2 Action Button Rows
-        let row2_y = y + h - 42.0;
-        let row1_y = row2_y - 36.0;
-        let name_row_y = row1_y - 42.0;
-
-        // Section 2: Microsoft Session & Device Code Card
-        let box_h = (name_row_y - cy - 6.0).clamp(38.0, 78.0);
-        ui.rounded(inner_x, cy, inner_w, box_h, 14.0, color::hex(0x1B1828, 255));
-        ui.border(inner_x, cy, inner_w, box_h, 14.0, color::hex(0x2D2942, 255));
-
         if let Some(SignInState::Code(code)) = &self.state {
             button(
                 ui,
                 targets,
-                [inner_x + 8.0, cy + 5.0, inner_w - 16.0, 28.0],
-                &format!("Device Code: {}  •  Tap to Copy", code.user_code),
+                [x + 20.0, y + 96.0, w - 40.0, 48.0],
+                &format!("{}    /    Copy code", code.user_code),
                 Action::CopyLoginCode,
-                true,
+                false,
             );
         } else {
-            let subtitle = if self.signed_in {
-                "Microsoft tokens are stored in encrypted storage and renew automatically."
-            } else {
-                "Sign in with Microsoft Browser or Device Code for official online servers."
-            };
-            let fitted_sub = ui.fit_text(Face::Medium, 11.5, subtitle, inner_w - 20.0);
-            ui.text(
-                Face::Medium,
-                11.5,
-                inner_x + 10.0,
-                cy + 6.0,
-                color::TEXT,
-                &fitted_sub,
-            );
-        }
-
-        let msg_text = match &self.state {
-            Some(SignInState::Starting) => "Requesting Microsoft sign-in code...",
-            _ => &self.message,
-        };
-        if !msg_text.is_empty() && box_h >= 42.0 {
-            let fitted_msg = ui.fit_text(Face::Regular, 11.0, msg_text, inner_w - 20.0);
             ui.text(
                 Face::Regular,
-                11.0,
-                inner_x + 10.0,
-                cy + box_h - 20.0,
-                color::hex(0xC4B5FD, 255),
-                &fitted_msg,
+                16.0,
+                x + 20.0,
+                y + 104.0,
+                color::TEXT,
+                if self.signed_in {
+                    "Account saved securely. Sessions renew automatically."
+                } else {
+                    "Your password is entered in Microsoft's browser."
+                },
             );
         }
-
-        // Section 3: Direct Offline Name Pill Bar
-        if !self.pending() && name_row_y >= cy + box_h + 2.0 {
-            let lbl_w = 112.0;
+        let text = match &self.state {
+            Some(SignInState::Starting) => "Requesting a sign-in code...",
+            _ => &self.message,
+        };
+        let limit = ((w - 40.0) / 7.5).max(20.0) as usize;
+        let mut line = String::new();
+        let mut row = 0;
+        for word in text.split_whitespace() {
+            if line.len() + word.len() + 1 > limit {
+                ui.text(
+                    Face::Regular,
+                    14.0,
+                    x + 20.0,
+                    y + 166.0 + row as f32 * 20.0,
+                    color::TEXT,
+                    &line,
+                );
+                row += 1;
+                line.clear();
+                if row >= 5 {
+                    break;
+                }
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        if row < 5 {
             ui.text(
-                Face::SemiBold,
-                11.5,
-                inner_x + 4.0,
-                name_row_y + 7.0,
-                color::MUTED,
-                "Offline Username:",
+                Face::Regular,
+                14.0,
+                x + 20.0,
+                y + 166.0 + row as f32 * 20.0,
+                color::TEXT,
+                &line,
             );
+        }
+        let half = (w - 52.0) / 2.0;
+        if self.message.contains("not approved by Mojang") {
             button(
                 ui,
                 targets,
-                [inner_x + lbl_w, name_row_y, inner_w - lbl_w, 32.0],
-                if offline_name.is_empty() {
-                    "Tap to set offline player name..."
-                } else {
-                    offline_name
-                },
-                Action::Field("name"),
+                [x + 20.0, y + h - 183.0, w - 40.0, 30.0],
+                "Request Minecraft API approval",
+                Action::ReviewApp,
                 false,
             );
         }
-
-        // Section 4: Action Buttons (2 M3 rows at bottom)
-        let (primary_label, primary_action) = if matches!(self.state, Some(SignInState::Code(_))) {
-            ("Copy code & open browser", Action::LoginLink)
+        let (label, action) = if matches!(self.state, Some(SignInState::Code(_))) {
+            ("Copy code and open browser", Action::LoginLink)
         } else if self.pending() {
             ("Restart browser sign-in", Action::SignIn)
-        } else if self.signed_in {
-            ("Switch Microsoft account", Action::SignIn)
         } else {
-            ("Sign in with browser", Action::SignIn)
+            (
+                if self.signed_in {
+                    "Switch Microsoft account"
+                } else {
+                    "Sign in with browser"
+                },
+                Action::SignIn,
+            )
         };
-        let half = (inner_w - 8.0) * 0.5;
         button(
             ui,
             targets,
-            [inner_x, row1_y, half, 32.0],
-            primary_label,
-            primary_action,
+            [x + 20.0, y + h - 148.0, w - 40.0, 42.0],
+            label,
+            action,
             true,
         );
         button(
             ui,
             targets,
-            [inner_x + half + 8.0, row1_y, half, 32.0],
-            "Use device code",
+            [x + 20.0, y + h - 98.0, half, 38.0],
+            "Use a device code instead",
             Action::DeviceSignIn,
             false,
         );
-
-        let (sec_label, sec_action) = if self.pending() {
-            ("Cancel sign-in", Action::CancelLogin)
-        } else if self.profile.is_some() {
-            ("Sign out", Action::SignOut)
-        } else if self.message.contains("not approved by Mojang") {
-            ("Request API approval", Action::ReviewApp)
-        } else {
-            ("Close", Action::CloseLogin)
-        };
         button(
             ui,
             targets,
-            [inner_x, row2_y, half, 32.0],
-            sec_label,
-            sec_action,
+            [x + 32.0 + half, y + h - 98.0, half, 38.0],
+            if self.pending() {
+                "Cancel sign-in"
+            } else {
+                if self.profile.is_some() {
+                    "Sign out"
+                } else {
+                    "Close"
+                }
+            },
+            if self.pending() {
+                Action::CancelLogin
+            } else {
+                if self.profile.is_some() {
+                    Action::SignOut
+                } else {
+                    Action::CloseLogin
+                }
+            },
             false,
         );
         button(
             ui,
             targets,
-            [inner_x + half + 8.0, row2_y, half, 32.0],
+            [x + 20.0, y + h - 52.0, w - 40.0, 36.0],
             if self.pending() {
-                "Back (continues)"
+                "Back (sign-in continues)"
             } else {
                 "Done"
             },

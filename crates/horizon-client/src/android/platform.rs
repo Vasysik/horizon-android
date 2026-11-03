@@ -500,6 +500,13 @@ pub fn capture_mouse(capture: bool) -> bool {
     .is_some()
 }
 
+pub fn show_secret(text: &str) {
+    MULTILINE.with(|mode| mode.set(false));
+    if crate::native_ime::show_secret(text) {
+        EDIT.with(|e| *e.borrow_mut() = Some(text.into()));
+    }
+}
+
 pub fn show(text: &str) {
     show_editor(text, false);
 }
