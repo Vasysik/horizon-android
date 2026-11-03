@@ -16,7 +16,7 @@ set -euo pipefail
 
 MIXINS_GIT=https://github.com/horizon-rust/horizon-mixins
 # Horizon's launcher's (launcher/src/native_mods.rs, MIXINS_REV).
-MIXINS_REV=0d6b103c70633d8fd9443d8d0acd3aadaacedb06
+MIXINS_REV=ddd9700b21997c95d95ac6ee5ecafe3830cf622a
 
 fail() { echo "native_build: $*" >&2; exit 1; }
 [ $# -ge 3 ] || fail "usage: native_build.sh SOURCE OUT BUNDLE..."
