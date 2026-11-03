@@ -441,6 +441,56 @@ pub struct Post {
     pub config: Config,
     /// Programs skipped and why, as `program: message` or `file:line: message`.
     pub notes: Vec<String>,
+    /// Every program that was found but did not load (it does not preprocess or translate, or
+    /// translating it panicked), with the reasons. The game draws with the next program of its
+    /// fallback chain, or skips a composite pass; this is what the log and the pack report list.
+    pub skipped: Vec<Skipped>,
+}
+
+/// A program that did not load.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Skipped {
+    /// The program (`gbuffers_water`, `composite3`, `composite3_a` for a compute stage).
+    pub name: String,
+    /// Its errors, as `file:line: message`.
+    pub reasons: Vec<String>,
+}
+
+/// Records that program `name` did not load, with its `reasons`.
+fn skip(post: &mut Post, name: &str, reasons: Vec<String>) {
+    post.notes.extend(reasons.iter().cloned());
+    post.notes.push(format!("{name}: skipped"));
+    post.skipped.push(Skipped {
+        name: name.to_owned(),
+        reasons,
+    });
+}
+
+/// `f` with a panic inside it turned into an error: a pack is not the game's own code, and a
+/// program that makes the translator panic loses that program, not the pack.
+fn contained<T>(
+    file: &str,
+    f: impl FnOnce() -> Result<T, Vec<crate::Error>>,
+) -> Result<T, Vec<crate::Error>> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|payload| {
+        let text = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown");
+        Err(vec![crate::Error {
+            file: file.to_owned(),
+            line: 0,
+            message: format!("internal error (translator panicked): {text}"),
+        }])
+    })
+}
+
+fn located_errors(errors: &[crate::Error]) -> Vec<String> {
+    errors
+        .iter()
+        .map(|e| format!("{}:{}: {}", e.file, e.line, e.message))
+        .collect()
 }
 
 impl Post {
@@ -571,6 +621,7 @@ pub fn load_post(
         },
         config: Config::default(),
         notes: Vec::new(),
+        skipped: Vec::new(),
     };
     let options = crate::with_options(pack, macros);
     for e in &properties.entries {
@@ -982,26 +1033,21 @@ impl Loader<'_> {
         }
         let vertex = self.preprocess(&vsh);
         let fragment = self.preprocess(&fsh);
-        let notes = &mut self.post.notes;
         let problems: Vec<String> = [&vertex, &fragment]
             .iter()
             .flat_map(|pp| diagnostics(pp))
             .collect();
         if !problems.is_empty() {
-            notes.extend(problems);
-            notes.push(format!("{name}: skipped"));
+            skip(self.post, &name, problems);
             return None;
         }
-        notes.extend([&vertex, &fragment].iter().flat_map(|pp| warnings(pp)));
-        let program = match translate(&vertex, &fragment) {
+        self.post
+            .notes
+            .extend([&vertex, &fragment].iter().flat_map(|pp| warnings(pp)));
+        let program = match contained(&fsh, || translate(&vertex, &fragment)) {
             Ok(p) => p,
             Err(errors) => {
-                notes.extend(
-                    errors
-                        .iter()
-                        .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-                );
-                notes.push(format!("{name}: skipped"));
+                skip(self.post, &name, located_errors(&errors));
                 return None;
             }
         };
@@ -1107,27 +1153,22 @@ impl Loader<'_> {
         inputs: &crate::GeometryInputs,
     ) -> Option<PostProgram> {
         let stages = [vsh, gsh, fsh].map(|p| self.preprocess(p));
-        let notes = &mut self.post.notes;
         let problems: Vec<String> = stages.iter().flat_map(diagnostics).collect();
         if !problems.is_empty() {
-            notes.extend(problems);
-            notes.push(format!("{name}: skipped"));
+            skip(self.post, &name, problems);
             return None;
         }
         let [vertex, geometry, fragment] = &stages;
-        let (program, triangles) =
-            match crate::translate_geometry(vertex, geometry, fragment, inputs) {
-                Ok(p) => p,
-                Err(errors) => {
-                    notes.extend(
-                        errors
-                            .iter()
-                            .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-                    );
-                    notes.push(format!("{name}: skipped"));
-                    return None;
-                }
-            };
+        let translated = contained(fsh, || {
+            crate::translate_geometry(vertex, geometry, fragment, inputs)
+        });
+        let (program, triangles) = match translated {
+            Ok(p) => p,
+            Err(errors) => {
+                skip(self.post, &name, located_errors(&errors));
+                return None;
+            }
+        };
         self.post.config.read(vertex);
         self.post.config.read(fragment);
         let mut buffers = config::draw_buffers(fragment).unwrap_or_else(|| (0..8).collect());
@@ -1174,22 +1215,13 @@ impl Loader<'_> {
             }
             let pp = self.preprocess(&path);
             let problems = diagnostics(&pp);
-            let notes = &mut self.post.notes;
             if !problems.is_empty() {
-                notes.extend(problems);
-                notes.push(format!("{name}: skipped"));
+                skip(self.post, &name, problems);
                 continue;
             }
-            match translate_compute(&pp) {
+            match contained(&path, || translate_compute(&pp)) {
                 Ok(program) => out.push((name, program)),
-                Err(errors) => {
-                    notes.extend(
-                        errors
-                            .iter()
-                            .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-                    );
-                    notes.push(format!("{name}: skipped"));
-                }
+                Err(errors) => skip(self.post, &name, located_errors(&errors)),
             }
         }
         out

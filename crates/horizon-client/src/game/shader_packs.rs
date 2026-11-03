@@ -414,6 +414,23 @@ impl Game<'_> {
                                     )
                                     .ok()
                                 };
+                                if !post.skipped.is_empty() {
+                                    let fell: Vec<&str> =
+                                        post.skipped.iter().map(|s| s.name.as_str()).collect();
+                                    let uses = |p: &Option<horizon_shaders::PostProgram>| {
+                                        p.as_ref().map_or("none", |p| p.name.as_str()).to_owned()
+                                    };
+                                    log::warn!(
+                                        "shader pack {pack_name}: {} programs did not load ({}); \
+                                         terrain draws with {}, water with {}, entities with {}, \
+                                         a composite pass that fell is skipped",
+                                        fell.len(),
+                                        fell.join(" "),
+                                        uses(&post.terrain),
+                                        uses(&post.water),
+                                        uses(&post.entities),
+                                    );
+                                }
                                 for note in
                                     horizon_shaders::resolve_resources(&mut post.textures, &read)
                                 {

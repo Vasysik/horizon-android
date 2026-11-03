@@ -5600,7 +5600,15 @@ impl Renderer {
             .name("shader pack".into())
             .stack_size(16 << 20)
             .spawn(move || {
-                let _ = send.send(world.build(&device, &queue, post(), &block_ids));
+                // A pack is not the game's own code: a panic while translating or building it
+                // is logged with its message and the pack turns off, instead of the thread
+                // ending without a word.
+                match crate::crash::contain(|| world.build(&device, &queue, post(), &block_ids)) {
+                    Ok(made) => {
+                        let _ = send.send(made);
+                    }
+                    Err(panic) => log::error!("shader pack: making it panicked: {panic}"),
+                }
             });
         if let Err(e) = spawned {
             log::warn!("shader pack: no thread to make it on: {e}");
