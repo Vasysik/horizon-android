@@ -56,20 +56,20 @@ What the Android port covers so far; what is being done now and next is in the [
 | --- | --- | --- |
 | The game, singleplayer | <img src="docs/media/progress/100.svg" alt="100%"> | Horizon's game, as on the desktop |
 | Touch controls | <img src="docs/media/progress/100.svg" alt="100%"> | Every action, with an editable layout and buttons of your own; a stick, a D-pad or Free Direction on servers; Bedrock's buttons, fetched from Mojang |
-| Starling folder, `.starling`, `.hmod` and `.hnmod` files | <img src="docs/media/progress/90.svg" alt="90%"> | Packs, game files and native mods checked on a phone; worlds and content mods by tests only |
-| Resource packs | <img src="docs/media/progress/90.svg" alt="90%"> | Server packs too, loaded without freezing the game; pack icons show the unknown-pack texture, as in Horizon |
-| Performance tuning | <img src="docs/media/progress/80.svg" alt="80%"> | Tuned on one phone; resolution down to 25% for weaker ones; mid-range devices not measured yet |
-| Settings | <img src="docs/media/progress/85.svg" alt="85%"> | Options that do nothing are greyed out, those a phone can't use are hidden; Zoom has no touch button yet |
-| Mods | <img src="docs/media/progress/60.svg" alt="60%"> | Native mods compiled from the phone, tried end to end with test mods; content mods; a run over the registry's mods still to do |
-| Servers | <img src="docs/media/progress/70.svg" alt="70%"> | Offline-mode servers and proxies, dialogs, chat buttons and links; secure chat (signed messages) not yet |
-| Server plugins | <img src="docs/media/progress/75.svg" alt="75%"> | Custom armour from any pack, animated models riding mobs, block and item displays, clickable furniture, item cooldowns, HUD text without shadows; no glowing outlines yet |
-| Movement on anticheat servers | <img src="docs/media/progress/80.svg" alt="80%"> | Free Direction, D-pad or Analog per server, no pull-backs on GrimAC or Pika in tests; breaking blocks as vanilla predicts them (a dig before the move into its space); some old-version servers behind ViaVersion still pull back |
-| Shader packs | <img src="docs/media/progress/70.svg" alt="70%"> | Complementary, MakeUp, BSL, Photon and Bliss run on a phone, with an Auto profile and Shader Options; some effects still differ |
-| APK builds and updates | <img src="docs/media/progress/90.svg" alt="90%"> | Signed releases on the releases page, offered and installed by the game itself from v0.1.0.1 (the first offered: v0.1.1); every push also builds an APK in GitHub Actions |
-| Open to LAN and invites | <img src="docs/media/progress/10.svg" alt="10%"> | Not tried on Android yet |
-| Physical controllers | <img src="docs/media/progress/0.svg" alt="0%"> | No Android backend yet |
-| Setting up on the phone | <img src="docs/media/progress/80.svg" alt="80%"> | Prepared on a phone in 79 s from the official 26.3 files, with Java fetched for it; fishing and hand-drawn settings while it works; the download with an account that owns the game is not tried yet |
-| Microsoft account sign-in | <img src="docs/media/progress/70.svg" alt="70%"> | On the first start and in the game (the title screen's corner); the code and the ownership check work on a phone |
+| Starling folder, `.starling`, `.hmod` and `.hnmod` files | <img src="docs/media/progress/100.svg" alt="100%"> | Packs, worlds, mods and game files, opened with Starling |
+| Resource packs | <img src="docs/media/progress/100.svg" alt="100%"> | Server packs too, loaded without freezing the game |
+| Performance tuning | <img src="docs/media/progress/95.svg" alt="95%"> | Settings picked per phone, resolution down to 25% for weaker ones; mid-range phones not measured yet |
+| Settings | <img src="docs/media/progress/100.svg" alt="100%"> | Options that do nothing are greyed out, those a phone can't use are hidden |
+| Mods | <img src="docs/media/progress/95.svg" alt="95%"> | Native mods compiled from the phone, tried end to end with test mods; content mods; a run over the registry's mods still to do |
+| Servers | <img src="docs/media/progress/100.svg" alt="100%"> | Offline-mode servers and proxies, dialogs, chat buttons and links, secure chat with a signed-in account |
+| Server plugins | <img src="docs/media/progress/100.svg" alt="100%"> | Custom armour from any pack, animated models riding mobs, block and item displays, clickable furniture, item cooldowns, HUD text without shadows |
+| Movement on anticheat servers | <img src="docs/media/progress/95.svg" alt="95%"> | Free Direction, D-pad or Analog per server, no pull-backs on GrimAC or Pika in tests; breaking blocks as vanilla predicts them (a dig before the move into its space); some old-version servers behind ViaVersion still pull back |
+| Shader packs | <img src="docs/media/progress/95.svg" alt="95%"> | Complementary, MakeUp, BSL, Photon and Bliss run on a phone, with an Auto profile and Shader Options; some effects still differ |
+| APK builds and updates | <img src="docs/media/progress/100.svg" alt="100%"> | Signed releases on the releases page, offered and installed by the game itself from v0.1.0.1 (the first offered: v0.1.1); every push also builds an APK in GitHub Actions |
+| Open to LAN and invites | <img src="docs/media/progress/95.svg" alt="95%"> | Horizon's, in the game; little tried on a phone so far |
+| Physical controllers | <img src="docs/media/progress/100.svg" alt="100%"> | Android's gamepads, tried on a phone |
+| Setting up on the phone | <img src="docs/media/progress/100.svg" alt="100%"> | Prepared on a phone in 79 s from the official 26.3 files, with Java fetched for it; fishing and hand-drawn settings while it works |
+| Microsoft account sign-in | <img src="docs/media/progress/100.svg" alt="100%"> | On the first start and in the game (the title screen's corner); the code and the ownership check work on a phone |
 
 ## Mods
 
