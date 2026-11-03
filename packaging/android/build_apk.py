@@ -35,8 +35,8 @@ LABEL = "Starling"
 # cannot install over), with its own folder (StarlingActivity.sharedFolder: StarlingDev) and its
 # own sign-in and game files.
 DEV_SUFFIX = ".dev"
-VERSION_NAME = "0.1.6"
-VERSION_CODE = 8
+VERSION_NAME = "0.2.0"
+VERSION_CODE = 9
 MIN_SDK = 26  # AAudio (cpal)
 TARGET_SDK = 35
 PLATFORM = 36

@@ -1,15 +1,46 @@
-**Starling 0.1.6: the game's sound.**
+**Starling 0.2.0: the biggest update yet. `.hmod` and `.hnmod` mods, right from your phone.**
 
 ## Install
 
-- **On 0.1.0.1 or later:** Starling offers this update on its title screen: tap **Update**, and Android installs it over (it asks you to allow installs from Starling the first time).
-- **New here:** download **`starling-0.1.6-arm64-v8a.apk`** below and open it. Sign in with the Microsoft account that owns Minecraft: Java Edition, or play offline: the game is downloaded from Mojang's servers and prepared on the phone, once. You need a 64-bit phone with Android 8 or newer and Vulkan, and about 2 GB free.
-
-> Installed a test build from GitHub Actions? Uninstall it first: test builds are signed with another key. Worlds kept in the `Starling` folder stay where they are.
+- **Already have Starling:** tap **Update** inside the game.
+- **New here:** download **`starling-0.2.0-arm64-v8a.apk`** below and open it.
 
 ## What's new
 
-- **Sound:** a game set up on the phone now has its sounds and music. If you set yours up before this update, Starling adds them the next time it starts, in a few seconds, with nothing to download again.
+### Mods: `.hmod` and `.hnmod`
+
+Open either kind of file with Starling, from your file manager or your downloads, and it shows up in **Mods**.
+
+- **`.hnmod`, native mods:** tap **Compile**. Starling tells you the risks, builds the game with your mods while you fish or mine, and restarts with them. It takes a few minutes and needs a connection.
+- **`.hmod`, content mods:** data-only mods, with nothing to compile. A dropped download of a mod's assets goes on from where it stopped.
+
+The old Starling mods (Far View, FPS Overlay, Keystrokes, Minimap, Recipes, Zoom) and the wasm mod format are gone: mods now use Horizon's formats.
+
+### Controls
+
+- **Bedrock Inventory:** the creative inventory shows the items and your inventory side by side, with six rows of items and a 2x2 crafting grid, and a tap takes a full stack. It is on by default; turn it off in **Options > Controls** for the Java layout.
+- **Custom buttons:** tap **Add** in **Touch Controls**, or go to **Options > Controls > Custom Buttons**. Each one holds or toggles a key, a native mod's key included, or sends a command or a message. Give them an icon or your own image, drawn on Bedrock's plate or imported as a PNG, and another image for while they are pressed. Select one in **Touch Controls** to move it or delete it.
+- **On-screen keyboard:** a tap on a text field brings it up and a tap beside it puts it away, on every screen, number boxes included. It no longer opens by itself on the world list or in the creative inventory.
+- A double tap on a stack moves it straight to the other side, as Shift-click does.
+- The held F3 button also has the other F keys, and the F3 text is bigger: it follows the GUI scale.
+- The three-finger Stats tap is off unless you turn it on (**3-tap** in the touch editor).
+
+### Shader packs
+
+- **Auto profile:** fits a pack to the phone by what its profiles ask of it, and draws terrain's depth first.
+- **Shader Options** for a finger, and **Resolution** and **FPS Limit** on the Shader Packs page.
+- Water and terrain came back in Photon, Sildur's and Bliss, and superDuperVanilla lost its overlay.
+- Packs' own textures load, a block's cracks show, faces are no longer shaded twice, and the sky reaches the horizon.
+- A pack that loses the graphics device is turned off instead of closing the game.
+
+### Newest Horizon
+
+Starling now sits on the newest Horizon, about 4,800 commits ahead of the previous base:
+
+- Many more vanilla behaviours for mobs: piglins, dolphins, wolves, foxes, zombies with spears, mobs boarding minecarts and picking up gear.
+- Remote players' hands and shoulder parrots, the jeb_ sheep's colours, and the portal loading screen on a server's dimension change.
+- Optimize World inside Edit World, and operator commands (`/op`, `/deop`, `/ban`, `/pardon`, `/whitelist`) on a dedicated server.
+- Your own skin shows with offline accounts, and on LAN the host's skin shows.
 
 ## Report a bug
 
