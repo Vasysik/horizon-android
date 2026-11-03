@@ -1,8 +1,0 @@
-id = "inventory_buttons"
-name = "Inventory Buttons"
-version = "0.1.0"
-description = "Quark's chest buttons and sorting: on chests, double chests, barrels, ender chests and shulker boxes, Take all and Sort for what is inside and Deposit all and Sort for your inventory; on your inventory, Sort. Sorting stacks and orders items as the creative inventory lists them (Inventory Profiles Next's way), the hotbar kept. Every button is the clicks a mouse would make, so any server takes them."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["inventory-read", "inventory-click", "ui"]

@@ -1,8 +1,0 @@
-id = "shulker_box_tooltip"
-name = "ShulkerBoxTooltip"
-version = "0.1.0"
-description = "What a shulker box holds, in its tooltip: the items as slots on the box's colour, those of one kind together or each slot where it is (Config picks which, Shift shows the other). Chests, barrels, dispensers and hoppers carrying their items too."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["hud", "ui", "storage"]

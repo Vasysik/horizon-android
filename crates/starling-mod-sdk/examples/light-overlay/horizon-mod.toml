@@ -1,8 +1,0 @@
-id = "light_overlay"
-name = "Light Overlay"
-version = "0.1.0"
-description = "Where monsters can spawn around you, as Light Overlay and Lighty show it: green where light keeps them off, orange where they spawn at night, red where they spawn at any time. Four modes: Cross, Number (block and sky light), Tile and Marker. F7, or its touch button, turns it on and off; F8, or Config, picks the mode, the green places and the reach."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["game-read", "world-read", "world-draw", "hud", "ui", "storage"]

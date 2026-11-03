@@ -1,8 +1,0 @@
-id = "hello_js"
-name = "Hello JS"
-version = "0.1.0"
-description = "A mod written in JavaScript: /hello_js (or its button on the pause menu) says where you are, the HUD shows the FPS, tooltips show the item's id."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["game-read", "chat", "hud", "ui"]

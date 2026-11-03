@@ -1,8 +1,0 @@
-id = "elytra_swap"
-name = "Elytra Swap"
-version = "0.1.0"
-description = "Swaps the chestplate you wear for the elytra in your inventory, and back, without opening it: R, or its touch button (as Elytra Swapper does)."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["inventory-click", "chat", "ui"]

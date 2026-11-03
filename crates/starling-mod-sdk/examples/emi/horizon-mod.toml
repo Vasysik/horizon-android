@@ -1,8 +1,0 @@
-id = "emi"
-name = "EMI"
-version = "0.1.0"
-description = "EMI's recipe viewer: every item beside the inventory, chests, crafting tables and furnaces, searched as the creative inventory searches; R or a click shows an item's recipes, U or a right click its uses, at every station (crafting table, furnaces, campfire, stonecutter, smithing table, brewing stand); + fills the open grid as the recipe book does. A keeps favourites."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["inventory-read", "creative", "recipes", "chat", "hud", "ui", "storage"]

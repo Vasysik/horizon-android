@@ -1,8 +1,0 @@
-id = "bedrock_inventory"
-name = "Bedrock Inventory"
-version = "0.1.0"
-description = "Bedrock's creative inventory: the creative screen's tabs, items and search with its Survival Inventory tab beside them, as Bedrock puts your inventory beside the items, plus a 2x2 crafting grid; both usable at once, with the mouse or by touch. The Survival Inventory tab shows only your inventory; Java UI goes back to the game's own screen."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["creative", "inventory-read", "inventory-click", "hud", "ui", "storage"]

@@ -1,8 +1,0 @@
-id = "armor_status"
-name = "Armor Status"
-version = "0.1.0"
-description = "The armour worn and the items in both hands with what is left of their durability, coloured from green to red, in a corner of the screen; its Config button picks the corner, percent or uses left, and whether the held items show."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["inventory-read", "hud", "ui", "storage"]

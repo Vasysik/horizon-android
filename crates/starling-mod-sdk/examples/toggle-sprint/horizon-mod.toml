@@ -1,8 +1,0 @@
-id = "toggle_sprint"
-name = "Toggle Sprint"
-version = "0.1.0"
-description = "V toggles sprinting and G sneaking, held for you until pressed again; the top left of the screen says what is on."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["game-read", "keys", "input", "hud", "storage"]

@@ -1,8 +1,0 @@
-id = "keystrokes"
-name = "Keystrokes"
-version = "0.1.0"
-description = "The movement keys, jump and both mouse buttons with their clicks per second, lit while held, in a top corner of the screen."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["keys", "hud", "ui", "storage"]

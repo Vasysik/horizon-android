@@ -1,8 +1,0 @@
-id = "peek"
-name = "Peek"
-version = "0.1.0"
-description = "What the crosshair is on, at the top of the screen (in the spirit of Jade and WTHIT): a block's name, tool, growth and breaking progress, a creature's health and armor."
-authors = ["Starling"]
-api = "starling-0.1"
-side = "client"
-capabilities = ["game-read", "world-read", "hud"]
