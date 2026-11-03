@@ -4,9 +4,11 @@ use super::{
     pages::{Action, button},
 };
 use crate::catalog::RendererMode;
+use crate::i18n::{Message, tr};
 use horizon_client::ui_theme::{Face, Ui, color};
 
 pub(super) enum Kind {
+    Language,
     Aspect,
     DisplayHz,
     CacheBudget,
@@ -21,7 +23,7 @@ pub(super) struct Chooser {
     title: &'static str,
     help: &'static str,
     device: Option<String>,
-    choices: Vec<(String, String, Action, bool)>,
+    choices: Vec<(Message, Message, Action, bool)>,
     pub scroll: f32,
 }
 impl Launcher {
@@ -40,6 +42,26 @@ impl Launcher {
         };
         let c = &self.catalog.config;
         let (title, help, choices) = match kind {
+            Kind::Language => (
+                "Launcher language / Language",
+                "Changes the launcher only. Choose the game language in Options > Language.",
+                crate::i18n::Preference::ALL
+                    .into_iter()
+                    .map(|language| {
+                        (
+                            match language {
+                                crate::i18n::Preference::System => "Follow system",
+                                crate::i18n::Preference::English => "English",
+                                crate::i18n::Preference::Chinese => "简体中文",
+                            }
+                            .into(),
+                            Message::default(),
+                            Action::ChooseLanguage(language),
+                            c.language == language,
+                        )
+                    })
+                    .collect(),
+            ),
             Kind::Aspect => (
                 "Aspect ratio",
                 "Fits the entire picture without stretching. Touch coordinates follow the picture. Portrait swaps width and height.",
@@ -53,7 +75,7 @@ impl Launcher {
                 .map(|a| {
                     (
                         a.label().into(),
-                        String::new(),
+                        Message::default(),
                         Action::ChooseAspect(a),
                         c.screen.aspect == a,
                     )
@@ -70,9 +92,9 @@ impl Launcher {
                             if mib == 0 {
                                 "Engine default (80 MiB)".into()
                             } else {
-                                format!("{mib} MiB")
+                                format!("{mib} MiB").into()
                             },
-                            String::new(),
+                            Message::default(),
                             Action::ChooseCacheBudget(mib),
                             c.cache_budget_mib == mib,
                         )
@@ -88,9 +110,12 @@ impl Launcher {
                             if limit == 0 {
                                 "No additional limit".into()
                             } else {
-                                format!("{limit} worker(s)")
+                                Message::formatted(
+                                    "{count} worker(s)",
+                                    &[("count", &limit.to_string())],
+                                )
                             },
-                            String::new(),
+                            Message::default(),
                             Action::ChooseWorkerLimit(limit),
                             c.worker_limit == limit,
                         )
@@ -107,9 +132,9 @@ impl Launcher {
                             if hz == 0 {
                                 "System default".into()
                             } else {
-                                format!("{hz} Hz")
+                                format!("{hz} Hz").into()
                             },
-                            String::new(),
+                            Message::default(),
                             Action::ChooseDisplayHz(hz),
                             c.device.display_hz == hz,
                         )
@@ -121,7 +146,7 @@ impl Launcher {
                     .into_iter()
                     .map(|percent| {
                         (
-                            format!("{percent}%"),
+                            format!("{percent}%").into(),
                             if percent == 100 {
                                 "Native resolution".into()
                             } else {
@@ -152,7 +177,7 @@ impl Launcher {
                     .map(|mode| {
                         (
                             mode.label().into(),
-                            String::new(),
+                            Message::default(),
                             Action::ChooseInputHost(mode),
                             c.input_host == mode,
                         )
@@ -167,7 +192,7 @@ impl Launcher {
                     .map(|mode| {
                         (
                             mode.label().into(),
-                            String::new(),
+                            Message::default(),
                             Action::ChooseOrientation(mode),
                             c.orientation == mode,
                         )
@@ -222,7 +247,10 @@ impl Launcher {
                     .into_iter()
                     .map(|id| {
                         (
-                            format!("Profile {id}"),
+                            Message::formatted(
+                                "Profile {profile}",
+                                &[("profile", &id.to_string())],
+                            ),
                             if id == 0 {
                                 "Default profile".into()
                             } else {
@@ -236,7 +264,10 @@ impl Launcher {
                 if let Some(id) = next {
                     choices.push((
                         "Create profile".into(),
-                        format!("Create Profile {id}"),
+                        Message::formatted(
+                            "Create Profile {profile}",
+                            &[("profile", &id.to_string())],
+                        ),
                         Action::ChooseProfile(id),
                         false,
                     ));
@@ -266,11 +297,11 @@ impl Chooser {
             choices: vec![
                 (
                     "Remove".into(),
-                    String::new(),
+                    Message::default(),
                     Action::ConfirmDeleteLocal,
                     false,
                 ),
-                ("Cancel".into(), String::new(), Action::Dismiss, true),
+                ("Cancel".into(), Message::default(), Action::Dismiss, true),
             ],
             scroll: 0.0,
         }
@@ -303,8 +334,23 @@ impl Chooser {
         let (w, h) = (ui.w, ui.h);
         targets.clear();
         ui.rounded(0.0, 0.0, w, h, 0.0, color::BG);
-        ui.text(Face::Medium, 28.0, 32.0, 35.0, color::TEXT, self.title);
-        ui.text(Face::Regular, 15.0, 32.0, 85.0, color::MUTED, self.help);
+        let title = ui.fit_text(Face::Medium, 24.0, tr(self.title), w - 64.0);
+        ui.text(Face::Medium, 24.0, 32.0, 35.0, color::TEXT, &title);
+        for (i, line) in ui
+            .wrap_text(Face::Regular, 15.0, tr(self.help), w - 64.0)
+            .iter()
+            .take(2)
+            .enumerate()
+        {
+            ui.text(
+                Face::Regular,
+                15.0,
+                32.0,
+                82.0 + i as f32 * 21.0,
+                color::MUTED,
+                line,
+            );
+        }
         if let Some(device) = &self.device {
             ui.text(Face::Regular, 13.0, 32.0, 111.0, color::MUTED, device);
         }
@@ -324,8 +370,10 @@ impl Chooser {
             if *selected {
                 ui.rounded(40.0, y + 16.0, 10.0, 10.0, 5.0, color::TEXT);
             }
-            ui.text(Face::Medium, 19.0, 80.0, y + 8.0, color::TEXT, label);
-            ui.text(Face::Regular, 14.0, 80.0, y + 40.0, color::MUTED, detail);
+            let label = ui.fit_text(Face::Medium, 19.0, &label.render(), w - 112.0);
+            ui.text(Face::Medium, 19.0, 80.0, y + 8.0, color::TEXT, &label);
+            let detail = ui.fit_text(Face::Regular, 14.0, &detail.render(), w - 112.0);
+            ui.text(Face::Regular, 14.0, 80.0, y + 40.0, color::MUTED, &detail);
             ui.rounded(32.0, y + 75.0, w - 64.0, 1.0, 0.0, color::BORDER);
             targets.push(([32.0, y, w - 64.0, 76.0], *action));
         }

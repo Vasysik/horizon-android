@@ -1,6 +1,7 @@
 //! A native Rust installer and version screen, sharing the game's Vulkan renderer.
 use crate::catalog::{Catalog, Page};
 use crate::game;
+use crate::i18n::Message;
 #[path = "chooser.rs"]
 mod chooser;
 #[path = "launcher_gesture.rs"]
@@ -70,8 +71,9 @@ impl Launcher {
             }
         });
         let mut catalog = Catalog::new(&home);
+        crate::i18n::set(catalog.config.language, &crate::platform::locales());
         if crate::diagnostics::previous_unclean(&home) {
-            catalog.status = crate::diagnostics::summary(&home);
+            catalog.status = crate::diagnostics::summary(&home).into();
         }
         horizon_client::android_runtime::graphics_startup::configure(home.clone());
         if horizon_client::android_runtime::graphics_startup::recover(&home) {
@@ -147,6 +149,7 @@ impl Launcher {
         self.controller_repeat = None;
         self.catalog.config.input_host = horizon_client::android_runtime::input_mode();
         self.catalog.refresh(&self.home);
+        crate::i18n::set(self.catalog.config.language, &crate::platform::locales());
         self.login.refresh_status();
         crate::diagnostics::heartbeat("returned_to_launcher", || serde_json::json!({}));
         self.catalog.page = Page::Play;
@@ -406,6 +409,7 @@ impl ApplicationHandler for Launcher {
         if let Some(game) = &mut self.game {
             return game.resumed(events);
         }
+        crate::i18n::set(self.catalog.config.language, &crate::platform::locales());
         if let Err(error) = self.open(events) {
             self.fail(error);
             events.exit();
@@ -424,6 +428,9 @@ impl ApplicationHandler for Launcher {
     fn window_event(&mut self, events: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if crate::documents::handle_event(&event) {
             return;
+        }
+        if matches!(event, WindowEvent::Focused(true)) {
+            crate::i18n::set(self.catalog.config.language, &crate::platform::locales());
         }
         if matches!(event, WindowEvent::Resized(_)) {
             let _ = crate::native_ime::viewport_bottom();
@@ -552,11 +559,14 @@ impl ApplicationHandler for Launcher {
             self.catalog.status = match result {
                 Ok(name) => {
                     let _ = crate::platform::open_documents("reports");
-                    format!(
-                        "Saved {name} in Reports. Review the ZIP before sharing; nothing was uploaded."
+                    Message::formatted(
+                        "Saved {name} in Reports. Review the ZIP before sharing; nothing was uploaded.",
+                        &[("name", &name)],
                     )
                 }
-                Err(error) => format!("Diagnostic export failed: {error}"),
+                Err(error) => {
+                    Message::formatted("Diagnostic export failed: {error}", &[("error", &error)])
+                }
             };
         }
         crate::platform::poll_gamepad_connections();
@@ -591,14 +601,19 @@ impl ApplicationHandler for Launcher {
         }
         self.catalog.poll(&self.home);
         if let Some(notice) = crate::documents::poll() {
-            self.catalog.status = notice.text;
+            self.catalog.status = notice.text.into();
             if notice.changed {
                 self.catalog.refresh(&self.home);
                 self.catalog.show_installed(notice.kind);
             }
         }
         for result in crate::gallery::poll() {
-            self.catalog.status = result.unwrap_or_else(|e| format!("File export failed: {e}"));
+            self.catalog.status = match result {
+                Ok(text) => text.into(),
+                Err(error) => {
+                    Message::formatted("File export failed: {error}", &[("error", &error)])
+                }
+            };
         }
         self.login.poll();
         if let Some(result) = self.session_worker.as_ref().and_then(|w| w.try_recv().ok()) {

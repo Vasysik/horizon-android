@@ -44,7 +44,8 @@ class ReleaseAuditTests(unittest.TestCase):
         self.assertFalse(build.generated_engine_file('worldgen/structure/minecraft/village/test.nbt'))
         with tempfile.TemporaryDirectory() as folder, patch.dict(sys.modules, {'android_build': build}):
             path = Path(folder) / 'public.apk'
-            files = {'AndroidManifest.xml': b'test', 'assets/engine-data.zip': archive({'facts.json': b'{}'})}
+            files = {'AndroidManifest.xml': b'test', 'assets/engine-data.zip': archive({'facts.json': b'{}'}),
+                     'assets/OFL-NotoSansSC.txt': b'SIL OPEN FONT LICENSE Version 1.1'}
             path.write_bytes(archive(files))
             self.assertEqual(audit.inspect_payload(path, public=True)['findings'], [])
             for name in ['worldgen/structure/minecraft/test.nbt', 'worldgen/biomes.json', 'raw.jar', 'unknown.json']:

@@ -6,6 +6,8 @@
 mod game;
 #[path = "android/game_launch.rs"]
 mod game_launch;
+#[path = "android/i18n.rs"]
+mod i18n;
 #[path = "android/launcher.rs"]
 mod launcher;
 // Share the desktop launcher's actual search, compatibility checks, downloads,

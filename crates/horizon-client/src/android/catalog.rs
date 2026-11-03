@@ -1,5 +1,6 @@
 //! Mobile launcher state. Browser operations reuse the desktop backend unchanged.
 use crate::browser::{self, Kind, Project, Query, Source, installed::Installed};
+use crate::i18n::Message;
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -36,6 +37,7 @@ impl RendererMode {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub language: crate::i18n::Preference,
     pub profile: u32,
     pub proxy: Option<String>,
     pub name: String,
@@ -176,7 +178,7 @@ impl Page {
     }
 }
 enum Reply {
-    Done(String, horizon_client::content_files::Kind),
+    Done(crate::i18n::Message, horizon_client::content_files::Kind),
 }
 pub struct Catalog {
     pub local: Vec<LocalItem>,
@@ -190,7 +192,7 @@ pub struct Catalog {
     pub page: Page,
     pub query: String,
     pub results: Vec<Project>,
-    pub status: String,
+    pub status: crate::i18n::Message,
     pub offset: usize,
     pub scroll: f32,
     pub config: Config,
@@ -222,7 +224,7 @@ impl Catalog {
             page: Page::Play,
             query: String::new(),
             results: vec![],
-            status: String::new(),
+            status: Default::default(),
             offset: 0,
             scroll: 0.0,
             config,
@@ -362,7 +364,7 @@ impl Catalog {
                     self.status = s;
                     self.show_installed(Some(kind));
                 }
-                Err(e) => self.status = e,
+                Err(e) => self.status = e.into(),
             }
             self.refresh(home);
         }
@@ -380,7 +382,7 @@ impl Catalog {
             if visible && self.page.is_catalog() && !self.busy() {
                 match result {
                     Ok(items) => self.show_results(items),
-                    Err(error) => self.status = error,
+                    Err(error) => self.status = error.into(),
                 }
             }
         }
@@ -435,21 +437,23 @@ impl Catalog {
         } else if self.page == Page::Mods
             && self.config.mod_source == crate::shader_catalog::Origin::Modrinth
         {
-            format!(
-                "{} Java mods - browsing only; this Rust client cannot run Java loaders",
-                items.len()
+            Message::formatted(
+                "{count} Java mods - browsing only; this Rust client cannot run Java loaders",
+                &[("count", &items.len().to_string())],
             )
         } else if self.page == Page::Mods {
             let native = items.iter().filter(|p| source_only_mod(p)).count();
-            format!(
-                "{} .hmod / {} source-only .hnmod (not supported yet)",
-                items.len() - native,
-                native
+            Message::formatted(
+                "{mods} .hmod / {native} source-only .hnmod (not supported yet)",
+                &[
+                    ("mods", &(items.len() - native).to_string()),
+                    ("native", &native.to_string()),
+                ],
             )
         } else {
-            format!(
-                "{} results - select Install to check compatibility",
-                items.len()
+            Message::formatted(
+                "{count} results - select Install to check compatibility",
+                &[("count", &items.len().to_string())],
             )
         };
         self.results = items;
@@ -501,7 +505,7 @@ impl Catalog {
                 let destination=dir.join(format!("{}.hmod",package.manifest.id));
                 if destination.exists(){std::fs::copy(&destination,destination.with_extension("hmod.previous")).map_err(|e|e.to_string())?;}
                 std::fs::rename(&stage,destination).map_err(|e|e.to_string())?;
-                Ok(Reply::Done(format!("Installed {}. Enable it in Installed after reviewing its capabilities in game Mods.",package.manifest.name), horizon_client::content_files::Kind::Mods))
+                Ok(Reply::Done(Message::formatted("Installed {name}. Enable it in Installed after reviewing its capabilities in game Mods.", &[("name", &package.manifest.name)]), horizon_client::content_files::Kind::Mods))
             })();
             let _=std::fs::remove_file(stage);result
         });
@@ -560,7 +564,10 @@ impl Catalog {
                 .len()
             };
             Ok(Reply::Done(
-                format!("Installed {count} item(s). Open Play to load this profile."),
+                Message::formatted(
+                    "Installed {count} item(s). Open Play to load this profile.",
+                    &[("count", &count.to_string())],
+                ),
                 match project.kind {
                     Kind::Mod => horizon_client::content_files::Kind::Mods,
                     Kind::Shader => horizon_client::content_files::Kind::Shaders,
@@ -665,8 +672,8 @@ impl Catalog {
             Ok(())
         })();
         self.status = match result {
-            Ok(()) => format!("Removed {}", item.title),
-            Err(e) => e,
+            Ok(()) => Message::formatted("Removed {name}", &[("name", &item.title)]),
+            Err(e) => e.into(),
         };
         self.refresh(home);
     }
