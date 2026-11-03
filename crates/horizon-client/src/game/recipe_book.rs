@@ -968,33 +968,6 @@ impl Game<'_> {
         self.place_recipe(book_type, entry_index, use_max);
         true
     }
-    /// `recipes.fill`: the recipe book's button for recipe `id` pressed (Shift: `all`), when the
-    /// open screen's book shows it: one of its kind the grid fits, which the player knows
-    /// (`handlePlaceRecipe` places only those).
-    pub(super) fn fill_recipe(&mut self, id: &str, all: bool) {
-        let Some(book_type) = self.active_book() else {
-            return;
-        };
-        self.ensure_book();
-        self.sync_client_book();
-        let (gw, gh) = self.book_grid();
-        let Some(book) = self.recipe_ui.book.as_ref() else {
-            return;
-        };
-        let known: std::collections::HashSet<i32> =
-            self.recipe_ui.client.displays().into_iter().collect();
-        let entry = book.entries.iter().position(|e| {
-            e.id == id
-                && known.contains(&e.display_id)
-                && book.book_of(&e.id) == Some(book_type)
-                && (book_type != BookType::Crafting || e.fits(gw, gh))
-        });
-        if let Some(entry) = entry {
-            self.recipe_ui.ghost.clear();
-            self.recipe_ui.last_placed = Some(id.to_owned());
-            self.place_recipe(book_type, entry, all);
-        }
-    }
     /// Whether the open screen takes `recipes.place` and `native_place_recipe`: a crafting grid's
     /// book (the inventory's or a crafting table's).
     pub(super) fn mod_recipe_screen(&self) -> bool {

@@ -596,13 +596,6 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
                 event
             }
             ClickEvent::OpenFile(path) => json!({ "action": "open_file", "path": path }),
-            ClickEvent::Custom { id, payload } => {
-                let mut event = json!({ "action": "custom", "id": id });
-                if let Some(p) = payload {
-                    event["payload"] = crate::scoreboard::tag_to_json(p);
-                }
-                event
-            }
         };
         out.push(("click_event".to_owned(), event));
     }

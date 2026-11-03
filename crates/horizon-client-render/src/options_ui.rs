@@ -2175,8 +2175,6 @@ enum Row {
     Note(String),
     /// A button, and another after it.
     Buttons(Widget, Option<Widget>),
-    /// A line of grey text under the row before (a mod's description).
-    About(String),
     /// Skin Customization's name box, after its label.
     Field,
     /// What a custom button sends.
@@ -4178,22 +4176,6 @@ impl OptionsUi {
                                 out.push(b);
                             }
                             y += 25.0;
-                        }
-                        Row::About(text) => {
-                            out.push(Widget {
-                                x: cx - 153.0,
-                                y,
-                                w: 306.0,
-                                h: 9.0,
-                                kind: WKind::Text {
-                                    text: Text::literal(text),
-                                    color: 0xFFA0_A0A0,
-                                    centered: false,
-                                },
-                                list: false,
-                                row: 0,
-                            });
-                            y += 13.0;
                         }
                         Row::Field => {
                             out.push(Widget {

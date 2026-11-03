@@ -346,54 +346,6 @@ impl Game<'_> {
         false
     }
 
-    /// `FunnelItem.getPlacementState`: a funnel just placed facing sideways over a belt or a
-    /// depot becomes its belt funnel, shaped by the belt below (`getShapeForPosition`): pulling
-    /// or pushing across it, retracted along it.
-    pub(super) fn belt_funnel_for(
-        &self,
-        pos: [i32; 3],
-        state: horizon_world::registry::BlockStateId,
-        sneaking: bool,
-    ) -> Option<horizon_world::registry::BlockStateId> {
-        let registry = self.pack.assets.registry;
-        let s = registry.state(state)?;
-        let base = s.name.strip_suffix("_funnel")?;
-        if base.ends_with("_belt") {
-            return None;
-        }
-        let facing = s.properties.get("facing")?.clone();
-        if facing == "up" || facing == "down" {
-            return None;
-        }
-        let below = [pos[0], pos[1] - 1, pos[2]];
-        if !self.takes_from_belt(below)
-            || self.machine_kind(below) == Some(super::machine_entities::Kind::Saw)
-        {
-            return None;
-        }
-        let across = if sneaking { "pulling" } else { "pushing" };
-        let shape = match self.belt_at(below) {
-            Some((chain, _)) => {
-                let d = horizon_client::kinetics::direction(&facing)?;
-                if (chain.facing[0] != 0) != (d[0] != 0) {
-                    across
-                } else {
-                    "retracted"
-                }
-            }
-            None => across,
-        };
-        let default = registry.default_state(&format!("{base}_belt_funnel"))?;
-        let mut t = registry.state(default)?.clone();
-        t.properties.insert("facing".into(), facing);
-        t.properties.insert("shape".into(), shape.into());
-        for k in ["powered", "waterlogged"] {
-            if let Some(v) = s.properties.get(k) {
-                t.properties.insert(k.into(), v.clone());
-            }
-        }
-        registry.id(&t)
-    }
 
     /// `FunnelBlock.useItemOn` on its open face: what the player holds into the inventory
     /// behind it, as much as it takes. True when it took the click.

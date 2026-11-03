@@ -7657,46 +7657,6 @@ impl Game<'_> {
             }));
         }
     }
-    /// `handleCreativeModeItemAdd` (a mod's `creative.set-slot`): the inventory menu's slot
-    /// `slot`, game slot `game`, sent now.
-    pub(super) fn remote_creative_slot(
-        &mut self,
-        slot: i16,
-        game: usize,
-        stack: &Option<ItemStack>,
-    ) {
-        let menu = self.creative_menu_slots();
-        let Some(r) = self.remote.as_mut() else {
-            return;
-        };
-        // What the per-tick syncs would send again.
-        if game < 36 {
-            r.synced[game] = stack.clone();
-        }
-        if let Some(m) = r.creative_menu.as_mut() {
-            *m = menu;
-        }
-        let item = self.to_network(stack);
-        self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
-            slot,
-            item,
-        }));
-    }
-    /// `MultiPlayerGameMode.handleCreativeModeItemDrop`: a stack the creative screen throws,
-    /// which a server makes (slot -1); in single player it is dropped here.
-    pub(super) fn creative_drop(&mut self, stack: ItemStack) {
-        if self.remote.is_none() {
-            self.player_drop(stack);
-            return;
-        }
-        // LivingEntity.drop on the client: only the swing.
-        self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
-        let item = self.to_network(&Some(stack));
-        self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
-            slot: -1,
-            item,
-        }));
-    }
 
     /// `MultiPlayerGameMode.stopDestroyBlock`: aborts the break and starts the attack strength
     /// again, if one is running (`if (!isDestroying) return;`), and says whether it did. Only the

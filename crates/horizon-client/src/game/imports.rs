@@ -79,14 +79,6 @@ impl Imports {
         finished
     }
 
-    /// A note that stays until replaced (other work the player waits on, such as mods starting).
-    pub(super) fn working(&mut self, text: String) {
-        self.note = Some(Note {
-            text,
-            error: false,
-            ended: None,
-        });
-    }
 
     /// Replace the note (an import that finished, told in other words by the caller).
     pub(super) fn say(&mut self, text: String) {
