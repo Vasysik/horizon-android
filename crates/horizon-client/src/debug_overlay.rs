@@ -204,6 +204,9 @@ pub fn scale(
 ) -> (f32, [i32; 2]) {
     let scale = match option {
         -1 => gui_scale,
+        // A phone is held close and its pixels are small: Auto follows the
+        // GUI scale instead of halving it, so the text stays readable.
+        0 if cfg!(target_os = "android") => gui_scale,
         0 => crate::window::calculate_scale(framebuffer, 0, unicode) / 2,
         n => crate::window::calculate_scale(framebuffer, n, unicode),
     };
