@@ -3604,17 +3604,7 @@ pub fn draw_hud_editor(
 
         let kb_y = iy + 33.0;
         let kb_h = (dh - 174.0).clamp(80.0, 132.0);
-        draw_mini_keyboard(
-            &mut ui,
-            dx + 14.0,
-            kb_y,
-            dw - 28.0,
-            kb_h,
-            accent,
-            bg_hi,
-            border_c,
-            text_c,
-        );
+        draw_mini_keyboard(&mut ui, [dx + 14.0, kb_y, dw - 28.0, kb_h]);
 
         let create_btn_r = [dx + 14.0, dy + dh - 34.0, dw - 28.0, 26.0];
         ui.rounded(
@@ -4060,7 +4050,7 @@ pub fn touch_hud_editor(
                 &mut ed.save_name_input
             };
             let max_len = if ed.editing_save_desc { 56 } else { 28 };
-            if hit_mini_keyboard(p, dx + 14.0, kb_y, dw - 28.0, kb_h, target_buf, max_len) {
+            if hit_mini_keyboard([dx + 14.0, kb_y, dw - 28.0, kb_h], p, target_buf, max_len) {
                 tc.clicked = true;
                 return false;
             }
