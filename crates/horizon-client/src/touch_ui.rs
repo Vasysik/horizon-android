@@ -1754,7 +1754,7 @@ impl TouchUi {
                     ui.text(Face::SemiBold, 10.5, cx + 12.0, ry + 4.0, text_c, title);
                     ui.text(Face::Regular, 8.8, cx + 12.0, ry + 20.0, muted_c, sub);
                     if let Some(on) = toggle {
-                        ui.switch(cx + cw - 48.0, ry + 8.0, on);
+                        ui.m3_switch(cx + cw - 48.0, ry + 8.0, on);
                     } else {
                         ui.text(Face::SemiBold, 13.0, cx + cw - 16.0, ry + 9.0, accent_hi, "›");
                     }
@@ -2313,7 +2313,7 @@ pub fn draw_hud_editor(
         let fourth_item = if tc.settings.control_style == ControlStyle::GoyControl {
             (Some(Icon::Plus), "Add", 64.0, true, false)
         } else {
-            (Some(Icon::Reset), "Reset", 64.0, true, false)
+            (Some(Icon::Undo), "Reset", 64.0, true, false)
         };
         let items: [(Option<Icon>, &str, f32, bool, bool); 5] = [
             (Some(Icon::Undo), "", 42.0, !ed.undo_stack.is_empty(), false),
