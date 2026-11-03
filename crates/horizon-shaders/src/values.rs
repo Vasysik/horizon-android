@@ -53,7 +53,7 @@ impl Values {
     /// costs 1 and one turned off saves 1; a valued option costs its place between the lowest
     /// and highest value it may take, relative to the default's (a bigger shadow map, more
     /// samples). Nothing here knows a pack or a profile's name; a profile that sets none of
-    /// the pack's options has no cost to compare and is left out.
+    /// the pack's options, or only words (see `is_scale`), has no cost to compare and is left out.
     pub fn profiles_by_cost(
         properties: &Properties,
         options: &BTreeMap<String, crate::PackOption>,
@@ -71,7 +71,10 @@ impl Values {
                 let Some(o) = options.get(option) else {
                     continue;
                 };
-                known += 1;
+                // Only a switch or a number says how much work a profile asks for; a word
+                // (`TONEMAP=Hejl`) is a choice, and a profile made of choices alone (Bliss's
+                // `profile.OLD_BLISS_TONEMAP`, a label in the profile list) ranks nothing.
+                known += usize::from(is_scale(o));
                 cost += option_cost(o, value);
             }
             if known > 0 {
@@ -232,6 +235,28 @@ fn spaced(comment: &str) -> String {
     }
 }
 
+/// Whether option `o` runs along a scale of work: a switch, values that are all numbers, or
+/// words of quality (`LOW MEDIUM HIGH`) in their order. A list of names (tonemaps, palettes)
+/// is a choice, not a scale.
+fn is_scale(o: &crate::PackOption) -> bool {
+    const LEVELS: [&str; 16] = [
+        "off", "none", "potato", "minimal", "low", "lowest", "medium", "mid", "normal", "high",
+        "highest", "ultra", "extreme", "max", "fast", "fancy",
+    ];
+    let number = |v: &str| v.trim().trim_end_matches(['f', 'F']).parse::<f64>().is_ok();
+    let level = |v: &str| {
+        let plain: String = v
+            .chars()
+            .filter(|c| c.is_ascii_alphabetic())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        LEVELS.contains(&plain.as_str())
+    };
+    o.switch
+        || (o.values.len() >= 2 && o.values.iter().all(|v| number(v)))
+        || o.values.iter().filter(|v| level(v)).count() >= 2
+}
+
 /// What setting option `o` to `value` costs against its default, see `profiles_by_cost`.
 fn option_cost(o: &crate::PackOption, value: &str) -> f64 {
     let on = |v: &str| f64::from(u8::from(v.trim() == "true"));
@@ -359,11 +384,13 @@ mod tests {
                 false,
             ),
             option("QUALITY", "MEDIUM", &["LOW", "MEDIUM", "HIGH"], false),
+            option("TONEMAP", "AgX", &["AgX", "Hejl", "ACES"], false),
         ]
         .into();
         let text = "profile.Fancy = shadowMapResolution=4096 QUALITY=HIGH\n\
                     profile.Fast = !SSAO shadowMapResolution=512\n\
                     profile.Mid = QUALITY=LOW\n\
+                    profile.Label = TONEMAP=Hejl\n\
                     profile.Mystery = UNKNOWN_OPTION=3\n\
                     profile.Custom =\n";
         let properties = Properties::parse(text, &Macros::standard());
