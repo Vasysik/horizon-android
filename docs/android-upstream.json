@@ -26,5 +26,12 @@
     "commits_beyond_merged_baseline": 482,
     "merge_preview_conflicting_files": 12,
     "status": "Reviewed candidate only; not merged or Android-validated"
+  },
+  "touch_inventory_review": {
+    "date": "2026-11-03",
+    "android_base": "80700a6f26afe53a368032d8b28bd364f7c3e7e4",
+    "fetched_main": "674948d0826adfd2807f8dd7b57a9ef9c4f19c09",
+    "moving_main_merged": false,
+    "notes": "Integrated the current Vasysik/android stable history. Reviewed newer input/container history, including 73729552ef (raw-key hotbar dispatch); its cross-platform signature changes are outside this touch modifier/gesture work and were not cherry-picked. Preserved the selected nightly baseline, architecture split and disabled deployment workflows. Android validation is recorded with the touch change."
   }
 }

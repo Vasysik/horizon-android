@@ -6,11 +6,23 @@ use serde::{Deserialize, Serialize};
 pub struct CustomButton {
     pub key: String,
     pub layouts: [Placement; 3],
+    #[serde(default)]
+    pub gestures: super::gestures::Bindings,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default = "default_text_scale")]
+    pub text_scale: f32,
+}
+fn default_text_scale() -> f32 {
+    1.0
 }
 impl CustomButton {
     pub fn new(key: String, index: usize) -> Self {
         Self {
             key,
+            gestures: super::gestures::Bindings::default(),
+            text: String::new(),
+            text_scale: 1.0,
             layouts: [Placement::new(
                 0.68 + (index % 3) as f32 * 0.1,
                 0.35 + (index / 3 % 3) as f32 * 0.12,
@@ -26,7 +38,16 @@ impl CustomButton {
                 .is_some_and(|name| crate::keybinds::MAPPINGS.iter().any(|m| m.0 == name))
     }
     pub fn label(&self) -> String {
+        if !self.text.is_empty() {
+            return self.text.clone();
+        }
         if self.key == "key.keyboard.unknown" {
+            if let Some(binding) = self.gestures.single.first() {
+                if let Some(action) = binding.token.strip_prefix("action:") {
+                    return crate::text::Text::translate(action, &[]).plain();
+                }
+                return crate::keybinds::display_name(&binding.token).plain();
+            }
             return "Button".into();
         }
         if let Some(name) = self.key.strip_prefix("action:") {
@@ -70,28 +91,27 @@ impl TouchControls {
         started: bool,
         ended: bool,
     ) -> bool {
-        if self.custom_fingers.contains_key(&id) {
+        if self.custom_runtime.owns(id) {
+            self.custom_runtime.motion(id, point, self.aspect());
             return self.custom_update(id, point, false, ended);
         }
         if started
             && self.custom_at(point).is_none()
             && let Some(token) = self.control_at(point).and_then(Self::inventory_token)
         {
-            let pressed = !self.custom_fingers.values().any(|v| v == token);
-            self.custom_fingers.insert(id, token.into());
+            self.custom_runtime.direct(id, token);
             self.fingers.insert(id, (Role::Ignore, point));
-            if pressed {
-                self.custom_events.push((token.into(), true));
-            }
             return true;
         }
         false
     }
     pub(super) fn fit_placement(&self, mut p: Placement) -> Placement {
+        p.width = (p.width() * self.settings.button_scale).min(self.aspect());
+        p.height = (p.height() * self.settings.button_scale).min(1.0);
         p.size = (p.size * self.settings.button_scale)
             .min(self.aspect())
             .min(1.0);
-        let half = [p.size / self.aspect() / 2.0, p.size / 2.0];
+        let half = [p.width / self.aspect() / 2.0, p.height / 2.0];
         for (i, half) in half.into_iter().enumerate() {
             p.center[i] = p.center[i].clamp(half, 1.0 - half);
         }
@@ -116,56 +136,69 @@ impl TouchControls {
         started: bool,
         ended: bool,
     ) -> bool {
-        if let Some(key) = self.custom_fingers.get(&id).cloned() {
+        if self.custom_runtime.owns(id) {
+            self.custom_runtime.motion(id, point, self.aspect());
             if ended {
-                self.custom_fingers.remove(&id);
+                self.custom_runtime.end(id, Instant::now());
                 self.fingers.remove(&id);
-                if !self.custom_fingers.values().any(|k| *k == key) {
-                    self.custom_events.push((key, false));
-                }
+            } else if let Some((_, previous)) = self.fingers.get_mut(&id) {
+                *previous = point;
             }
             return true;
         }
         if started && let Some(index) = self.custom_at(point) {
             let key = self.settings.custom_buttons[index].key.clone();
-            if key == "key.keyboard.unknown" {
+            let mut bindings = self.settings.custom_buttons[index].gestures.clone();
+            if bindings.single.is_empty() && key != "key.keyboard.unknown" {
+                bindings.single.push(super::gestures::Binding {
+                    token: key.clone(),
+                    toggle: false,
+                });
+            }
+            if bindings.single.is_empty() && bindings.double.is_empty() && bindings.hold.is_empty()
+            {
                 return false;
             }
-            let pressed = !self.custom_fingers.values().any(|k| *k == key);
-            self.custom_fingers.insert(id, key.clone());
+            self.custom_runtime
+                .start(id, index, bindings, Instant::now());
+            self.custom_runtime.motion(id, point, self.aspect());
             self.fingers.insert(id, (Role::Ignore, point));
-            if pressed {
-                self.custom_events.push((key, true));
-            }
             self.clicked = true;
             return true;
         }
         false
     }
     pub fn held_custom_tokens(&self) -> impl Iterator<Item = &str> {
-        self.custom_fingers.values().map(String::as_str)
+        self.custom_runtime.tokens()
     }
     pub fn key_events(&mut self) -> Vec<(String, bool)> {
-        std::mem::take(&mut self.custom_events)
+        let mut events = self.custom_runtime.poll(Instant::now());
+        events.append(&mut self.custom_events);
+        events
+    }
+    pub fn drop_sneak_toggles(&mut self, physical_binding: &str) {
+        self.custom_runtime
+            .clear_toggle_tokens(|token| token == "action:key.sneak" || token == physical_binding);
     }
     pub(super) fn clear_custom(&mut self) {
-        let keys: std::collections::BTreeSet<_> = std::mem::take(&mut self.custom_fingers)
-            .into_values()
-            .collect();
-        self.custom_events
-            .extend(keys.into_iter().map(|k| (k, false)));
+        self.custom_events.clear();
+        self.custom_runtime.clear();
     }
     pub(super) fn draw_custom(&self, b: &mut HudBatch, a: &HudAtlas) {
         for (i, button) in self.settings.custom_buttons.iter().enumerate() {
             let p = self.custom_placement(i);
-            let size = p.size * b.height;
-            let rect = [
-                p.center[0] * b.width - size / 2.0,
-                p.center[1] * b.height - size / 2.0,
-                size,
-                size,
-            ];
-            let pressed = self.custom_fingers.values().any(|key| *key == button.key);
+            let [x, y, w, h] = p.rect(self.aspect());
+            let rect = [x * b.width, y * b.height, w * b.width, h * b.height];
+            let pressed = self.held_custom_tokens().any(|key| {
+                key == button.key
+                    || button
+                        .gestures
+                        .single
+                        .iter()
+                        .chain(&button.gestures.double)
+                        .chain(&button.gestures.hold)
+                        .any(|b| b.token == key)
+            });
             let opacity = if self.editor.is_some() {
                 p.opacity.max(0.25)
             } else {
@@ -174,7 +207,7 @@ impl TouchControls {
             if opacity <= 0.0 {
                 continue;
             }
-            text_button(
+            text_button_scaled(
                 b,
                 a,
                 rect,
@@ -182,6 +215,7 @@ impl TouchControls {
                 pressed,
                 rgba(255, 255, 255, (opacity * 255.0) as u8),
                 true,
+                button.text_scale,
             );
         }
     }

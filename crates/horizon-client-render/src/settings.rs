@@ -831,6 +831,8 @@ pub enum Opt {
     TouchMouseSensitivity,
     TouchCrosshairGestures,
     TouchDynamicJoystick,
+    TouchFollowingJoystick,
+    TouchMineButtonLook,
     TouchDynamicAreaX,
     TouchDynamicAreaY,
     AndroidGyroscope,

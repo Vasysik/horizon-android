@@ -211,6 +211,8 @@ impl Opt {
             Opt::TouchSprintToggle => "Toggle sprint button",
             Opt::TouchInventoryControls => "Controls in inventory",
             Opt::TouchDynamicJoystick => "Dynamic joystick",
+            Opt::TouchFollowingJoystick => "Joystick follows finger",
+            Opt::TouchMineButtonLook => "Look while holding mine",
             Opt::TouchDynamicAreaX => "Dynamic joystick width",
             Opt::TouchDynamicAreaY => "Dynamic joystick height",
             Opt::AndroidGyroscope => "Gyroscope aiming",
@@ -595,6 +597,22 @@ impl Opt {
                 .into(),
             ),
             Opt::TouchDynamicAreaX => Some(format!("{:.0}%", s.touch.dynamic_area_x * 100.0)),
+            Opt::TouchFollowingJoystick => Some(
+                if s.touch.following_joystick {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+                .into(),
+            ),
+            Opt::TouchMineButtonLook => Some(
+                if s.touch.mine_button_look {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+                .into(),
+            ),
             Opt::TouchDynamicAreaY => Some(format!("{:.0}%", s.touch.dynamic_area_y * 100.0)),
             Opt::AndroidInputMode => Some(crate::android_runtime::input_mode().label().into()),
             Opt::TouchSwapJumpSneak => {
@@ -1116,6 +1134,8 @@ impl Opt {
             Opt::TouchSprintToggle => s.touch.sprint_toggle ^= true,
             Opt::TouchInventoryControls => s.touch.inventory_controls ^= true,
             Opt::TouchDynamicJoystick => s.touch.dynamic_joystick ^= true,
+            Opt::TouchFollowingJoystick => s.touch.following_joystick ^= true,
+            Opt::TouchMineButtonLook => s.touch.mine_button_look ^= true,
             Opt::TouchCrosshairGestures => s.touch.crosshair_gestures ^= true,
             Opt::AndroidInputMode => {
                 let all = crate::android_gamepad::InputMode::ALL;
@@ -1826,11 +1846,13 @@ fn inactive(mut w: Widget) -> Widget {
 }
 fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
     let touch_available = match opt {
-        Opt::TouchAnalog | Opt::TouchAutoSprint | Opt::TouchDynamicJoystick => {
-            s.touch.mode != crate::touch::Mode::Dpad
-        }
+        Opt::TouchAnalog
+        | Opt::TouchAutoSprint
+        | Opt::TouchDynamicJoystick
+        | Opt::TouchFollowingJoystick => s.touch.mode != crate::touch::Mode::Dpad,
         Opt::TouchDynamicAreaX | Opt::TouchDynamicAreaY => {
-            s.touch.dynamic_joystick && s.touch.mode != crate::touch::Mode::Dpad
+            (s.touch.dynamic_joystick || s.touch.following_joystick)
+                && s.touch.mode != crate::touch::Mode::Dpad
         }
         Opt::TouchSprintButton => {
             s.touch.mode != crate::touch::Mode::Dpad && !s.touch.sprint_with_joystick
@@ -2779,6 +2801,8 @@ impl OptionsUi {
                     Opt::TouchInteract,
                     Opt::TouchMouseSensitivity,
                     Opt::TouchDynamicJoystick,
+                    Opt::TouchFollowingJoystick,
+                    Opt::TouchMineButtonLook,
                     Opt::TouchDynamicAreaX,
                     Opt::TouchDynamicAreaY,
                     Opt::AndroidGyroscope,
