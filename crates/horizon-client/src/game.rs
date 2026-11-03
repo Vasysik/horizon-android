@@ -254,6 +254,7 @@ mod natural_spawning;
 mod nautili;
 mod net_harness;
 mod nether_portal;
+#[cfg(not(target_os = "android"))]
 mod no_resources;
 mod ominous_item_spawner;
 mod options;
@@ -561,7 +562,7 @@ impl Options {
         #[cfg(not(target_os = "android"))]
         let args = std::env::args().skip(1);
         #[cfg(target_os = "android")]
-        let args = crate::args().into_iter();
+        let args = crate::android::args().into_iter();
         let Some(mut o) = Self::parse(args).map_err(|e| launch_api::UsageError(e.to_string()))?
         else {
             return Ok(None);
@@ -7966,7 +7967,7 @@ impl Game<'_> {
             self.captured =
                 capture && self.input_mode == horizon_client::input_mode::InputMode::KeyboardMouse;
             if self.captured != was_grabbed {
-                crate::capture_pointer(self.captured);
+                crate::android::capture_pointer(self.captured);
             }
         }
         #[cfg(not(target_os = "android"))]
@@ -18362,7 +18363,7 @@ impl Game<'_> {
                         r.gpu_times.clear();
                         #[cfg(target_os = "android")]
                         if rendered {
-                            crate::frame_hint(cpu, self.framerate_limit());
+                            crate::android::frame_hint(cpu, self.framerate_limit());
                         }
                     }
                     horizon_client::ram_limit::frame();
@@ -18433,7 +18434,7 @@ impl Game<'_> {
                             );
                             // Runs that skip the loading screen show the window here.
                             #[cfg(target_os = "android")]
-                            crate::first_frame_shown();
+                            crate::android::first_frame_shown();
                         }
                         if self.title.is_some() {
                             self.perf.title_shown();
@@ -20847,7 +20848,7 @@ fn event_loop() -> Result<EventLoop<()>> {
     {
         use winit::platform::android::EventLoopBuilderExtAndroid;
         Ok(EventLoop::builder()
-            .with_android_app(crate::android_app())
+            .with_android_app(crate::android::android_app())
             .build()?)
     }
     #[cfg(not(target_os = "android"))]
@@ -21258,7 +21259,7 @@ impl Loading {
             );
             // The system's starting window stayed over the app until now (StarlingActivity).
             #[cfg(target_os = "android")]
-            crate::first_frame_shown();
+            crate::android::first_frame_shown();
             // Not before the first frame: opening the output takes a moment.
             if self.audio.is_none()
                 && self.failure.is_none()
@@ -21534,6 +21535,7 @@ impl ApplicationHandler for App {
 /// Every launch reads the prepared game files (`horizon-prepare`'s output, whose
 /// manifest is `horizon-resources.json`): without them, say where they were
 /// looked for and how to get them, before a window or a loader starts.
+#[cfg(not(target_os = "android"))]
 fn missing_resources(root: &std::path::Path) -> Option<String> {
     if root.join("horizon-resources.json").is_file() {
         return None;

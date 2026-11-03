@@ -86,26 +86,18 @@ pub(in crate::game) enum PadEvent {
 #[path = "pad/android.rs"]
 mod hardware;
 
-/// A build without the `controllers` feature (the server build, which must not need libudev): no
-/// hardware pads, only `horizon-ctl pad`'s virtual one.
-#[cfg(not(any(feature = "controllers", target_os = "android")))]
-mod hardware {
-    use super::{super::Game, Pads};
-    use horizon_client::gamepad::{PadState, Pulse, Rumble};
-    use serde_json::{Value, json};
-
-    impl Pads {
-        pub(super) fn read(&mut self) -> PadState {
-            PadState::default()
-        }
-        pub(in crate::game) fn release_hardware(&mut self) {}
-    }
+/// The splitscreen's pad router where there are no gilrs pads to route (the server build, Android):
+/// no pad events, no pad to lend.
+#[cfg(not(feature = "controllers"))]
+mod no_router {
+    use super::{PadEvent, Pads};
+    use horizon_client::gamepad::PadState;
 
     pub(in crate::game) type PadId = usize;
     #[derive(Default)]
     pub(in crate::game) struct PadRouter {}
     impl PadRouter {
-        pub(in crate::game) fn events(&mut self) -> Vec<super::PadEvent> {
+        pub(in crate::game) fn events(&mut self) -> Vec<PadEvent> {
             Vec::new()
         }
         pub(in crate::game) fn lend_output(&mut self, _: &mut Pads, _: PadId) {}
@@ -126,6 +118,24 @@ mod hardware {
             horizon_client::gamepad::GlyphStyle::Auto
         }
     }
+}
+
+/// A build without the `controllers` feature (the server build, which must not need libudev): no
+/// hardware pads, only `horizon-ctl pad`'s virtual one.
+#[cfg(not(any(feature = "controllers", target_os = "android")))]
+mod hardware {
+    use super::{super::Game, Pads};
+    use horizon_client::gamepad::{PadState, Pulse, Rumble};
+    use serde_json::{Value, json};
+
+    impl Pads {
+        pub(super) fn read(&mut self) -> PadState {
+            PadState::default()
+        }
+        pub(in crate::game) fn release_hardware(&mut self) {}
+    }
+
+    pub(in crate::game) use super::no_router::{PadId, PadRouter};
 
     impl Game<'_> {
         pub(super) fn pad_output_off(&mut self) {}

@@ -33,7 +33,7 @@ fn agent_name() -> String {
 /// The APK's version on a phone, else the program's.
 #[cfg(target_os = "android")]
 fn version() -> String {
-    crate::app_version().map_or_else(|| env!("CARGO_PKG_VERSION").to_owned(), |(v, _)| v)
+    crate::android::app_version().map_or_else(|| env!("CARGO_PKG_VERSION").to_owned(), |(v, _)| v)
 }
 #[cfg(not(target_os = "android"))]
 fn version() -> String {

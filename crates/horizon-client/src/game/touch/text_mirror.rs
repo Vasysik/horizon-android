@@ -343,20 +343,20 @@ impl Game<'_> {
     /// own changes or put away; or NativeActivity's keyboard for a field it cannot read.
     #[cfg(target_os = "android")]
     pub(super) fn android_keyboard(&mut self, keyboard: bool) {
-        for event in crate::take_mirror_events() {
+        for event in crate::android::take_mirror_events() {
             match event {
-                crate::MirrorEvent::Edit {
+                crate::android::MirrorEvent::Edit {
                     text,
                     cursor,
                     anchor,
                     generation,
                 } => self.mirror_edit(&text, cursor, anchor, generation),
                 _ if self.touch.mirror.shown.is_none() => {}
-                crate::MirrorEvent::Action => self.mirror_action(),
-                crate::MirrorEvent::Key(111) => {
+                crate::android::MirrorEvent::Action => self.mirror_action(),
+                crate::android::MirrorEvent::Key(111) => {
                     let _ = self.touch_key_tap(KeyCode::Escape);
                 }
-                crate::MirrorEvent::Key(code) => {
+                crate::android::MirrorEvent::Key(code) => {
                     if let Some(key) = android_key(code) {
                         self.mirror_key(key);
                     }
@@ -372,9 +372,9 @@ impl Game<'_> {
             | Some(Push::Update(f, cursor, anchor, generation)) => {
                 let show = matches!(push, Some(Push::Show(..)));
                 let max = f.max.min(i32::MAX as usize) as i32;
-                crate::text_mirror(show, &f.text, *cursor, *anchor, max, f.flags, *generation);
+                crate::android::text_mirror(show, &f.text, *cursor, *anchor, max, f.flags, *generation);
             }
-            Some(Push::Hide) => crate::hide_text_mirror(),
+            Some(Push::Hide) => crate::android::hide_text_mirror(),
             None => {}
         }
         // NativeActivity's keyboard for the rest; not in the frame the editor goes away, whose
@@ -386,7 +386,7 @@ impl Game<'_> {
             window.set_ime_allowed(native);
             // winit hides only a keyboard shown implicitly; Android's own call hides any.
             if !native {
-                crate::hide_keyboard();
+                crate::android::hide_keyboard();
             }
             self.touch.mirror.native = native;
         }

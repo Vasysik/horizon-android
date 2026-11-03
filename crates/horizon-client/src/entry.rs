@@ -8,6 +8,12 @@ pub fn main() {
 
 /// Start the game with trait mods in dispatch order.
 pub fn main_with(mods: crate::mod_api::Mods) {
+    start(mods, || {});
+}
+
+/// [`main_with`], running `after_log` once the log is open (Android's start-up notes, its
+/// platform set-up that logs).
+pub fn start(mods: crate::mod_api::Mods, after_log: impl FnOnce()) {
     // First: a trait injection into anything below (logging, the crash handler) calls its mod.
     if crate::mod_api::MODS.set(mods).is_err() {
         log::warn!("Trait mods already installed; ignoring the second list");
@@ -15,7 +21,11 @@ pub fn main_with(mods: crate::mod_api::Mods) {
     horizon_threads::configure_allocator();
     horizon_client::telemetry::mark_start();
     horizon_client::spans::startup::init(std::time::Instant::now());
+    #[cfg(not(target_os = "android"))]
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The process has no command line: `horizon-args.txt`'s, read by `android::main`.
+    #[cfg(target_os = "android")]
+    let args: Vec<String> = crate::android::args();
     let game_args = args.iter().take_while(|a| *a != "--dedicated");
     let help = game_args
         .clone()
@@ -55,6 +65,7 @@ pub fn main_with(mods: crate::mod_api::Mods) {
         crash::install(home.clone(), side);
         ram_limit::start(&home, side);
     }
+    after_log();
     let renderers = crate::mod_api::mods()
         .iter()
         .filter_map(|m| m.render())
@@ -180,6 +191,10 @@ pub fn main_with(mods: crate::mod_api::Mods) {
             eprintln!("Press Enter to close.");
             let _ = std::io::stdin().read_line(&mut String::new());
         }
+        // The activity ends first, and the process without the C library's exit handlers.
+        #[cfg(target_os = "android")]
+        crate::android::finish_and_exit();
+        #[cfg(not(target_os = "android"))]
         std::process::exit(if usage {
             game::exit_code::USAGE
         } else {

@@ -583,7 +583,7 @@ impl Game<'_> {
             return;
         }
         #[cfg(target_os = "android")]
-        crate::vibrate(millis);
+        crate::android::vibrate(millis);
         #[cfg(not(target_os = "android"))]
         let _ = millis;
     }
@@ -601,7 +601,7 @@ impl Game<'_> {
         {
             if wanted != self.touch.gyro_on {
                 // A phone without a gyroscope says so; it is not asked again until the next change.
-                let started = crate::gyroscope(wanted);
+                let started = crate::android::gyroscope(wanted);
                 self.touch.gyro_on = wanted;
                 if wanted && !started {
                     log::info!("Horizon: no gyroscope to aim with");
@@ -610,7 +610,7 @@ impl Game<'_> {
             if !wanted {
                 return;
             }
-            let Some([x, y, rotation]) = crate::take_gyro() else {
+            let Some([x, y, rotation]) = crate::android::take_gyro() else {
                 return;
             };
             let [yaw, pitch] = touch::gyro_turn([x, y], rotation as i32);
@@ -864,7 +864,7 @@ impl Game<'_> {
         }
         #[cfg(target_os = "android")]
         if self.touch.keyboard {
-            if crate::ime_height() > 0 {
+            if crate::android::ime_height() > 0 {
                 self.touch.ime_seen = true;
             } else if self.touch.ime_seen {
                 // Put away with the back key: a tap on the field brings it back.
@@ -1338,7 +1338,7 @@ impl Game<'_> {
         // The gyroscope rests in the background; the next frame that aims listens again.
         #[cfg(target_os = "android")]
         if std::mem::take(&mut self.touch.gyro_on) {
-            crate::gyroscope(false);
+            crate::android::gyroscope(false);
         }
         // The system put the keyboard away: ask for it again when the chat is back.
         self.touch.keyboard = false;
@@ -1423,7 +1423,7 @@ impl Game<'_> {
     fn keyboard_height(&self) -> u32 {
         #[cfg(target_os = "android")]
         if self.touch.keyboard {
-            return crate::ime_height();
+            return crate::android::ime_height();
         }
         0
     }

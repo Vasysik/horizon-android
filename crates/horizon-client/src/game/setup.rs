@@ -172,7 +172,7 @@ fn folder_offer(setup: &Setup) -> Option<super::files_offer::Stage> {
     if !private || setup.folder_later || declined().exists() {
         return None;
     }
-    Some(if crate::file_access_allowed() {
+    Some(if crate::android::file_access_allowed() {
         Stage::Restart
     } else if setup.folder_asked {
         Stage::Waiting
@@ -605,9 +605,9 @@ impl Loading {
         match action {
             #[cfg(target_os = "android")]
             Action::Folder => match folder_offer(&self.setup) {
-                Some(super::files_offer::Stage::Restart) => crate::restart_app(),
+                Some(super::files_offer::Stage::Restart) => crate::android::restart_app(),
                 _ => {
-                    crate::open_file_access_settings();
+                    crate::android::open_file_access_settings();
                     self.setup.folder_asked = true;
                 }
             },

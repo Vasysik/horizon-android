@@ -82,7 +82,7 @@ impl Game<'_> {
             let private =
                 horizon_client::logging::game_home() == horizon_client::logging::private_home();
             if private && !declined().exists() {
-                offer.stage = Some(if crate::file_access_allowed() {
+                offer.stage = Some(if crate::android::file_access_allowed() {
                     Stage::Restart
                 } else {
                     Stage::Ask
@@ -93,7 +93,7 @@ impl Game<'_> {
             && offer.checked.is_none_or(|t| t.elapsed() >= CHECK)
         {
             offer.checked = Some(Instant::now());
-            if crate::file_access_allowed() {
+            if crate::android::file_access_allowed() {
                 offer.stage = Some(Stage::Restart);
             }
         }
@@ -104,7 +104,7 @@ impl Game<'_> {
     pub(super) fn ask_files_offer(&mut self) {
         let _ = std::fs::remove_file(declined());
         let offer = &mut self.files_offer;
-        offer.stage = Some(if crate::file_access_allowed() {
+        offer.stage = Some(if crate::android::file_access_allowed() {
             Stage::Restart
         } else {
             Stage::Ask
@@ -196,10 +196,10 @@ impl Game<'_> {
         if inside(primary) {
             match stage {
                 Stage::Ask | Stage::Waiting => {
-                    crate::open_file_access_settings();
+                    crate::android::open_file_access_settings();
                     offer.stage = Some(Stage::Waiting);
                 }
-                Stage::Restart => crate::restart_app(),
+                Stage::Restart => crate::android::restart_app(),
             }
         } else if inside(other) {
             if stage != Stage::Restart {

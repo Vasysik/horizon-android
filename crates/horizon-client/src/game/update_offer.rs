@@ -209,7 +209,7 @@ impl Game<'_> {
             let test = std::env::var("STARLING_UPDATE_TEST")
                 .ok()
                 .filter(|v| !v.is_empty());
-            let current = match (crate::app_version(), test) {
+            let current = match (crate::android::app_version(), test) {
                 (_, Some(pretend)) => pretend,
                 (Some((version, true)), None) => version,
                 _ => return,
@@ -251,7 +251,7 @@ impl Game<'_> {
             && let Some(result) = shared.downloaded.take()
         {
             offer.stage = Some(match result {
-                Ok(name) if crate::install_update(&name) => Stage::Installing,
+                Ok(name) if crate::android::install_update(&name) => Stage::Installing,
                 Ok(_) => Stage::Failed("Android has no installer that takes the update.".into()),
                 Err(e) => Stage::Failed(e),
             });
@@ -464,7 +464,7 @@ impl Game<'_> {
             }
             (Stage::Installing, 0) => {
                 if let Some(release) = release
-                    && !crate::install_update(&release.name)
+                    && !crate::android::install_update(&release.name)
                 {
                     offer.stage = Some(Stage::Failed(
                         "Android has no installer that takes the update.".into(),

@@ -91,25 +91,6 @@ def ndk_tool(ndk, name):
     return tool(ndk / "toolchains" / "llvm" / "prebuilt" / host / "bin", name)
 
 
-def build_js_engine():
-    """Starling's shared JavaScript engine (crates/starling-mod-sdk/js-engine), which the game
-    embeds to run JavaScript mods: built with Node when missing or older than its sources.
-    Without Node the APK runs component mods only."""
-    folder = ROOT / "crates" / "starling-mod-sdk" / "js-engine"
-    engine = ROOT / "target" / "js-engine" / "engine.wasm"
-    sources = [folder / "engine.js", folder / "build.mjs", folder / "package.json",
-               ROOT / "crates" / "starling-mod-sdk" / "wit" / "starling.wit"]
-    if engine.is_file() and all(engine.stat().st_mtime >= s.stat().st_mtime for s in sources):
-        return
-    npm = shutil.which("npm")
-    if npm is None:
-        print("build_apk: no npm: the APK runs no JavaScript mods", flush=True)
-        return
-    if not (folder / "node_modules").is_dir():
-        run(npm, "install", "--no-audit", "--no-fund", cwd=folder)
-    run(npm, "run", "build", cwd=folder)
-
-
 def build_library(profile, ndk, sdk):
     env = dict(os.environ, ANDROID_NDK_HOME=str(ndk), ANDROID_HOME=str(sdk))
     env["RUSTFLAGS"] = (env.get("RUSTFLAGS", "") + " " + PAGE_FLAGS).strip()
@@ -284,7 +265,6 @@ def main():
             sys.exit(f"build_apk: missing {path}")
 
     if not args.no_build:
-        build_js_engine()
         build_library(args.profile, ndk, sdk)
     profile_dir = "debug" if args.profile == "dev" else args.profile
     built = ROOT / "target" / TRIPLE / profile_dir / f"lib{LIBRARY}.so"

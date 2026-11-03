@@ -4,54 +4,25 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version = "1.90"
-description = "Horizon on Android: the client's game loop in a NativeActivity library"
+description = "Horizon on Android: the entry points of the client's game loop in a NativeActivity library"
 publish = false
 
 [lib]
 crate-type = ["cdylib"]
-# Beside horizon-client's main.rs, whose `game` module it compiles (android_lib.rs).
+# The entry points Android and the JVM look up by name (android_main, starling_on_create, the
+# Java native methods); the game and its Android hooks are horizon-client's (src/android.rs).
 path = "../horizon-client/src/android_lib.rs"
 
-# Everything is Android-only: on other targets the library is empty, so workspace builds and
-# lints don't compile the game module a second time.
+# Everything is Android-only: on other targets the library is empty.
 [target.'cfg(target_os = "android")'.dependencies]
-horizon-client = { path = "../horizon-client", default-features = false, features = ["mods"] }
-horizon-assets = { path = "../horizon-assets" }
-horizon-bench = { path = "../horizon-bench" }
-horizon-core = { path = "../horizon-core" }
-horizon-friends = { path = "../horizon-friends" }
-horizon-mods = { path = "../horizon-mods", features = ["runtime"] }
-horizon-protocol = { path = "../horizon-protocol" }
-horizon-shaders = { path = "../horizon-shaders" }
-horizon-shader-api = { path = "../horizon-shader-api" }
-horizon-telemetry = { path = "../horizon-telemetry", default-features = false }
-horizon-threads = { path = "../horizon-threads" }
-horizon-world = { path = "../horizon-world" }
-wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "wgsl"] }
-# The NativeActivity glue (android-activity): `android_main` gets the app, the event loop is
-# built from it.
+horizon-client = { path = "../horizon-client", default-features = false }
+# The NativeActivity glue (android-activity): `android_main` gets the app.
 winit = { version = "0.30.13", features = ["android-native-activity"] }
-pollster = "0.4"
-glam = "0.30"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1.0.151", features = ["raw_value"] }
-log = "0.4"
-chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
-# Calls into the activity: the file manager, the file picker, the clipboard (cpal's version).
 jni = "0.21.1"
-# A server's resource packs download through it (game/server_packs.rs), and the updates
-# (game/update_offer.rs), checked with sha2.
-ureq = { version = "2", default-features = false, features = ["tls"] }
-sha2 = "0.10.9"
 
 [features]
-default = ["audio", "mods"]
+default = ["audio"]
 audio = ["horizon-client/audio"]
-# Named by the game module's cfgs too (the code mods' input, render and frame hooks): always on.
-mods = ["horizon-client/mods"]
-# Named by the game module's cfgs. Never on here: gilrs has no Android backend and hidapi does not
-# build for it, so phones read their controllers from Android's own events (game/pad/android.rs).
-controllers = []
 
 [lints]
 workspace = true

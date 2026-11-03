@@ -82,6 +82,12 @@ fs4 = { version = "1.1.0", default-features = false, features = ["sync"] }
 # The server thread's CPU time per tick (`HORIZON_SPIKES`, spans.rs).
 rustix = { version = "1", default-features = false, features = ["std", "time", "process", "fs"] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# The NativeActivity glue (android-activity) and the calls into the activity (android.rs): the
+# file manager, the file picker, the clipboard (cpal's version of jni).
+winit = { version = "0.30.13", features = ["android-native-activity"] }
+jni = "0.21.1"
+
 [target.'cfg(windows)'.dependencies]
 # (Resource pack overlays' `junction` is horizon-client-render's, with packs.rs.)
 # Use the registered URI handler without routing links through Explorer/cmd.

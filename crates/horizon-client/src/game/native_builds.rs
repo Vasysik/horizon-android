@@ -266,7 +266,7 @@ impl Game<'_> {
 
     /// Shows the card: the builds for this version, looked up now.
     pub(super) fn open_native_builds(&mut self) {
-        let Some((version, _)) = crate::app_version() else {
+        let Some((version, _)) = crate::android::app_version() else {
             return;
         };
         let card = &mut self.native_builds;
@@ -512,7 +512,7 @@ impl Game<'_> {
         let Some(act) = act else {
             return;
         };
-        let Some((version, _)) = crate::app_version() else {
+        let Some((version, _)) = crate::android::app_version() else {
             return;
         };
         match act {
@@ -548,7 +548,7 @@ impl Game<'_> {
                     "{REQUEST}&title=%5Bnative+build%5D+&version={version}"
                 ));
             }
-            Act::Restart => crate::restart_app(),
+            Act::Restart => crate::android::restart_app(),
             Act::Retry => self.open_native_builds(),
             Act::Close => self.native_builds.stage = None,
         }

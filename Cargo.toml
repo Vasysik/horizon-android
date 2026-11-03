@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["crates/horizon-android", "launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/naga", "third_party/libmimalloc-sys", "third_party/winit"]
+exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/naga", "third_party/libmimalloc-sys", "third_party/winit"]
 members = [
     "crates/horizon-core",
     "crates/horizon-dualsense",
@@ -8,6 +8,8 @@ members = [
     "crates/horizon-hdr",
     "crates/horizon-world",
     "crates/horizon-client",
+    # Starling: the game as a NativeActivity library; empty on other targets.
+    "crates/horizon-android",
     "crates/horizon-client-lib",
     "crates/horizon-client-core",
     "crates/horizon-client-input",

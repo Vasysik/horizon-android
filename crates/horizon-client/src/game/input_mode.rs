@@ -40,13 +40,13 @@ impl Game<'_> {
     /// events (its captured motion turns the view as a computer's raw motion does).
     #[cfg(target_os = "android")]
     pub(super) fn android_input_frame(&mut self, event_loop: &dyn EventLoopCtl) {
-        if crate::pointer_capture_lost() && self.captured {
+        if crate::android::pointer_capture_lost() && self.captured {
             self.capture(false);
         }
-        if crate::keyboard_used() {
+        if crate::android::keyboard_used() {
             self.input_used(InputMode::KeyboardMouse);
         }
-        let events = crate::take_mouse_events();
+        let events = crate::android::take_mouse_events();
         if events.is_empty() {
             return;
         }
@@ -57,11 +57,11 @@ impl Game<'_> {
         let device_id = DeviceId::dummy();
         for event in events {
             let event = match event {
-                crate::MouseEvent::Moved(x, y) => WindowEvent::CursorMoved {
+                crate::android::MouseEvent::Moved(x, y) => WindowEvent::CursorMoved {
                     device_id,
                     position: PhysicalPosition::new(x, y),
                 },
-                crate::MouseEvent::Button(button, down) => WindowEvent::MouseInput {
+                crate::android::MouseEvent::Button(button, down) => WindowEvent::MouseInput {
                     device_id,
                     state: if down {
                         ElementState::Pressed
@@ -70,12 +70,12 @@ impl Game<'_> {
                     },
                     button,
                 },
-                crate::MouseEvent::Wheel(x, y) => WindowEvent::MouseWheel {
+                crate::android::MouseEvent::Wheel(x, y) => WindowEvent::MouseWheel {
                     device_id,
                     delta: MouseScrollDelta::LineDelta(x, y),
                     phase: TouchPhase::Moved,
                 },
-                crate::MouseEvent::Motion(x, y) => {
+                crate::android::MouseEvent::Motion(x, y) => {
                     self.grabbed_mouse_motion(x, y);
                     continue;
                 }

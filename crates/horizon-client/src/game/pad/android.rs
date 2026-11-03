@@ -6,6 +6,8 @@ use super::{super::Game, Pads};
 use horizon_client::gamepad::{GlyphStyle, PadState, Pulse, Rumble};
 use serde_json::{Value, json};
 
+pub(in crate::game) use super::no_router::{PadId, PadRouter};
+
 /// The controllers used so far and the one playing.
 #[derive(Default)]
 pub(super) struct Devices {
@@ -15,18 +17,21 @@ pub(super) struct Devices {
 }
 
 impl Pads {
+    /// Splitscreen gives pads away; there are no gilrs pads here to close.
+    pub(in crate::game) fn release_hardware(&mut self) {}
+
     /// The active pad's state; its maker picks the button pictures.
     pub(super) fn read(&mut self) -> PadState {
-        let Some((device, state)) = crate::pad_state() else {
+        let Some((device, state)) = crate::android::pad_state() else {
             return PadState::default();
         };
         let vendor = match self.devices.seen.iter().find(|(d, _)| *d == device) {
             Some((_, vendor)) => *vendor,
             None => {
-                let vendor = crate::pad_vendor(device);
+                let vendor = crate::android::pad_vendor(device);
                 log::info!(
                     "Controller in use: {} (vendor {:04x})",
-                    crate::pad_name(device).unwrap_or_default(),
+                    crate::android::pad_name(device).unwrap_or_default(),
                     vendor.unwrap_or(0)
                 );
                 self.devices.seen.push((device, vendor));
@@ -51,7 +56,7 @@ impl Game<'_> {
             return;
         };
         let level = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-        crate::vibrate_pad(
+        crate::android::vibrate_pad(
             device,
             i32::try_from(pulse.millis).unwrap_or(i32::MAX),
             level(pulse.strong),
@@ -68,7 +73,7 @@ impl Game<'_> {
             .map(|(device, vendor)| {
                 json!({
                     "device": device,
-                    "name": crate::pad_name(*device),
+                    "name": crate::android::pad_name(*device),
                     "vendor": vendor,
                     "active": devices.active == Some(*device),
                 })
