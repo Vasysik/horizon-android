@@ -3347,13 +3347,26 @@ impl OptionsUi {
                             .is_some_and(|page| !page.keys.is_empty() || !page.buttons.is_empty())
                         {
                             let toggle = button(0.0, 0.0, 150.0, label, Act::ToggleMod(i));
-                            let settings = button(
-                                0.0,
-                                0.0,
-                                150.0,
-                                tr("horizon.mods.settings"),
-                                Act::ModSettings(i),
-                            );
+                            // A mod not in this game (Android): its one button, Compile, at once.
+                            let settings = if installed.problem.as_deref()
+                                == Some(crate::mod_list::NOT_BUILT)
+                            {
+                                button(
+                                    0.0,
+                                    0.0,
+                                    150.0,
+                                    Text::literal("Compile"),
+                                    Act::NativeButton(i, 0),
+                                )
+                            } else {
+                                button(
+                                    0.0,
+                                    0.0,
+                                    150.0,
+                                    tr("horizon.mods.settings"),
+                                    Act::ModSettings(i),
+                                )
+                            };
                             Row::Buttons(
                                 if dead { inactive(toggle) } else { toggle },
                                 Some(settings),

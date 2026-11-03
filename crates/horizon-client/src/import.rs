@@ -22,6 +22,8 @@ pub enum Kind {
     ShaderPack,
     World,
     Mod,
+    /// A native mod (`horizon-native.json`): for `horizon-native-mods/`, compiled from there.
+    NativeMod,
     /// A folder horizon-prepare made (`horizon-resources.json`), zipped.
     Resources,
     /// Bedrock Edition content (.mcpack, .mcaddon, .mcworld, .mctemplate).
@@ -65,6 +67,12 @@ pub fn classify(path: &Path) -> (Kind, String) {
     let found = |marker: &str| marker_prefix(&names, marker);
     if let Some(prefix) = found("horizon-resources.json") {
         return (Kind::Resources, prefix);
+    }
+    if names
+        .iter()
+        .any(|n| n == horizon_mods::index::native::MANIFEST)
+    {
+        return (Kind::NativeMod, String::new());
     }
     if let Some(prefix) = found("horizon-mod.toml") {
         return (Kind::Mod, prefix);
@@ -181,6 +189,15 @@ pub fn install(path: &Path, name: &str, places: &Places) -> Result<Installed, St
             format!(
                 "Mod \"{title}\" added: turn it on in Options > Mods, or, if it adds blocks or items, pick it for a new world in Create New World > More > Mods & Data Packs"
             )
+        }
+        Kind::NativeMod => {
+            let bundle = horizon_mods::index::native::Bundle::read(path)
+                .map_err(|e| format!("{name} is not a native mod: {e}"))?;
+            let id = bundle.manifest.id;
+            let dir = places.game.join("horizon-native-mods");
+            fs::create_dir_all(&dir).map_err(fail)?;
+            copy_file(path, &dir.join(format!("{id}.hnmod"))).map_err(fail)?;
+            format!("Native mod \"{id}\" added: compile it in Options > Mods")
         }
         Kind::Resources => {
             install_resources(path, &prefix, &places.resources)?;

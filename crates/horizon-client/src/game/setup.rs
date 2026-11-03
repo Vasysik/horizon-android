@@ -4,7 +4,7 @@
 //! (preparer.rs); or the resources prepared on a computer, picked as before. Drawn with the
 //! embedded Horizon font: the game's own is part of what is missing. While it waits, water to fish in (fishing.rs), and the
 //! game's settings, drawn in the low-budget skin the app carries (packaging/lowbudget).
-mod fishing;
+pub(super) mod fishing;
 
 use super::{Audio, Loading, UiResources};
 use horizon_client::{

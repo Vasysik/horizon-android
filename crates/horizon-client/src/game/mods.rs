@@ -505,6 +505,8 @@ impl Game<'_> {
             .ok()
             .and_then(|exe| std::fs::read_to_string(exe.with_file_name(BUILD_INFO)).ok())
             .unwrap_or_default();
+        #[cfg(target_os = "android")]
+        let built = super::native_builds::running_build_info().unwrap_or(built);
         let built_mods = native_mods_detail(&built);
         let built_with_mods = built_mods.is_some();
         if let Some(list) = built_mods {
@@ -522,6 +524,8 @@ impl Game<'_> {
         let native_dir = Self::game_dir().join(mod_list::NATIVE_DIR);
         let unbuilt = not_built(&native_dir, &built, &self.settings.mods.installed);
         self.settings.mods.installed.extend(unbuilt);
+        #[cfg(target_os = "android")]
+        self.offer_compile();
         let installed = &self.settings.mods.installed;
         self.mods.stopped = installed
             .iter()

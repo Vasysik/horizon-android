@@ -76,8 +76,9 @@ impl Game<'_> {
     /// eyes (a guest names the block their own client aimed at). Single
     /// player and LAN have no spawn protection.
     fn wr_may_change(&self, pos: [i32; 3]) -> bool {
-        let in_level = pos[1] >= self.dim.min_y()
-            && pos[1] <= self.dim.max_y()
+        let layout = self.world.layout();
+        let in_level = pos[1] >= layout.min_y()
+            && pos[1] < layout.max_y()
             && self.world.loaded(pos[0], pos[2]);
         let inside_border = self.border.contains(f64::from(pos[0]), f64::from(pos[2]));
         let reach = self.reach() + 1.0;
@@ -101,10 +102,15 @@ impl Game<'_> {
             return false;
         };
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        for properties in wr::turns(&now.name, &now.properties, face) {
+        let current = now
+            .properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for properties in wr::turns(&now.name, &current, face) {
             let candidate = BlockState {
                 name: now.name.clone(),
-                properties,
+                properties: properties.into(),
             };
             let Some(turned) = registry.id(&candidate) else {
                 continue;

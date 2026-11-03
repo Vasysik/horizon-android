@@ -44,6 +44,11 @@ impl Game<'_> {
 
     /// Allow the input method only while a text box has focus.
     pub(super) fn sync_ime(&mut self) {
+        // On Android asking for the input method shows the keyboard: there a tap on the field
+        // decides (touch.rs), not its focus.
+        if cfg!(target_os = "android") {
+            return;
+        }
         let want = self.text_field_focused();
         if want != self.ime_allowed
             && let Some(window) = &self.window

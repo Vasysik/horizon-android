@@ -72,6 +72,9 @@
                 <data android:pathPattern=".*\\.hmod" />
                 <data android:pathPattern=".*\\..*\\.hmod" />
                 <data android:pathPattern=".*\\..*\\..*\\.hmod" />
+                <data android:pathPattern=".*\\.hnmod" />
+                <data android:pathPattern=".*\\..*\\.hnmod" />
+                <data android:pathPattern=".*\\..*\\..*\\.hnmod" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

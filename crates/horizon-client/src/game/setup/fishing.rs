@@ -64,7 +64,7 @@ const FISH_CELL: f32 = 4.0;
 
 /// What the fishing sounds like.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Sound {
+pub(in crate::game) enum Sound {
     /// The line thrown.
     Cast,
     /// The bobber on the water, or a fish gone.
@@ -78,11 +78,11 @@ pub(super) enum Sound {
 }
 
 /// The samples' rate.
-pub(super) const RATE: u32 = 22_050;
+pub(in crate::game) const RATE: u32 = 22_050;
 
 impl Sound {
     /// Mono samples at `RATE`, made once.
-    pub(super) fn samples(self) -> Arc<Vec<f32>> {
+    pub(in crate::game) fn samples(self) -> Arc<Vec<f32>> {
         static MADE: [OnceLock<Arc<Vec<f32>>>; 5] = [const { OnceLock::new() }; 5];
         MADE[self as usize]
             .get_or_init(|| Arc::new(self.make()))
@@ -167,7 +167,7 @@ enum Phase {
     Bite { until: Instant },
 }
 
-pub(super) struct Fishing {
+pub(in crate::game) struct Fishing {
     phase: Phase,
     /// When the phase began.
     since: Instant,
@@ -239,7 +239,7 @@ impl Fishing {
     }
 
     /// A finger down on the water at `at` (dp): the bobber goes there.
-    pub(super) fn press(&mut self, now: Instant, at: [f32; 2]) {
+    pub(in crate::game) fn press(&mut self, now: Instant, at: [f32; 2]) {
         if self.phase == Phase::Idle {
             self.spot = at;
             self.sounds.push(Sound::Cast);
@@ -248,12 +248,12 @@ impl Fishing {
     }
 
     /// The sounds since the last call.
-    pub(super) fn take_sounds(&mut self) -> Vec<Sound> {
+    pub(in crate::game) fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
 
     /// The finger lifted.
-    pub(super) fn release(&mut self, now: Instant) {
+    pub(in crate::game) fn release(&mut self, now: Instant) {
         match self.phase {
             Phase::Bite { .. } => {
                 let mut roll = self.random() * 100.0;
@@ -276,7 +276,7 @@ impl Fishing {
     }
 
     /// The fish's moves, every frame.
-    pub(super) fn update(&mut self, now: Instant) {
+    pub(in crate::game) fn update(&mut self, now: Instant) {
         if self
             .said
             .as_ref()
@@ -316,7 +316,7 @@ impl Fishing {
     }
 
     /// The water under everything, `w` x `h` dp.
-    pub(super) fn draw_water(&self, ui: &mut Ui<'_>, w: f32, h: f32, now: Instant) {
+    pub(in crate::game) fn draw_water(&self, ui: &mut Ui<'_>, w: f32, h: f32, now: Instant) {
         let t = now.duration_since(self.started).as_secs_f32();
         ui.fill(0.0, 0.0, w, h, WATER[1]);
         let (cols, rows) = ((w / CELL).ceil() as i32, (h / CELL).ceil() as i32);
@@ -339,7 +339,7 @@ impl Fishing {
 
     /// The line, the bobber, the fish and the splash over the water, and what to do, written at
     /// `hint_y` (dp); the catches counted at the top right.
-    pub(super) fn draw(&self, ui: &mut Ui<'_>, w: f32, h: f32, hint_y: f32, now: Instant) {
+    pub(in crate::game) fn draw(&self, ui: &mut Ui<'_>, w: f32, h: f32, hint_y: f32, now: Instant) {
         let t = now.duration_since(self.since).as_secs_f32();
         let landed = self.spot;
         // The player is below the screen, a little left of the middle.

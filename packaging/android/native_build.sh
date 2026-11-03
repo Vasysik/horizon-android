@@ -53,6 +53,13 @@ grep -qxF "$lib_line" "$work/source/$manifest" || fail "$manifest no longer has:
 sed -i "s|^path = \"../horizon-client/src/android_lib.rs\"\$|path = \"plan-stub.rs\"|" \
   "$work/source/$manifest"
 : > "$work/source/crates/horizon-android/plan-stub.rs"
+# horizon-mixins does not look under a file with a conditional attribute of its own, and the game
+# module hangs from this one. The attribute does nothing on Android.
+lib_attr='#![cfg_attr(not(target_os = "android"), forbid(unsafe_code))]'
+grep -qxF "$lib_attr" "$work/source/crates/horizon-client/src/lib.rs" \
+  || fail "crates/horizon-client/src/lib.rs no longer has: $lib_attr"
+grep -vxF "$lib_attr" "$work/source/crates/horizon-client/src/lib.rs" > "$work/lib.rs"
+cp "$work/lib.rs" "$work/source/crates/horizon-client/src/lib.rs"
 
 # The bundles, each pinned to the commit built here when it pins one (Starling's commits are not
 # Horizon's; a mod that calls what Starling changed fails in the compiler).
