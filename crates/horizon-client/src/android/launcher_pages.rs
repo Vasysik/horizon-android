@@ -753,7 +753,7 @@ impl Launcher {
             pill_h * 0.5,
             color::hex(0x312C45, 255),
         );
-        ui.avatar_head(pill_x + 7.0, pill_y + 6.0, 24.0);
+        ui.avatar_head_3d(pill_x + 6.0, pill_y + 4.0, 28.0, &account_name);
         let fitted_acct = ui.fit_text(Face::Medium, 13.5, &account_name, pill_w - 62.0);
         ui.text(
             Face::Medium,
@@ -1658,6 +1658,7 @@ impl Launcher {
                 &mut ui,
                 &mut self.targets,
                 &self.catalog.config.name,
+                self.catalog.config.last_name_changed_label(),
                 self.catalog.editing == Some("name"),
             );
         }
@@ -1687,6 +1688,7 @@ impl Launcher {
         if caret_visible && let Some(name) = self.catalog.editing {
             let value = match name {
                 "name" => self.catalog.config.name.clone(),
+                "profile_name" => self.catalog.config.custom_profile_name.clone(),
                 "server" => self.catalog.config.server.clone(),
                 "render_scale" => self.catalog.render_scale_text.clone(),
                 _ => self.catalog.query.clone(),
@@ -2411,7 +2413,21 @@ impl Launcher {
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
-                let profile_label = format!("{} v", touch_cfg.active_profile);
+                let saved_profiles = horizon_client::touch::Settings::list_profiles(&game_home);
+                let profile_label = format!(
+                    "{} ({} saved) v",
+                    touch_cfg.active_profile,
+                    saved_profiles.len()
+                );
+                let save_as_label = if self.catalog.editing == Some("profile_name") {
+                    if self.catalog.config.custom_profile_name.is_empty() {
+                        "Type name...".to_owned()
+                    } else {
+                        self.catalog.config.custom_profile_name.clone()
+                    }
+                } else {
+                    "Save As Name...".to_owned()
+                };
                 let mouse_sens = format!("{:.0}%", opts.sensitivity * 200.0);
                 let touch_sens = format!("{:.0}%", touch_cfg.sensitivity * 100.0);
                 let vmouse_spd = format!("{:.0}%", touch_cfg.virtual_mouse_sensitivity * 100.0);
@@ -2421,18 +2437,18 @@ impl Launcher {
                 let rows: [(&str, &str, SettingControl<'_>); 13] = [
                     (
                         "Customize HUD Controls (Control Editor)",
-                        "Move buttons, add custom keys, and set Pass-Through, Toggle & Swipe",
+                        "Move buttons, add custom keys, and set Visible in Game / Menu, Toggle & Swipe",
                         SettingControl::Button("Open Editor", Action::OpenControlEditor, true),
                     ),
                     (
-                        "Active control layout profile",
-                        "Switch between MCPE Style Touch Controls and GoyControl custom layouts",
+                        "Saved & preset control profiles",
+                        "View all saved control layouts in controlmap/ and load any profile",
                         SettingControl::Button(&profile_label, Action::ControlProfileChooser, false),
                     ),
                     (
-                        "Save current layout as new profile",
-                        "Creates a new named JSON layout in controlmap/",
-                        SettingControl::Button("Save New Profile", Action::SaveControlProfileAsNew, false),
+                        "Save current layout under custom name",
+                        "Type a custom name to save your layout in controlmap/<name>.json",
+                        SettingControl::Button(&save_as_label, Action::SaveControlProfileAsNew, false),
                     ),
                     (
                         "Export control layout file (.json)",
@@ -2953,14 +2969,18 @@ impl Launcher {
             }
             Some(Action::SaveControlProfileAsNew) => {
                 let game_home = self.catalog.config.game_home(&self.home);
-                let touch = horizon_client::touch::Settings::load_from(
+                let mut touch = horizon_client::touch::Settings::load_from(
                     &game_home.join("horizon-touch.json"),
                 );
                 let existing = horizon_client::touch::Settings::list_profiles(&game_home);
-                let next_name = format!("custom-{}", existing.len() + 1);
+                let next_name = format!("goy-custom-{}", existing.len());
+                touch.active_profile = next_name.clone();
                 let _ = touch.save_profile(&game_home, &next_name);
+                self.catalog.config.custom_profile_name = next_name.clone();
+                self.catalog.editing = Some("profile_name");
+                crate::platform::show(&self.catalog.config.custom_profile_name);
                 self.catalog.status = format!(
-                    "Saved current HUD controls as profile '{next_name}' in controlmap/{next_name}.json."
+                    "Saved as '{next_name}'. Type a custom name and press Enter to rename, or view in Saved Profiles."
                 );
             }
             Some(Action::ExportControlProfile) => {
@@ -3214,6 +3234,7 @@ impl Launcher {
             Some(Action::FinishNameEdit) => {
                 self.catalog.editing = None;
                 crate::platform::hide();
+                self.catalog.config.touch_name_changed();
                 self.catalog.config.save(&self.home)?;
             }
             Some(Action::Field(name)) => {
@@ -3225,6 +3246,7 @@ impl Launcher {
                 self.catalog.editing = Some(name);
                 let initial = match name {
                     "name" => &self.catalog.config.name,
+                    "profile_name" => &self.catalog.config.custom_profile_name,
                     "server" => &self.catalog.config.server,
                     "render_scale" => &self.catalog.render_scale_text,
                     "client_id" => &self.catalog.config.microsoft_client_id,

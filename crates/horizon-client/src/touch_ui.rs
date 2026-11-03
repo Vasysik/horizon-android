@@ -31,6 +31,8 @@ pub enum InGameMenuAction {
     OpenControlEditor,
     SetControlStyle(crate::touch::ControlStyle),
     ApplyPreset(&'static str),
+    LoadSavedProfile(usize),
+    PresetVisibilityAll,
     CycleMovementMode,
     CycleJoystickArea,
     ToggleSplitTouch,
@@ -319,21 +321,32 @@ impl TouchUi {
             Gesture::None
         }
     }
-    pub fn action(&self, _w: f32, _h: f32, p: [f32; 2], _menu: bool) -> Option<Action> {
-        if (3.0..23.0).contains(&p[1]) {
+    pub fn action(&self, w: f32, h: f32, p: [f32; 2], menu: bool) -> Option<Action> {
+        if menu && (3.0..23.0).contains(&p[1]) && (w - 86.0..w - 50.0).contains(&p[0]) {
+            return Some(Action::VirtualMouse);
+        }
+        if menu && self.virtual_mouse && (w - 48.0..w - 6.0).contains(&p[0]) {
+            if (h - 52.0..h - 30.0).contains(&p[1]) {
+                return Some(Action::MouseButton(false));
+            }
+            if (h - 28.0..h - 6.0).contains(&p[1]) {
+                return Some(Action::MouseButton(true));
+            }
+        }
+        if self.expanded && (3.0..23.0).contains(&p[1]) {
             if (3.0..36.0).contains(&p[0]) {
                 return Some(Action::More);
             }
-            if self.expanded && (39.0..72.0).contains(&p[0]) {
+            if (39.0..72.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::F3));
             }
-            if self.expanded && (75.0..108.0).contains(&p[0]) {
+            if (75.0..108.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::F5));
             }
-            if self.expanded && (111.0..144.0).contains(&p[0]) {
+            if (111.0..144.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::KeyT));
             }
-            if self.expanded && (147.0..186.0).contains(&p[0]) {
+            if (147.0..186.0).contains(&p[0]) {
                 return Some(Action::Keyboard);
             }
         }
@@ -351,6 +364,9 @@ impl TouchUi {
         None
     }
     pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas, _menu: bool) {
+        if !self.expanded {
+            return;
+        }
         for (label, x, width) in [
             ("...", 3.0, 33.0),
             ("F3", 39.0, 33.0),
@@ -358,9 +374,6 @@ impl TouchUi {
             ("Chat", 111.0, 33.0),
             ("Keys", 147.0, 39.0),
         ] {
-            if label != "..." && !self.expanded {
-                continue;
-            }
             button(
                 b,
                 a,
@@ -586,8 +599,154 @@ const MOUSE_AND_ACTION_ITEMS: &[(&str, &str)] = &[
     ("Action: Advancements (L)", "action:key.advancements"),
 ];
 
+/// Renders the live GoyControl HUD (Analog Joystick + Static Buttons) in-game and in menus
+/// using the exact same `Ui::mobile` TrueType & rounded-shape pipeline as `draw_hud_editor`.
+pub fn draw_goy_hud(
+    tc: &crate::touch::TouchControls,
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    in_menu: bool,
+    virtual_mouse: bool,
+) {
+    use crate::touch::{Control, ControlStyle};
+    use crate::ui_theme::{Face, Ui, color};
+    if tc.editor.is_some() {
+        return;
+    }
+    let mut ui = Ui::mobile(a, b, (0.0, 0.0));
+    let (w, h) = (ui.w, ui.h);
+    let text_c = color::hex(0xF4EFFA, 255);
+    let state = tc.state();
+
+    // 1. Built-in controls that use GoyControl style (including the GoyControl Analog Joystick)
+    for c in Control::ALL {
+        if !tc.visible_for_state(c, in_menu) {
+            continue;
+        }
+        let p = tc.placement(c);
+        if tc.settings.control_style != ControlStyle::GoyControl && !p.use_goy_style {
+            continue;
+        }
+        let [nx, ny, nw, nh] = p.rect(tc.aspect());
+        let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
+        let alpha = p.opacity.clamp(0.15, 1.0);
+        if c == Control::Move {
+            let js = &tc.settings.joystick_style;
+            let side = rw.min(rh);
+            let jx = rx + (rw - side) * 0.5;
+            let jy = ry + (rh - side) * 0.5;
+            let base_fill = color::with_alpha(js.base_color, js.base_opacity * alpha);
+            let base_stroke = color::with_alpha(js.base_stroke_color, js.base_opacity * alpha);
+            let br = (side * (js.base_roundness / 100.0)).clamp(0.0, side * 0.5);
+            ui.rounded(jx, jy, side, side, br, base_fill);
+            if js.base_stroke > 0.1 {
+                ui.stroke_rounded(jx, jy, side, side, br, js.base_stroke, base_stroke);
+            }
+            let kside = side * js.stick_size.clamp(0.20, 0.85);
+            let kx = jx + (side - kside) * 0.5 + state.left[0] * (side * 0.26);
+            let ky = jy + (side - kside) * 0.5 - state.left[1] * (side * 0.26);
+            let kr = kside * 0.5;
+            let stick_fill = color::with_alpha(js.stick_color, js.stick_opacity * alpha);
+            let stick_stroke = color::with_alpha(js.stick_stroke_color, js.stick_opacity * alpha);
+            ui.rounded(kx, ky, kside, kside, kr, stick_fill);
+            if js.stick_stroke > 0.1 {
+                ui.stroke_rounded(kx, ky, kside, kside, kr, js.stick_stroke, stick_stroke);
+            }
+        } else {
+            let fill_c = color::with_alpha(p.button_color, alpha);
+            let stroke_c = color::with_alpha(p.stroke_color, alpha);
+            let shadow_c = color::with_alpha(p.shadow_color, alpha);
+            ui.goy_box(
+                rx,
+                ry,
+                rw,
+                rh,
+                p.shape,
+                p.roundness,
+                fill_c,
+                p.stroke_size,
+                p.stroke_margin,
+                p.stroke_roundness,
+                stroke_c,
+                p.shadow_size,
+                shadow_c,
+            );
+            ui.centered_fit(
+                Face::SemiBold,
+                (rh * 0.28).clamp(9.5, 14.5),
+                [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
+                color::with_alpha(text_c, alpha),
+                c.name(),
+            );
+        }
+    }
+
+    // 2. Custom GoyControl Static Buttons (respecting `visible_in_game` and `visible_in_menu`)
+    for (i, custom) in tc.settings.custom_buttons.iter().enumerate() {
+        if !tc.custom_visible_for_state(i, in_menu) {
+            continue;
+        }
+        let p = tc.custom_placement(i);
+        let [nx, ny, nw, nh] = p.rect(tc.aspect());
+        let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
+        let alpha = p.opacity.clamp(0.15, 1.0);
+        let label = custom.label();
+
+        let is_active_token = tc.held_custom_tokens().any(|tok| {
+            tok == custom.key
+                || (!custom.second_key.is_empty() && tok == custom.second_key)
+                || (!custom.third_key.is_empty() && tok == custom.third_key)
+        });
+        let is_vmouse_on = custom.key == "mouse.virtual.toggle" && virtual_mouse;
+        let held = is_active_token && !p.toggleable;
+        let toggled = (is_active_token && p.toggleable) || is_vmouse_on;
+
+        let raw_fill = if held {
+            p.on_click_color
+        } else if toggled {
+            p.on_toggle_color
+        } else {
+            p.button_color
+        };
+        let raw_stroke = if held {
+            p.on_click_stroke_color
+        } else if toggled {
+            p.on_toggle_stroke_color
+        } else {
+            p.stroke_color
+        };
+        let fill_c = color::with_alpha(raw_fill, alpha);
+        let stroke_c = color::with_alpha(raw_stroke, alpha);
+        let shadow_c = color::with_alpha(p.shadow_color, alpha);
+        ui.goy_box(
+            rx,
+            ry,
+            rw,
+            rh,
+            p.shape,
+            p.roundness,
+            fill_c,
+            p.stroke_size,
+            p.stroke_margin,
+            p.stroke_roundness,
+            stroke_c,
+            p.shadow_size,
+            shadow_c,
+        );
+        ui.centered_fit(
+            Face::SemiBold,
+            (rh * 0.30).clamp(10.0, 15.0),
+            [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
+            color::with_alpha(text_c, alpha.max(0.75)),
+            &label,
+        );
+    }
+
+    ui.finish();
+}
+
 impl TouchUi {
-    /// Handles touch events for the draggable In-Game Floating '=' Button and Floating Hub Dialog.
+    /// Handles touch events for the draggable Material You 3 Floating '=' Button and Floating Hub Dialog.
     pub fn floating_menu_touch(
         &mut self,
         b: &mut HudBatch,
@@ -607,23 +766,25 @@ impl TouchUi {
             p[0] >= r[0] && p[0] <= r[0] + r[2] && p[1] >= r[1] && p[1] <= r[1] + r[3]
         };
 
-        let btn_x = (settings.floating_menu_pos[0] * w).clamp(6.0, (w - 40.0).max(6.0));
-        let btn_y = (settings.floating_menu_pos[1] * h).clamp(4.0, (h - 36.0).max(4.0));
-        let btn_rect = [btn_x, btn_y, 34.0, 30.0];
+        let btn_w = 48.0;
+        let btn_h = 42.0;
+        let btn_x = (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
+        let btn_y = (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
+        let btn_rect = [btn_x, btn_y, btn_w, btn_h];
 
         if let Some((drag_id, offset, mut moved)) = self.floating_drag {
             if drag_id == id {
                 match phase {
                     TouchPhase::Moved => {
-                        let nx = (p[0] - offset[0]).clamp(6.0, (w - 40.0).max(6.0));
-                        let ny = (p[1] - offset[1]).clamp(4.0, (h - 36.0).max(4.0));
+                        let nx = (p[0] - offset[0]).clamp(6.0, (w - btn_w - 6.0).max(6.0));
+                        let ny = (p[1] - offset[1]).clamp(4.0, (h - btn_h - 4.0).max(4.0));
                         if (nx - btn_x).hypot(ny - btn_y) > 5.0 {
                             moved = true;
                         }
                         if moved {
                             settings.floating_menu_pos = [
-                                (nx / w.max(1.0)).clamp(0.04, 0.94),
-                                (ny / h.max(1.0)).clamp(0.02, 0.92),
+                                (nx / w.max(1.0)).clamp(0.03, 0.93),
+                                (ny / h.max(1.0)).clamp(0.02, 0.90),
                             ];
                         }
                         self.floating_drag = Some((drag_id, offset, moved));
@@ -652,78 +813,91 @@ impl TouchUi {
             return None;
         }
 
-        let dw = (w - 28.0).clamp(290.0, 520.0);
-        let dh = (h - 20.0).clamp(240.0, 368.0);
+        let dw = (w - 24.0).clamp(320.0, 560.0);
+        let dh = (h - 16.0).clamp(264.0, 396.0);
         let dx = (w - dw) * 0.5;
         let dy = (h - dh) * 0.5;
-        if !inside([dx, dy, dw, dh]) || inside([dx + dw - 72.0, dy + 10.0, 60.0, 28.0]) {
+        if !inside([dx, dy, dw, dh]) || inside([dx + dw - 78.0, dy + 12.0, 64.0, 32.0]) {
             self.floating_menu = false;
             return Some(InGameMenuAction::Close);
         }
-        if inside([dx + dw - 206.0, dy + 10.0, 128.0, 28.0]) {
+        if inside([dx + dw - 222.0, dy + 12.0, 138.0, 32.0]) {
             self.floating_menu = false;
             return Some(InGameMenuAction::OpenControlEditor);
         }
 
-        // Row 1: GoyControl is the one engine, always on.
-        let ey = dy + 56.0;
-
-        // Row 2: Presets
-        let py = ey + 44.0;
-        let pw = (dw - 28.0 - 16.0) / 5.0;
+        // Row 1: Saved Profiles & Quick Presets
+        let py = dy + 64.0;
+        let pw = (dw - 32.0 - 16.0) / 5.0;
         let presets = ["default", "goycontrol", "pvp", "building", "speedrun"];
         for (i, preset_id) in presets.iter().enumerate() {
-            let rx = dx + 14.0 + i as f32 * (pw + 4.0);
-            if inside([rx, py, pw, 26.0]) {
+            let rx = dx + 16.0 + i as f32 * (pw + 4.0);
+            if inside([rx, py, pw, 30.0]) {
                 return Some(InGameMenuAction::ApplyPreset(preset_id));
             }
         }
 
-        // Row 3: Movement, JoystickMoveArea, Split Crosshair, Gyro
-        let ty = py + 42.0;
-        let tw = (dw - 28.0 - 12.0) / 4.0;
-        if inside([dx + 14.0, ty, tw, 28.0]) {
+        // Row 2: Saved Custom Profiles bar (up to 4 saved profiles + Preset Visibility)
+        let spy = py + 36.0;
+        let saved_list = crate::touch::Settings::list_profiles(std::path::Path::new("."));
+        let sp_count = saved_list.len().clamp(1, 4);
+        let sp_w = (dw - 32.0 - 4.0 * sp_count as f32) / (sp_count as f32 + 1.0);
+        for i in 0..sp_count {
+            let rx = dx + 16.0 + i as f32 * (sp_w + 4.0);
+            if inside([rx, spy, sp_w, 28.0]) {
+                return Some(InGameMenuAction::LoadSavedProfile(i));
+            }
+        }
+        let preset_vis_x = dx + 16.0 + sp_count as f32 * (sp_w + 4.0);
+        if inside([preset_vis_x, spy, sp_w, 28.0]) {
+            return Some(InGameMenuAction::PresetVisibilityAll);
+        }
+
+        // Row 3: Movement, JoystickMoveArea, Split Crosshair, Gyro (M3 Cards)
+        let ty = spy + 44.0;
+        let tw = (dw - 32.0 - 12.0) / 4.0;
+        if inside([dx + 16.0, ty, tw, 34.0]) {
             return Some(InGameMenuAction::CycleMovementMode);
         }
-        if inside([dx + 14.0 + (tw + 4.0), ty, tw, 28.0]) {
+        if inside([dx + 16.0 + (tw + 4.0), ty, tw, 34.0]) {
             return Some(InGameMenuAction::CycleJoystickArea);
         }
-        if inside([dx + 14.0 + (tw + 4.0) * 2.0, ty, tw, 28.0]) {
+        if inside([dx + 16.0 + (tw + 4.0) * 2.0, ty, tw, 34.0]) {
             return Some(InGameMenuAction::ToggleSplitTouch);
         }
-        if inside([dx + 14.0 + (tw + 4.0) * 3.0, ty, tw, 28.0]) {
+        if inside([dx + 16.0 + (tw + 4.0) * 3.0, ty, tw, 34.0]) {
             return Some(InGameMenuAction::ToggleGyro);
         }
 
         // Row 4: Sensitivity, Scale, Virtual Mouse, Left-Handed
-        let sy = ty + 42.0;
-        let sw = (dw - 28.0 - 12.0) / 4.0;
-        let s0 = dx + 14.0;
-        if inside([s0, sy, sw * 0.5, 28.0]) {
+        let sy = ty + 48.0;
+        let sw = (dw - 32.0 - 12.0) / 4.0;
+        let s0 = dx + 16.0;
+        if inside([s0, sy, sw * 0.5, 34.0]) {
             return Some(InGameMenuAction::StepTouchSensitivity(-1));
         }
-        if inside([s0 + sw * 0.5, sy, sw * 0.5, 28.0]) {
+        if inside([s0 + sw * 0.5, sy, sw * 0.5, 34.0]) {
             return Some(InGameMenuAction::StepTouchSensitivity(1));
         }
-        let s1 = dx + 14.0 + (sw + 4.0);
-        if inside([s1, sy, sw * 0.5, 28.0]) {
+        let s1 = dx + 16.0 + (sw + 4.0);
+        if inside([s1, sy, sw * 0.5, 34.0]) {
             return Some(InGameMenuAction::StepButtonScale(-1));
         }
-        if inside([s1 + sw * 0.5, sy, sw * 0.5, 28.0]) {
+        if inside([s1 + sw * 0.5, sy, sw * 0.5, 34.0]) {
             return Some(InGameMenuAction::StepButtonScale(1));
         }
-        let s2 = dx + 14.0 + (sw + 4.0) * 2.0;
-        if inside([s2, sy, sw, 28.0]) {
+        let s2 = dx + 16.0 + (sw + 4.0) * 2.0;
+        if inside([s2, sy, sw, 34.0]) {
             return Some(InGameMenuAction::ToggleVirtualMouse);
         }
-        let s3 = dx + 14.0 + (sw + 4.0) * 3.0;
-        if inside([s3, sy, sw, 28.0]) {
+        let s3 = dx + 16.0 + (sw + 4.0) * 3.0;
+        if inside([s3, sy, sw, 34.0]) {
             return Some(InGameMenuAction::ToggleLeftHanded);
         }
 
         // Row 5: Quick Desktop Keys
-        let ky = sy + 42.0;
-        let kw = (dw - 28.0 - 20.0) / 6.0;
+        let ky = sy + 48.0;
+        let kw = (dw - 32.0 - 20.0) / 6.0;
         let quick = [
             KeyCode::F1,
             KeyCode::F3,
@@ -732,13 +906,13 @@ impl TouchUi {
             KeyCode::KeyT,
         ];
         for (i, key) in quick.iter().enumerate() {
-            let rx = dx + 14.0 + i as f32 * (kw + 4.0);
-            if inside([rx, ky, kw, 26.0]) {
+            let rx = dx + 16.0 + i as f32 * (kw + 4.0);
+            if inside([rx, ky, kw, 32.0]) {
                 self.floating_menu = false;
                 return Some(InGameMenuAction::TriggerKey(*key));
             }
         }
-        if inside([dx + 14.0 + 5.0 * (kw + 4.0), ky, kw, 26.0]) {
+        if inside([dx + 16.0 + 5.0 * (kw + 4.0), ky, kw, 32.0]) {
             self.floating_menu = false;
             return Some(InGameMenuAction::OpenKeyboard);
         }
@@ -746,7 +920,8 @@ impl TouchUi {
         Some(InGameMenuAction::Close)
     }
 
-    /// Draws the moveable In-Game Floating '=' Button and the In-Game Control & Launcher Hub Dialog.
+    /// Draws the larger Material You 3 Floating '=' Button (`48x42dp`) and the revamped
+    /// Material You 3 In-Game Control & Launcher Hub Dialog.
     pub fn draw_floating_menu(
         &self,
         b: &mut HudBatch,
@@ -757,34 +932,58 @@ impl TouchUi {
         let mut ui = Ui::mobile(a, b, (0.0, 0.0));
         let (w, h) = (ui.w, ui.h);
 
-        let bg_card = color::hex(0x161422, 248);
-        let bg_hi = color::hex(0x232036, 245);
-        let border_c = color::hex(0x363152, 255);
+        let m3_surface = color::hex(0x151320, 250);
+        let m3_card = color::hex(0x211E30, 248);
+        let m3_tonal = color::hex(0x362C59, 248);
+        let m3_border = color::hex(0x3E375C, 255);
         let accent = color::hex(0x9A7BFF, 255);
-        let accent_soft = color::hex(0x372B63, 240);
+        let on_accent = color::hex(0x16102C, 255);
         let text_c = color::hex(0xF4EFFA, 255);
-        let muted_c = color::hex(0xACA5C4, 255);
+        let muted_c = color::hex(0xB2ABC7, 255);
 
-        // Draw moveable Floating Menu Pill when not expanded by '...' bar
+        // Draw moveable Material You 3 Floating Menu Button (48x42dp)
         if !self.expanded {
-            let btn_x = (settings.floating_menu_pos[0] * w).clamp(6.0, (w - 40.0).max(6.0));
-            let btn_y = (settings.floating_menu_pos[1] * h).clamp(4.0, (h - 36.0).max(4.0));
+            let btn_w = 48.0;
+            let btn_h = 42.0;
+            let btn_x = (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
+            let btn_y = (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
+            // Soft M3 elevation shadow
+            ui.rounded(
+                btn_x + 1.5,
+                btn_y + 3.0,
+                btn_w,
+                btn_h,
+                14.0,
+                rgba(0, 0, 0, 135),
+            );
             ui.rounded(
                 btn_x,
                 btn_y,
-                34.0,
-                30.0,
-                10.0,
-                if self.floating_menu { accent } else { bg_card },
+                btn_w,
+                btn_h,
+                14.0,
+                if self.floating_menu { accent } else { m3_card },
             );
-            ui.border(btn_x, btn_y, 34.0, 30.0, 10.0, accent);
+            ui.stroke_rounded(
+                btn_x,
+                btn_y,
+                btn_w,
+                btn_h,
+                14.0,
+                1.8,
+                if self.floating_menu {
+                    color::hex(0xE5DEFF, 255)
+                } else {
+                    accent
+                },
+            );
             ui.icon(
                 Icon::MenuEquals,
-                btn_x + 8.0,
-                btn_y + 6.0,
-                18.0,
+                btn_x + (btn_w - 22.0) * 0.5,
+                btn_y + (btn_h - 22.0) * 0.5,
+                22.0,
                 if self.floating_menu {
-                    color::hex(0x140E26, 255)
+                    on_accent
                 } else {
                     accent
                 },
@@ -796,74 +995,70 @@ impl TouchUi {
             return;
         }
 
-        ui.fill(0.0, 0.0, w, h, rgba(4, 5, 10, 175));
-        let dw = (w - 28.0).clamp(290.0, 520.0);
-        let dh = (h - 20.0).clamp(240.0, 368.0);
+        // Scrim & Material You 3 Extra-Large Dialog Surface
+        ui.fill(0.0, 0.0, w, h, rgba(5, 4, 12, 188));
+        let dw = (w - 24.0).clamp(320.0, 560.0);
+        let dh = (h - 16.0).clamp(264.0, 396.0);
         let dx = (w - dw) * 0.5;
         let dy = (h - dh) * 0.5;
-        ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
-        ui.border(dx, dy, dw, dh, 18.0, border_c);
-        ui.rounded(dx + 12.0, dy + 10.0, 28.0, 28.0, 9.0, accent_soft);
-        ui.icon(Icon::MenuEquals, dx + 17.0, dy + 15.0, 18.0, accent);
+        ui.rounded(dx + 2.0, dy + 5.0, dw, dh, 24.0, rgba(0, 0, 0, 150));
+        ui.rounded(dx, dy, dw, dh, 24.0, m3_surface);
+        ui.stroke_rounded(dx, dy, dw, dh, 24.0, 1.5, m3_border);
+
+        // M3 Top App Header Bar inside Dialog
+        ui.rounded(dx + 16.0, dy + 12.0, 32.0, 32.0, 10.0, m3_tonal);
+        ui.icon(Icon::MenuEquals, dx + 23.0, dy + 19.0, 18.0, accent);
         ui.text(
             Face::SemiBold,
-            14.0,
-            dx + 46.0,
-            dy + 14.0,
+            15.0,
+            dx + 56.0,
+            dy + 13.0,
             text_c,
-            "Horizon Floating Control Hub",
+            "Horizon Control Hub",
+        );
+        ui.text(
+            Face::Regular,
+            10.5,
+            dx + 56.0,
+            dy + 30.0,
+            muted_c,
+            &format!(
+                "Active Layout: {} • GoyControl Engine",
+                settings.active_profile
+            ),
         );
 
-        ui.rounded(dx + dw - 206.0, dy + 10.0, 128.0, 28.0, 9.0, accent);
+        // Primary M3 Filled Pill: Open Control Editor
+        ui.rounded(dx + dw - 222.0, dy + 12.0, 138.0, 32.0, 16.0, accent);
         ui.centered_fit(
             Face::SemiBold,
-            11.0,
-            [dx + dw - 204.0, dy + 10.0, 124.0, 28.0],
-            color::hex(0x140E26, 255),
+            11.5,
+            [dx + dw - 218.0, dy + 12.0, 130.0, 32.0],
+            on_accent,
             "Open Control Editor",
         );
-        ui.rounded(dx + dw - 72.0, dy + 10.0, 60.0, 28.0, 9.0, bg_hi);
-        ui.border(dx + dw - 72.0, dy + 10.0, 60.0, 28.0, 9.0, border_c);
+        // Secondary M3 Tonal Pill: Close
+        ui.rounded(dx + dw - 78.0, dy + 12.0, 62.0, 32.0, 16.0, m3_card);
+        ui.border(dx + dw - 78.0, dy + 12.0, 62.0, 32.0, 16.0, m3_border);
         ui.centered_fit(
-            Face::Medium,
-            11.0,
-            [dx + dw - 70.0, dy + 10.0, 56.0, 28.0],
+            Face::SemiBold,
+            11.5,
+            [dx + dw - 76.0, dy + 12.0, 58.0, 32.0],
             text_c,
-            "Close",
+            "Done",
         );
 
-        // Row 1: GoyControl is the one engine and is always on in game.
+        // Row 1: Preset Layouts + Saved Profiles
         ui.text(
             Face::SemiBold,
-            9.5,
-            dx + 14.0,
-            dy + 42.0,
+            10.0,
+            dx + 16.0,
+            dy + 50.0,
             accent,
-            "CONTROL ENGINE",
+            "PRESETS & SAVED CONTROL PROFILES",
         );
-        let ey = dy + 56.0;
-        ui.rounded(dx + 14.0, ey, dw - 28.0, 28.0, 8.0, accent_soft);
-        ui.border(dx + 14.0, ey, dw - 28.0, 28.0, 8.0, accent);
-        ui.centered_fit(
-            Face::SemiBold,
-            10.5,
-            [dx + 18.0, ey, dw - 36.0, 28.0],
-            accent,
-            "GoyControl (Custom Static) — always on",
-        );
-        let _ = settings;
-
-        // Row 2: Presets
-        ui.text(
-            Face::SemiBold,
-            9.5,
-            dx + 14.0,
-            ey + 30.0,
-            accent,
-            "QUICK PRESET LAYOUTS",
-        );
-        let py = ey + 44.0;
-        let pw = (dw - 28.0 - 16.0) / 5.0;
+        let py = dy + 64.0;
+        let pw = (dw - 32.0 - 16.0) / 5.0;
         for (i, (id, title)) in [
             ("default", "Goy Default"),
             ("goycontrol", "GoyControl"),
@@ -874,44 +1069,82 @@ impl TouchUi {
         .into_iter()
         .enumerate()
         {
-            let rx = dx + 14.0 + i as f32 * (pw + 4.0);
+            let rx = dx + 16.0 + i as f32 * (pw + 4.0);
             let active = settings.active_profile.eq_ignore_ascii_case(id);
             ui.rounded(
                 rx,
                 py,
                 pw,
-                26.0,
-                7.0,
-                if active { accent_soft } else { bg_hi },
+                30.0,
+                15.0,
+                if active { accent } else { m3_card },
             );
-            ui.border(
-                rx,
-                py,
-                pw,
-                26.0,
-                7.0,
-                if active { accent } else { border_c },
-            );
+            if !active {
+                ui.border(rx, py, pw, 30.0, 15.0, m3_border);
+            }
             ui.centered_fit(
                 Face::SemiBold,
-                9.8,
-                [rx + 2.0, py, pw - 4.0, 26.0],
-                if active { accent } else { text_c },
+                10.5,
+                [rx + 3.0, py, pw - 6.0, 30.0],
+                if active { on_accent } else { text_c },
                 title,
             );
         }
 
+        // Row 2: Saved Profiles from controlmap/ + Preset Visibility
+        let spy = py + 36.0;
+        let saved_list = crate::touch::Settings::list_profiles(std::path::Path::new("."));
+        let sp_count = saved_list.len().clamp(1, 4);
+        let sp_w = (dw - 32.0 - 4.0 * sp_count as f32) / (sp_count as f32 + 1.0);
+        for (i, name) in saved_list.iter().take(sp_count).enumerate() {
+            let rx = dx + 16.0 + i as f32 * (sp_w + 4.0);
+            let active = settings.active_profile.eq_ignore_ascii_case(name);
+            ui.rounded(
+                rx,
+                spy,
+                sp_w,
+                28.0,
+                10.0,
+                if active { m3_tonal } else { m3_card },
+            );
+            ui.border(
+                rx,
+                spy,
+                sp_w,
+                28.0,
+                10.0,
+                if active { accent } else { m3_border },
+            );
+            ui.centered_fit(
+                Face::Medium,
+                10.0,
+                [rx + 4.0, spy, sp_w - 8.0, 28.0],
+                if active { accent } else { muted_c },
+                &format!("Saved: {name}"),
+            );
+        }
+        let preset_vis_x = dx + 16.0 + sp_count as f32 * (sp_w + 4.0);
+        ui.rounded(preset_vis_x, spy, sp_w, 28.0, 10.0, m3_tonal);
+        ui.border(preset_vis_x, spy, sp_w, 28.0, 10.0, accent);
+        ui.centered_fit(
+            Face::SemiBold,
+            9.8,
+            [preset_vis_x + 3.0, spy, sp_w - 6.0, 28.0],
+            accent,
+            "Preset Menu Vis",
+        );
+
         // Row 3: Movement, JoystickMoveArea, Split Crosshair, Gyro
         ui.text(
             Face::SemiBold,
-            9.5,
-            dx + 14.0,
-            py + 28.0,
+            10.0,
+            dx + 16.0,
+            spy + 31.0,
             accent,
-            "MOVEMENT & JOYSTICK AREA",
+            "MOVEMENT, JOYSTICK AREA & AIMING",
         );
-        let ty = py + 42.0;
-        let tw = (dw - 28.0 - 12.0) / 4.0;
+        let ty = spy + 44.0;
+        let tw = (dw - 32.0 - 12.0) / 4.0;
         let move_lbl = match settings.mode {
             crate::touch::Mode::Dpad => "Move: D-Pad",
             crate::touch::Mode::Crosshair => "Move: Stick+Cross",
@@ -946,27 +1179,27 @@ impl TouchUi {
         .into_iter()
         .enumerate()
         {
-            let rx = dx + 14.0 + i as f32 * (tw + 4.0);
+            let rx = dx + 16.0 + i as f32 * (tw + 4.0);
             ui.rounded(
                 rx,
                 ty,
                 tw,
-                28.0,
-                7.0,
-                if active { accent_soft } else { bg_hi },
+                34.0,
+                12.0,
+                if active { m3_tonal } else { m3_card },
             );
             ui.border(
                 rx,
                 ty,
                 tw,
-                28.0,
-                7.0,
-                if active { accent } else { border_c },
+                34.0,
+                12.0,
+                if active { accent } else { m3_border },
             );
             ui.centered_fit(
-                Face::Medium,
-                9.8,
-                [rx + 3.0, ty, tw - 6.0, 28.0],
+                Face::SemiBold,
+                10.2,
+                [rx + 4.0, ty, tw - 8.0, 34.0],
                 if active { accent } else { text_c },
                 lbl,
             );
@@ -975,80 +1208,89 @@ impl TouchUi {
         // Row 4: Sensitivity, Scale, Virtual Mouse, Left-Handed
         ui.text(
             Face::SemiBold,
-            9.5,
-            dx + 14.0,
-            ty + 30.0,
+            10.0,
+            dx + 16.0,
+            ty + 36.0,
             accent,
-            "SENSITIVITY, SCALE & POINTER",
+            "SENSITIVITY, BUTTON SCALE & VIRTUAL MOUSE",
         );
-        let sy = ty + 42.0;
-        let sw = (dw - 28.0 - 12.0) / 4.0;
-        for (i, txt) in [
-            format!("Sens {:.0}%", settings.sensitivity * 100.0),
-            format!("Scale {:.0}%", settings.button_scale * 100.0),
-            if self.virtual_mouse {
-                "Mouse: ON".to_owned()
-            } else {
-                "Mouse: OFF".to_owned()
-            },
-            if settings.left_handed {
-                "Left-Hand: ON".to_owned()
-            } else {
-                "Left-Hand: OFF".to_owned()
-            },
+        let sy = ty + 48.0;
+        let sw = (dw - 32.0 - 12.0) / 4.0;
+        for (i, (txt, hi)) in [
+            (format!("Sens {:.0}%", settings.sensitivity * 100.0), false),
+            (
+                format!("Scale {:.0}%", settings.button_scale * 100.0),
+                false,
+            ),
+            (
+                if self.virtual_mouse {
+                    "Mouse: ON".to_owned()
+                } else {
+                    "Mouse: OFF".to_owned()
+                },
+                self.virtual_mouse,
+            ),
+            (
+                if settings.left_handed {
+                    "Left-Hand: ON".to_owned()
+                } else {
+                    "Left-Hand: OFF".to_owned()
+                },
+                settings.left_handed,
+            ),
         ]
         .into_iter()
         .enumerate()
         {
-            let rx = dx + 14.0 + i as f32 * (sw + 4.0);
-            ui.rounded(rx, sy, sw, 28.0, 7.0, bg_hi);
-            ui.border(rx, sy, sw, 28.0, 7.0, border_c);
+            let rx = dx + 16.0 + i as f32 * (sw + 4.0);
+            ui.rounded(rx, sy, sw, 34.0, 12.0, if hi { m3_tonal } else { m3_card });
+            ui.border(rx, sy, sw, 34.0, 12.0, if hi { accent } else { m3_border });
             if i < 2 {
-                ui.text(Face::SemiBold, 11.5, rx + 5.0, sy + 5.0, accent, "-");
-                ui.text(Face::SemiBold, 11.5, rx + sw - 12.0, sy + 5.0, accent, "+");
+                ui.text(Face::SemiBold, 13.0, rx + 7.0, sy + 7.0, accent, "−");
+                ui.text(Face::SemiBold, 13.0, rx + sw - 14.0, sy + 7.0, accent, "+");
                 ui.centered_fit(
-                    Face::Medium,
-                    9.5,
-                    [rx + 14.0, sy, sw - 28.0, 28.0],
+                    Face::SemiBold,
+                    10.0,
+                    [rx + 18.0, sy, sw - 36.0, 34.0],
                     text_c,
                     &txt,
                 );
             } else {
                 ui.centered_fit(
-                    Face::Medium,
-                    9.8,
-                    [rx + 3.0, sy, sw - 6.0, 28.0],
-                    text_c,
+                    Face::SemiBold,
+                    10.2,
+                    [rx + 4.0, sy, sw - 8.0, 34.0],
+                    if hi { accent } else { text_c },
                     &txt,
                 );
             }
         }
 
-        // Row 5: Quick Desktop Keys
+        // Row 5: Quick Desktop Shortcuts
         ui.text(
             Face::SemiBold,
-            9.5,
-            dx + 14.0,
-            sy + 30.0,
+            10.0,
+            dx + 16.0,
+            sy + 36.0,
             accent,
-            "QUICK DESKTOP SHORTCUTS",
+            "QUICK IN-GAME DESKTOP ACTIONS",
         );
-        let ky = sy + 42.0;
-        let kw = (dw - 28.0 - 20.0) / 6.0;
+        let ky = sy + 48.0;
+        let kw = (dw - 32.0 - 20.0) / 6.0;
         for (i, lbl) in [
             "F1 HUD", "F3 Info", "F5 View", "Inv (E)", "Chat (T)", "Keyboard",
         ]
         .into_iter()
         .enumerate()
         {
-            let rx = dx + 14.0 + i as f32 * (kw + 4.0);
-            ui.rounded(rx, ky, kw, 26.0, 7.0, bg_hi);
-            ui.border(rx, ky, kw, 26.0, 7.0, border_c);
+            let rx = dx + 16.0 + i as f32 * (kw + 4.0);
+            ui.rounded(rx, ky, kw, 32.0, 12.0, m3_card);
+            ui.border(rx, ky, kw, 32.0, 12.0, m3_border);
             ui.centered_fit(
-                Face::Medium,
-                9.5,
-                [rx + 2.0, ky, kw - 4.0, 26.0],
-                muted_c,
+                Face::SemiBold,
+                10.0,
+                [rx + 2.0, ky, kw - 4.0, 32.0],
+                text_c,
                 lbl,
             );
         }
@@ -1164,42 +1406,8 @@ pub fn draw_hud_editor(
         }
     }
 
-    // 2. Accurate 1:1 Vanilla 9-Slot Hotbar + Offhand Slot Reference (exact 182x22 GUI units)
-    let hb_w = 182.0 * gui_to_dp;
-    let hb_h = 22.0 * gui_to_dp;
-    let hb_x = (w - hb_w) * 0.5;
-    let hb_y = h - hb_h;
-    let off_w = 22.0 * gui_to_dp;
-    let off_x = hb_x - (29.0 * gui_to_dp);
-    // Offhand reference slot
-    ui.rounded(off_x, hb_y, off_w, hb_h, 3.0, rgba(24, 24, 28, 195));
-    ui.border(off_x, hb_y, off_w, hb_h, 3.0, rgba(185, 185, 195, 150));
-    ui.centered_fit(
-        Face::Mono,
-        (7.5 * gui_to_dp).clamp(7.0, 10.0),
-        [off_x, hb_y, off_w, hb_h],
-        muted_c,
-        "F",
-    );
-    // 9 Hotbar slots (20x20 GUI units each inside 182x22 frame)
-    ui.rounded(hb_x, hb_y, hb_w, hb_h, 3.0, rgba(20, 20, 24, 205));
-    ui.border(hb_x, hb_y, hb_w, hb_h, 3.0, rgba(195, 195, 208, 170));
-    let slot_step = 20.0 * gui_to_dp;
-    let pad_1 = 1.0 * gui_to_dp;
-    for slot in 0..9 {
-        let sx = hb_x + pad_1 + slot as f32 * slot_step;
-        let sy = hb_y + pad_1;
-        let sw = (slot_step - pad_1).max(4.0);
-        let sh = (hb_h - pad_1 * 2.0).max(4.0);
-        ui.border(sx, sy, sw, sh, 2.0, rgba(130, 130, 145, 120));
-        ui.centered_fit(
-            Face::Mono,
-            (7.5 * gui_to_dp).clamp(7.0, 10.0),
-            [sx, sy, sw, sh],
-            rgba(210, 210, 224, 155),
-            &format!("{}", slot + 1),
-        );
-    }
+    // Dummy hotbar removed per user request for a clean, unobstructed GoyControl canvas.
+    let _ = (gui_to_dp, muted_c);
 
     // 3. Draw Built-in Controls (MCPE Style or GoyControl Joystick/Static override)
     let mut selected_rect_and_title: Option<([f32; 4], String)> = None;
@@ -1224,28 +1432,30 @@ pub fn draw_hud_editor(
         if c == Control::Move
             && (tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
         {
-            // Draw GoyControl Customizable Joystick (Base Area + Inner Stick)
+            // Draw GoyControl Customizable Joystick (Base Area + Inner Stick) identically to in-game
             let js = &tc.settings.joystick_style;
+            let side = rw.min(rh);
+            let jx = rx + (rw - side) * 0.5;
+            let jy = ry + (rh - side) * 0.5;
             let base_fill = color::with_alpha(
                 js.base_color,
                 js.base_opacity * if vis { 1.0 } else { 0.45 },
             );
             let base_stroke = color::with_alpha(js.base_stroke_color, js.base_opacity);
-            let br = (rw.min(rh) * (js.base_roundness / 100.0)).clamp(0.0, rw.min(rh) * 0.5);
-            ui.rounded(rx, ry, rw, rh, br, base_fill);
+            let br = (side * (js.base_roundness / 100.0)).clamp(0.0, side * 0.5);
+            ui.rounded(jx, jy, side, side, br, base_fill);
             if js.base_stroke > 0.1 {
-                ui.stroke_rounded(rx, ry, rw, rh, br, js.base_stroke, base_stroke);
+                ui.stroke_rounded(jx, jy, side, side, br, js.base_stroke, base_stroke);
             }
-            let kw = rw * js.stick_size.clamp(0.20, 0.85);
-            let kh = rh * js.stick_size.clamp(0.20, 0.85);
-            let kx = rx + (rw - kw) * 0.5;
-            let ky = ry + (rh - kh) * 0.5;
-            let kr = kw.min(kh) * 0.5;
+            let kside = side * js.stick_size.clamp(0.20, 0.85);
+            let kx = jx + (side - kside) * 0.5;
+            let ky = jy + (side - kside) * 0.5;
+            let kr = kside * 0.5;
             let stick_fill = color::with_alpha(js.stick_color, js.stick_opacity);
             let stick_stroke = color::with_alpha(js.stick_stroke_color, js.stick_opacity);
-            ui.rounded(kx, ky, kw, kh, kr, stick_fill);
+            ui.rounded(kx, ky, kside, kside, kr, stick_fill);
             if js.stick_stroke > 0.1 {
-                ui.stroke_rounded(kx, ky, kw, kh, kr, js.stick_stroke, stick_stroke);
+                ui.stroke_rounded(kx, ky, kside, kside, kr, js.stick_stroke, stick_stroke);
             }
         } else if tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style {
             // Draw Static GoyControl Button (no icons!)
@@ -1418,29 +1628,37 @@ pub fn draw_hud_editor(
         );
     }
 
-    // 6. Moveable/Draggable Floating Menu Pod (No Top Toolbar!)
-    let pod_w = if ed.pod_expanded { 278.0 } else { 38.0 };
-    let pod_h = 36.0;
+    // 6. Larger Material You 3 Moveable Floating Menu Pod (`356x48dp`)
+    let pod_w = if ed.pod_expanded { 356.0 } else { 52.0 };
+    let pod_h = 48.0;
     let pod_x = (tc.settings.floating_menu_pos[0] * w).clamp(8.0, (w - pod_w - 8.0).max(8.0));
     let pod_y = (tc.settings.floating_menu_pos[1] * h).clamp(6.0, (h - pod_h - 6.0).max(6.0));
 
-    ui.rounded(pod_x, pod_y, pod_w, pod_h, 18.0, bg_card);
-    ui.border(pod_x, pod_y, pod_w, pod_h, 18.0, accent);
-
-    // Main draggable '=' hub button on the left of the pod
     ui.rounded(
-        pod_x + 3.0,
-        pod_y + 3.0,
-        30.0,
-        30.0,
-        15.0,
+        pod_x + 2.0,
+        pod_y + 4.0,
+        pod_w,
+        pod_h,
+        24.0,
+        rgba(0, 0, 0, 145),
+    );
+    ui.rounded(pod_x, pod_y, pod_w, pod_h, 24.0, bg_card);
+    ui.stroke_rounded(pod_x, pod_y, pod_w, pod_h, 24.0, 1.8, accent);
+
+    // Main draggable '=' M3 hub button on the left of the pod (40x40dp)
+    ui.rounded(
+        pod_x + 4.0,
+        pod_y + 4.0,
+        40.0,
+        40.0,
+        20.0,
         if ed.menu_open { accent } else { accent_soft },
     );
     ui.icon(
         Icon::MenuEquals,
-        pod_x + 9.0,
-        pod_y + 9.0,
-        18.0,
+        pod_x + 13.0,
+        pod_y + 13.0,
+        22.0,
         if ed.menu_open {
             color::hex(0x140E26, 255)
         } else {
@@ -1451,15 +1669,15 @@ pub fn draw_hud_editor(
     if ed.pod_expanded {
         // [Undo] [Redo] [Props (Gear)] [+ Add] [Save & Exit]
         let items: [(Option<Icon>, &str, f32, bool, bool); 5] = [
-            (Some(Icon::Undo), "", 32.0, !ed.undo_stack.is_empty(), false),
-            (Some(Icon::Redo), "", 32.0, !ed.redo_stack.is_empty(), false),
-            (Some(Icon::Gear), "Props", 56.0, true, ed.props_open),
-            (Some(Icon::Plus), "Add", 48.0, true, false),
-            (Some(Icon::Check), "Save", 54.0, true, true),
+            (Some(Icon::Undo), "", 42.0, !ed.undo_stack.is_empty(), false),
+            (Some(Icon::Redo), "", 42.0, !ed.redo_stack.is_empty(), false),
+            (Some(Icon::Gear), "Props", 72.0, true, ed.props_open),
+            (Some(Icon::Plus), "Add", 64.0, true, false),
+            (Some(Icon::Check), "Save", 68.0, true, true),
         ];
-        let mut ix = pod_x + 38.0;
+        let mut ix = pod_x + 50.0;
         for (ic, lbl, iw, enabled, hi) in items {
-            let r = [ix, pod_y + 4.0, iw, 28.0];
+            let r = [ix, pod_y + 5.0, iw, 38.0];
             let bg = if lbl == "Save" {
                 accent
             } else if hi {
@@ -1467,13 +1685,13 @@ pub fn draw_hud_editor(
             } else {
                 bg_hi
             };
-            ui.rounded(r[0], r[1], r[2], r[3], 14.0, bg);
+            ui.rounded(r[0], r[1], r[2], r[3], 19.0, bg);
             ui.border(
                 r[0],
                 r[1],
                 r[2],
                 r[3],
-                14.0,
+                19.0,
                 if hi || lbl == "Save" {
                     accent
                 } else {
@@ -1491,10 +1709,10 @@ pub fn draw_hud_editor(
             };
             if let Some(icon) = ic {
                 if lbl.is_empty() {
-                    ui.icon(icon, r[0] + (iw - 15.0) * 0.5, r[1] + 6.5, 15.0, fg);
+                    ui.icon(icon, r[0] + (iw - 18.0) * 0.5, r[1] + 10.0, 18.0, fg);
                 } else {
-                    ui.icon(icon, r[0] + 7.0, r[1] + 7.0, 14.0, fg);
-                    ui.text(Face::SemiBold, 10.0, r[0] + 23.0, r[1] + 7.0, fg, lbl);
+                    ui.icon(icon, r[0] + 10.0, r[1] + 11.0, 16.0, fg);
+                    ui.text(Face::SemiBold, 11.5, r[0] + 29.0, r[1] + 10.0, fg, lbl);
                 }
             }
             ix += iw + 4.0;
@@ -1934,6 +2152,63 @@ pub fn draw_hud_editor(
                 text_c,
                 "Cycle Base Stroke Col",
             );
+
+            // Visibility Checkboxes Row for Joystick (Visible in Game [✓] | Visible in Menu [ ])
+            let y6 = y5 + 26.0;
+            let third = (dw - 28.0 - 8.0) / 3.0;
+            ui.rounded(dx + 14.0, y6, third, 26.0, 8.0, bg_hi);
+            ui.border(
+                dx + 14.0,
+                y6,
+                third,
+                26.0,
+                8.0,
+                if p_move.visible_in_game {
+                    accent
+                } else {
+                    border_c
+                },
+            );
+            ui.m3_checkbox(
+                dx + 20.0,
+                y6 + 4.0,
+                18.0,
+                p_move.visible_in_game,
+                "Visible in Game",
+            );
+
+            let vm_x = dx + 14.0 + third + 4.0;
+            ui.rounded(vm_x, y6, third, 26.0, 8.0, bg_hi);
+            ui.border(
+                vm_x,
+                y6,
+                third,
+                26.0,
+                8.0,
+                if p_move.visible_in_menu {
+                    accent
+                } else {
+                    border_c
+                },
+            );
+            ui.m3_checkbox(
+                vm_x + 6.0,
+                y6 + 4.0,
+                18.0,
+                p_move.visible_in_menu,
+                "Visible in Menu",
+            );
+
+            let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
+            ui.rounded(pv_x, y6, third, 26.0, 8.0, accent_soft);
+            ui.border(pv_x, y6, third, 26.0, 8.0, accent);
+            ui.centered_fit(
+                Face::SemiBold,
+                9.5,
+                [pv_x + 4.0, y6, third - 8.0, 26.0],
+                accent,
+                "Preset Vis for All",
+            );
         } else {
             // Button Inspector Tabs: [0: Style, Text & Colors] [1: Stroke, Shape & Shadow] [2: Events (Up to 3) & Behavior]
             let tab_y = dy + 40.0;
@@ -2135,6 +2410,55 @@ pub fn draw_hud_editor(
                         [dx + 18.0 + half + 8.0, cy2, half - 8.0, 28.0],
                         text_c,
                         "onToggle Style (Tap to Cycle)",
+                    );
+
+                    // Row 4: Visible in Game [✓] | Visible in Menu [✓] | Preset Visibility for All
+                    let cy3 = cy2 + 34.0;
+                    let third = (dw - 28.0 - 8.0) / 3.0;
+                    ui.rounded(dx + 14.0, cy3, third, 28.0, 8.0, bg_hi);
+                    ui.border(
+                        dx + 14.0,
+                        cy3,
+                        third,
+                        28.0,
+                        8.0,
+                        if p.visible_in_game { accent } else { border_c },
+                    );
+                    ui.m3_checkbox(
+                        dx + 20.0,
+                        cy3 + 5.0,
+                        18.0,
+                        p.visible_in_game,
+                        "Visible in Game",
+                    );
+
+                    let vm_x = dx + 14.0 + third + 4.0;
+                    ui.rounded(vm_x, cy3, third, 28.0, 8.0, bg_hi);
+                    ui.border(
+                        vm_x,
+                        cy3,
+                        third,
+                        28.0,
+                        8.0,
+                        if p.visible_in_menu { accent } else { border_c },
+                    );
+                    ui.m3_checkbox(
+                        vm_x + 6.0,
+                        cy3 + 5.0,
+                        18.0,
+                        p.visible_in_menu,
+                        "Visible in Menu",
+                    );
+
+                    let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
+                    ui.rounded(pv_x, cy3, third, 28.0, 8.0, accent_soft);
+                    ui.border(pv_x, cy3, third, 28.0, 8.0, accent);
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        9.5,
+                        [pv_x + 4.0, cy3, third - 8.0, 28.0],
+                        accent,
+                        "Preset Vis for All",
                     );
                 }
                 1 => {
@@ -2364,6 +2688,55 @@ pub fn draw_hud_editor(
                             lbl,
                         );
                     }
+
+                    // Row 3 in Tab 2: Visible in Game [✓] | Visible in Menu [✓] | Preset Vis for All
+                    let vy = by + 38.0;
+                    let third = (dw - 28.0 - 8.0) / 3.0;
+                    ui.rounded(dx + 14.0, vy, third, 28.0, 8.0, bg_hi);
+                    ui.border(
+                        dx + 14.0,
+                        vy,
+                        third,
+                        28.0,
+                        8.0,
+                        if p.visible_in_game { accent } else { border_c },
+                    );
+                    ui.m3_checkbox(
+                        dx + 20.0,
+                        vy + 5.0,
+                        18.0,
+                        p.visible_in_game,
+                        "Visible in Game",
+                    );
+
+                    let vm_x = dx + 14.0 + third + 4.0;
+                    ui.rounded(vm_x, vy, third, 28.0, 8.0, bg_hi);
+                    ui.border(
+                        vm_x,
+                        vy,
+                        third,
+                        28.0,
+                        8.0,
+                        if p.visible_in_menu { accent } else { border_c },
+                    );
+                    ui.m3_checkbox(
+                        vm_x + 6.0,
+                        vy + 5.0,
+                        18.0,
+                        p.visible_in_menu,
+                        "Visible in Menu",
+                    );
+
+                    let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
+                    ui.rounded(pv_x, vy, third, 28.0, 8.0, accent_soft);
+                    ui.border(pv_x, vy, third, 28.0, 8.0, accent);
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        9.5,
+                        [pv_x + 4.0, vy, third - 8.0, 28.0],
+                        accent,
+                        "Preset Vis for All",
+                    );
                 }
             }
         }
@@ -2560,33 +2933,40 @@ pub fn draw_hud_editor(
             );
         }
 
-        // Row 4: Save Controls, Set as Default Always, Add Button, Reset
+        // Row 4: Named Save Profile + Set Default Always + Add Button + Reset
         ui.text(
             Face::SemiBold,
             9.5,
             dx + 14.0,
-            gy + 32.0,
+            gy + 30.0,
             accent,
-            "4. SAVE CONTROLS & SET DEFAULT ALWAYS",
+            "4. SAVE AS NAMED PROFILE & LOAD SAVED CONTROLS",
         );
-        let sy = gy + 46.0;
-        let sw = (dw - 28.0 - 12.0) / 4.0;
+        let sy = gy + 43.0;
+        let sw = (dw - 28.0 - 16.0) / 5.0;
+        let save_name = if ed.save_name_input.trim().is_empty() {
+            tc.settings.active_profile.as_str()
+        } else {
+            ed.save_name_input.as_str()
+        };
         let is_default_always = tc
             .settings
             .default_profile
             .eq_ignore_ascii_case(&tc.settings.active_profile);
+        let name_lbl = format!("Name: {save_name}");
         for (i, (lbl, primary)) in [
-            ("Save Controls", true),
+            (name_lbl.as_str(), false),
+            ("Save Profile", true),
             (
                 if is_default_always {
-                    "★ Default Always"
+                    "★ Default"
                 } else {
-                    "Set Default Always"
+                    "Set Default"
                 },
                 is_default_always,
             ),
-            ("+ Add Goy Button", false),
-            ("Reset to Default", false),
+            ("+ Add Button", false),
+            ("Reset Layout", false),
         ]
         .into_iter()
         .enumerate()
@@ -2596,11 +2976,11 @@ pub fn draw_hud_editor(
                 rx,
                 sy,
                 sw,
-                30.0,
+                28.0,
                 8.0,
-                if i == 0 {
+                if i == 1 {
                     accent
-                } else if primary {
+                } else if primary || i == 0 {
                     accent_soft
                 } else {
                     bg_hi
@@ -2610,18 +2990,55 @@ pub fn draw_hud_editor(
                 rx,
                 sy,
                 sw,
-                30.0,
+                28.0,
                 8.0,
-                if i == 0 || primary { accent } else { border_c },
+                if i == 1 || primary || i == 0 {
+                    accent
+                } else {
+                    border_c
+                },
             );
-            let fg = if i == 0 {
+            let fg = if i == 1 {
                 color::hex(0x140E26, 255)
-            } else if primary {
+            } else if primary || i == 0 {
                 accent
             } else {
                 text_c
             };
-            ui.centered_fit(Face::SemiBold, 9.8, [rx + 3.0, sy, sw - 6.0, 30.0], fg, lbl);
+            ui.centered_fit(Face::SemiBold, 9.5, [rx + 3.0, sy, sw - 6.0, 28.0], fg, lbl);
+        }
+
+        // Row 5: Saved Control Profiles Loader Bar (Tap any saved layout to load immediately)
+        let saved_y = sy + 33.0;
+        let saved_list = crate::touch::Settings::list_profiles(std::path::Path::new("."));
+        let max_show = saved_list.len().clamp(1, 5);
+        let sp_w = (dw - 28.0 - 4.0 * (max_show as f32 - 1.0)) / max_show as f32;
+        for (i, prof) in saved_list.iter().take(max_show).enumerate() {
+            let rx = dx + 14.0 + i as f32 * (sp_w + 4.0);
+            let active = tc.settings.active_profile.eq_ignore_ascii_case(prof);
+            ui.rounded(
+                rx,
+                saved_y,
+                sp_w,
+                24.0,
+                7.0,
+                if active { accent_soft } else { bg_hi },
+            );
+            ui.border(
+                rx,
+                saved_y,
+                sp_w,
+                24.0,
+                7.0,
+                if active { accent } else { border_c },
+            );
+            ui.centered_fit(
+                Face::Medium,
+                9.2,
+                [rx + 3.0, saved_y, sp_w - 6.0, 24.0],
+                if active { accent } else { muted_c },
+                &format!("Load: {prof}"),
+            );
         }
     }
 
@@ -2657,13 +3074,13 @@ pub fn touch_hud_editor(
                 if drag_id == id {
                     match kind {
                         EditorDragKind::FloatingPod { offset, mut moved } => {
-                            let pod_w = if ed.pod_expanded { 278.0 } else { 38.0 };
+                            let pod_w = if ed.pod_expanded { 356.0 } else { 52.0 };
                             let cur_x = (tc.settings.floating_menu_pos[0] * w)
                                 .clamp(8.0, (w - pod_w - 8.0).max(8.0));
                             let cur_y = (tc.settings.floating_menu_pos[1] * h)
-                                .clamp(6.0, (h - 42.0).max(6.0));
+                                .clamp(6.0, (h - 54.0).max(6.0));
                             let nx = (p[0] - offset[0]).clamp(8.0, (w - pod_w - 8.0).max(8.0));
-                            let ny = (p[1] - offset[1]).clamp(6.0, (h - 42.0).max(6.0));
+                            let ny = (p[1] - offset[1]).clamp(6.0, (h - 54.0).max(6.0));
                             if (nx - cur_x).hypot(ny - cur_y) > 4.0 {
                                 moved = true;
                             }
@@ -3093,6 +3510,30 @@ pub fn touch_hud_editor(
                     tc.clicked = true;
                     return false;
                 }
+                let y6 = y5 + 26.0;
+                let third = (dw - 28.0 - 8.0) / 3.0;
+                if inside([dx + 14.0, y6, third, 26.0]) {
+                    push_undo_snapshot(&mut ed, &tc.settings);
+                    tc.settings.layouts[mode_idx][slot].visible_in_game ^= true;
+                    let _ = tc.settings.save();
+                    tc.clicked = true;
+                    return false;
+                }
+                if inside([dx + 14.0 + third + 4.0, y6, third, 26.0]) {
+                    push_undo_snapshot(&mut ed, &tc.settings);
+                    tc.settings.layouts[mode_idx][slot].visible_in_menu ^= true;
+                    let _ = tc.settings.save();
+                    tc.clicked = true;
+                    return false;
+                }
+                if inside([dx + 14.0 + (third + 4.0) * 2.0, y6, third, 26.0]) {
+                    push_undo_snapshot(&mut ed, &tc.settings);
+                    tc.settings.apply_visibility_preset_all();
+                    let _ = tc.settings.save();
+                    ed.status_msg = Some("Applied preset visibility to all controls.".into());
+                    tc.clicked = true;
+                    return false;
+                }
                 return false;
             }
 
@@ -3226,6 +3667,30 @@ pub fn touch_hud_editor(
                         tc.clicked = true;
                         return false;
                     }
+                    let cy3 = cy2 + 34.0;
+                    let third = (dw - 28.0 - 8.0) / 3.0;
+                    if inside([dx + 14.0, cy3, third, 28.0]) {
+                        push_undo_snapshot(&mut ed, &tc.settings);
+                        mutate_placement(tc, &ed, &|pl| pl.visible_in_game = !pl.visible_in_game);
+                        let _ = tc.settings.save();
+                        tc.clicked = true;
+                        return false;
+                    }
+                    if inside([dx + 14.0 + third + 4.0, cy3, third, 28.0]) {
+                        push_undo_snapshot(&mut ed, &tc.settings);
+                        mutate_placement(tc, &ed, &|pl| pl.visible_in_menu = !pl.visible_in_menu);
+                        let _ = tc.settings.save();
+                        tc.clicked = true;
+                        return false;
+                    }
+                    if inside([dx + 14.0 + (third + 4.0) * 2.0, cy3, third, 28.0]) {
+                        push_undo_snapshot(&mut ed, &tc.settings);
+                        tc.settings.apply_visibility_preset_all();
+                        let _ = tc.settings.save();
+                        ed.status_msg = Some("Applied preset visibility to all controls.".into());
+                        tc.clicked = true;
+                        return false;
+                    }
                 }
                 1 => {
                     let cw = (dw - 28.0 - 12.0) / 4.0;
@@ -3346,6 +3811,30 @@ pub fn touch_hud_editor(
                             return false;
                         }
                     }
+                    let vy = by + 38.0;
+                    let third = (dw - 28.0 - 8.0) / 3.0;
+                    if inside([dx + 14.0, vy, third, 28.0]) {
+                        push_undo_snapshot(&mut ed, &tc.settings);
+                        mutate_placement(tc, &ed, &|pl| pl.visible_in_game = !pl.visible_in_game);
+                        let _ = tc.settings.save();
+                        tc.clicked = true;
+                        return false;
+                    }
+                    if inside([dx + 14.0 + third + 4.0, vy, third, 28.0]) {
+                        push_undo_snapshot(&mut ed, &tc.settings);
+                        mutate_placement(tc, &ed, &|pl| pl.visible_in_menu = !pl.visible_in_menu);
+                        let _ = tc.settings.save();
+                        tc.clicked = true;
+                        return false;
+                    }
+                    if inside([dx + 14.0 + (third + 4.0) * 2.0, vy, third, 28.0]) {
+                        push_undo_snapshot(&mut ed, &tc.settings);
+                        tc.settings.apply_visibility_preset_all();
+                        let _ = tc.settings.save();
+                        ed.status_msg = Some("Applied preset visibility to all controls.".into());
+                        tc.clicked = true;
+                        return false;
+                    }
                 }
             }
             return false;
@@ -3425,18 +3914,50 @@ pub fn touch_hud_editor(
                 }
             }
 
-            let sy = gy + 46.0;
-            let sw = (dw - 28.0 - 12.0) / 4.0;
-            for i in 0..4 {
+            let sy = gy + 43.0;
+            let sw = (dw - 28.0 - 16.0) / 5.0;
+            for i in 0..5 {
                 let rx = dx + 14.0 + i as f32 * (sw + 4.0);
-                if inside([rx, sy, sw, 30.0]) {
+                if inside([rx, sy, sw, 28.0]) {
                     match i {
                         0 => {
-                            let _ = tc.settings.save();
-                            ed.status_msg =
-                                Some(format!("Saved layout '{}'.", tc.settings.active_profile));
+                            let names = [
+                                "goy-main",
+                                "pvp-claw",
+                                "bedwars",
+                                "survival",
+                                "builder-pro",
+                                "speedrun-x",
+                                "custom-1",
+                                "custom-2",
+                            ];
+                            let cur = names
+                                .iter()
+                                .position(|n| *n == ed.save_name_input)
+                                .map(|idx| (idx + 1) % names.len())
+                                .unwrap_or(0);
+                            ed.save_name_input = names[cur].to_owned();
+                            ed.status_msg = Some(format!(
+                                "Selected profile name '{}'. Tap 'Save Profile' to save.",
+                                ed.save_name_input
+                            ));
                         }
                         1 => {
+                            let target_name = if ed.save_name_input.trim().is_empty() {
+                                tc.settings.active_profile.clone()
+                            } else {
+                                crate::touch::Settings::sanitize_profile_name(&ed.save_name_input)
+                            };
+                            tc.settings.active_profile = target_name.clone();
+                            let _ = tc
+                                .settings
+                                .save_profile(std::path::Path::new("."), &target_name);
+                            let _ = tc.settings.save();
+                            ed.status_msg = Some(format!(
+                                "Saved controls as '{target_name}' in controlmap/{target_name}.json."
+                            ));
+                        }
+                        2 => {
                             tc.settings.default_profile = tc.settings.active_profile.clone();
                             let _ = tc.settings.save();
                             ed.status_msg = Some(format!(
@@ -3444,7 +3965,7 @@ pub fn touch_hud_editor(
                                 tc.settings.active_profile
                             ));
                         }
-                        2 => {
+                        3 => {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             let idx = tc.settings.custom_buttons.len();
                             let mut nb = CustomButton::new("key.mouse.left".into(), idx);
@@ -3476,15 +3997,33 @@ pub fn touch_hud_editor(
                     return false;
                 }
             }
+
+            // Row 5: Saved Control Profiles Loader Bar
+            let saved_y = sy + 33.0;
+            let saved_list = crate::touch::Settings::list_profiles(std::path::Path::new("."));
+            let max_show = saved_list.len().clamp(1, 5);
+            let sp_w = (dw - 28.0 - 4.0 * (max_show as f32 - 1.0)) / max_show as f32;
+            for (i, prof) in saved_list.iter().take(max_show).enumerate() {
+                let rx = dx + 14.0 + i as f32 * (sp_w + 4.0);
+                if inside([rx, saved_y, sp_w, 24.0]) {
+                    push_undo_snapshot(&mut ed, &tc.settings);
+                    tc.settings =
+                        crate::touch::Settings::load_profile(std::path::Path::new("."), prof);
+                    ed.save_name_input = tc.settings.active_profile.clone();
+                    ed.status_msg = Some(format!("Loaded saved profile '{prof}'."));
+                    tc.clicked = true;
+                    return false;
+                }
+            }
             return false;
         }
 
-        // 5. Check Moveable Floating Menu Pod (Main '=' button + Undo / Redo / Props / Add / Save)
-        let pod_w = if ed.pod_expanded { 278.0 } else { 38.0 };
-        let pod_h = 36.0;
+        // 5. Check Larger Material You 3 Moveable Floating Menu Pod (356x48dp)
+        let pod_w = if ed.pod_expanded { 356.0 } else { 52.0 };
+        let pod_h = 48.0;
         let pod_x = (tc.settings.floating_menu_pos[0] * w).clamp(8.0, (w - pod_w - 8.0).max(8.0));
         let pod_y = (tc.settings.floating_menu_pos[1] * h).clamp(6.0, (h - pod_h - 6.0).max(6.0));
-        if inside([pod_x, pod_y, 36.0, pod_h]) {
+        if inside([pod_x, pod_y, 48.0, pod_h]) {
             ed.active_drag = Some((
                 id,
                 EditorDragKind::FloatingPod {
@@ -3496,10 +4035,10 @@ pub fn touch_hud_editor(
             return false;
         }
         if ed.pod_expanded && inside([pod_x, pod_y, pod_w, pod_h]) {
-            let widths = [32.0, 32.0, 56.0, 48.0, 54.0];
-            let mut ix = pod_x + 38.0;
+            let widths = [42.0, 42.0, 72.0, 64.0, 68.0];
+            let mut ix = pod_x + 50.0;
             for (btn_i, iw) in widths.into_iter().enumerate() {
-                if inside([ix, pod_y + 4.0, iw, 28.0]) {
+                if inside([ix, pod_y + 5.0, iw, 38.0]) {
                     match btn_i {
                         0 => {
                             // Undo

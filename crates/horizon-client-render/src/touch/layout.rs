@@ -209,6 +209,9 @@ impl JoystickStyle {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
 fn default_one() -> f32 {
     1.0
 }
@@ -293,6 +296,12 @@ pub struct Placement {
     pub on_toggle_color: u32,
     #[serde(default = "default_toggle_stroke")]
     pub on_toggle_stroke_color: u32,
+    /// Whether this control/button is visible while playing in the 3D world.
+    #[serde(default = "default_true")]
+    pub visible_in_game: bool,
+    /// Whether this control/button is visible & interactive while a menu/inventory/title screen is open.
+    #[serde(default = "default_true")]
+    pub visible_in_menu: bool,
 }
 impl Placement {
     pub fn new(x: f32, y: f32, size: f32) -> Self {
@@ -319,6 +328,8 @@ impl Placement {
             on_click_stroke_color: 0xFFD0BCFF,
             on_toggle_color: 0xFF543B94,
             on_toggle_stroke_color: 0xFFEADDFF,
+            visible_in_game: true,
+            visible_in_menu: true,
         }
     }
     pub fn rect(self, aspect: f32) -> [f32; 4] {
@@ -416,6 +427,13 @@ pub struct Settings {
     pub gyroscope: bool,
     pub gyro_sensitivity: f32,
     pub attack_indicator_left: bool,
+    pub dynamic_joystick: bool,
+    /// Fraction of the width, from the movement edge inward, where a dynamic
+    /// joystick may start.
+    pub dynamic_area_x: f32,
+    /// Fraction of the height the dynamic area spans, centred on the movement
+    /// control (1.0 is the full surface).
+    pub dynamic_area_y: f32,
     #[serde(deserialize_with = "deserialize_visibility")]
     pub button_visibility: [u8; 14],
     pub horizontal_margin: f32,
@@ -489,6 +507,19 @@ impl Default for Settings {
         let mut layouts = [base; 3];
         layouts[2][Control::Sneak as usize] = Placement::new(0.13, 0.76, 0.10);
         layouts[2][Control::Jump as usize] = Placement::new(0.90, 0.78, 0.14);
+        for row in &mut layouts {
+            for c in [
+                Control::Move,
+                Control::Sprint,
+                Control::Jump,
+                Control::Sneak,
+                Control::Offhand,
+                Control::Shield,
+            ] {
+                row[c as usize].visible_in_game = true;
+                row[c as usize].visible_in_menu = false;
+            }
+        }
         Self {
             mode: Mode::Crosshair,
             split_controls: false,
@@ -500,7 +531,7 @@ impl Default for Settings {
             sensitivity_horizontal: 1.0,
             sensitivity_vertical: 1.0,
             offhand_button: false,
-            shield_button: false,
+            shield_button: true,
             circle_size: 32.0,
             button_scale: 1.0,
             custom_buttons: Vec::new(),
@@ -513,6 +544,9 @@ impl Default for Settings {
             gyroscope: false,
             gyro_sensitivity: 1.0,
             attack_indicator_left: true,
+            dynamic_joystick: false,
+            dynamic_area_x: 0.25,
+            dynamic_area_y: 1.0,
             button_visibility: [0; 14],
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
@@ -536,31 +570,36 @@ impl Settings {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         s.sanitize();
-        // GoyControl is the only touch look now: an older MCPE profile adopts it once.
-        if s.control_style == ControlStyle::Mcpe {
-            s.set_control_style(ControlStyle::GoyControl);
+        if s.control_style == ControlStyle::GoyControl && s.custom_buttons.is_empty() {
+            s.custom_buttons = Self::default_goy_buttons();
+            for c in Control::ALL {
+                s.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
+            }
         }
-        // Sneak and sprint used to latch raw keys, so a tap left them dead.
-        // They hold the game action now, like the vanilla keys do.
+        // Ensure SNEAK and SPRINT buttons use clean primary tokens without overriding user's toggleable choice.
         for button in &mut s.custom_buttons {
-            let label = button.custom_label.trim().to_ascii_lowercase();
-            match button.key.as_str() {
-                "key.keyboard.left.shift" if label == "sneak" => {
-                    button.key = "action:key.sneak".into();
-                    for p in &mut button.layouts {
-                        p.toggleable = false;
-                    }
+            let label = button.custom_label.trim().to_ascii_uppercase();
+            if label == "SNEAK"
+                || button.key == "key.keyboard.left.shift"
+                || button.key == "action:key.sneak"
+            {
+                button.key = "key.keyboard.left.shift".into();
+                if button.second_key == "action:key.sneak"
+                    || button.second_key == "key.keyboard.left.shift"
+                {
+                    button.second_key.clear();
                 }
-                "key.keyboard.left.control" if label == "sprint" => {
-                    button.key = "action:key.sprint".into();
-                    if button.second_key == "key.keyboard.w" {
-                        button.second_key.clear();
-                    }
-                    for p in &mut button.layouts {
-                        p.toggleable = false;
-                    }
+            } else if label == "SPRINT"
+                || button.key == "key.keyboard.left.control"
+                || button.key == "action:key.sprint"
+            {
+                button.key = "key.keyboard.left.control".into();
+                if button.second_key == "key.keyboard.w"
+                    || button.second_key == "action:key.sprint"
+                    || button.second_key == "key.keyboard.left.control"
+                {
+                    button.second_key.clear();
                 }
-                _ => {}
             }
         }
         // Restore the original top-row spacing without moving custom layouts.
@@ -635,6 +674,16 @@ impl Settings {
         }
         self.button_scale = if self.button_scale.is_finite() {
             self.button_scale.clamp(0.5, 2.0)
+        } else {
+            1.0
+        };
+        self.dynamic_area_x = if self.dynamic_area_x.is_finite() {
+            self.dynamic_area_x.clamp(0.0, 1.0)
+        } else {
+            0.25
+        };
+        self.dynamic_area_y = if self.dynamic_area_y.is_finite() {
+            self.dynamic_area_y.clamp(0.0, 1.0)
         } else {
             1.0
         };
@@ -760,8 +809,10 @@ impl Settings {
     ];
 
     /// Builds the super-optimized default GoyControl button layout (static buttons, no icons,
-    /// custom stroke/shadow/roundness, and direct mouse/keyboard events).
+    /// custom stroke/shadow/roundness, comfortable touch sizes, dedicated Mouse button, and
+    /// smart `visible_in_game` / `visible_in_menu` defaults).
     pub fn default_goy_buttons() -> Vec<super::CustomButton> {
+        #[allow(clippy::too_many_arguments)]
         let make = |label: &str,
                     k1: &str,
                     k2: &str,
@@ -772,7 +823,9 @@ impl Settings {
                     hr: f32,
                     pass: bool,
                     tog: bool,
-                    shape: u8| {
+                    shape: u8,
+                    in_game: bool,
+                    in_menu: bool| {
             let mut p = Placement::new(x, y, sz);
             p.width_ratio = wr;
             p.height_ratio = hr;
@@ -780,222 +833,302 @@ impl Settings {
             p.toggleable = tog;
             p.use_goy_style = true;
             p.shape = shape;
-            p.opacity = 0.78;
+            p.opacity = 0.82;
             p.stroke_size = 1.8;
             p.stroke_margin = 0.0;
-            p.roundness = 10.0;
-            p.stroke_roundness = 10.0;
-            p.shadow_size = 3.0;
+            p.roundness = 12.0;
+            p.stroke_roundness = 12.0;
+            p.shadow_size = 3.2;
+            p.visible_in_game = in_game;
+            p.visible_in_menu = in_menu;
             super::CustomButton {
                 key: k1.into(),
                 second_key: k2.into(),
                 third_key: String::new(),
                 custom_label: label.into(),
-                always_visible: false,
+                always_visible: in_menu,
                 layouts: [p; 3],
             }
         };
         vec![
-            // Left combat & interaction triggers above joystick (Pass-Through camera enabled)
+            // Left combat & menu interaction triggers above joystick (visible in game AND menu)
             make(
                 "PRI",
                 "key.mouse.left",
                 "",
                 0.11,
-                0.40,
-                0.13,
-                1.15,
-                0.95,
+                0.39,
+                0.155,
+                1.18,
+                0.96,
                 true,
                 false,
                 0,
+                true,
+                true,
             ),
             make(
                 "SEC",
                 "key.mouse.right",
                 "",
-                0.24,
-                0.40,
-                0.13,
-                1.15,
-                0.95,
+                0.26,
+                0.39,
+                0.155,
+                1.18,
+                0.96,
                 true,
                 false,
                 0,
+                true,
+                true,
             ),
-            // Right movement & action cluster
+            // Right movement & action cluster (visible in game only by default)
             make(
                 "JUMP",
                 "key.keyboard.space",
                 "",
                 0.89,
-                0.74,
-                0.145,
-                1.10,
+                0.73,
+                0.165,
+                1.12,
                 1.0,
                 true,
                 false,
                 2,
+                true,
+                false,
             ),
             make(
                 "SNEAK",
-                "action:key.sneak",
+                "key.keyboard.left.shift",
                 "",
-                0.76,
+                0.74,
                 0.84,
-                0.115,
-                1.10,
-                0.95,
+                0.138,
+                1.12,
+                0.96,
                 false,
-                false,
+                true,
                 0,
+                true,
+                false,
             ),
             make(
                 "SPRINT",
-                "action:key.sprint",
+                "key.keyboard.left.control",
                 "",
                 0.89,
-                0.54,
-                0.115,
-                1.10,
-                0.95,
+                0.52,
+                0.138,
+                1.12,
+                0.96,
                 false,
-                false,
+                true,
                 0,
+                true,
+                false,
             ),
             make(
                 "SWAP",
                 "key.keyboard.f",
                 "",
-                0.76,
-                0.64,
-                0.105,
-                1.05,
-                0.92,
+                0.74,
+                0.63,
+                0.122,
+                1.08,
+                0.94,
                 false,
                 false,
                 0,
+                true,
+                false,
             ),
             make(
                 "INV",
                 "key.keyboard.e",
                 "",
-                0.64,
-                0.88,
-                0.095,
-                1.15,
-                0.90,
+                0.60,
+                0.85,
+                0.122,
+                1.18,
+                0.94,
                 false,
                 false,
                 0,
+                true,
+                true,
             ),
             make(
                 "DROP",
                 "key.keyboard.q",
                 "",
                 0.89,
-                0.36,
-                0.095,
-                1.05,
-                0.90,
+                0.34,
+                0.115,
+                1.08,
+                0.92,
                 false,
                 false,
                 0,
+                true,
+                false,
             ),
-            // Top utility strip
+            // Top utility bar (with prominent MOUSE toggle & ESC visible in both game & menus)
             make(
                 "ESC",
                 "key.keyboard.escape",
                 "",
-                0.06,
                 0.07,
-                0.075,
-                1.25,
-                0.88,
+                0.08,
+                0.095,
+                1.30,
+                0.90,
                 false,
                 false,
                 0,
+                true,
+                true,
             ),
             make(
                 "DEBUG",
                 "key.keyboard.f3",
                 "",
-                0.20,
-                0.07,
-                0.075,
-                1.30,
-                0.88,
+                0.19,
+                0.08,
+                0.095,
+                1.34,
+                0.90,
                 false,
                 false,
                 0,
+                true,
+                false,
             ),
             make(
                 "3RD",
                 "key.keyboard.f5",
                 "",
-                0.30,
-                0.07,
-                0.075,
-                1.25,
-                0.88,
+                0.31,
+                0.08,
+                0.095,
+                1.28,
+                0.90,
                 false,
                 false,
                 0,
+                true,
+                false,
             ),
             make(
                 "CHAT",
                 "key.keyboard.t",
                 "",
-                0.68,
-                0.07,
-                0.075,
+                0.63,
+                0.08,
+                0.095,
                 1.30,
-                0.88,
+                0.90,
                 false,
                 false,
                 0,
+                true,
+                false,
             ),
             make(
                 "TAB",
                 "key.keyboard.tab",
                 "",
-                0.78,
-                0.07,
-                0.075,
-                1.25,
-                0.88,
+                0.75,
+                0.08,
+                0.095,
+                1.28,
+                0.90,
                 false,
                 false,
                 0,
+                true,
+                false,
             ),
             make(
                 "MOUSE",
                 "mouse.virtual.toggle",
                 "",
-                0.90,
-                0.07,
-                0.075,
-                1.40,
-                0.88,
+                0.89,
+                0.08,
+                0.098,
+                1.46,
+                0.92,
                 false,
                 false,
                 0,
+                true,
+                true,
             ),
         ]
     }
 
-    pub fn set_control_style(&mut self, _style: ControlStyle) {
-        // One style ships now; the MCPE look was removed.
-        self.control_style = ControlStyle::GoyControl;
-        self.mode = Mode::Crosshair;
-        self.split_controls = true;
-        if self.custom_buttons.is_empty() {
-            self.custom_buttons = Self::default_goy_buttons();
+    /// Applies the smart preset visibility (`Visible in Game` vs `Visible in Menu`) across all
+    /// built-in controls and custom GoyControl buttons.
+    pub fn apply_visibility_preset_all(&mut self) {
+        for row in &mut self.layouts {
+            for c in Control::ALL {
+                let in_menu = !matches!(
+                    c,
+                    Control::Move
+                        | Control::Jump
+                        | Control::Sneak
+                        | Control::Sprint
+                        | Control::Offhand
+                        | Control::Shield
+                );
+                row[c as usize].visible_in_game = true;
+                row[c as usize].visible_in_menu = in_menu;
+            }
         }
-        // In GoyControl mode, only Move (the customizable GoyControl Joystick) is shown from built-ins by default;
-        // all actions come from the customizable GoyControl static buttons.
-        for c in Control::ALL {
-            self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
+        for btn in &mut self.custom_buttons {
+            let label = btn.custom_label.trim().to_ascii_uppercase();
+            let is_movement_only = matches!(
+                label.as_str(),
+                "JUMP" | "SNEAK" | "SPRINT" | "SWAP" | "DROP" | "DEBUG" | "3RD" | "CHAT" | "TAB"
+            ) || matches!(
+                btn.key.as_str(),
+                "key.keyboard.space"
+                    | "action:key.jump"
+                    | "key.keyboard.left.shift"
+                    | "action:key.sneak"
+                    | "key.keyboard.left.control"
+                    | "action:key.sprint"
+                    | "key.keyboard.q"
+                    | "action:key.drop"
+                    | "key.keyboard.f"
+                    | "action:key.swapOffhand"
+            );
+            for p in &mut btn.layouts {
+                p.visible_in_game = true;
+                p.visible_in_menu = !is_movement_only;
+            }
+            btn.always_visible = !is_movement_only;
+        }
+    }
+
+    pub fn set_control_style(&mut self, style: ControlStyle) {
+        self.control_style = style;
+        match style {
+            ControlStyle::Mcpe => {
+                self.button_visibility = [0; 14];
+            }
+            ControlStyle::GoyControl => {
+                self.mode = Mode::Crosshair;
+                self.split_controls = true;
+                if self.custom_buttons.is_empty() {
+                    self.custom_buttons = Self::default_goy_buttons();
+                }
+                // In GoyControl mode, only Move (the customizable GoyControl Joystick) is shown from built-ins by default;
+                // all actions come from the customizable GoyControl static buttons.
+                for c in Control::ALL {
+                    self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
+                }
+            }
         }
         self.sanitize();
     }
@@ -1113,7 +1246,7 @@ impl Settings {
         }
         match c {
             Control::Offhand => self.offhand_button,
-            Control::Shield => self.shield_button,
+            Control::Shield => self.shield_button && !self.visible(Control::Use),
             Control::Attack | Control::Use => self.crosshair(),
             Control::Sprint => {
                 self.sprint_button && self.mode != Mode::Dpad && !self.sprint_with_joystick
@@ -1292,5 +1425,41 @@ mod tests {
         assert_eq!(last.active_tokens().len(), 3);
         assert_eq!(last.layouts[0].width_ratio, 1.5);
         assert_eq!(last.layouts[0].shape, 3);
+    }
+
+    #[test]
+    fn visible_in_game_and_menu_presets_and_named_profiles_roundtrip() {
+        let mut settings = Settings::default();
+        settings.set_control_style(ControlStyle::GoyControl);
+        // Move joystick is visible in game only
+        assert!(settings.layouts[0][Control::Move as usize].visible_in_game);
+        assert!(!settings.layouts[0][Control::Move as usize].visible_in_menu);
+        // PRI, SEC, MOUSE, INV, ESC are visible in both game and menu; JUMP, SNEAK, SPRINT are game-only
+        let find_btn = |lbl: &str| {
+            settings
+                .custom_buttons
+                .iter()
+                .find(|b| b.custom_label == lbl)
+                .unwrap()
+        };
+        for menu_btn in ["PRI", "SEC", "MOUSE", "INV", "ESC"] {
+            let b = find_btn(menu_btn);
+            assert!(b.layouts[0].visible_in_game, "{menu_btn} in game");
+            assert!(b.layouts[0].visible_in_menu, "{menu_btn} in menu");
+        }
+        for game_btn in ["JUMP", "SNEAK", "SPRINT", "SWAP", "DROP"] {
+            let b = find_btn(game_btn);
+            assert!(b.layouts[0].visible_in_game, "{game_btn} in game");
+            assert!(!b.layouts[0].visible_in_menu, "{game_btn} not in menu");
+        }
+        // Named profile save & load
+        let tmp = std::env::temp_dir().join(format!("horizon-named-prof-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        settings.save_profile(&tmp, "My Custom PvP").unwrap();
+        let listed = Settings::list_profiles(&tmp);
+        assert!(listed.contains(&"my-custom-pvp".to_owned()));
+        let loaded = Settings::load_profile(&tmp, "my-custom-pvp");
+        assert_eq!(loaded.active_profile, "my-custom-pvp");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

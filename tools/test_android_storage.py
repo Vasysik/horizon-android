@@ -34,7 +34,7 @@ public final class Probe extends Activity {
             Uri mods = DocumentsContract.buildDocumentUri(authority, "p0/mods");
             Uri children = DocumentsContract.buildChildDocumentsUri(authority, "horizon");
             try (Cursor c = getContentResolver().query(children, null, null, null, null)) {
-                check(c != null && c.getCount() == 5, "five directories");
+                check(c != null && c.getCount() == 6, "six directories");
             }
             Uri file = DocumentsContract.createDocument(getContentResolver(), mods, "application/zip", "probe.hmod");
             check(file != null, "create");
@@ -57,6 +57,19 @@ public final class Probe extends Activity {
             try (InputStream s = getContentResolver().openInputStream(level)) { check(s.read() == 9 && s.read() == 8 && s.read() == 7, "world file round trip"); }
             check(DocumentsContract.deleteDocument(getContentResolver(), level), "delete fixture level");
             check(DocumentsContract.deleteDocument(getContentResolver(), world), "delete fixture world");
+            Uri configuration = DocumentsContract.buildDocumentUri(authority, "p0/configuration");
+            Uri options = DocumentsContract.createDocument(getContentResolver(), configuration, "text/plain", "options.txt");
+            try (OutputStream s = getContentResolver().openOutputStream(options, "wt")) {
+                s.write("renderDistance:12\n".getBytes("UTF-8"));
+            }
+            try (InputStream s = getContentResolver().openInputStream(options)) {
+                check(s.read() == 'r', "configuration round trip");
+            }
+            Uri privateConfig = DocumentsContract.buildDocumentUri(authority, "p0/configuration/android-launcher.json");
+            boolean privateDenied = false;
+            try (ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(privateConfig, "r")) {}
+            catch (FileNotFoundException error) { privateDenied = true; }
+            check(privateDenied, "private configuration denied");
             Uri secret = DocumentsContract.buildDocumentUri(authority, "p0/mods/../android-launcher.json");
             boolean denied = false;
             try (ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(secret, "r")) {}

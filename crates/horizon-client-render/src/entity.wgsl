@@ -151,6 +151,15 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     out.tier = (overlay >> 16u) & 0xffu;
     return out;
 }
+@vertex fn vs_entity_sky(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
+    @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>,
+    @location(5) normal: vec4<f32>, @location(6) glint_uv: vec2<f32>) -> Out {
+    var out = entity_vertex(position, uv, overlay & 0xffffu, color, light, normal);
+    out.clip.z = 0.0;
+    out.glint_uv = glint_uv;
+    out.tier = (overlay >> 16u) & 0xffu;
+    return out;
+}
 // Retained bolt-local geometry, translated using the same f64 camera
 // subtraction as the former CPU path before adding each local f32 position.
 // The bolt offset is instance attribute 7: 6 is the entity vertex's glint UV.

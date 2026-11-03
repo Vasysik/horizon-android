@@ -159,8 +159,41 @@ mod hardware {
 }
 
 impl Pads {
-    /// Include releases delayed until the next simulation tick.
+    /// Include releases delayed until the next simulation tick, plus Android custom touch holds/latches.
     pub(super) fn holds_action(&self, settings: &gamepad::PadSettings, action: &str) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            let custom_held = match action {
+                "key.sneak" => {
+                    self.custom_keys.contains(&KeyCode::ShiftLeft)
+                        || self.custom_keys.contains(&KeyCode::ShiftRight)
+                        || self.touch.held_custom_tokens().any(|t| {
+                            matches!(
+                                t,
+                                "key.keyboard.left.shift"
+                                    | "key.keyboard.right.shift"
+                                    | "action:key.sneak"
+                            )
+                        })
+                }
+                "key.sprint" => {
+                    self.custom_keys.contains(&KeyCode::ControlLeft)
+                        || self.custom_keys.contains(&KeyCode::ControlRight)
+                        || self.touch.held_custom_tokens().any(|t| {
+                            matches!(
+                                t,
+                                "key.keyboard.left.control"
+                                    | "key.keyboard.right.control"
+                                    | "action:key.sprint"
+                            )
+                        })
+                }
+                _ => false,
+            };
+            if custom_held {
+                return true;
+            }
+        }
         settings.binding(action).is_some_and(|button| {
             self.edges.is_held(button) || self.late_releases.contains(&button)
         })
@@ -211,15 +244,16 @@ impl Game<'_> {
                 }
                 horizon_client::android_runtime::clear_keypad();
             }
-            if (self.pad_in_menu() && !self.android_inventory_controls()) || !self.focused {
+            if !self.focused {
                 self.pad.touch.clear();
                 horizon_client::android_runtime::clear_keypad();
+            } else if self.pad_in_menu() {
+                self.pad.touch.clear_world_gesture();
+                if !self.android_inventory_controls() {
+                    horizon_client::android_runtime::clear_keypad();
+                }
             }
             self.android_custom_events();
-        }
-        #[cfg(target_os = "android")]
-        if self.pad_in_menu() && self.android_inventory_controls() {
-            self.pad.touch.clear_world_gesture();
         }
         let settings = &self.settings.controller;
         if !settings.enabled && !cfg!(target_os = "android") {

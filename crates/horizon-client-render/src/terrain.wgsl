@@ -56,6 +56,10 @@ struct Globals {
 // which then samples exactly as before.
 override SPRITE_ARRAYS: u32 = 1u;
 override SPRITE_SPLIT: u32 = 2048u;
+// Specialize only when the renderer proves the matching frame state.
+// 3 keeps the ordinary runtime texture-filter setting.
+override TERRAIN_FILTERING: u32 = 3u;
+override TERRAIN_FULLY_VISIBLE: bool = false;
 // A sprite sampled with the given gradients, from whichever array holds its layer.
 fn sprite_grad(uv: vec2<f32>, layer: u32, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
     let l = i32(layer % SPRITE_SPLIT);
@@ -97,7 +101,11 @@ fn sample_nearest(uv: vec2<f32>, layer: u32, pixel: vec2<f32>, du: vec2<f32>, dv
     let texel_coords = uv / pixel;
     let center = round(texel_coords) - 0.5;
     var offset = texel_coords - center;
-    offset = (offset - 0.5) * pixel / max(texel_screen, vec2(1e-12)) + 0.5;
+    if TERRAIN_FILTERING == 0u {
+        offset = (offset - 0.5) * (pixel * inverseSqrt(max(du * du + dv * dv, vec2(1e-24)))) + 0.5;
+    } else {
+        offset = (offset - 0.5) * pixel / max(texel_screen, vec2(1e-12)) + 0.5;
+    }
     offset = clamp(offset, vec2(0.0), vec2(1.0));
     return sprite_grad((center + offset) * pixel, layer, du, dv);
 }
@@ -139,7 +147,7 @@ fn sprite(tiled: vec2<f32>, layer: u32) -> vec4<f32> {
     let uv = tile_uv(tiled);
     let pixel = vec2(1.0 / globals.filtering.y);
     let texel_screen = sqrt(du * du + dv * dv);
-    if u32(globals.filtering.x) == 1u {
+    if TERRAIN_FILTERING == 1u || (TERRAIN_FILTERING == 3u && u32(globals.filtering.x) == 1u) {
         return sample_rgss(uv, layer, pixel, du, dv, texel_screen);
     }
     return sample_nearest(uv, layer, pixel, du, dv, texel_screen);
@@ -207,6 +215,7 @@ fn faded(code: u32, local: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>) -> bool {
 // tile's drew over it, two waters, opaque. A tile's UV step is 1/32, a
 // section's 1/32768 (`terrain_uv`).
 fn fade_depth(clip: vec4<f32>, w: f32) -> vec4<f32> {
+    if TERRAIN_FULLY_VISIBLE { return clip; }
     let code = fade_code(w);
     let tile = instance_step(w) > 0.001;
     var scale = select(1.0, 1.0 - 2e-3, tile);
@@ -265,6 +274,7 @@ fn instance_step(w: f32) -> f32 {
     return fract(abs(w));
 }
 fn instance_visibility(w: f32) -> f32 {
+    if TERRAIN_FULLY_VISIBLE { return 1.0; }
     if w > 0.0 {
         return 1.0 - f32(bitcast<u32>(w) & 0x7fffffu) / 8388608.0;
     }
@@ -365,8 +375,11 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     out.cylindrical = max(length(pos.xz), abs(pos.y));
     out.fade = fade_code(w);
     const CHUNK_FULLY_VISIBLE_RANGE: f32 = 16.0;
-    out.visibility = mix(1.0, instance_visibility(w),
-        clamp((length(pos) - CHUNK_FULLY_VISIBLE_RANGE) / CHUNK_FULLY_VISIBLE_RANGE, 0.0, 1.0));
+    out.visibility = 1.0;
+    if !TERRAIN_FULLY_VISIBLE {
+        out.visibility = mix(1.0, instance_visibility(w),
+            clamp((length(pos) - CHUNK_FULLY_VISIBLE_RANGE) / CHUNK_FULLY_VISIBLE_RANGE, 0.0, 1.0));
+    }
     return out;
 }
 fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
@@ -394,6 +407,17 @@ fn brightness(c: vec3<f32>) -> f32 {
     if in.height < globals.fog_ends.w { discard; }
     return solid_color(in);
 }
+// Identical alpha cutout, HDR and fog for sections with fade_code == 0.
+// Selecting this entrypoint is a CPU-side proof, never a quality option.
+@fragment fn fs_cutout_static(in: TerrainOut) -> @location(0) vec4<f32> {
+    let texel = sprite(in.uv, in.layer & 0x7fffu);
+    var color = texel * in.color;
+    if !TERRAIN_FULLY_VISIBLE {
+        color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
+    }
+    if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
+    return solid_finish(in, texel, color);
+}
 fn solid_color(in: TerrainOut) -> vec4<f32> {
     let dx = dpdx(in.local);
     let dy = dpdy(in.local);
@@ -410,7 +434,9 @@ fn solid_color(in: TerrainOut) -> vec4<f32> {
 @fragment fn fs_opaque(in: TerrainOut) -> @location(0) vec4<f32> {
     let texel = sprite(in.uv, in.layer & 0x7fffu);
     var color = texel * in.color;
-    color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
+    if !TERRAIN_FULLY_VISIBLE {
+        color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
+    }
     return solid_finish(in, texel, color);
 }
 fn solid_finish(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>) -> vec4<f32> {

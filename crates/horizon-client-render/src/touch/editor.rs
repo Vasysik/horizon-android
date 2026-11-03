@@ -75,6 +75,10 @@ pub struct Editor {
     pub redo_stack: Vec<Settings>,
     /// Status banner message inside editor.
     pub status_msg: Option<String>,
+    /// Custom profile name input inside the Control Manager dialog.
+    pub save_name_input: String,
+    /// Whether the custom profile name field is actively focused.
+    pub editing_save_name: bool,
 }
 
 enum Drag {
@@ -109,6 +113,8 @@ impl TouchControls {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             status_msg: None,
+            save_name_input: self.settings.active_profile.clone(),
+            editing_save_name: false,
         });
     }
     pub fn cancel_editor(&mut self) {

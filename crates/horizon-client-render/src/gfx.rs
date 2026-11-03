@@ -514,6 +514,13 @@ pub struct ScreenshotRequest {
     /// `Renderer::screenshot_quality`, not the window's.
     pub scaled: bool,
 }
+/// Vanilla sky at the far depth plane, drawn after solid terrain in the same pass.
+struct LateSky {
+    sky: wgpu::RenderPipeline,
+    dark_disc: wgpu::RenderPipeline,
+    celestial: wgpu::RenderPipeline,
+}
+
 pub struct Renderer {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
@@ -562,6 +569,13 @@ pub struct Renderer {
     /// No-discard opaque and alpha-cutout pipelines for Android Vulkan.
     opaque_terrain: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     opaque_terrain_on: bool,
+    static_cutout: Option<wgpu::RenderPipeline>,
+    static_cutout_on: bool,
+    settled_terrain: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    settled_terrain_on: bool,
+    /// Android Vulkan only; packs keep their original sky/material ordering.
+    late_sky: Option<LateSky>,
+    late_sky_on: bool,
     /// Last frame's opaque/cutout/order-sensitive draw counts; None uses the ordinary path.
     pub terrain_pass_draws: Option<[u32; 3]>,
     translucent: wgpu::RenderPipeline,
@@ -1902,23 +1916,31 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &debug_line_attributes,
         })];
-        let pipeline_in = |layout: &wgpu::PipelineLayout,
-                           label: &str,
-                           vertex: &str,
-                           fragment: &str,
-                           buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
-                           topology: wgpu::PrimitiveTopology,
-                           cull: Option<wgpu::Face>,
-                           depth_write: bool,
-                           depth_test: bool,
-                           blend: Option<wgpu::BlendState>| {
+        let specialized_pipeline = |layout: &wgpu::PipelineLayout,
+                                    label: &str,
+                                    vertex: &str,
+                                    fragment: &str,
+                                    buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                                    topology: wgpu::PrimitiveTopology,
+                                    cull: Option<wgpu::Face>,
+                                    depth_write: bool,
+                                    depth_test: bool,
+                                    blend: Option<wgpu::BlendState>,
+                                    settled: bool| {
+            let mut constants = sprite_constants.to_vec();
+            if settled {
+                constants.extend([("TERRAIN_FILTERING", 0.0), ("TERRAIN_FULLY_VISIBLE", 1.0)]);
+            }
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some(vertex),
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &constants,
+                        ..Default::default()
+                    },
                     buffers,
                 },
                 primitive: wgpu::PrimitiveState {
@@ -1942,7 +1964,7 @@ impl Renderer {
                     module: &shader,
                     entry_point: Some(fragment),
                     compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &sprite_constants,
+                        constants: &constants,
                         ..Default::default()
                     },
                     targets: &[Some(wgpu::ColorTargetState {
@@ -1954,6 +1976,30 @@ impl Renderer {
                 multiview_mask: None,
                 cache: None,
             })
+        };
+        let pipeline_in = |layout: &wgpu::PipelineLayout,
+                           label: &str,
+                           vertex: &str,
+                           fragment: &str,
+                           buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                           topology: wgpu::PrimitiveTopology,
+                           cull: Option<wgpu::Face>,
+                           depth_write: bool,
+                           depth_test: bool,
+                           blend: Option<wgpu::BlendState>| {
+            specialized_pipeline(
+                layout,
+                label,
+                vertex,
+                fragment,
+                buffers,
+                topology,
+                cull,
+                depth_write,
+                depth_test,
+                blend,
+                false,
+            )
         };
         let pipeline = |label: &str,
                         vertex: &str,
@@ -2035,6 +2081,60 @@ impl Renderer {
                 }
             })
             .flatten();
+        let static_cutout = opaque_terrain.as_ref().and_then(|_| {
+            let checks = GpuChecks::push(&device);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let candidate = pipeline(
+                "Terrain cutout without LOD fade",
+                "vs_terrain_cutout",
+                "fs_cutout_static",
+                &terrain_buffers,
+                tri,
+                Some(wgpu::Face::Back),
+                true,
+                true,
+                None,
+            );
+            if let Some(error) = pollster::block_on(internal.pop()).or(checks.pop()) {
+                log::warn!("Static cutout pipeline unavailable; retaining fade shader: {error}");
+                None
+            } else {
+                Some(candidate)
+            }
+        });
+        let settled_terrain = opaque_terrain.as_ref().and_then(|_| {
+            let checks = GpuChecks::push(&device);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let make = |label, vertex, fragment| {
+                specialized_pipeline(
+                    &layout,
+                    label,
+                    vertex,
+                    fragment,
+                    &terrain_buffers,
+                    tri,
+                    Some(wgpu::Face::Back),
+                    true,
+                    true,
+                    None,
+                    true,
+                )
+            };
+            let pair = (
+                make("Settled opaque terrain", "vs_terrain_opaque", "fs_opaque"),
+                make(
+                    "Settled cutout terrain",
+                    "vs_terrain_cutout",
+                    "fs_cutout_static",
+                ),
+            );
+            if let Some(error) = pollster::block_on(internal.pop()).or(checks.pop()) {
+                log::warn!("Settled terrain unavailable; retaining ordinary shader: {error}");
+                None
+            } else {
+                Some(pair)
+            }
+        });
         crate::mesher::group_parts(opaque_terrain.is_some());
         // The water mirror's camera sees the world from the other side of the plane, which
         // flips the winding: its solid terrain culls the front.
@@ -2952,7 +3052,7 @@ impl Renderer {
             },
             ..additive_descriptor
         });
-        let celestial_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let celestial_descriptor = wgpu::RenderPipelineDescriptor {
             label: Some("Celestial bodies"),
             layout: Some(&entity_layout),
             vertex: wgpu::VertexState {
@@ -3000,6 +3100,56 @@ impl Renderer {
             }),
             multiview_mask: None,
             cache: None,
+        };
+        let celestial_pipeline = device.create_render_pipeline(&celestial_descriptor);
+        let mut late_sky = opaque_terrain.as_ref().and_then(|_| {
+            let checks = GpuChecks::push(&device);
+            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+            let sky = pipeline(
+                "Late sky",
+                "vs_sky",
+                "fs_sky",
+                &[],
+                tri,
+                None,
+                false,
+                true,
+                None,
+            );
+            let dark = pipeline(
+                "Late dark disc",
+                "vs_sky",
+                "fs_dark_disc",
+                &[],
+                tri,
+                None,
+                false,
+                true,
+                Some(alpha_blend),
+            );
+            let celestial = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Late celestial bodies"),
+                vertex: wgpu::VertexState {
+                    entry_point: Some("vs_entity_sky"),
+                    ..celestial_descriptor.vertex.clone()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    ..celestial_descriptor.depth_stencil.clone().unwrap()
+                }),
+                ..celestial_descriptor.clone()
+            });
+            let error = pollster::block_on(internal.pop()).or(checks.pop());
+            if let Some(error) = error {
+                log::warn!("Late sky unavailable; retaining original order: {error}");
+                None
+            } else {
+                Some(LateSky {
+                    sky,
+                    dark_disc: dark,
+                    celestial,
+                })
+            }
         });
         // WorldBorderRenderer: misc/forcefield.png as a MipmappedTexture
         // (repeat, linear minification with mipmaps, nearest magnification).
@@ -3357,7 +3507,14 @@ impl Renderer {
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
-        let stars = stars::Stars::new(&device, config.format.remove_srgb_suffix());
+        let stars = stars::Stars::new(
+            &device,
+            config.format.remove_srgb_suffix(),
+            late_sky.is_some(),
+        );
+        if !stars.has_late_pipeline() {
+            late_sky = None;
+        }
         let entity_outline = entity_outline::EntityOutline::new(
             &device,
             (&entity_shader, &entity_layout, &entity_vertex),
@@ -3407,6 +3564,12 @@ impl Renderer {
             solid,
             opaque_terrain,
             opaque_terrain_on: true,
+            static_cutout,
+            static_cutout_on: true,
+            settled_terrain,
+            settled_terrain_on: true,
+            late_sky,
+            late_sky_on: true,
             terrain_pass_draws: None,
             translucent,
             flat_on: flat.is_some(),
@@ -3815,15 +3978,60 @@ impl Renderer {
         if on && self.flat.is_none() {
             return Err("flat section draws are off on this device".into());
         }
+        if on && let Some(flat) = &mut self.flat {
+            // Explicit developer comparisons must exercise the flat path even
+            // on backends whose automatic vanilla threshold disables it.
+            flat.min_sections = 0;
+        }
         self.flat_on = on;
         Ok(())
     }
+    /// Developer A/B control: direct and indirect draws use the same section geometry.
+    pub fn set_indirect_draws(&mut self, on: bool) -> Result<()> {
+        if on
+            && !(self
+                .device
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+                && self
+                    .adapter
+                    .get_downlevel_capabilities()
+                    .flags
+                    .contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION))
+        {
+            return Err("indirect section draws are unavailable on this device".into());
+        }
+        self.multi_draw = on;
+        Ok(())
+    }
     /// Developer A/B control; unavailable backends retain their ordinary pipeline.
+    pub fn set_static_cutout(&mut self, on: bool) -> Result<()> {
+        if on && self.static_cutout.is_none() {
+            return Err("static cutout unavailable".into());
+        }
+        self.static_cutout_on = on;
+        Ok(())
+    }
+    pub fn set_settled_terrain(&mut self, on: bool) -> Result<()> {
+        if on && self.settled_terrain.is_none() {
+            return Err("settled terrain unavailable".into());
+        }
+        self.settled_terrain_on = on;
+        Ok(())
+    }
     pub fn set_opaque_terrain(&mut self, on: bool) -> Result<()> {
         if on && self.opaque_terrain.is_none() {
             return Err("split opaque terrain is unavailable on this backend".into());
         }
         self.opaque_terrain_on = on;
+        Ok(())
+    }
+    /// Developer-only comparison, with the ordinary path retained for packs and mirrors.
+    pub fn set_late_sky(&mut self, on: bool) -> Result<()> {
+        if on && self.late_sky.is_none() {
+            return Err("late sky unavailable".into());
+        }
+        self.late_sky_on = on;
         Ok(())
     }
     /// Whether one of Horizon's own packs reads the water mirror, which needs the frame's
@@ -5588,6 +5796,16 @@ impl Renderer {
             && visible_lods.is_empty()
             && self.native.is_none()
             && self.pack_post.is_none();
+        // Negative origins encode LOD crossfades; preserve their original shader.
+        let static_cutout = self.static_cutout_on
+            && split_terrain
+            && self.origins.iter().all(|origin| origin[3] >= 0.0);
+        let settled_terrain = self.settled_terrain_on
+            && static_cutout
+            && self.texture_filtering != 1
+            // The bare section UV step encodes fully visible, ordinary terrain.
+            // Upload fades, LOD instances and other encodings keep the general path.
+            && self.origins.iter().all(|origin| origin[3] == 1.0 / crate::mesher::UV_STEPS);
         let mut opaque_draws = 0u32;
         let mut cutout_end = 0u32;
         if split_terrain {
@@ -6213,6 +6431,13 @@ impl Renderer {
             Some(flat)
                 if self.flat_on
                     && !self.draws.is_empty()
+                    // Preserve Android packs' existing terrain/material path.
+                    // Classic terrain/shadow programs explicitly require flat inputs.
+                    && (!cfg!(target_os = "android")
+                        || (self.native.is_none()
+                            && (self.pack_post.is_none()
+                                || pack_terrain
+                                || shadow_view.is_some())))
                     && (self.drawn_sections >= flat.min_sections
                         || pack_terrain
                         || shadow_view.is_some()) =>
@@ -6735,7 +6960,16 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.group, &[]);
             pack_frame(&mut pass);
-            if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
+            let late_sky = self.late_sky_on
+                && self.late_sky.is_some()
+                && !frame.title
+                && frame.skybox
+                && !frame.end_sky
+                && self.native.is_none()
+                && self.pack_post.is_none()
+                && mirror.is_none()
+                && cull.is_none();
+            if !late_sky && (frame.title || (sky_visible && (frame.skybox || frame.end_sky))) {
                 if !frame.title && frame.skybox && !pack_draws_sky && !native_sky_pass {
                     match self
                         .native
@@ -6778,7 +7012,7 @@ impl Renderer {
                     .as_ref()
                     .is_some_and(|n| n.sky.is_some() && !n.vanilla_stars);
                 if !frame.title && frame.stars.is_some() && !pack_draws_sky && !own_stars {
-                    self.stars.draw(&mut pass);
+                    self.stars.draw(&mut pass, false);
                     pass.set_bind_group(0, &self.group, &[]);
                 }
                 if !frame.title && frame.dark_disc && !pack_draws_sky {
@@ -6863,13 +7097,29 @@ impl Renderer {
                                 && material.is_none()
                                 && let Some((opaque, cutout)) = &self.opaque_terrain
                             {
+                                let (opaque, settled_cutout) = if settled_terrain {
+                                    self.settled_terrain
+                                        .as_ref()
+                                        .map(|(a, b)| (a, Some(b)))
+                                        .unwrap_or((opaque, None))
+                                } else {
+                                    (opaque, None)
+                                };
                                 pass.set_pipeline(opaque);
                                 self.draw_sections(&mut pass, &self.indirect, 0, 0, opaque_draws);
-                                pass.set_pipeline(cutout);
+                                pass.set_pipeline(if let Some(cutout) = settled_cutout {
+                                    cutout
+                                } else if static_cutout {
+                                    self.static_cutout.as_ref().unwrap_or(cutout)
+                                } else {
+                                    cutout
+                                });
+                                // All three material ranges share the complete
+                                // indirect buffer; its draw zero stays draw zero.
                                 self.draw_sections(
                                     &mut pass,
                                     &self.indirect,
-                                    opaque_draws,
+                                    0,
                                     opaque_draws,
                                     cutout_end - opaque_draws,
                                 );
@@ -6877,7 +7127,7 @@ impl Renderer {
                                 self.draw_sections(
                                     &mut pass,
                                     &self.indirect,
-                                    cutout_end,
+                                    0,
                                     cutout_end,
                                     solid_draws - cutout_end,
                                 );
@@ -6886,6 +7136,28 @@ impl Renderer {
                             }
                         }
                     }
+                }
+            }
+            // Read the depth left by solids, without writing depth or adding a render pass.
+            // At reverse-Z's far plane, the unchanged sky shaders run only in uncovered pixels.
+            if let Some(sky) = self.late_sky.as_ref().filter(|_| late_sky && sky_visible) {
+                pass.set_pipeline(&sky.sky);
+                pass.draw(0..3, 0..1);
+                if celestial_vertices > 0 {
+                    pass.set_pipeline(&sky.celestial);
+                    pass.set_bind_group(0, &self.entity_group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
+                    pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
+                    pass.set_bind_group(0, &self.group, &[]);
+                }
+                if frame.stars.is_some() {
+                    self.stars.draw(&mut pass, true);
+                    pass.set_bind_group(0, &self.group, &[]);
+                }
+                if frame.dark_disc {
+                    pass.set_pipeline(&sky.dark_disc);
+                    pass.draw(0..3, 0..1);
                 }
             }
             if entity_quads > 0 {

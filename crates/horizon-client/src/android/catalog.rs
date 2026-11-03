@@ -75,6 +75,10 @@ pub struct Config {
     pub zero_latency_touch: bool,
     #[serde(default = "default_true")]
     pub fast_chunk_upload: bool,
+    #[serde(default)]
+    pub last_name_changed: String,
+    #[serde(default)]
+    pub custom_profile_name: String,
 }
 
 fn default_true() -> bool {
@@ -164,6 +168,35 @@ impl Config {
     pub fn game_home(&self, home: &Path) -> PathBuf {
         // Legacy modpack selections are ignored; their files remain untouched.
         self.profile_home(home)
+    }
+    pub fn touch_name_changed(&mut self) {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let days = secs / 86_400;
+        let rem = secs % 86_400;
+        let hh = rem / 3600;
+        let mm = (rem % 3600) / 60;
+        // Convert days since 1970-01-01 to YYYY-MM-DD (civil calendar algorithm)
+        let z = days as i64 + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = (z - era * 146_097) as u64;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+        let y = yoe as i64 + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = if m <= 2 { y + 1 } else { y };
+        self.last_name_changed = format!("{year:04}-{m:02}-{d:02} at {hh:02}:{mm:02} UTC");
+    }
+    pub fn last_name_changed_label(&self) -> &str {
+        if self.last_name_changed.trim().is_empty() {
+            "Default profile (Never changed)"
+        } else {
+            &self.last_name_changed
+        }
     }
     pub fn ui_scale_label(&self) -> &'static str {
         match self.ui_scale_percent {
@@ -1354,17 +1387,28 @@ impl Catalog {
     }
     pub fn edit(&mut self, out: horizon_client::osk::Output, home: &Path) {
         use horizon_client::osk::Output;
+        let is_name = self.editing == Some("name");
+        let is_profile_name = self.editing == Some("profile_name");
         let field = match self.editing {
             Some("name") => &mut self.config.name,
+            Some("profile_name") => &mut self.config.custom_profile_name,
             Some("server") => &mut self.config.server,
             Some("render_scale") => &mut self.render_scale_text,
             Some("client_id") => &mut self.config.microsoft_client_id,
             _ => &mut self.query,
         };
         match out {
-            Output::Text(s) => field.push_str(&s),
+            Output::Text(s) => {
+                field.push_str(&s);
+                if is_name {
+                    self.config.touch_name_changed();
+                }
+            }
             Output::Backspace => {
                 field.pop();
+                if is_name {
+                    self.config.touch_name_changed();
+                }
             }
             Output::Enter | Output::Close => {
                 if self.editing == Some("render_scale") {
@@ -1378,6 +1422,22 @@ impl Catalog {
                             return;
                         }
                     }
+                } else if is_name {
+                    self.config.touch_name_changed();
+                } else if is_profile_name {
+                    let game_home = self.config.game_home(home);
+                    let clean = horizon_client::touch::Settings::sanitize_profile_name(
+                        &self.config.custom_profile_name,
+                    );
+                    self.config.custom_profile_name = clean.clone();
+                    let mut touch = horizon_client::touch::Settings::load_from(
+                        &game_home.join("horizon-touch.json"),
+                    );
+                    touch.active_profile = clean.clone();
+                    let _ = touch.save_profile(&game_home, &clean);
+                    self.status = format!(
+                        "Saved controls as '{clean}' in controlmap/{clean}.json."
+                    );
                 }
                 self.editing = None;
                 let _ = self.config.save(home);

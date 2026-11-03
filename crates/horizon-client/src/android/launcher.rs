@@ -65,13 +65,22 @@ pub(super) struct Launcher {
 
 impl Launcher {
     pub(super) fn new(home: PathBuf) -> Self {
-        // Upgrade existing installations that retained the old download cache.
+        // Upgrade existing installations and pre-verify structure transforms in the background
+        // so pressing Play launches immediately without main-thread I/O stalls.
         let cleanup_home = home.clone();
         std::thread::spawn(move || {
             if let Err(error) =
                 horizon_client::official_install::cleanup_completed_downloads(&cleanup_home)
             {
                 log::warn!("Could not clean completed Minecraft downloads: {error}");
+            }
+            if horizon_client::official_install::ready(&cleanup_home) {
+                let _ = horizon_client::android_resources::repair_structure_transforms(
+                    &cleanup_home.join("engine-data.zip"),
+                    &cleanup_home
+                        .join(".local/horizon-client")
+                        .join(horizon_core::VANILLA_VERSION),
+                );
             }
         });
         let mut catalog = Catalog::new(&home);
@@ -102,6 +111,25 @@ impl Launcher {
                 log::warn!("Cannot write the factory touch layout: {error}");
             }
         }
+        // Pre-warm Microsoft session in background at startup so pressing Play doesn't stall.
+        let prewarm_session_worker = if crate::account::Accounts::load().selected().is_some() {
+            let id = catalog.config.microsoft_client_id.clone();
+            let game_home = catalog.config.game_home(&home);
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let res = (|| {
+                    login::Login::session(&id)?
+                        .map(|(a, s)| {
+                            crate::account::write_session_file(&game_home.join("sessions"), &a, &s)
+                        })
+                        .transpose()
+                })();
+                let _ = tx.send(res);
+            });
+            Some(rx)
+        } else {
+            None
+        };
         Self {
             home,
             controller_edges: Default::default(),
@@ -131,7 +159,7 @@ impl Launcher {
             chooser: None,
             exit_confirmation: false,
             login: login::Login::new(),
-            session_worker: None,
+            session_worker: prewarm_session_worker,
             session_ready: false,
             prepared_session: None,
             focus: None,
@@ -660,16 +688,26 @@ impl ApplicationHandler for Launcher {
         }
         self.login.poll();
         if let Some(result) = self.session_worker.as_ref().and_then(|w| w.try_recv().ok()) {
+            let launch_pending = self.catalog.status == "Preparing Microsoft session...";
             self.session_worker = None;
             match result {
                 Ok(file) => {
                     self.prepared_session = file;
                     self.session_ready = true;
-                    if let Err(e) = self.action(events) {
-                        self.fail(e);
+                    if launch_pending {
+                        self.catalog.status.clear();
+                        if let Err(e) = self.action(events) {
+                            self.fail(e);
+                        }
                     }
                 }
-                Err(e) => self.fail(e),
+                Err(e) => {
+                    if launch_pending {
+                        self.fail(e);
+                    } else {
+                        log::warn!("Background session pre-warm notice: {e}");
+                    }
+                }
             }
         }
 

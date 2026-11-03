@@ -1,4 +1,4 @@
-# The source exporter installs this as the fork's only active workflow.
+# The source exporter restores the Android checks and dev APK workflows.
 name: Android source checks
 on:
   push:
@@ -41,7 +41,9 @@ jobs:
       - run: python3 tools/test_android_performance.py
       - run: python3 tools/test_android_content.py
       - name: Check workflow export matches the active workflow
-        run: cmp .github/workflows/android-source.yml packaging/android/source-checks.yml
+        run: |
+          cmp .github/workflows/android-source.yml packaging/android/source-checks.yml
+          cmp .github/workflows/android-dev.yml packaging/android/dev-builds.yml
   native:
     if: github.event_name == 'workflow_dispatch' && inputs.native_checks
     needs: source
@@ -70,86 +72,12 @@ jobs:
           persist-credentials: false
       - name: Install Android toolchain
         run: |
-          # The runner image ships the SDK without cmdline-tools on PATH.
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          [ -x "$sdkmanager" ] || sdkmanager=$(command -v sdkmanager)
-          "$sdkmanager" "ndk;28.2.13676358" "build-tools;35.0.0"
+          if [[ ! -x "$sdkmanager" ]]; then
+            sdkmanager=$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)
+          fi
+          test -x "$sdkmanager"
+          "$sdkmanager" --sdk_root="$ANDROID_HOME" "ndk;28.2.13676358" "build-tools;35.0.0"
           rustup target add "${{ matrix.target }}"
       - name: Check Android Rust code without building an APK
-        run: python3 tools/android_build.py --abi "${{ matrix.abi }}" --check --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"
-  build:
-    # On demand only: an APK takes the better part of an hour and needs the
-    # pinned game inputs, while pushes stay a ten-minute source check.
-    if: github.event_name == 'workflow_dispatch' && inputs.build_apk
-    needs: source
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
-    env:
-      HORIZON_TELEMETRY_URL: "off"
-      CARGO_TARGET_DIR: .local/android/ci-target
-      CARGO_BUILD_JOBS: "4"
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-      - name: Install Android toolchain
-        run: |
-          # The runner image ships the SDK without cmdline-tools on PATH.
-          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          [ -x "$sdkmanager" ] || sdkmanager=$(command -v sdkmanager)
-          "$sdkmanager" "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-35"
-          target=$(case "${{ inputs.abi }}" in
-            armeabi-v7a) echo armv7-linux-androideabi ;;
-            x86) echo i686-linux-android ;;
-            x86_64) echo x86_64-linux-android ;;
-            *) echo aarch64-linux-android ;;
-          esac)
-          rustup target add "$target"
-      - name: Install Gradle 8.14
-        run: |
-          version=8.14
-          cd "$RUNNER_TEMP"
-          curl -fsSLO "https://services.gradle.org/distributions/gradle-$version-bin.zip"
-          expected=$(curl -fsSL "https://services.gradle.org/distributions/gradle-$version-bin.zip.sha256" | awk '{print $1}')
-          actual=$(sha256sum "gradle-$version-bin.zip" | awk '{print $1}')
-          if [ "$expected" != "$actual" ]; then echo "Gradle checksum mismatch"; exit 1; fi
-          unzip -q "gradle-$version-bin.zip"
-          "./gradle-$version/bin/gradle" --version
-      - name: Prepare the pinned engine tables
-        run: python3 tools/android_prepare.py
-      - name: Use the permanent signing key
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          # Every build signs with the same certificate, so a new APK updates the
-          # installed one in place instead of needing an uninstall first.
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::error::ANDROID_KEYSTORE_BASE64 is not set: the APK would need an uninstall to install"
-            exit 1
-          fi
-          mkdir -p .local/android
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > .local/android/release.keystore
-          chmod 600 .local/android/release.keystore
-          {
-            echo "HORIZON_ANDROID_KEYSTORE=$PWD/.local/android/release.keystore"
-            echo "HORIZON_ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
-            echo "HORIZON_ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS"
-            echo "HORIZON_ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
-          } >> "$GITHUB_ENV"
-      - name: Build the public APK
-        run: |
-          python3 tools/android_build.py --abi "${{ inputs.abi }}" --public \
-            --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" \
-            --gradle "$RUNNER_TEMP/gradle-8.14/bin/gradle"
-          # The certificate the next build must match for an in-place update.
-          "$JAVA_HOME_17_X64/bin/java" -jar "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" \
-            verify --print-certs .local/android/apk/${{ inputs.abi }}/horizon-android-public.apk \
-            | sed -n '1,3p'
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: horizon-android-public-${{ inputs.abi }}
-          path: .local/android/apk/${{ inputs.abi }}/horizon-android-public.apk
-          if-no-files-found: error
+        run: python3 tools/android_build.py --abi "${{ matrix.abi }}" --check --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" --ndk-version 28.2.13676358 --build-tools-version 35.0.0

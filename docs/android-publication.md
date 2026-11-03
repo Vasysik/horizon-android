@@ -4,6 +4,9 @@ Horizon Android preserves the upstream Git history, MIT copyright and license,
 third-party notices and dependency licenses. See [upstream integration](android-upstream.json).
 The `android` branch is maintained separately from upstream deployment workflows.
 
+For automatic, separately installed development APKs for testers, see
+[development builds in GitHub Actions](android-dev-builds.md).
+
 ## Build distribution APKs
 
 Build each required architecture with the optimized public mode:

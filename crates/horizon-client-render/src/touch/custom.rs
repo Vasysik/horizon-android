@@ -171,8 +171,8 @@ impl TouchControls {
         started: bool,
         ended: bool,
     ) -> bool {
-        if self.custom_fingers.contains_key(&id) {
-            return self.custom_update(id, point, false, ended);
+        if self.custom_fingers.contains_key(&id) || (started && self.custom_at(point).is_some()) {
+            return self.custom_update(id, point, started, ended);
         }
         if started
             && self.custom_at(point).is_none()
@@ -187,6 +187,21 @@ impl TouchControls {
             return true;
         }
         false
+    }
+    /// Handles touch input for `visible_in_menu` GoyControl buttons & auxiliary controls while any
+    /// menu (Main Title Menu, Inventory, Container, Pause, Options) is open.
+    pub fn menu_update(&mut self, id: u64, point: [f32; 2], started: bool, ended: bool) -> bool {
+        let prev = self.in_menu;
+        self.in_menu = true;
+        let handled = if self.custom_fingers.contains_key(&id)
+            || (started && self.custom_at(point).is_some())
+        {
+            self.custom_update(id, point, started, ended)
+        } else {
+            self.inventory_update(id, point, started, ended)
+        };
+        self.in_menu = prev;
+        handled
     }
     pub fn fit_placement(&self, mut p: Placement) -> Placement {
         p.size = (p.size * self.settings.button_scale)
@@ -205,10 +220,25 @@ impl TouchControls {
         }
         self.fit_placement(p)
     }
+    pub fn custom_visible_for_state(&self, index: usize, in_menu: bool) -> bool {
+        let p = self.custom_placement(index);
+        if p.opacity <= 0.0 {
+            return false;
+        }
+        if self.editor.is_some() {
+            return true;
+        }
+        if in_menu {
+            p.visible_in_menu
+        } else {
+            p.visible_in_game
+        }
+    }
     pub fn custom_at(&self, point: [f32; 2]) -> Option<usize> {
-        (0..self.settings.custom_buttons.len())
-            .rev()
-            .find(|&i| layout::contains(self.custom_placement(i).rect(self.aspect()), point))
+        (0..self.settings.custom_buttons.len()).rev().find(|&i| {
+            self.custom_visible_for_state(i, self.in_menu)
+                && layout::contains(self.custom_placement(i).rect(self.aspect()), point)
+        })
     }
     pub(super) fn custom_update(
         &mut self,
@@ -227,7 +257,25 @@ impl TouchControls {
                 if !self.custom_fingers.values().any(|k| *k == key)
                     && !self.latched_custom.contains(&key)
                 {
+                    let mut extra_tokens = Vec::new();
+                    for btn in &self.settings.custom_buttons {
+                        if btn.key == key {
+                            for extra in [&btn.second_key, &btn.third_key] {
+                                if !extra.is_empty()
+                                    && CustomButton::valid_token(extra)
+                                    && extra != "key.keyboard.unknown"
+                                    && !self.latched_custom.contains(extra)
+                                    && !extra_tokens.contains(extra)
+                                {
+                                    extra_tokens.push(extra.clone());
+                                }
+                            }
+                        }
+                    }
                     self.custom_events.push((key, false));
+                    for extra in extra_tokens {
+                        self.custom_events.push((extra, false));
+                    }
                 }
                 return !was_passthrough;
             }

@@ -150,13 +150,31 @@ impl Game<'_> {
     pub(super) fn android_custom_events(&mut self) {
         for (name, down) in self.pad.touch.key_events() {
             if let Some(mapping) = name.strip_prefix("action:") {
-                // Sneak and sprint hold their mapping directly, so the touch
-                // buttons work even while a screen or overlay is open.
                 if mapping == "key.sneak" || mapping == "key.sprint" {
                     let slot = usize::from(mapping == "key.sprint");
-                    if let Err(error) = self.hold_toggle(slot, down) {
-                        log::warn!("Custom touch toggle: {error}");
+                    let key = [KeyCode::ShiftLeft, KeyCode::ControlLeft][slot];
+                    if down {
+                        self.pad.custom_keys.insert(key);
+                        self.physical_keys.insert(key);
+                    } else {
+                        self.pad.custom_keys.remove(&key);
+                        self.physical_keys.remove(&key);
                     }
+                    self.toggles.0[slot].set_down(down, false);
+                    self.sync_toggle(slot);
+                    if slot == 1 && !down {
+                        if let Some(player) = &mut self.player {
+                            player.sprinting = false;
+                        }
+                    }
+                    continue;
+                }
+                if self.pad_in_menu()
+                    && down
+                    && mapping == "key.inventory"
+                    && matches!(self.screen, Screen::Inventory | Screen::Creative)
+                {
+                    let _ = self.pad_back();
                     continue;
                 }
                 let default = horizon_client::keybinds::KeyBinds::default_of(mapping);
@@ -226,13 +244,35 @@ impl Game<'_> {
             self.mod_key(key, down, false);
             self.native_key_event(key, down, false);
             // Raw Shift and Control are the touch Sneak and Sprint buttons:
-            // hold them through the mapping, never through a screen rule.
-            if matches!(key, KeyCode::ShiftLeft | KeyCode::ControlLeft) {
-                let slot = usize::from(key == KeyCode::ControlLeft);
-                if let Err(error) = self.hold_toggle(slot, down) {
-                    log::warn!("Custom touch toggle: {error}");
+            // set their toggle state directly so both Hold and Toggle modes work reliably.
+            if matches!(
+                key,
+                KeyCode::ShiftLeft
+                    | KeyCode::ShiftRight
+                    | KeyCode::ControlLeft
+                    | KeyCode::ControlRight
+            ) {
+                let slot = usize::from(matches!(key, KeyCode::ControlLeft | KeyCode::ControlRight));
+                self.toggles.0[slot].set_down(down, false);
+                self.sync_toggle(slot);
+                if slot == 1 && !down {
+                    if let Some(player) = &mut self.player {
+                        player.sprinting = false;
+                    }
                 }
                 continue;
+            }
+            if self.pad_in_menu() && down {
+                if key == KeyCode::Escape {
+                    let _ = self.pad_back();
+                    continue;
+                }
+                if key == KeyCode::KeyE
+                    && matches!(self.screen, Screen::Inventory | Screen::Creative)
+                {
+                    let _ = self.pad_back();
+                    continue;
+                }
             }
             let action = if down {
                 KeyAction::Press
@@ -259,6 +299,18 @@ impl Game<'_> {
     }
 
     fn android_custom_mouse(&mut self, button: MouseButton, down: bool) -> Result<()> {
+        if self.pad_in_menu() && !matches!(self.screen, Screen::Inventory | Screen::Creative) {
+            let right = button == MouseButton::Right;
+            if matches!(button, MouseButton::Left | MouseButton::Right) {
+                return self.android_menu_mouse(
+                    &super::event_loop::EventLoopCtl::Noop,
+                    WindowId::dummy(),
+                    right,
+                    down,
+                );
+            }
+            return Ok(());
+        }
         if !matches!(self.screen, Screen::Inventory | Screen::Creative) {
             return self.play_mouse(button, down);
         }
@@ -379,6 +431,22 @@ impl Game<'_> {
                 }
                 InGameMenuAction::ApplyPreset(name) => {
                     self.pad.touch.settings.apply_preset(name);
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::LoadSavedProfile(idx) => {
+                    let saved =
+                        horizon_client::touch::Settings::list_profiles(std::path::Path::new("."));
+                    if let Some(name) = saved.get(idx) {
+                        self.pad.touch.settings = horizon_client::touch::Settings::load_profile(
+                            std::path::Path::new("."),
+                            name,
+                        );
+                        self.settings.touch = self.pad.touch.settings.clone();
+                    }
+                }
+                InGameMenuAction::PresetVisibilityAll => {
+                    self.pad.touch.settings.apply_visibility_preset_all();
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }

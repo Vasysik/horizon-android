@@ -14,6 +14,18 @@ fn render_paths(
     alpha: u8,
     mixed: bool,
 ) -> Vec<u8> {
+    render_specialized(device, queue, source, variant, split, alpha, mixed, 0)
+}
+fn render_specialized(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    source: &str,
+    variant: u8,
+    split: bool,
+    alpha: u8,
+    mixed: bool,
+    settled: u8,
+) -> Vec<u8> {
     let module = naga::front::wgsl::parse_str(source).unwrap();
     let (_, globals) = module
         .types
@@ -88,11 +100,13 @@ fn render_paths(
         contents: &bytes,
         usage: wgpu::BufferUsages::UNIFORM,
     });
+    let textured = variant == 36;
+    let edge = if textured { 16 } else { 1 };
     let white = device.create_texture(&wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d {
-            width: 1,
-            height: 1,
+            width: edge,
+            height: edge,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -102,13 +116,27 @@ fn render_paths(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
+    let texels: Vec<u8> = if textured {
+        (0..256u32)
+            .flat_map(|i| {
+                [
+                    i.wrapping_mul(37) as u8,
+                    i.wrapping_mul(91) as u8,
+                    i.wrapping_mul(17) as u8,
+                    if i % 4 == 0 { 0 } else { alpha },
+                ]
+            })
+            .collect()
+    } else {
+        vec![255, 255, 255, alpha]
+    };
     queue.write_texture(
         white.as_image_copy(),
-        &[255, 255, 255, alpha],
+        &texels,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(4),
-            rows_per_image: Some(1),
+            bytes_per_row: Some(edge * 4),
+            rows_per_image: Some(edge),
         },
         white.size(),
     );
@@ -174,6 +202,11 @@ fn render_paths(
     let attributes =
         wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
     let instance_attributes = wgpu::vertex_attr_array![5=>Float32x4];
+    let constants: &[(&str, f64)] = if settled == 2 {
+        &[("TERRAIN_FILTERING", 0.0), ("TERRAIN_FULLY_VISIBLE", 1.0)]
+    } else {
+        &[]
+    };
     let make_pipeline = |vertex, fragment| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
@@ -181,7 +214,10 @@ fn render_paths(
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some(vertex),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..Default::default()
+                },
                 buffers: &[
                     Some(wgpu::VertexBufferLayout {
                         array_stride: 24,
@@ -198,7 +234,10 @@ fn render_paths(
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some(fragment),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..Default::default()
+                },
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: None,
@@ -215,7 +254,14 @@ fn render_paths(
     let pipelines = if split {
         vec![
             make_pipeline("vs_terrain_opaque", "fs_opaque"),
-            make_pipeline("vs_terrain_cutout", "fs_solid"),
+            make_pipeline(
+                "vs_terrain_cutout",
+                if settled == 2 {
+                    "fs_cutout_static"
+                } else {
+                    "fs_solid"
+                },
+            ),
         ]
     } else {
         vec![make_pipeline("vs_terrain", "fs_solid")]
@@ -233,8 +279,16 @@ fn render_paths(
         ] {
             vertices.extend_from_slice(bytemuck::cast_slice(&[px, py, 0.5f32]));
             vertices.extend_from_slice(bytemuck::cast_slice(&[
-                16384u16,
-                16384,
+                if textured {
+                    ((px - x) * 8.0 * 32768.0) as u16
+                } else {
+                    16384u16
+                },
+                if textured {
+                    ((py + 1.0) * 0.5 * 32768.0) as u16
+                } else {
+                    16384
+                },
                 if mixed && emission % 2 == 0 {
                     0x8000
                 } else {
@@ -249,7 +303,7 @@ fn render_paths(
         contents: &vertices,
         usage: wgpu::BufferUsages::VERTEX,
     });
-    let step = if variant == 0 {
+    let step = if variant == 0 || settled != 0 {
         1.0 / 32768.0
     } else if variant == 1 {
         1.5 / 32768.0
@@ -329,6 +383,38 @@ fn render_paths(
 }
 
 #[test]
+fn settled_terrain_preserves_fog_lighting_alpha_and_emissive_masks() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let source = super::terrain_shader(false);
+    for alpha in [0, 64, 127, 128, 255] {
+        for variant in 0..36 {
+            let expected =
+                render_specialized(&device, &queue, &source, variant, false, alpha, true, 1);
+            let actual =
+                render_specialized(&device, &queue, &source, variant, true, alpha, true, 2);
+            assert_eq!(expected, actual, "scene {variant}, alpha {alpha}");
+        }
+    }
+}
+
+#[test]
+fn specialized_sampling_preserves_textured_edges_and_cutouts() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let source = super::terrain_shader(false);
+    let expected = render_specialized(&device, &queue, &source, 36, false, 255, true, 1);
+    let actual = render_specialized(&device, &queue, &source, 36, true, 255, true, 2);
+    assert!(
+        expected.iter().filter(|&&v| v != 0).count() > 32,
+        "Empty test image"
+    );
+    assert_eq!(expected, actual, "Textured sampling/cutout pixels changed");
+}
+
+#[test]
 fn packed_interface_preserves_rgb_fog_fade_and_all_hdr_tiers_on_gpu() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
@@ -378,6 +464,28 @@ fn split_opaque_cutout_preserves_pixels_for_alpha_fog_fade_and_emission() {
             let original = render_paths(&device, &queue, &source, variant, false, alpha, true);
             let split = render_paths(&device, &queue, &source, variant, true, alpha, true);
             assert_eq!(original, split, "scene {variant}, texture alpha {alpha}");
+        }
+    }
+}
+
+#[test]
+fn static_cutout_preserves_alpha_threshold_fog_and_hdr_without_fading() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let source = super::terrain_shader(false);
+    let specialized = source.replace("return solid_color(in);", "return fs_cutout_static(in);");
+    // Calling a fragment entry point as a helper is forbidden by WGSL; rename
+    // only its declaration in this independently rendered comparison module.
+    let specialized = specialized.replace(
+        "@fragment fn fs_cutout_static(in: TerrainOut) -> @location(0) vec4<f32>",
+        "fn fs_cutout_static(in: TerrainOut) -> vec4<f32>",
+    );
+    for alpha in [0, 64, 127, 128, 255] {
+        for variant in [0, 1] {
+            let original = render_paths(&device, &queue, &source, variant, false, alpha, true);
+            let actual = render_paths(&device, &queue, &specialized, variant, false, alpha, true);
+            assert_eq!(original, actual, "scene {variant}, alpha {alpha}");
         }
     }
 }

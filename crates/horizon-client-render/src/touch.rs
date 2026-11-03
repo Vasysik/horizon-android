@@ -169,6 +169,10 @@ pub struct TouchControls {
     pub auxiliary_only: bool,
     /// Inventory utility buttons emit real modifier/mouse events, never movement.
     pub inventory_mode: bool,
+    /// True when a menu (Main Title Menu, Inventory, Pause, Options) is open so `visible_in_menu` controls apply.
+    pub in_menu: bool,
+    /// True when `touch_ui::draw_goy_hud` renders GoyControl with `Ui::mobile` so `TouchControls::draw` skips duplicate boxy drawing.
+    pub goy_rendered_by_ui: bool,
     pub editor: Option<editor::Editor>,
     fingers: BTreeMap<u64, (Role, [f32; 2])>,
     custom_fingers: BTreeMap<u64, String>,
@@ -180,7 +184,6 @@ pub struct TouchControls {
     tap_aim: Option<[f32; 2]>,
     pending_tap: Option<bool>,
     aspect: f32,
-    loaded: bool,
     pub chat_requested: bool,
     pub settings_requested: bool,
     pub debug_requested: bool,
@@ -205,12 +208,10 @@ impl TouchControls {
         self.force_crosshair || self.settings.crosshair()
     }
 
+    /// The surface size. The caller owns `settings`: the game and the launcher
+    /// assign them from the player's saved layout, so this never touches disk.
     pub fn viewport(&mut self, width: u32, height: u32) {
         self.aspect = width.max(1) as f32 / height.max(1) as f32;
-        if !self.loaded {
-            self.settings = Settings::load();
-            self.loaded = true;
-        }
     }
     pub fn aspect(&self) -> f32 {
         if self.aspect > 0.0 {
@@ -218,6 +219,18 @@ impl TouchControls {
         } else {
             16.0 / 9.0
         }
+    }
+    /// Where a dynamic joystick may appear. X is the fraction of the surface
+    /// width measured inward from the movement edge; Y is the fraction of the
+    /// height centred on the movement control. Touches outside it stay camera
+    /// gestures.
+    pub fn dynamic_area(&self) -> [f32; 4] {
+        let move_control = self.placement(Control::Move);
+        let left = move_control.center[0] < 0.5;
+        let width = self.settings.dynamic_area_x.clamp(0.0, 1.0);
+        let height = self.settings.dynamic_area_y.clamp(0.0, 1.0);
+        let y = (move_control.center[1] - height / 2.0).clamp(0.0, 1.0 - height);
+        [if left { 0.0 } else { 1.0 - width }, y, width, height]
     }
     fn auxiliary_control(c: Control) -> bool {
         matches!(
@@ -239,8 +252,25 @@ impl TouchControls {
     }
     pub fn control_at(&self, point: [f32; 2]) -> Option<Control> {
         Control::ALL.into_iter().rev().find(|c| {
-            self.visible(*c) && layout::contains(self.placement(*c).rect(self.aspect()), point)
+            if !self.visible(*c) {
+                return false;
+            }
+            if *c == Control::Move && self.dynamic_joystick() && self.editor.is_none() {
+                let area = self.dynamic_area();
+                return !self.inventory_mode
+                    && area[2] > 0.0
+                    && area[3] > 0.0
+                    && !self
+                        .fingers
+                        .values()
+                        .any(|(role, _)| matches!(role, Role::Move(_)))
+                    && layout::contains(area, point);
+            }
+            layout::contains(self.placement(*c).rect(self.aspect()), point)
         })
+    }
+    fn dynamic_joystick(&self) -> bool {
+        self.settings.dynamic_joystick && self.settings.mode != Mode::Dpad
     }
     pub fn control_at_point(&self, point: [f32; 2]) -> bool {
         self.custom_at(point).is_some() || self.control_at(point).is_some()
@@ -267,8 +297,30 @@ impl TouchControls {
     pub fn tap(&mut self, button: Button) {
         self.pending.set(button, true);
     }
+    pub fn visible_for_state(&self, c: Control, in_menu: bool) -> bool {
+        if !self.visible(c) {
+            return false;
+        }
+        if self.editor.is_some() {
+            return true;
+        }
+        let p = self.placement(c);
+        if in_menu {
+            p.visible_in_menu
+        } else {
+            p.visible_in_game
+        }
+    }
     pub fn visible(&self, c: Control) -> bool {
         if c == Control::Shield && !self.shield_available && self.editor.is_none() {
+            return false;
+        }
+        if c == Control::Shield
+            && self.force_crosshair
+            && self.settings.button_visibility[Control::Use as usize] == 0
+            && self.settings.button_visibility[c as usize] == 0
+        {
+            // A forced aim layout already provides the ordinary use/raise-shield button.
             return false;
         }
         if self.auxiliary_only && !Self::auxiliary_control(c) {
@@ -355,13 +407,16 @@ impl TouchControls {
         }
         let state = self.state();
         for control in Control::ALL {
-            if !self.visible(control) {
+            if !self.visible_for_state(control, self.in_menu) {
                 continue;
             }
             let p = self.placement(control);
             if (self.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
                 && control != Control::Move
             {
+                if self.goy_rendered_by_ui && self.editor.is_none() {
+                    continue;
+                }
                 let [nx, ny, nw, nh] = p.rect(self.aspect());
                 let rect = [nx * w, ny * h, nw * w, nh * h];
                 let held = Self::button(control).is_some_and(|bt| state.held(bt));
@@ -372,6 +427,9 @@ impl TouchControls {
             if control == Control::Move
                 && (self.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
             {
+                if self.goy_rendered_by_ui && self.editor.is_none() {
+                    continue;
+                }
                 let size = p.size * h;
                 let (x, y) = (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0);
                 draw_goy_joystick(
@@ -402,6 +460,23 @@ impl TouchControls {
                         || (bt == Button::RightTrigger && state.triggers[1] > 0.0)
                 });
             if control == Control::Move {
+                // The frame stays where the finger first landed; only the knob follows.
+                let anchor = self.fingers.values().find_map(|(role, _)| match role {
+                    Role::Move(anchor) => Some(*anchor),
+                    _ => None,
+                });
+                let dynamic = self.dynamic_joystick();
+                let (x, y) = match anchor {
+                    Some(anchor) if dynamic => {
+                        (anchor[0] * w - size / 2.0, anchor[1] * h - size / 2.0)
+                    }
+                    _ => (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0),
+                };
+                // A dynamic joystick only exists where the player touches; the
+                // editor still shows its home position so it can be moved.
+                if dynamic && anchor.is_none() && self.editor.is_none() {
+                    continue;
+                }
                 if self.settings.mode == Mode::Dpad {
                     let cell = size / 3.0;
                     for (dx, dy, name) in [
@@ -567,7 +642,9 @@ impl TouchControls {
                 }
             }
         }
-        self.draw_custom(b, a);
+        if !self.goy_rendered_by_ui || self.editor.is_some() {
+            self.draw_custom(b, a);
+        }
         if self.editor.is_some() {
             self.draw_editor(b, a);
         } else if let Some(point) = self.pointer() {
@@ -667,12 +744,16 @@ impl TouchControls {
                 }
             }
             let role = match control {
-                Some(Control::Move) if !has_move => {
-                    let anchor = match self.settings.joystick_style.move_area {
-                        JoystickMoveArea::FollowFinger | JoystickMoveArea::RightSideAnywhere => {
-                            point
-                        }
-                        _ => self.placement(Control::Move).center,
+                Some(Control::Move)
+                    if !self
+                        .fingers
+                        .values()
+                        .any(|(r, _)| matches!(r, Role::Move(_))) =>
+                {
+                    let anchor = if self.dynamic_joystick() {
+                        point
+                    } else {
+                        self.placement(Control::Move).center
                     };
                     Role::Move(anchor)
                 }
@@ -915,6 +996,28 @@ impl TouchControls {
                 Role::Button(Button::RightTrigger) => state.triggers[1] = 1.0,
                 Role::Button(b) => state.set(*b, true),
                 _ => {}
+            }
+        }
+        if !self.inventory_mode && !self.in_menu {
+            for token in self.held_custom_tokens() {
+                match token {
+                    "key.keyboard.space" | "action:key.jump" => {
+                        state.set(Button::South, true);
+                    }
+                    "key.keyboard.w" | "action:key.forward" => {
+                        state.left[1] = state.left[1].max(1.0);
+                    }
+                    "key.keyboard.s" | "action:key.back" => {
+                        state.left[1] = state.left[1].min(-1.0);
+                    }
+                    "key.keyboard.a" | "action:key.left" => {
+                        state.left[0] = state.left[0].min(-1.0);
+                    }
+                    "key.keyboard.d" | "action:key.right" => {
+                        state.left[0] = state.left[0].max(1.0);
+                    }
+                    _ => {}
+                }
             }
         }
         state
@@ -1319,7 +1422,28 @@ pub fn draw_goy_static_button(
     }
 }
 
-/// Renders the GoyControl customizable Joystick (Base analog area + Stick knob) in-game.
+fn disc(b: &mut HudBatch, a: &HudAtlas, center: [f32; 2], radius: f32, color: u32) {
+    if radius <= 0.5 || (color >> 24) == 0 {
+        return;
+    }
+    let Some(white) = a.sprites.get("horizon/white") else {
+        return;
+    };
+    let uv = [[(white.u0 + white.u1) / 2.0, (white.v0 + white.v1) / 2.0]; 4];
+    for segment in circle_points().windows(2) {
+        let p0 = [
+            center[0] + segment[0][0] * radius,
+            center[1] + segment[0][1] * radius,
+        ];
+        let p1 = [
+            center[0] + segment[1][0] * radius,
+            center[1] + segment[1][1] * radius,
+        ];
+        b.quad([center, p0, p1, center], uv, color);
+    }
+}
+
+/// Renders the GoyControl customizable Joystick (Base analog area + Stick knob) using smooth circular geometry.
 pub fn draw_goy_joystick(
     b: &mut HudBatch,
     a: &HudAtlas,
@@ -1331,25 +1455,20 @@ pub fn draw_goy_joystick(
     let base_stroke = scale_alpha(js.base_stroke_color, js.base_opacity);
     let center = [x + w * 0.5, y + h * 0.5];
     let radius = w.min(h) * 0.5;
-    b.fill(a, x + w * 0.08, y + h * 0.08, w * 0.84, h * 0.84, base_fill);
+    disc(b, a, center, radius, base_fill);
     if js.base_stroke > 0.1 {
         ring(b, a, center, radius, base_stroke);
     }
-    let kw = w * js.stick_size.clamp(0.20, 0.85);
-    let kh = h * js.stick_size.clamp(0.20, 0.85);
-    let kx = center[0] + stick_vec[0] * (w * 0.25) - kw * 0.5;
-    let ky = center[1] - stick_vec[1] * (h * 0.25) - kh * 0.5;
+    let kr = (w.min(h) * js.stick_size.clamp(0.20, 0.85)) * 0.5;
+    let kcenter = [
+        center[0] + stick_vec[0] * (w * 0.25),
+        center[1] - stick_vec[1] * (h * 0.25),
+    ];
     let stick_fill = scale_alpha(js.stick_color, js.stick_opacity);
     let stick_stroke = scale_alpha(js.stick_stroke_color, js.stick_opacity);
-    b.fill(a, kx, ky, kw, kh, stick_fill);
+    disc(b, a, kcenter, kr, stick_fill);
     if js.stick_stroke > 0.1 {
-        ring(
-            b,
-            a,
-            [kx + kw * 0.5, ky + kh * 0.5],
-            kw.min(kh) * 0.5,
-            stick_stroke,
-        );
+        ring(b, a, kcenter, kr, stick_stroke);
     }
 }
 
@@ -1547,6 +1666,118 @@ mod tests {
         }
     }
     #[test]
+    fn dynamic_area_follows_the_configured_width_and_height() {
+        let mut t = TouchControls::default();
+        t.settings.dynamic_area_x = 0.25;
+        t.settings.dynamic_area_y = 0.5;
+        let area = t.dynamic_area();
+        assert_eq!([area[0], area[2], area[3]], [0.0, 0.25, 0.5]);
+        let move_y = t.placement(Control::Move).center[1];
+        let expected_y = (move_y - 0.25).clamp(0.0, 0.5);
+        assert!((area[1] - expected_y).abs() < 1e-4);
+        // The height is centred on the movement control, so a touch far above
+        // it stays a camera gesture.
+        t.settings.dynamic_joystick = true;
+        t.update(1, [0.1, 0.05], true, false);
+        assert!(matches!(t.fingers[&1].0, Role::Look { .. }));
+        t.update(1, [0.1, 0.05], false, true);
+        t.update(2, [0.1, move_y], true, false);
+        assert!(matches!(t.fingers[&2].0, Role::Move(_)));
+        // Y saturates at the surface edges instead of leaving the screen.
+        t.settings.dynamic_area_y = 1.0;
+        t.settings.left_handed = true;
+        let area = t.dynamic_area();
+        assert_eq!([area[0], area[1], area[3]], [0.75, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn dynamic_joystick_spawns_only_in_the_movement_strip_and_locks_its_frame() {
+        let mut t = TouchControls::default();
+        t.settings.dynamic_joystick = true;
+        // Outside the movement-side quarter this stays a camera gesture.
+        t.update(1, [0.5, 0.5], true, false);
+        assert!(matches!(t.fingers[&1].0, Role::Look { .. }));
+        t.update(1, [0.5, 0.5], false, true);
+        // Inside it, the frame is where the finger first landed.
+        t.update(2, [0.12, 0.6], true, false);
+        assert!(
+            matches!(t.fingers[&2].0, Role::Move(a) if (a[0] - 0.12).abs() < 1e-4 && (a[1] - 0.6).abs() < 1e-4)
+        );
+        t.update(2, [0.20, 0.6], false, false);
+        assert!(matches!(t.fingers[&2].0, Role::Move(a) if (a[0] - 0.12).abs() < 1e-4));
+        assert!(t.state().left[0] > 0.0);
+        // Right-handed layouts use the same strip on the other side.
+        t.settings.left_handed = true;
+        t.settings.mode = Mode::Crosshair;
+        t.update(2, [0.20, 0.6], false, true);
+        t.update(3, [0.80, 0.6], true, false);
+        assert!(matches!(t.fingers[&3].0, Role::Move(_)));
+    }
+
+    #[test]
+    fn dynamic_joystick_respects_hidden_controls_and_has_no_fixed_hitbox() {
+        let mut t = TouchControls::default();
+        t.settings.dynamic_joystick = true;
+        t.settings.dynamic_area_x = 0.05;
+        let home = t.placement(Control::Move).center;
+        t.update(1, home, true, false);
+        assert!(matches!(t.fingers[&1].0, Role::Look { .. }));
+        t.clear();
+
+        // The edge strip participates in the same hit test as the other controls.
+        let edge = [0.025, 0.5];
+        assert_eq!(t.control_at(edge), Some(Control::Move));
+        t.update(2, edge, true, false);
+        assert!(matches!(t.fingers[&2].0, Role::Move(_)));
+        // A second finger cannot steal the movement anchor.
+        t.update(3, [0.03, 0.6], true, false);
+        assert!(matches!(t.fingers[&3].0, Role::Look { .. }));
+        t.update(2, [0.05, 0.5], false, false);
+        assert!(t.state().left[0] > 0.0);
+        t.update(2, [0.05, 0.5], false, true);
+        assert_eq!(t.state().left, [0.0; 2]);
+        t.clear();
+
+        t.settings.button_visibility[Control::Move as usize] = 2;
+        t.update(4, edge, true, false);
+        assert!(matches!(t.fingers[&4].0, Role::Look { .. }));
+        t.clear();
+        t.settings.button_visibility[Control::Move as usize] = 0;
+        t.settings.dynamic_area_x = 0.0;
+        t.update(5, [0.0, 0.5], true, false);
+        assert!(matches!(t.fingers[&5].0, Role::Look { .. }));
+    }
+
+    #[test]
+    fn dynamic_joystick_keeps_fixed_and_dpad_controls_and_button_priority() {
+        let mut t = TouchControls::default();
+        let home = t.placement(Control::Move).center;
+        let start = [home[0] + 0.01, home[1]];
+        t.update(1, start, true, false);
+        assert!(matches!(t.fingers[&1].0, Role::Move(anchor) if anchor == home));
+        t.clear();
+
+        t.settings.dynamic_joystick = true;
+        t.settings.mode = Mode::Dpad;
+        let home = t.placement(Control::Move).center;
+        let up = [home[0], home[1] - t.placement(Control::Move).size / 3.0];
+        t.update(2, up, true, false);
+        assert!(matches!(t.fingers[&2].0, Role::Move(anchor) if anchor == home));
+        t.clear();
+
+        t.settings.mode = Mode::Crosshair;
+        t.settings.dynamic_area_x = 1.0;
+        let jump = t.placement(Control::Jump).center;
+        t.update(3, jump, true, false);
+        assert!(t.state().held(Button::South));
+        assert!(
+            !t.fingers
+                .values()
+                .any(|(role, _)| matches!(role, Role::Move(_)))
+        );
+    }
+
+    #[test]
     fn camera_calibration_uses_physical_distance_on_both_axes() {
         let mut settings = Settings::default();
         for (w, h) in [(2400, 1080), (1080, 2400)] {
@@ -1622,6 +1853,7 @@ mod tests {
             ]
         );
         t.clear();
+        t.settings.mode = Mode::Tap;
         t.settings.shield_button = true;
         t.shield_available = true;
         let p = t.placement(Control::Shield).center;
@@ -1633,6 +1865,41 @@ mod tests {
         t.update(2, [0.5, 0.4], false, true);
         assert!(!t.shield_held());
         assert_eq!(t.poll_state().triggers[0], 0.0);
+    }
+
+    #[test]
+    fn shield_uses_the_existing_use_button_in_aim_layouts() {
+        let mut t = TouchControls::default();
+        t.shield_available = true;
+        assert!(!t.visible(Control::Shield));
+        let p = t.placement(Control::Use).center;
+        t.update(1, p, true, false);
+        assert!(t.poll_state().triggers[0] > 0.0);
+        t.update(1, p, false, true);
+        assert_eq!(t.poll_state().triggers[0], 0.0);
+
+        for mode in [Mode::Tap, Mode::Dpad] {
+            t.clear();
+            t.settings.mode = mode;
+            assert!(t.visible(Control::Shield));
+            let p = t.placement(Control::Shield).center;
+            t.update(2, p, true, false);
+            assert!(t.shield_held());
+            assert!(t.poll_state().triggers[0] > 0.0);
+            t.update(2, p, false, true);
+            assert!(!t.shield_held());
+
+            t.force_crosshair = true;
+            assert!(!t.visible(Control::Shield));
+            t.force_crosshair = false;
+            t.settings.shield_button = false;
+            assert!(!t.visible(Control::Shield));
+            t.settings.shield_button = true;
+        }
+        // A player hiding the normal use button can retain the dedicated shield button.
+        t.settings.mode = Mode::Crosshair;
+        t.settings.button_visibility[Control::Use as usize] = 2;
+        assert!(t.visible(Control::Shield));
     }
 
     #[test]
@@ -1704,7 +1971,6 @@ mod tests {
     #[test]
     fn sprint_toggle_survives_finger_release_and_clears_on_focus_loss() {
         let mut t = TouchControls {
-            loaded: true,
             aspect: 16.0 / 9.0,
             ..Default::default()
         };
@@ -1744,7 +2010,6 @@ mod tests {
     fn oversized_controls_can_be_dragged_on_narrow_portrait_surfaces() {
         let mut touch = TouchControls {
             aspect: 0.4,
-            loaded: true,
             ..Default::default()
         };
         touch.settings.layouts[0][Control::Move as usize].size = 0.45;
