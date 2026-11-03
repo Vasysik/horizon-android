@@ -1,11 +1,5 @@
 [workspace]
-<<<<<<< HEAD
-exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/winit"]
-||||||| f8988d5a7
-exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal"]
-=======
-exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/naga", "third_party/libmimalloc-sys"]
->>>>>>> 31f83499b
+exclude = ["launcher", "crates/horizon-telemetry-server", "crates/horizon-mod-registry", "third_party/wgpu-hal", "third_party/naga", "third_party/libmimalloc-sys", "third_party/winit"]
 members = [
     "crates/horizon-core",
     "crates/horizon-dualsense",
@@ -14,12 +8,8 @@ members = [
     "crates/horizon-hdr",
     "crates/horizon-world",
     "crates/horizon-client",
-<<<<<<< HEAD
     "crates/horizon-android",
-||||||| f8988d5a7
-=======
     "crates/horizon-client-lib",
->>>>>>> 31f83499b
     "crates/horizon-client-core",
     "crates/horizon-client-input",
     "crates/horizon-client-render",
@@ -48,20 +38,7 @@ members = [
     "crates/horizon-optifine",
     "crates/horizon-shader-api",
     "crates/horizon-release-sign",
-<<<<<<< HEAD
     "crates/starling-account",
-||||||| f8988d5a7
-    "crates/horizon-mod-sdk/examples/coords-hud",
-    "crates/horizon-mod-sdk/examples/predator-missile",
-    "crates/horizon-mod-sdk/examples/welcome",
-    "crates/horizon-mod-sdk/examples/beacons",
-    "mods/official/fps-overlay",
-    "mods/official/keystrokes",
-    "mods/official/far-view",
-    "mods/official/minimap",
-    "mods/official/zoom",
-=======
->>>>>>> 31f83499b
     "xtask",
 ]
 resolver = "2"
@@ -85,60 +62,30 @@ large_enum_variant = "allow"
 # UHD 620/630) crashes on it with an access violation (#746). It also fixes the
 # Metal backend's lookup of the CoreGraphics HDR colour space names, which handed
 # CoreGraphics a symbol's address as the string and crashed HDR output on macOS.
-<<<<<<< HEAD
-# Drop this and the folder once a wgpu release has both fixes.
+# And gfx-rs/wgpu#10714: on Windows, Vulkan waits for the acquire fence only in
+# FIFO (VSync), where it was meant to pace frames; with VSync off it made every
+# frame wait for the GPU to finish the one before (#4604).
+# Drop this and the folder once a wgpu release has these fixes.
 #
 # winit 0.30.13 with an input hook on Android (`winit::platform::android::set_input_hook`): its
 # Android backend makes touches of a controller's sticks and a mouse's buttons and drops the
 # rest (hover, the wheel, the buttons' own events), and the app never sees the raw events.
 # Starling takes those there (crates/horizon-client/src/android_lib.rs). A few lines in the
 # backend, marked "Horizon's patch"; nothing changes on the other platforms.
-||||||| f8988d5a7
-# Drop this and the folder once a wgpu release has both fixes.
-=======
-# And gfx-rs/wgpu#10714: on Windows, Vulkan waits for the acquire fence only in
-# FIFO (VSync), where it was meant to pace frames; with VSync off it made every
-# frame wait for the GPU to finish the one before (#4604).
-# Drop this and the folder once a wgpu release has these fixes.
->>>>>>> 31f83499b
 [patch.crates-io]
 wgpu-hal = { path = "third_party/wgpu-hal" }
-<<<<<<< HEAD
 winit = { path = "third_party/winit" }
-||||||| f8988d5a7
-=======
 # naga 30.0.1, with the fixes to its GLSL frontend that shader packs need (THIRD_PARTY_NOTICES.md).
 naga = { path = "third_party/naga" }
 # libmimalloc-sys 0.1.49 whose mimalloc v3 counts bits without POPCNT when MSVC builds it: the
 # game died before main on CPUs without it (Core 2, #7264; THIRD_PARTY_NOTICES.md). Drop this and
 # the folder once a libmimalloc-sys release has microsoft/mimalloc#1291's fix.
 libmimalloc-sys = { path = "third_party/libmimalloc-sys" }
->>>>>>> 31f83499b
 
 # Line tables keep file:line in backtraces; full debug info made every
 # example and test binary hundreds of megabytes and slow to link.
 [profile.dev]
 debug = "line-tables-only"
-
-# The mod runtime's compiler, optimized in debug builds and tests: unoptimized, it took minutes to
-# compile the test mods (cargo test -p horizon-mods).
-[profile.dev.package.cranelift-codegen]
-opt-level = 3
-
-[profile.dev.package.regalloc2]
-opt-level = 3
-
-[profile.dev.package.wasmtime-internal-cranelift]
-opt-level = 3
-
-[profile.dev.package.wasmparser]
-opt-level = 3
-
-[profile.dev.package.wasmtime-environ]
-opt-level = 3
-
-[profile.dev.package.wit-component]
-opt-level = 3
 
 [profile.release]
 lto = "thin"
@@ -168,6 +115,5 @@ opt-level = 1
 [profile.quick.package.horizon-android]
 opt-level = 1
 
-# The mod runtime, which the mod API work edits.
-[profile.quick.package.horizon-mods]
+[profile.quick.package.horizon-client-lib]
 opt-level = 1

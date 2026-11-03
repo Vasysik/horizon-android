@@ -44,12 +44,13 @@ pub struct WorldOptions {
     /// `getGameRules`: the Game Rules screen's values, saved with the world.
     #[serde(with = "rules_text")]
     pub rules: crate::gamerules::GameRules,
-<<<<<<< HEAD
-    /// The Data Packs screen's selection (`file/<name>`, in the game's `datapacks` folder),
-    /// copied into the world's `datapacks` when it is created.
+    /// The Data Packs screen's selection, lowest priority first.
     pub data_packs: Vec<String>,
-    /// Starling: the content mods adding blocks or items the world plays with, as that screen
-    /// chose them; none chosen, the ones running now (world_content.rs).
+    /// The folder of packs for the new world (vanilla's `mcworld-`
+    /// temporary folder), made when Data Packs first opens.
+    pub pack_dir: Option<std::path::PathBuf>,
+    /// Starling: the content mods adding blocks or items the world plays with; none chosen, the
+    /// ones running now (world_content.rs).
     pub mods: Option<std::collections::BTreeSet<String>>,
 }
 
@@ -79,14 +80,6 @@ mod rules_text {
         }
         Ok(rules)
     }
-||||||| f8988d5a7
-=======
-    /// The Data Packs screen's selection, lowest priority first.
-    pub data_packs: Vec<String>,
-    /// The folder of packs for the new world (vanilla's `mcworld-`
-    /// temporary folder), made when Data Packs first opens.
-    pub pack_dir: Option<std::path::PathBuf>,
->>>>>>> 31f83499b
 }
 impl Default for WorldOptions {
     fn default() -> Self {
@@ -101,14 +94,9 @@ impl Default for WorldOptions {
             structures: true,
             bonus_chest: false,
             rules: crate::gamerules::GameRules::default(),
-<<<<<<< HEAD
-            data_packs: Vec::new(),
-            mods: None,
-||||||| f8988d5a7
-=======
             data_packs: vec!["vanilla".into()],
             pack_dir: None,
->>>>>>> 31f83499b
+            mods: None,
         }
     }
 }
@@ -483,15 +471,8 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 28,
             ),
         ],
-<<<<<<< HEAD
-        // Experiments have no screen yet; Data Packs is Starling's (title.rs `packs`), with the
-        // world's content mods beside the packs.
-||||||| f8988d5a7
-        // Experiments and data packs have no screens yet.
-=======
         // The More tab, as vanilla lays it out: Game Rules, Experiments
         // (the resources' feature packs), Data Packs.
->>>>>>> 31f83499b
         _ => [
             "selectWorld.gameRules",
             "selectWorld.experiments",
@@ -499,35 +480,7 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
         ]
         .iter()
         .enumerate()
-<<<<<<< HEAD
-        .map(|(i, key)| {
-            b(
-                gx,
-                gy + 28.0 * i as f32,
-                210.0,
-                if i == 2 {
-                    "Mods & Data Packs".to_owned()
-                } else {
-                    tr(key)
-                },
-                i != 1,
-                29 + i as u8,
-            )
-        })
-||||||| f8988d5a7
-        .map(|(i, key)| {
-            b(
-                gx,
-                gy + 28.0 * i as f32,
-                210.0,
-                tr(key),
-                i == 0,
-                29 + i as u8,
-            )
-        })
-=======
         .map(|(i, key)| b(gx, gy + 28.0 * i as f32, 210.0, tr(key), true, 29 + i as u8))
->>>>>>> 31f83499b
         .collect(),
     };
     // The footer: two 150-wide buttons 8 apart, centred in its 33 pixels.

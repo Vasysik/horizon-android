@@ -55,26 +55,18 @@ mod agent;
 mod agent_settings;
 mod allays;
 mod armor_stands;
-<<<<<<< HEAD
 mod arms;
-||||||| f8988d5a7
-=======
 mod atlas_slots;
 mod attachment_sync;
->>>>>>> 31f83499b
 mod banners;
 mod basins;
 mod beacon;
 mod bearings;
 mod beds;
 mod beehives;
-<<<<<<< HEAD
 mod belts;
-||||||| f8988d5a7
-=======
 mod block_editor;
 mod block_edits;
->>>>>>> 31f83499b
 mod block_entity_anims;
 mod block_entity_ticks;
 mod block_items;
@@ -159,20 +151,12 @@ mod glowing;
 mod golems;
 mod growth;
 mod hand;
-<<<<<<< HEAD
-mod imports;
-||||||| f8988d5a7
-=======
 mod headless;
 mod ime;
->>>>>>> 31f83499b
+mod imports;
 mod initial_spawn;
-<<<<<<< HEAD
 mod input_mode;
-||||||| f8988d5a7
-=======
 mod input_trace;
->>>>>>> 31f83499b
 mod integrated;
 mod interactions;
 mod item_draw;
@@ -181,13 +165,9 @@ mod item_use;
 mod jigsaw_blocks;
 mod jigsaw_edit;
 mod jukebox;
-<<<<<<< HEAD
+mod key_focus;
 mod kinetic_machines;
 mod kinetics;
-||||||| f8988d5a7
-=======
-mod key_focus;
->>>>>>> 31f83499b
 mod lan;
 mod lan_actions;
 mod lan_attributes;
@@ -225,39 +205,19 @@ mod mob_gear;
 mod mob_index;
 mod mob_looting;
 mod mob_sounds;
-<<<<<<< HEAD
-mod mod_assets;
-mod mod_creative;
-mod mod_input;
-#[cfg(feature = "mods")]
-mod mod_panel;
-mod mod_recipe_catalog;
-mod mod_render;
-mod mod_ui;
-mod mod_widgets;
-mod mod_world;
-||||||| f8988d5a7
-mod mod_input;
-#[cfg(feature = "mods")]
-mod mod_panel;
-mod mod_render;
-=======
 mod mod_api_host;
->>>>>>> 31f83499b
+mod mod_assets;
 mod mods;
 mod mount_menu;
 mod mounts;
 mod moving_pistons;
 mod music;
 mod names;
-<<<<<<< HEAD
-#[cfg(target_os = "android")]
-mod native_builds;
-||||||| f8988d5a7
-=======
 mod narrator;
 mod native_biome_colors;
 pub mod native_block_entity_draw;
+#[cfg(target_os = "android")]
+mod native_builds;
 mod native_claimed_items;
 mod native_components;
 mod native_criteria;
@@ -266,7 +226,6 @@ mod native_entities;
 mod native_entity_refs;
 mod native_explosions;
 mod native_falling;
->>>>>>> 31f83499b
 mod native_hooks;
 mod native_inventories;
 mod native_item_container;
@@ -299,7 +258,6 @@ mod no_resources;
 mod ominous_item_spawner;
 mod options;
 mod own_skin;
-mod own_states;
 mod packs;
 mod pad;
 mod pad_menu;
@@ -318,12 +276,8 @@ mod postprocess;
 mod potent_sulfur;
 mod potions;
 mod powder_snow;
-<<<<<<< HEAD
-mod processing;
-||||||| f8988d5a7
-=======
 mod prediction;
->>>>>>> 31f83499b
+mod processing;
 mod pumpkin;
 mod quick_actions;
 mod raids;
@@ -461,7 +415,6 @@ use horizon_core::{
     position::BlockPos,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
-use horizon_mods::HudPart;
 use horizon_world::{
     block_collision::BlockCollisionRegistry,
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
@@ -604,8 +557,12 @@ impl Options {
     /// The command line, then what it asks of the process: the game folder, the account.
     /// A bad command line is a [`launch_api::UsageError`] (exit code 2, no crash report).
     fn read() -> Result<Option<Self>> {
-        let Some(mut o) = Self::parse(std::env::args().skip(1))
-            .map_err(|e| launch_api::UsageError(e.to_string()))?
+        // An Android activity has no command line: horizon-android builds one.
+        #[cfg(not(target_os = "android"))]
+        let args = std::env::args().skip(1);
+        #[cfg(target_os = "android")]
+        let args = crate::args().into_iter();
+        let Some(mut o) = Self::parse(args).map_err(|e| launch_api::UsageError(e.to_string()))?
         else {
             return Ok(None);
         };
@@ -712,29 +669,11 @@ impl Options {
             session_file: std::env::var("HORIZON_SESSION_FILE").ok(),
             session_stdin: false,
         };
-<<<<<<< HEAD
-        let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
-        // An Android activity has no command line: horizon-android builds one.
-        #[cfg(not(target_os = "android"))]
-        let mut args = std::env::args().skip(1);
-        #[cfg(target_os = "android")]
-        let mut args = crate::args().into_iter();
-||||||| f8988d5a7
-        let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
-        let mut args = std::env::args().skip(1);
-=======
->>>>>>> 31f83499b
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-<<<<<<< HEAD
-                        "Horizon â€” Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --in-frame              Run single player's world in the frame, not on its server thread\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
-||||||| f8988d5a7
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --in-frame              Run single player's world in the frame, not on its server thread\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
-=======
                         "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..128 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --session-stdin         The same account as JSON on standard input\n  --game-dir DIR          Game folder: saves, options.txt, packs, mods (default: the working directory)\n  --home DIR              Logs and crash reports (default $HORIZON_HOME, else the platform data folder)\n  --player-dir DIR        This player's own files when several play in one game folder: options.txt, logs, horizon-player.txt, servers.dat, screenshots\n  --fullscreen            Open the window fullscreen\n  --launch-api            Print the Launch API version and options as JSON (docs/api/launch.md)\n  --dev-mod PATH          A content mod (.hmod or folder) to develop: always on\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
->>>>>>> 31f83499b
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -2380,10 +2319,6 @@ struct Game<'a> {
     /// again only when the feet block (or the dimension) changes.
     debug_density: RefCell<debug_keys::DensityCache>,
     pending_pack_reload: bool,
-<<<<<<< HEAD
-    /// A resource reload preparing on a worker (`reload_selected_packs`).
-||||||| f8988d5a7
-=======
     /// When `resourcepacks/` was last looked at for the open pack screen, and what it held
     /// (`watch_pack_folder`).
     pack_folder: Option<(
@@ -2392,7 +2327,6 @@ struct Game<'a> {
     )>,
     /// A pack reload staged on a worker (`LoadingOverlay`): the frame draws
     /// its progress until `drive_pack_reload` applies it.
->>>>>>> 31f83499b
     pack_reload: Option<packs::PackReload>,
     /// A server's resource packs (game/server_packs.rs).
     server_packs: server_packs::ServerPackState,
@@ -2866,21 +2800,17 @@ struct Game<'a> {
     waypoints: horizon_client::locator_bar::ClientWaypoints,
     /// The camera the last frame drew from (position, yaw, pitch, fov), for the locator bar.
     locator_camera: Option<([f64; 3], f32, f32, f32)>,
-<<<<<<< HEAD
     /// The kinetic parts near the player and their speeds (game/kinetics.rs).
     kinetics: kinetics::Kinetics,
     /// Where this game simulates the world: its drills and crushing wheels at work
     /// (game/kinetic_machines.rs).
     machines: kinetic_machines::Machines,
-||||||| f8988d5a7
-=======
     native_camera_frame: Option<horizon_client::mod_api::NativeCamera>,
     /// `LocalPlayer.postEffects`: the chains the server has the screen run
     /// (`ClientboundPostEffectsPacket`), in order.
     post_effects: Vec<String>,
     /// `GameRenderer.spectatedEntityPostEffect` (`checkEntityPostEffect`).
     spectated_post_effect: Option<&'static str>,
->>>>>>> 31f83499b
     /// `LocalPlayer.experienceDisplayStartTick`: (last progress, seen a change, tick).
     experience_display: (f32, bool, u64),
     boats: Vec<boats::Boat>,
@@ -2918,25 +2848,17 @@ struct Game<'a> {
     /// block, while a lead is tied there.
     knot_ids: HashMap<[i32; 3], u32>,
     text_display_vertices: usize,
-    /// A server's interaction entities (furniture and model hitboxes), by entity id.
-    interactions: std::collections::HashMap<u32, remote_objects::Interaction>,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
     /// `ProfileResolver.Cached`: `Dynamic` profiles (name- or id-only heads
     /// and mannequins) resolve through the services in the background.
     skin_profiles: RefCell<horizon_client::skins::Resolver>,
-<<<<<<< HEAD
-    skin_slots: Vec<(String, usize)>,
+    skin_slots: horizon_client::skins::SkinSlots,
     /// The player's own skin from Options > Skin Customization (game/own_skin.rs).
     own_skin: own_skin::OwnSkin,
-||||||| f8988d5a7
-    skin_slots: Vec<(String, usize)>,
-=======
-    skin_slots: horizon_client::skins::SkinSlots,
     /// Cosmetics on players (game/cosmetics.rs), off by default.
     cosmetics: cosmetics::Cosmetics,
->>>>>>> 31f83499b
     /// Atlas trim slots in use: (sprite name, slot), least recently drawn first.
     trim_slots: Vec<(String, usize)>,
     cart_models: minecarts::CartModels,
@@ -3440,7 +3362,14 @@ impl Game<'_> {
     /// along this ray, so a tracked controller can stand in for it, and so
     /// does a finger with tap to interact (game/touch.rs).
     fn aim(&self) -> Option<([f64; 3], [f64; 3])> {
-<<<<<<< HEAD
+        // Minecraft.pick: from the camera entity's eyes along its view
+        // (LivingEntity.getViewYRot: the head's yaw).
+        if let Some(m) = self.camera_mob() {
+            return Some((
+                [m.position.x, m.eye_y(), m.position.z],
+                view_vector(m.head_yaw, m.head_pitch),
+            ));
+        }
         let dir = self
             .touch_aim_dir()
             .unwrap_or_else(|| view_vector(self.yaw, self.pitch));
@@ -3450,19 +3379,6 @@ impl Game<'_> {
     /// is told: the view's, or the finger's with tap to interact.
     fn interaction_rotation(&self) -> (f32, f32) {
         self.touch_aim_rotation().unwrap_or((self.yaw, self.pitch))
-||||||| f8988d5a7
-        Some((self.eye_position()?, view_vector(self.yaw, self.pitch)))
-=======
-        // Minecraft.pick: from the camera entity's eyes along its view
-        // (LivingEntity.getViewYRot: the head's yaw).
-        if let Some(m) = self.camera_mob() {
-            return Some((
-                [m.position.x, m.eye_y(), m.position.z],
-                view_vector(m.head_yaw, m.head_pitch),
-            ));
-        }
-        Some((self.eye_position()?, view_vector(self.yaw, self.pitch)))
->>>>>>> 31f83499b
     }
     /// `Player.blockInteractionRange`: the block pick's and mining's reach.
     fn reach(&self) -> f64 {
@@ -6004,19 +5920,8 @@ impl Game<'_> {
         {
             return Ok(());
         }
-<<<<<<< HEAD
-        self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
-        self.touch_vibrate(touch::BREAK_BUZZ);
-||||||| f8988d5a7
-        self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
-=======
->>>>>>> 31f83499b
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
-<<<<<<< HEAD
-        self.mods_block_broken(pos, state);
-||||||| f8988d5a7
-=======
         // Native mods, once the game allowed the break: a canceled one keeps
         // the block, and a guest's acknowledgement puts it back in its world.
         let mut canceled = false;
@@ -6025,7 +5930,7 @@ impl Game<'_> {
             return Ok(());
         }
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
->>>>>>> 31f83499b
+        self.touch_vibrate(touch::BREAK_BUZZ);
         let broken = state;
         let facts = self.res.facts().get(state).clone();
         let state = self.crack_mined_pot(pos, state);
@@ -6189,13 +6094,6 @@ impl Game<'_> {
     }
     /// `Minecraft.startUseItem`: the main hand, then the off hand.
     fn use_item_as_player(&mut self) -> Result<Option<Hand>> {
-<<<<<<< HEAD
-        // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
-        if self.spectator() || !self.mods_allow_use() {
-||||||| f8988d5a7
-        // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass).
-        if self.spectator() {
-=======
         // Spectators only look (MultiPlayerGameMode.useItemOn/useItem pass),
         // but on a server a spectator's use on a block opens the block's
         // menu (ServerPlayerGameMode.useItemOn).
@@ -6205,7 +6103,6 @@ impl Game<'_> {
             {
                 self.spectator_open_menu(hit.pos);
             }
->>>>>>> 31f83499b
             return Ok(None);
         }
         // A carrot or warped fungus on a stick boosts the ridden pig or strider.
@@ -6794,20 +6691,10 @@ impl Game<'_> {
         };
         let target = [pos.x, pos.y, pos.z];
         let state = self.apply_item_block_state(target, state, &stack)?;
-<<<<<<< HEAD
-        // A content mod's block with states of its own: what its template does not place.
-        let state = self.orient_own_states(target, state, &ctx);
         // Create's arm takes the points marked for it.
         self.arm_placed(target);
-        self.mod_block_event(target, state, true);
-        if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
-||||||| f8988d5a7
-        self.mod_block_event(target, state, true);
-        if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
-=======
         let name = self.res.facts().get(state).name.clone();
         if let Some(entity) = self.new_block_entity(&name) {
->>>>>>> 31f83499b
             let key = (target[0], target[1], target[2]);
             self.world.block_entities.insert(key, entity);
             let game_master = self.can_use_game_master_blocks();
@@ -7722,12 +7609,6 @@ impl Game<'_> {
         }
         Ok(())
     }
-<<<<<<< HEAD
-    /// Keep the held-key state of toggled sneak and sprint in step with their mapping, with the
-    /// mods holding them (`input.hold`), and for sneak with the touch Sneak button.
-||||||| f8988d5a7
-    /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
-=======
     /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
     /// `KeyMapping.resetToggleKeys`: every toggle mapping up, and the latched sneak and sprint
     /// keys with it.
@@ -7740,11 +7621,10 @@ impl Game<'_> {
         self.left = false;
         self.right = false;
     }
->>>>>>> 31f83499b
     fn sync_toggle(&mut self, slot: usize) {
         let key = [KeyCode::ShiftLeft, KeyCode::ControlLeft][slot];
         let touch = slot == 0 && self.touch_sneaking();
-        if self.toggles.is_down(slot) || self.mods.holding(slot) || touch {
+        if self.toggles.is_down(slot) || touch {
             self.keys.insert(key);
         } else {
             self.keys.remove(&key);
@@ -7926,11 +7806,19 @@ impl Game<'_> {
     /// The mouse's raw motion (`DeviceEvent::MouseMotion`, or Android's from the input hook):
     /// MouseHandler.onMove with the pointer grabbed, applied once per frame.
     fn grabbed_mouse_motion(&mut self, x: f64, y: f64) {
+        // A composited view renders offscreen but its keyboard/mouse owner still
+        // controls a visible native window. A headless offscreen run never does.
         if self.pending_save.is_none()
             && self.captured
             && self.focused
+            && self.keyboard_mouse
+            && (!self.options.offscreen || self.split_window)
             && self.screen == Screen::Playing
         {
+            self.note_input(
+                input_trace::InputOrigin::User,
+                input_trace::TraceKind::Motion { x, y },
+            );
             self.mouse.on_move(0.0, 0.0, x, y, true, true);
             self.last_input = Instant::now();
         }
@@ -8065,7 +7953,6 @@ impl Game<'_> {
             || window.inner_size().into(),
             |r| [r.config.width, r.config.height],
         );
-<<<<<<< HEAD
         let scale = HudBatch::new(size).scale;
         let was_grabbed = self.captured;
         // Android grabs the mouse as the activity's pointer capture, which comes a moment later
@@ -8083,32 +7970,17 @@ impl Game<'_> {
             }
         }
         #[cfg(not(target_os = "android"))]
-        let centre =
-            winit::dpi::PhysicalPosition::new(f64::from(size[0]) / 2.0, f64::from(size[1]) / 2.0);
-        #[cfg(not(target_os = "android"))]
-||||||| f8988d5a7
-        let centre =
-            winit::dpi::PhysicalPosition::new(f64::from(size[0]) / 2.0, f64::from(size[1]) / 2.0);
-=======
         let [vx, vy] = self.view_at.map(f64::from);
+        #[cfg(not(target_os = "android"))]
         let centre = winit::dpi::PhysicalPosition::new(
             vx + f64::from(size[0]) / 2.0,
             vy + f64::from(size[1]) / 2.0,
         );
->>>>>>> 31f83499b
+        #[cfg(not(target_os = "android"))]
         let warp = |window: &Window| {
             let _ = window.set_cursor_position(centre);
         };
-<<<<<<< HEAD
         #[cfg(not(target_os = "android"))]
-        if capture {
-||||||| f8988d5a7
-        let scale = HudBatch::new(size).scale;
-        let was_grabbed = self.captured;
-        if capture {
-=======
-        let scale = HudBatch::new(size).scale;
-        let was_grabbed = self.captured;
         if self.options.offscreen && !self.split_window {
             // A genuinely hidden `--offscreen` run leaves the system pointer where
             // the person at the computer has it. Its grab is internal (an
@@ -8118,7 +7990,6 @@ impl Game<'_> {
             }
             self.captured = capture;
         } else if capture {
->>>>>>> 31f83499b
             self.mouse.set_ignore_first_move();
             // macOS warps by re-associating the mouse with the pointer,
             // which undoes a Locked grab and leaves the pointer free: warp
@@ -8367,36 +8238,22 @@ impl Game<'_> {
         } else {
             self.hud_layers(size)
         };
-<<<<<<< HEAD
         self.draw_slot_touch(&mut batch);
-        self.draw_mod_window_buttons(&mut batch, false);
-        self.draw_mod_screen_buttons(&mut batch);
-        self.draw_mod_screens(&mut batch);
-        self.draw_mod_window_buttons(&mut batch, true);
-        self.draw_dialog(&mut batch);
-||||||| f8988d5a7
-        self.draw_dialog(&mut batch);
-=======
         // Vanilla's confirmation replaces the dialog as the screen.
         if self.command_prompt.is_none() {
             self.draw_dialog(&mut batch);
         }
->>>>>>> 31f83499b
         self.draw_pack_prompt(&mut batch);
         self.draw_code_of_conduct(&mut batch);
         self.draw_link_prompt(&mut batch);
-<<<<<<< HEAD
         self.draw_touch(&mut batch);
         self.draw_chat_bar(&mut batch);
         // Starling: the kinetic part looked at, its speed and stress (kinetics.rs).
         self.draw_kinetic_info(&mut batch);
-||||||| f8988d5a7
-=======
         self.draw_command_prompt(&mut batch);
         // The ToastManager draws over every screen, the title and the
         // options included: the narrator's toast follows the player there.
         self.draw_narrator_toast(&mut batch);
->>>>>>> 31f83499b
         // Gui.extractRenderState: the debug overlay comes after the screen
         // and the toasts, so it is over everything, menus included.
         self.draw_debug_overlay(&mut batch, size);
@@ -8404,7 +8261,6 @@ impl Game<'_> {
             .draw(self.settings.horizon.overlay, &mut batch, &self.gui.atlas);
         self.draw_stats_overlay(&mut batch);
         self.draw_pad_cursor(&mut batch);
-<<<<<<< HEAD
         self.lift_over_keyboard(&mut batch);
         #[cfg(target_os = "android")]
         {
@@ -8414,10 +8270,7 @@ impl Game<'_> {
         }
         // Over the keyboard's lift: the note stays at the top.
         self.draw_imports(&mut batch);
-||||||| f8988d5a7
-=======
         self.resolve_inline_profiles(&batch.inline_profiles);
->>>>>>> 31f83499b
         batch
     }
     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
@@ -8464,24 +8317,6 @@ impl Game<'_> {
             }
         }
         if let Some(title) = &self.title {
-<<<<<<< HEAD
-            title.draw(
-                &self.gui.atlas,
-                &mut batch,
-                self.cursor,
-                self.settings.file.bool("hideSplashTexts"),
-            );
-        }
-        if self.title.is_some() {
-            self.draw_title_player(&mut batch);
-||||||| f8988d5a7
-            title.draw(
-                &self.gui.atlas,
-                &mut batch,
-                self.cursor,
-                self.settings.file.bool("hideSplashTexts"),
-            );
-=======
             for found in title.lan_found_narrations((w, h)) {
                 self.say_system_queued(&found);
             }
@@ -8499,6 +8334,7 @@ impl Game<'_> {
                     self.settings.file.bool("hideSplashTexts"),
                 );
             }
+            self.draw_title_player(&mut batch);
             // ScreenEvent.Render.Post over the title's own screens: a mod draws
             // over them here (a pack browser over Create New World, say), and the
             // toasts still come after, as over any screen.
@@ -8507,7 +8343,6 @@ impl Game<'_> {
             self.draw_tutorial_toasts(&mut batch, false);
             self.draw_pack_toasts(&mut batch, false);
             self.draw_music_toast(&mut batch, false);
->>>>>>> 31f83499b
             return batch;
         }
         let atlas_ptr: *const HudAtlas = &self.gui.atlas;
@@ -8547,75 +8382,10 @@ impl Game<'_> {
                     hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
                 });
                 let draws = hud_layout::crosshair(wi, hi, attack, full);
-<<<<<<< HEAD
-                self.mod_hud_part(&mut batch, HudPart::Crosshair, |game, batch| {
-                    hud_layout::paint(batch, &game.gui.atlas, &draws);
-||||||| f8988d5a7
-                hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
-=======
                 self.gui_layer("minecraft:crosshair", &mut batch, |g, batch| {
                     hud_layout::paint(batch, &g.gui.atlas, &draws);
->>>>>>> 31f83499b
                 });
             }
-<<<<<<< HEAD
-            if spectator {
-                self.draw_spectator_hotbar(&mut batch);
-            } else {
-                let partial = self.clock.fraction() as f32;
-                let inputs = hud_layout::HotbarInputs {
-                    selected: self.selected as i32,
-                    right_handed: !self.settings.main_hand_left,
-                    offhand: self.offhand.is_some(),
-                    slots: std::array::from_fn(|i| {
-                        self.inventory[i]
-                            .as_ref()
-                            .map(|_| (f32::from(self.hotbar_pop[i]) - partial).max(0.0))
-                    }),
-                    offhand_pop: (f32::from(self.hotbar_pop[9]) - partial).max(0.0),
-                    attack: (indicator == 2).then_some(strength),
-                };
-                let draws = hud_layout::hotbar(wi, hi, &inputs);
-                self.mod_hud_part(&mut batch, HudPart::Hotbar, |game, batch| {
-                    hud_layout::paint(batch, &game.gui.atlas, &draws);
-                    for d in &draws {
-                        if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
-                            let stack = if slot == 40 {
-                                game.offhand.clone()
-                            } else {
-                                game.inventory[slot as usize].clone()
-                            };
-                            if let Some(stack) = stack {
-                                game.draw_item(batch, &stack, x as f32, y as f32);
-||||||| f8988d5a7
-            if spectator {
-                self.draw_spectator_hotbar(&mut batch);
-            } else {
-                let partial = self.clock.fraction() as f32;
-                let inputs = hud_layout::HotbarInputs {
-                    selected: self.selected as i32,
-                    right_handed: !self.settings.main_hand_left,
-                    offhand: self.offhand.is_some(),
-                    slots: std::array::from_fn(|i| {
-                        self.inventory[i]
-                            .as_ref()
-                            .map(|_| (f32::from(self.hotbar_pop[i]) - partial).max(0.0))
-                    }),
-                    offhand_pop: (f32::from(self.hotbar_pop[9]) - partial).max(0.0),
-                    attack: (indicator == 2).then_some(strength),
-                };
-                let draws = hud_layout::hotbar(wi, hi, &inputs);
-                hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
-                for d in &draws {
-                    if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
-                        let stack = if slot == 40 {
-                            self.offhand.as_ref()
-                        } else {
-                            self.inventory[slot as usize].as_ref()
-                        };
-                        if let Some(stack) = stack {
-                            self.draw_item(&mut batch, stack, x as f32, y as f32);
-=======
             self.gui_layer("minecraft:hotbar", &mut batch, |g, batch| {
                 if spectator {
                     g.draw_spectator_hotbar(batch);
@@ -8644,36 +8414,17 @@ impl Game<'_> {
                             };
                             if let Some(stack) = stack {
                                 g.draw_item(batch, stack, x as f32, y as f32);
->>>>>>> 31f83499b
                             }
                         }
                     }
-<<<<<<< HEAD
-                });
-            }
-            self.mod_hud_part(&mut batch, HudPart::Effects, |game, batch| {
-                game.draw_effect_icons(batch);
-||||||| f8988d5a7
-                }
-            }
-            self.draw_effect_icons(&mut batch);
-=======
                 }
             });
             self.gui_layer("minecraft:effects", &mut batch, |g, batch| {
                 g.draw_effect_icons(batch);
->>>>>>> 31f83499b
             });
             // Hud: the action bar and titles draw over the hotbar (nextStratum).
-<<<<<<< HEAD
-            self.mod_hud_part(&mut batch, HudPart::BossBars, |game, batch| {
-                game.draw_boss_bars(batch);
-||||||| f8988d5a7
-            self.draw_boss_bars(&mut batch);
-=======
             self.gui_layer("minecraft:boss_overlay", &mut batch, |g, batch| {
                 g.draw_boss_bars(batch);
->>>>>>> 31f83499b
             });
             self.draw_extras(&mut batch);
         }
@@ -8697,36 +8448,6 @@ impl Game<'_> {
             };
             // Without the survival bars only the mount's hearts raise it.
             bar_height = 39 + 10 * ((vehicle_hearts + 9) / 10);
-<<<<<<< HEAD
-            let mut health_draws = None;
-            if contextual == ContextualBar::Locator {
-                let (sprite, [x, y, w, h]) = horizon_client::locator_bar::background(wi, hi);
-                horizon_client::ui::nine_slice(
-                    &mut batch,
-                    &self.gui.atlas,
-                    sprite,
-                    x as f32,
-                    y as f32,
-                    w as f32,
-                    h as f32,
-                    u32::MAX,
-                );
-            }
-||||||| f8988d5a7
-            if contextual == ContextualBar::Locator {
-                let (sprite, [x, y, w, h]) = horizon_client::locator_bar::background(wi, hi);
-                horizon_client::ui::nine_slice(
-                    &mut batch,
-                    &self.gui.atlas,
-                    sprite,
-                    x as f32,
-                    y as f32,
-                    w as f32,
-                    h as f32,
-                    u32::MAX,
-                );
-            }
-=======
             // The one bar above the hotbar: the mount's jump bar, the locator
             // bar (with its background) or the experience bar, with the level
             // number that a survival player always has.
@@ -8765,36 +8486,10 @@ impl Game<'_> {
                     hud_layout::paint(batch, &g.gui.atlas, &draws);
                 }
             });
->>>>>>> 31f83499b
             if !self.creative
                 && !spectator
                 && let Some(p) = &mut self.player
             {
-<<<<<<< HEAD
-                let atlas = &self.gui.atlas;
-                let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
-                let xp_draws = hud_layout::experience(
-                    wi,
-                    hi,
-                    self.experience.progress,
-                    self.experience.level,
-                    contextual == ContextualBar::Experience,
-                    &width,
-                );
-||||||| f8988d5a7
-                let atlas = &self.gui.atlas;
-                let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
-                let draws = hud_layout::experience(
-                    wi,
-                    hi,
-                    self.experience.progress,
-                    self.experience.level,
-                    contextual == ContextualBar::Experience,
-                    &width,
-                );
-                hud_layout::paint(&mut batch, atlas, &draws);
-=======
->>>>>>> 31f83499b
                 let effects = &self.potions.effects;
                 let kind = if effects.get("poison").is_some() {
                     hud_layout::HeartKind::Poisoned
@@ -8830,12 +8525,6 @@ impl Game<'_> {
                     under_water,
                     vehicle_hearts,
                 };
-<<<<<<< HEAD
-                let draws = self.health_hud.layout(&inputs, wi, hi);
-||||||| f8988d5a7
-                let draws = self.health_hud.layout(&inputs, wi, hi);
-                hud_layout::paint(&mut batch, atlas, &draws);
-=======
                 let at = [p.position.x, p.position.y, p.position.z];
                 // The native mods' health HUD (`native_health_hud`): a mod
                 // that answers draws every row instead.
@@ -8850,7 +8539,6 @@ impl Game<'_> {
                 self.gui_layer("minecraft:player_health", &mut batch, |g, batch| {
                     hud_layout::paint(batch, &g.gui.atlas, &draws);
                 });
->>>>>>> 31f83499b
                 bar_height = self
                     .health_hud
                     .left_height
@@ -8867,25 +8555,10 @@ impl Game<'_> {
                         .play_on(players, "ui.hud.bubble_pop", Some(at), volume, pitch);
                     self.audio.capture = capture;
                 }
-                health_draws = Some((xp_draws, draws));
-            }
-            if let Some((xp_draws, draws)) = health_draws {
-                self.mod_hud_part(&mut batch, HudPart::Experience, |game, batch| {
-                    hud_layout::paint(batch, &game.gui.atlas, &xp_draws);
-                });
-                self.paint_health_parts(&mut batch, draws);
             }
             if !spectator {
-<<<<<<< HEAD
-                let can_hurt = !self.creative;
-                self.mod_hud_part(&mut batch, HudPart::SelectedItemName, |game, batch| {
-                    game.draw_selected_name(batch, bar_height, can_hurt);
-||||||| f8988d5a7
-                self.draw_selected_name(&mut batch, bar_height, !self.creative);
-=======
                 self.gui_layer("minecraft:selected_item_name", &mut batch, |g, batch| {
                     g.draw_selected_name(batch, bar_height, !g.creative);
->>>>>>> 31f83499b
                 });
             }
         }
@@ -8895,19 +8568,6 @@ impl Game<'_> {
             hud_layout::paint(batch, &g.gui.atlas, &draws);
         });
         if show_hud {
-<<<<<<< HEAD
-            self.draw_titles(&mut batch, bar_height);
-            self.mod_hud_part(&mut batch, HudPart::Scoreboard, |game, batch| {
-                game.draw_scoreboard(batch);
-            });
-            self.draw_subtitles(&mut batch);
-            // HudRenderCallback: the mods draw over the HUD, under the chat and screens.
-            self.draw_mod_hud(&mut batch);
-||||||| f8988d5a7
-            self.draw_titles(&mut batch, bar_height);
-            self.draw_scoreboard(&mut batch);
-            self.draw_subtitles(&mut batch);
-=======
             self.gui_layer("minecraft:overlay_message", &mut batch, |g, batch| {
                 g.draw_overlay_message(batch, bar_height);
             });
@@ -8920,7 +8580,6 @@ impl Game<'_> {
             self.gui_layer("minecraft:subtitle_overlay", &mut batch, |g, batch| {
                 g.draw_subtitles(batch);
             });
->>>>>>> 31f83499b
         }
         let atlas = &self.gui.atlas;
         if show_hud
@@ -8930,15 +8589,6 @@ impl Game<'_> {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
-<<<<<<< HEAD
-        self.mod_hud_part(&mut batch, HudPart::Chat, |game, batch| {
-            game.draw_chat(batch);
-        });
-        self.draw_tab_list(&mut batch);
-||||||| f8988d5a7
-        self.draw_chat(&mut batch);
-        self.draw_tab_list(&mut batch);
-=======
         // The chat screen draws the focused chat itself; F1 hides the rest.
         if show_hud && self.screen != Screen::Chat {
             self.gui_layer("minecraft:chat", &mut batch, |g, batch| g.draw_chat(batch));
@@ -8949,7 +8599,6 @@ impl Game<'_> {
             self.draw_chat(&mut batch);
             self.draw_tab_list(&mut batch);
         }
->>>>>>> 31f83499b
         // Screen.extractBlurredBackground blurs the world and HUD, while the
         // screen's background, widgets, toasts and debug overlay stay sharp.
         batch.blur_at = batch.vertices.len() as u32;
@@ -9711,7 +9360,7 @@ impl Game<'_> {
         button: i32,
         input: horizon_client::menu::Input,
     ) {
-        use horizon_client::creative::click_display;
+        use horizon_client::creative::{DisplayClick, click_display};
         if self.creative_screen.tab().search {
             // CreativeModeInventoryScreen.slotClicked: moveCursorToEnd, then
             // setHighlightPos(0), so typing replaces the whole query.
@@ -9725,19 +9374,6 @@ impl Game<'_> {
             .shown(&self.pack.names, first * 9 + slot - Creative::DISPLAY);
         let catalog = world_items!(self);
         let max = |s: &ItemStack| catalog.get(&s.item).map_or(64, |i| i.max_stack);
-<<<<<<< HEAD
-        let effect = click_display(&mut self.carried, shown, max, button, input);
-        self.creative_display_effect(effect);
-||||||| f8988d5a7
-        match click_display(&mut self.carried, shown, max, button, input) {
-            DisplayClick::Hotbar(i, stack) if i < self.inventory.len() => {
-                self.inventory[i] = Some(stack);
-            }
-            DisplayClick::Offhand(stack) => self.offhand = Some(stack),
-            DisplayClick::Drop(stack) => self.player_drop(stack),
-            _ => {}
-        }
-=======
         match click_display(&mut self.carried, shown.as_ref(), max, button, input) {
             DisplayClick::Hotbar(i, stack) if i < self.inventory.len() => {
                 self.inventory[i] = Some(stack);
@@ -9753,7 +9389,6 @@ impl Game<'_> {
         if self.remote.is_some() {
             self.send_creative_slots();
         }
->>>>>>> 31f83499b
     }
     /// Several clicks on one menu instance (a quick craft drag is three).
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
@@ -10069,7 +9704,7 @@ impl Game<'_> {
         let creative = self.creative;
         // CreativeModeInventoryScreen clicks the menu itself and sends every
         // changed slot, which the server sets by player.
-        let equipment_before = self.creative_menu_open().then(|| self.player_equipment());
+        let equipment_before = (self.screen == Screen::Creative).then(|| self.player_equipment());
         let station_menu = self.station.as_ref().map(|s| {
             (
                 s.loom.selected.map_or(-1, |i| i as i32),
@@ -10250,14 +9885,6 @@ impl Game<'_> {
                 let at = [p.position.x, p.position.y, p.position.z];
                 self.award_furnace_recipes(pos, at);
             }
-<<<<<<< HEAD
-        } else if self.creative_menu_open() {
-            // The creative screen's clicks are not the server's: it drops what they throw
-            // (handleCreativeModeItemDrop).
-            for stack in dropped {
-                self.creative_drop(stack);
-||||||| f8988d5a7
-=======
         } else if self.screen == Screen::Creative {
             // A THROW in the creative screen with an empty hand: on an item tab's hotbar
             // `AbstractContainerMenu.doClick` calls `Player.handleCreativeModeItemDrop`, on the
@@ -10266,7 +9893,6 @@ impl Game<'_> {
             // slot has already given it up.
             for stack in dropped {
                 self.remote_creative_throw(stack);
->>>>>>> 31f83499b
             }
         }
         if kind == Kind::Loom {
@@ -11174,13 +10800,7 @@ impl Game<'_> {
         // `ItemEntityRenderer`.
         self.mark_entity(out.len(), "minecraft:item");
         self.dropped_item_geometry(camera, alpha, &mut out);
-<<<<<<< HEAD
-        // `ItemDisplayRenderer` (a server's item displays).
-        self.item_display_geometry(camera, alpha, &mut out);
-||||||| f8988d5a7
-=======
         self.mark_motion(out.len(), 0);
->>>>>>> 31f83499b
         // `VaultRenderer`.
         self.mark_entity(out.len(), "");
         self.vault_geometry(camera, alpha, &mut out);
@@ -11218,14 +10838,8 @@ impl Game<'_> {
         self.debug_renderer_geometry(camera, &mut out);
         self.text_display_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
-<<<<<<< HEAD
-        // Entity shadows (EntityRenderer.extractShadow), unless the Entity Shadows option is off.
-||||||| f8988d5a7
-        // Entity shadows (EntityRenderer.extractShadow).
-=======
         laps.lap("eg_name_tags");
-        // Entity shadows (EntityRenderer.extractShadow).
->>>>>>> 31f83499b
+        // Entity shadows (EntityRenderer.extractShadow), unless the Entity Shadows option is off.
         self.mark_translucent_entity(out.len(), "minecraft:entity_shadow");
         // A native shader pack's sun shadows already fall under the entities in the Overworld:
         // the round blob would be a second one. The Nether and the End have no sun to cast them.
@@ -11565,13 +11179,9 @@ impl Game<'_> {
         }
         self.mark_entity(out.len(), "");
         self.moving_piston_geometry(camera, alpha, &mut out);
-<<<<<<< HEAD
-        self.kinetic_geometry(camera, &mut out);
-||||||| f8988d5a7
-=======
         // LevelRenderer.submitTransientBlocks.
         self.transient_block_geometry(camera, &mut out);
->>>>>>> 31f83499b
+        self.kinetic_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:tnt");
         self.tnt_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:painting");
@@ -11952,7 +11562,7 @@ impl Game<'_> {
     }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
-        if self.spectator() || !self.mods_allow_attack() {
+        if self.spectator() {
             return false;
         }
         // A painting nearer than the targeted block and mob breaks instead.
@@ -12336,7 +11946,14 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
-<<<<<<< HEAD
+        // openWorldLoadLevelData: an existing world whose level data does not read opens
+        // RecoverWorldDataScreen instead.
+        if create.is_none()
+            && let Some(title) = self.title.as_mut()
+            && title.open_recover(folder)
+        {
+            return Ok(());
+        }
         // A world plays with the mods it was made with (world_content.rs): another set starts the
         // game again with it; a new world takes the set running now.
         if create.is_none() {
@@ -12418,16 +12035,6 @@ impl Game<'_> {
             }
             self.content_record = Some(folder.to_owned());
             world_content::remember_running();
-||||||| f8988d5a7
-=======
-        // openWorldLoadLevelData: an existing world whose level data does not read opens
-        // RecoverWorldDataScreen instead.
-        if create.is_none()
-            && let Some(title) = self.title.as_mut()
-            && title.open_recover(folder)
-        {
-            return Ok(());
->>>>>>> 31f83499b
         }
         world_loading::world_data_used();
         if self.defer_world_entry(PendingWorldEntry::Local {
@@ -15618,41 +15225,31 @@ impl Game<'_> {
         if self.remote.is_some() {
             return Ok(());
         }
-<<<<<<< HEAD
-        if wait {
-            self.save_level(true)?;
-            self.save_parked_levels(true)?;
-            self.save_game_metadata()?;
-            horizon_client::save::later::flush();
-            return Ok(());
-        }
-        // The autosave: its small files go to the background writer too, so the frame does
-        // not wait on storage.
-        horizon_client::save::later::deferred(|| {
-            self.save_level(false)?;
-            self.save_parked_levels(false)?;
-            self.save_game_metadata()
-        })
-||||||| f8988d5a7
-        self.save_level(wait)?;
-        self.save_parked_levels(wait)?;
-        self.save_game_metadata()
-=======
         // `DedicatedServer.saveAllChunks` tells the management protocol's clients when a save starts and when
         // it ends without failing, for every save: the command, the autosave, the pause.
         let dedicated = self.options.dedicated.is_some();
         if dedicated {
             dedicated::events::record_server("saving", serde_json::json!({}));
         }
-        self.save_level(wait)?;
-        self.save_parked_levels(wait)?;
-        self.save_game_metadata()?;
+        if wait {
+            self.save_level(true)?;
+            self.save_parked_levels(true)?;
+            self.save_game_metadata()?;
+            horizon_client::save::later::flush();
+        } else {
+            // The autosave: its small files go to the background writer too, so the frame does
+            // not wait on storage.
+            horizon_client::save::later::deferred(|| {
+                self.save_level(false)?;
+                self.save_parked_levels(false)?;
+                self.save_game_metadata()
+            })?;
+        }
         self.native_world_saved(wait);
         if dedicated {
             dedicated::events::record_server("saved", serde_json::json!({}));
         }
         Ok(())
->>>>>>> 31f83499b
     }
     fn save_game_metadata(&mut self) -> Result<()> {
         self.save_maps();
@@ -15838,26 +15435,8 @@ impl Game<'_> {
                 horizon_client::level_loading::draw(
                     &mut hud,
                     &self.gui.atlas,
-<<<<<<< HEAD
-                    if loader.cancelled {
-                        "Cancelling world"
-                    } else if loader.ready() && self.mods.starting() {
-                        "Starting mods"
-                    } else {
-                        "Opening world"
-                    },
-                    0.0,
-||||||| f8988d5a7
-                    if loader.cancelled {
-                        "Cancelling world"
-                    } else {
-                        "Opening world"
-                    },
-                    0.0,
-=======
                     Some(&status),
                     progress,
->>>>>>> 31f83499b
                 );
                 return renderer.render(&loading_frame(&hud));
             }
@@ -16004,25 +15583,6 @@ impl Game<'_> {
         // FishingHookRenderer's line, then DebugRenderer: chunk borders and
         // hitboxes (F3+G, F3+B).
         let mut lines = self.fishing_line(alpha, size);
-<<<<<<< HEAD
-        let mut on_top = Vec::new();
-        if self.show_hitboxes || self.show_chunk_borders {
-            let g = self.debug_gizmos(alpha as f32);
-            lines.extend(g.lines);
-            on_top = g.on_top;
-        }
-        // The mods' (`world-draw`).
-        if self.title.is_none() {
-            self.mod_world_lines(&mut lines, &mut on_top);
-        }
-||||||| f8988d5a7
-        let mut on_top = Vec::new();
-        if self.show_hitboxes || self.show_chunk_borders {
-            let g = self.debug_gizmos(alpha as f32);
-            lines.extend(g.lines);
-            on_top = g.on_top;
-        }
-=======
         let g = self.debug_gizmos(alpha as f32, camera.to_array());
         lines.extend(g.lines);
         let on_top = g.on_top;
@@ -16043,7 +15603,6 @@ impl Game<'_> {
         } else {
             Vec::new()
         };
->>>>>>> 31f83499b
         let view = horizon_client::camera::view_matrix(view_yaw, view_pitch);
         let at = camera.to_array();
         // GameRenderer.render3dHud: the debug crosshair, first person with the HUD shown.
@@ -16064,25 +15623,14 @@ impl Game<'_> {
         let mut outline_after_terrain = false;
         // GameRenderer.shouldRenderBlockOutline: not with the HUD hidden (F1), and only for a
         // player who may build. Adventure players only get one with a CAN_BREAK or
-<<<<<<< HEAD
-        // CAN_PLACE_ON item and spectators with a menu block; Horizon reads neither the
-        // components nor opens menus for spectators, so those never show it.
-        let outline = if self.screen == Screen::Playing
-            && !self.ui.hide_gui
-            && self.may_build()
-            && !self.touch_hides_outline()
-        {
-||||||| f8988d5a7
-        // CAN_PLACE_ON item and spectators with a menu block; Horizon reads neither the
-        // components nor opens menus for spectators, so those never show it.
-        let outline = if self.screen == Screen::Playing && !self.ui.hide_gui && self.may_build() {
-=======
         // CAN_PLACE_ON item matching the block, and spectators with a menu block; Horizon
         // does not open menus for spectators, so those never show it. An open
         // screen does not hide it: vanilla checks the HUD and the game mode, not the screen.
         let adventure = self.mode == horizon_client::command::args::GameMode::Adventure;
-        let outline = if !self.ui.hide_gui && (self.may_build() || adventure) {
->>>>>>> 31f83499b
+        let outline = if !self.ui.hide_gui
+            && (self.may_build() || adventure)
+            && !self.touch_hides_outline()
+        {
             self.pick()
                 .filter(|h| {
                     self.may_build()
@@ -16215,18 +15763,6 @@ impl Game<'_> {
         self.glowing_vertices.get_mut().clear();
         self.shadow_only_vertices.get_mut().clear();
         if !title {
-<<<<<<< HEAD
-            entities = horizon_client::spans::time("entity_geometry", || {
-                self.entity_geometry(camera, alpha, entities)
-            });
-            let mut see_through = std::mem::take(&mut self.see_through_vertices);
-            self.mod_world_geometry(camera, fov_degrees, size, &mut entities, &mut see_through);
-            self.see_through_vertices = see_through;
-||||||| f8988d5a7
-            entities = horizon_client::spans::time("entity_geometry", || {
-                self.entity_geometry(camera, alpha, entities)
-            });
-=======
             let (built, static_sections, visible_static_sections, static_stats) =
                 spans::time("entity_geometry", || {
                     self.entity_geometry(camera, alpha, entities)
@@ -16235,7 +15771,6 @@ impl Game<'_> {
             static_block_entities = static_sections;
             visible_static_block_entity_sections = visible_static_sections;
             static_block_entity_stats = static_stats;
->>>>>>> 31f83499b
         }
         let bolts = if title {
             Vec::new()
@@ -16617,9 +16152,6 @@ impl Game<'_> {
             return Ok(());
         }
         match key {
-            // The creative screen's stand-in closes as the creative screen does, for the keys that
-            // do not come through its window events (a controller's, the control socket's).
-            KeyCode::Escape | KeyCode::KeyE if self.mods.standing_in() => self.close_mod_screen(),
             KeyCode::Escape => match self.screen {
                 Screen::Options => self.options_key(KeyCode::Escape, None)?,
                 Screen::Playing => {
@@ -16660,14 +16192,8 @@ impl Game<'_> {
                 Screen::BlockEditor => self.close_block_editor(),
                 Screen::Chat => self.close_chat(chat::ChatExit::Intentional),
                 Screen::Win => self.close_win_screen()?,
-<<<<<<< HEAD
-                Screen::Mod => self.close_mod_ui(true),
-||||||| f8988d5a7
-                Screen::Mod => self.close_mod_screen(true),
-=======
                 Screen::DebugOptions => self.close_debug_options(),
                 Screen::Mod => self.close_mod_screen(),
->>>>>>> 31f83499b
             },
             // `checkHotbarKeyPressed`: the keys the controls bind to the off
             // hand and the hotbar slots, so a rebound key swaps instead of
@@ -16835,23 +16361,6 @@ impl Game<'_> {
     }
     /// A mouse button while playing (window or control socket).
     fn play_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
-<<<<<<< HEAD
-        match button {
-            MouseButton::Left if pressed => self.mods.press("key.attack"),
-            MouseButton::Right if pressed => self.mods.press("key.use"),
-            _ => {}
-        }
-        // A mod's claimed item takes the use button (capability `input`).
-        if self.mod_use(button, pressed) {
-            return Ok(());
-        }
-||||||| f8988d5a7
-        // A mod's claimed item takes the use button (capability `input`).
-        if self.mod_use(button, pressed) {
-            return Ok(());
-        }
-=======
->>>>>>> 31f83499b
         if self.sleeping.is_some() {
             return Ok(());
         }
@@ -17421,27 +16930,24 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
-        // A composited view renders offscreen but its keyboard/mouse owner still
-        // controls a visible native window. A headless offscreen run never does.
-        if self.pending_save.is_none()
-            && self.captured
-            && self.focused
-            && self.keyboard_mouse
-            && (!self.options.offscreen || self.split_window)
-            && self.screen == Screen::Playing
-            && let DeviceEvent::MouseMotion { delta: (x, y) } = event
-        {
-            // MouseHandler.onMove with the pointer grabbed; applied once per frame.
-            self.note_input(
-                input_trace::InputOrigin::User,
-                input_trace::TraceKind::Motion { x, y },
-            );
-            self.mouse.on_move(0.0, 0.0, x, y, true, true);
-            self.last_input = Instant::now();
+        if let DeviceEvent::MouseMotion { delta: (x, y) } = event {
+            self.grabbed_mouse_motion(x, y);
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.idle(event_loop);
+    }
+    /// Android took the window away (the app went to the background, the screen went off): its
+    /// surface goes now, the sound stops, and the world is saved unless losing the focus saved it
+    /// already, since the system may end the process at any time from here on. Android's UI
+    /// thread waits for this to return, so nothing here waits for the world's writes.
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(r) = &mut self.renderer {
+            r.suspend();
+        }
+        self.audio.suspend_output();
+        self.touch_release_all();
+        self.save_for_background();
     }
     /// The application is ending. On macOS, Quit (Cmd+Q) ends it through
     /// applicationWillTerminate without a CloseRequested; vanilla's GLFW
@@ -17472,7 +16978,6 @@ impl Game<'_> {
         if !ours {
             return;
         }
-<<<<<<< HEAD
         // The focus goes first when the game leaves the screen (home, the recent apps, a call),
         // before the window, and the system may end the process from then on: the world is saved
         // at once, as Bedrock does.
@@ -17492,8 +16997,6 @@ impl Game<'_> {
         {
             return;
         }
-||||||| f8988d5a7
-=======
         follow_keymap(&mut event);
         // MacosUtil.setCtrlClickEmulatesRightClick: Control + left click is a right click.
         if let WindowEvent::MouseInput { state, button, .. } = &mut event
@@ -17509,7 +17012,6 @@ impl Game<'_> {
         // Who caused it, before the event is handled: the trace wants the
         // window's own keys, never the ones the socket made up.
         self.trace_window_event(origin, &event);
->>>>>>> 31f83499b
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && let PhysicalKey::Code(key) = event.physical_key
         {
@@ -17765,12 +17267,6 @@ impl Game<'_> {
             }
             return;
         }
-<<<<<<< HEAD
-        // The mods, unless a server's resource pack prompt is up (it takes the input below):
-        // their screens, the game's screens' events, their keybinds.
-        if !self.server_packs.prompting() && self.mods_window_event(&event) {
-||||||| f8988d5a7
-=======
         // ScreenEvent.KeyPressed.Pre: the open screen hears of the key before
         // it acts on it, and a cancelled press goes no further — no focus
         // move, no Escape-close, no inventory or hotbar key, no typing by the
@@ -17845,7 +17341,6 @@ impl Game<'_> {
             // The keyboard's focus took the key; its characters are a separate
             // callback and still come (`KeyboardHandler.charTyped`).
             self.screen_chars_typed(typed.as_deref());
->>>>>>> 31f83499b
             return;
         }
         let result: Result<()> = (|| {
@@ -18772,40 +18267,7 @@ impl Game<'_> {
                     horizon_client::heartbeat::set_lan(self.is_published());
                     self.update_discord_presence();
                     let steps = self.clock.advance(elapsed);
-<<<<<<< HEAD
-                    if steps >= 4 && self.remote.is_some() {
-                        // Each tick sends its movement: a server's anticheat sees them at once.
-                        log::info!(
-                            "Horizon: {steps} ticks in one frame ({} ms since the last)",
-                            elapsed.as_millis()
-                        );
-                    }
-                    // The world ticking in the frame: once its ticks took a
-                    // tick's length, the rest are dropped (`FixedStep::tick_fits`).
-                    let in_frame = self.remote.is_none();
-                    let mut spent = Duration::ZERO;
-                    for step in 0..steps {
-                        if in_frame && !self.clock.tick_fits(spent) {
-                            if let Some(warning) = self.clock.drop_ticks(steps - step) {
-                                log::warn!("{warning}");
-                            }
-                            break;
-                        }
-||||||| f8988d5a7
-                    // The world ticking in the frame: once its ticks took a
-                    // tick's length, the rest are dropped (`FixedStep::tick_fits`).
-                    let in_frame = self.remote.is_none();
-                    let mut spent = Duration::ZERO;
-                    for step in 0..steps {
-                        if in_frame && !self.clock.tick_fits(spent) {
-                            if let Some(warning) = self.clock.drop_ticks(steps - step) {
-                                log::warn!("{warning}");
-                            }
-                            break;
-                        }
-=======
                     for _ in 0..steps {
->>>>>>> 31f83499b
                         let started = Instant::now();
                         if self.title.is_none() && !self.pause {
                             horizon_client::spans::time("tick", || self.tick())?;
@@ -19030,28 +18492,11 @@ impl Game<'_> {
             self.exit_on_error(event_loop);
         }
     }
-<<<<<<< HEAD
-    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
-        if let DeviceEvent::MouseMotion { delta: (x, y) } = event {
-            self.grabbed_mouse_motion(x, y);
-||||||| f8988d5a7
-    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
-        if self.pending_save.is_none()
-            && self.captured
-            && self.focused
-            && self.screen == Screen::Playing
-            && let DeviceEvent::MouseMotion { delta: (x, y) } = event
-        {
-            // MouseHandler.onMove with the pointer grabbed; applied once per frame.
-            self.mouse.on_move(0.0, 0.0, x, y, true, true);
-            self.last_input = Instant::now();
-=======
     /// The loop ended: close the pads' output, save the world, write the perf report.
     pub(super) fn shut_down(&mut self) {
         self.pad_close_output();
         if let Err(e) = self.save_for_exit() {
             log::warn!("Horizon: failed to save the world on exit: {e}");
->>>>>>> 31f83499b
         }
         self.finish_perf();
     }
@@ -19108,13 +18553,11 @@ impl Game<'_> {
         if self.pending_save.is_some() {
             return;
         }
-<<<<<<< HEAD
         // The mouse and the keyboard as Android's input hook saw them (game/input_mode.rs).
         #[cfg(target_os = "android")]
         self.android_input_frame(event_loop);
         self.touch_frame(event_loop);
         self.poll_imports();
-        self.poll_mods();
         if let Some(folder) = &self.content_record
             && world_content::record(folder, &world_content::running())
         {
@@ -19126,13 +18569,8 @@ impl Game<'_> {
             self.poll_update_offer();
             self.poll_native_builds();
         }
-        self.poll_pads(event_loop);
-||||||| f8988d5a7
-        self.poll_pads(event_loop);
-=======
         horizon_client::spans::time("pads", || self.poll_pads(event_loop));
         self.pause_if_inactive();
->>>>>>> 31f83499b
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();
@@ -19170,39 +18608,6 @@ impl Game<'_> {
             );
             return;
         }
-<<<<<<< HEAD
-        event_loop.set_control_flow(ControlFlow::Poll);
-    }
-    /// The application is ending. On macOS, Quit (Cmd+Q) ends it through
-    /// applicationWillTerminate without a CloseRequested; vanilla's GLFW
-    /// window turns it into a window close, so Minecraft.stop saves the world.
-    /// Android took the window away (the app went to the background, the screen went off): its
-    /// surface goes now, the sound stops, and the world is saved unless losing the focus saved it
-    /// already, since the system may end the process at any time from here on. Android's UI
-    /// thread waits for this to return, so nothing here waits for the world's writes.
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(r) = &mut self.renderer {
-            r.suspend();
-        }
-        self.audio.suspend_output();
-        self.touch_release_all();
-        self.save_for_background();
-    }
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        self.pad_close_output();
-        if let Err(e) = self.save_for_exit() {
-            log::warn!("Horizon: failed to save the world on exit: {e}");
-||||||| f8988d5a7
-        event_loop.set_control_flow(ControlFlow::Poll);
-    }
-    /// The application is ending. On macOS, Quit (Cmd+Q) ends it through
-    /// applicationWillTerminate without a CloseRequested; vanilla's GLFW
-    /// window turns it into a window close, so Minecraft.stop saves the world.
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        self.pad_close_output();
-        if let Err(e) = self.save_for_exit() {
-            log::warn!("Horizon: failed to save the world on exit: {e}");
-=======
         // A window the compositor hides gets no `RedrawRequested` at all, so
         // polling would spin the loop with nothing to draw and pin a core.
         // Once a requested frame fails to reach the swap chain, wait for the
@@ -19214,7 +18619,6 @@ impl Game<'_> {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + Duration::from_millis(16),
             ));
->>>>>>> 31f83499b
         }
     }
 }
@@ -19289,11 +18693,7 @@ impl<'a> Game<'a> {
             pending_entry: None,
             debug_density: RefCell::default(),
             pending_pack_reload: false,
-<<<<<<< HEAD
-||||||| f8988d5a7
-=======
             pack_folder: None,
->>>>>>> 31f83499b
             pack_reload: None,
             server_packs: Default::default(),
             link_prompt: None,
@@ -19570,15 +18970,11 @@ impl<'a> Game<'a> {
             waypoint_styles: prepared.waypoint_styles,
             waypoints: Default::default(),
             locator_camera: None,
-<<<<<<< HEAD
             kinetics: Default::default(),
             machines: Default::default(),
-||||||| f8988d5a7
-=======
             native_camera_frame: None,
             post_effects: Vec::new(),
             spectated_post_effect: None,
->>>>>>> 31f83499b
             experience_display: Default::default(),
             boats: Vec::new(),
             leash_boats: Vec::new(),
@@ -19603,20 +18999,6 @@ impl<'a> Game<'a> {
             remote_knots: Default::default(),
             knot_ids: Default::default(),
             text_display_vertices: 0,
-<<<<<<< HEAD
-            interactions: Default::default(),
-            skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join("assets/skins"),
-            )),
-||||||| f8988d5a7
-            skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join("assets/skins"),
-            )),
-=======
             skin_downloads: RefCell::new({
                 let mut downloads = horizon_client::skins::Downloader::new(
                     std::env::current_dir()
@@ -19626,17 +19008,10 @@ impl<'a> Game<'a> {
                 downloads.set_resource_root(root.clone());
                 downloads
             }),
->>>>>>> 31f83499b
             skin_profiles: RefCell::new(horizon_client::skins::Resolver::new()),
-<<<<<<< HEAD
-            skin_slots: Vec::new(),
-            own_skin: Default::default(),
-||||||| f8988d5a7
-            skin_slots: Vec::new(),
-=======
             skin_slots: horizon_client::skins::SkinSlots::new(horizon_client::hud::SKIN_SLOTS),
+            own_skin: Default::default(),
             cosmetics: Default::default(),
->>>>>>> 31f83499b
             trim_slots: Vec::new(),
             cart_models: prepared.cart_models,
             riding: None,
@@ -19981,41 +19356,7 @@ impl Game<'_> {
     fn resume_world_entry(&mut self) -> Result<()> {
         self.poll_integrated_start()?;
         self.poll_world_rest()?;
-<<<<<<< HEAD
-        if let Some(loader) = &self.world_loader {
-            // The world opens with its mods running: entered before they start, it would play
-            // without them (they load in the background, a JavaScript mod for seconds).
-            if !loader.ready() || (!loader.cancelled && self.mods.starting()) {
-                return Ok(());
-            }
-            let loader = self
-                .world_loader
-                .take()
-                .ok_or("missing world initialization worker")?;
-            let cancelled = loader.cancelled;
-            let prepared = loader.finish();
-            if !cancelled {
-                self.finish_open_world(prepared?)?;
-            }
-        }
-||||||| f8988d5a7
-        if let Some(loader) = &self.world_loader {
-            if !loader.ready() {
-                return Ok(());
-            }
-            let loader = self
-                .world_loader
-                .take()
-                .ok_or("missing world initialization worker")?;
-            let cancelled = loader.cancelled;
-            let prepared = loader.finish();
-            if !cancelled {
-                self.finish_open_world(prepared?)?;
-            }
-        }
-=======
         self.poll_world_creation();
->>>>>>> 31f83499b
         if self.rest_loader.is_some() {
             return Ok(());
         }
@@ -21019,11 +20360,7 @@ fn load_world_rest(
         threads
     );
     progress.set(8);
-<<<<<<< HEAD
-    let stations = horizon_client::stations::StationData::load(root, &items);
-    let animate =
-        horizon_client::animate_tick::AnimateTables::load(root, registry_owner.registry, biomes)?;
-    let fog = horizon_client::fog::FogTables::load(root, biomes);
+    let _tail = startup::step("rest.tail");
     // Content mods' kinetic blocks (none without them): their networks (game/kinetics.rs).
     let kinetics = horizon_client::kinetics::KineticTable::load(root, registry_owner.registry)
         .unwrap_or_else(|e| {
@@ -21068,14 +20405,6 @@ fn load_world_rest(
             &crafting,
         )
     };
-||||||| f8988d5a7
-    let stations = horizon_client::stations::StationData::load(root, &items);
-    let animate =
-        horizon_client::animate_tick::AnimateTables::load(root, registry_owner.registry, biomes)?;
-    let fog = horizon_client::fog::FogTables::load(root, biomes);
-=======
-    let _tail = startup::step("rest.tail");
->>>>>>> 31f83499b
     Ok(WorldRest {
         kinetics,
         basin_recipes,
@@ -21542,11 +20871,6 @@ fn leave_fullscreen_after(
 }
 
 fn run_event_loop(mut game: Game<'_>) -> Result<()> {
-<<<<<<< HEAD
-    let result = event_loop()?.run_app(&mut game);
-||||||| f8988d5a7
-    let result = EventLoop::new()?.run_app(&mut game);
-=======
     if game.options.headless {
         // No display to open winit's loop on: the game's own loop.
         game.run_headless();
@@ -21556,10 +20880,9 @@ fn run_event_loop(mut game: Game<'_>) -> Result<()> {
         return game.error.take().map_or(Ok(()), Err);
     }
     let mut split = split::Split::new(game);
-    let result = EventLoop::new()?.run_app(&mut split);
+    let result = event_loop()?.run_app(&mut split);
     game = split.host;
     narrator::stop();
->>>>>>> 31f83499b
     leave_fullscreen_after(&result, &mut game.settings);
     result?;
     horizon_client::discord_presence::stop();
@@ -21730,7 +21053,6 @@ impl Loading {
         horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);
         self.window = Some(window);
     }
-<<<<<<< HEAD
     /// The window is going away (Android): its surface goes with it, and the log is flushed
     /// before the system may end the process.
     fn suspended(&mut self) {
@@ -21740,16 +21062,10 @@ impl Loading {
         }
         horizon_client::logging::flush();
     }
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-||||||| f8988d5a7
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-=======
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, mut event: WindowEvent) {
->>>>>>> 31f83499b
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
-<<<<<<< HEAD
         if self.menu_touch_editor_event(&event) {
             return;
         }
@@ -21773,6 +21089,7 @@ impl Loading {
             }
             return;
         }
+        follow_keymap(&mut event);
         let events = match &event {
             WindowEvent::Touch(touch) => {
                 let size = self.window.as_ref().map_or([1, 1], |w| {
@@ -21795,16 +21112,6 @@ impl Loading {
                 event_loop.exit();
                 return;
             }
-||||||| f8988d5a7
-        if let Err(error) = self.menu_event(event_loop, event) {
-            self.error = Some(error);
-            event_loop.exit();
-=======
-        follow_keymap(&mut event);
-        if let Err(error) = self.menu_event(event_loop, event) {
-            self.error = Some(error);
-            event_loop.exit();
->>>>>>> 31f83499b
         }
     }
     /// The menu bundle arrived: rebuild the loading screen with the real atlas
@@ -21816,12 +21123,8 @@ impl Loading {
         );
         self.menu.set_root(root, &self.settings);
         self.gui = Some(gui);
-<<<<<<< HEAD
         self.setup.starting = false;
-||||||| f8988d5a7
-=======
         self.title_drawn = false;
->>>>>>> 31f83499b
         horizon_client::ui_theme::reset_atlas();
         self.apply_menu_settings();
         let Some(window) = self.window.clone() else {
@@ -21914,7 +21217,6 @@ impl Loading {
             return;
         };
         let mut batch = HudBatch::new(size);
-<<<<<<< HEAD
         if self.failure.is_some() && self.menu.options_open {
             // The setup's settings: the menu's own screens, in the skin it put on.
             self.draw_menu(&mut batch);
@@ -21931,12 +21233,7 @@ impl Loading {
             self.draw_menu(&mut batch);
         }
         self.draw_menu_touch_editor(&mut batch, size);
-||||||| f8988d5a7
-        self.draw_menu(&mut batch);
-=======
-        self.draw_menu(&mut batch);
         self.menu.frame_drawn((batch.width, batch.height));
->>>>>>> 31f83499b
         let mut frame = loading_frame(&batch);
         frame.yaw = self.panorama_rotation.update(
             self.started.elapsed().as_secs_f32(),
@@ -21979,7 +21276,6 @@ impl Loading {
             }
         }
     }
-<<<<<<< HEAD
     /// Load the resources again (they were imported after a failure): a fresh loader, as at start.
     fn retry(&mut self) -> Result<()> {
         let options = self.options.as_ref().ok_or("loading already finished")?;
@@ -22054,12 +21350,7 @@ impl Loading {
         ui.finish();
         self.imports.draw(&gui.atlas, batch);
     }
-    fn finish(&mut self, loaded: Loaded) -> Result<Option<Game<'static>>> {
-||||||| f8988d5a7
-    fn finish(&mut self, loaded: Loaded) -> Result<Option<Game<'static>>> {
-=======
     fn finish(&mut self, loaded: Loaded) -> Result<Option<split::Split<'static>>> {
->>>>>>> 31f83499b
         let handoff_at = Instant::now();
         let mut options = self.options.take().ok_or("loading already finished")?;
         options.resources = loaded.root.clone();
@@ -22096,7 +21387,6 @@ impl Loading {
         let audio = if !options.execution_role.is_client() {
             Audio::silent(&options.resources)
         } else {
-<<<<<<< HEAD
             match self.audio.take() {
                 Some(mut audio) => {
                     if options.resources != self.vanilla_root {
@@ -22104,13 +21394,8 @@ impl Loading {
                     }
                     audio
                 }
-                None => Audio::new(&options.resources),
+                None => Audio::with_device(&options.resources, &self.settings.sound_device),
             }
-||||||| f8988d5a7
-            Audio::new(&options.resources)
-=======
-            Audio::with_device(&options.resources, &self.settings.sound_device)
->>>>>>> 31f83499b
         };
         let pack_error = loaded.pack_error.or_else(|| self.pack_error.take());
         // The game borrows its shared resources for the process's lifetime,
@@ -22196,15 +21481,12 @@ impl ApplicationHandler for App {
                     event_loop.exit();
                     return;
                 }
-<<<<<<< HEAD
                 // A window in the background has no surface for the game's renderer: the
                 // loaded resources wait for it to come back.
-                match if loading.menu.reload_packs || loading.suspended {
-||||||| f8988d5a7
-                match if loading.menu.reload_packs {
-=======
-                match if loading.menu.reload_packs || !loading.ready_for_handoff() {
->>>>>>> 31f83499b
+                match if loading.menu.reload_packs
+                    || loading.suspended
+                    || !loading.ready_for_handoff()
+                {
                     None
                 } else {
                     loading.loaded.take()
@@ -22320,14 +21602,8 @@ fn run_loading(
         suspended: false,
     };
     let mut app = App::Loading(Box::new(loading));
-<<<<<<< HEAD
     let result = event_loop()?.run_app(&mut app);
-||||||| f8988d5a7
-    let result = EventLoop::new()?.run_app(&mut app);
-=======
-    let result = EventLoop::new()?.run_app(&mut app);
     narrator::stop();
->>>>>>> 31f83499b
     match &mut app {
         // Ready: splitscreen around P1's game.
         App::Ready(split) => leave_fullscreen_after(&result, &mut split.host.settings),
@@ -22398,37 +21674,8 @@ pub fn run_with() -> Result<()> {
         horizon_client::spans::record_here(true);
     }
     let vanilla_root = options.resources.clone();
-<<<<<<< HEAD
-    // Bedrock's touch buttons, fetched from Mojang once (bedrock_touch.rs) where the resources
-    // came without them (prepared on a computer, or no network then): drawn from the next start,
-    // or this one's if they come before its GUI atlas.
-    #[cfg(target_os = "android")]
-    if options.execution_role.is_client() && !horizon_client::bedrock_touch::present(&vanilla_root)
-    {
-        let root = vanilla_root.clone();
-        let _ = std::thread::Builder::new()
-            .name("bedrock touch".into())
-            .spawn(move || horizon_client::bedrock_touch::fetch_logged(&root));
-    }
-    let options_txt = std::env::current_dir()?.join("options.txt");
-    #[cfg(target_os = "android")]
-    let first_start = !options_txt.exists();
-    #[allow(unused_mut)]
-    let mut early_settings = Settings::load(&options_txt);
-    // A phone's first start: settings for what it can take, saved before anything reads them.
-    #[cfg(target_os = "android")]
-    if first_start && let Some(tier) = horizon_client::system_stats::Tier::here() {
-        horizon_client::graphics::apply_mobile_defaults(tier, &mut early_settings);
-        early_settings.save(&options_txt);
-        log::info!(
-            "Horizon: first start on a {} tier device: render distance {}, resolution {}%",
-            tier.name(),
-            early_settings.render_distance,
-            early_settings.horizon.resolution_scale
-        );
-||||||| f8988d5a7
-    let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
-=======
+    // Android has no launcher to start from: the setup screen asks for the game files instead.
+    #[cfg(not(target_os = "android"))]
     if let Some(error) = missing_resources(&vanilla_root) {
         // The game build started by hand (the release's zip), not by the
         // launcher: a window says where to get it. Scripts and servers get
@@ -22454,11 +21701,37 @@ pub fn run_with() -> Result<()> {
     }
     mods::register_components(&vanilla_root)?;
     mods::register_standalone_models();
-    let early_settings = Settings::load(&Game::options_path());
+    // Bedrock's touch buttons, fetched from Mojang once (bedrock_touch.rs) where the resources
+    // came without them (prepared on a computer, or no network then): drawn from the next start,
+    // or this one's if they come before its GUI atlas.
+    #[cfg(target_os = "android")]
+    if options.execution_role.is_client() && !horizon_client::bedrock_touch::present(&vanilla_root)
+    {
+        let root = vanilla_root.clone();
+        let _ = std::thread::Builder::new()
+            .name("bedrock touch".into())
+            .spawn(move || horizon_client::bedrock_touch::fetch_logged(&root));
+    }
+    let options_txt = Game::options_path();
+    #[cfg(target_os = "android")]
+    let first_start = !options_txt.exists();
+    #[allow(unused_mut)]
+    let mut early_settings = Settings::load(&options_txt);
+    // A phone's first start: settings for what it can take, saved before anything reads them.
+    #[cfg(target_os = "android")]
+    if first_start && let Some(tier) = horizon_client::system_stats::Tier::here() {
+        horizon_client::graphics::apply_mobile_defaults(tier, &mut early_settings);
+        early_settings.save(&options_txt);
+        log::info!(
+            "Horizon: first start on a {} tier device: render distance {}, resolution {}%",
+            tier.name(),
+            early_settings.render_distance,
+            early_settings.horizon.resolution_scale
+        );
+    }
     // Minecraft's constructor opens the narrator; a server has none.
     if options.execution_role.is_client() {
         narrator::start(&early_settings);
->>>>>>> 31f83499b
     }
     // "Playing Horizon" on Discord: never for a server; an automated run only talks to a test's fake Discord.
     if options.dedicated.is_none() {
@@ -22501,15 +21774,9 @@ pub fn run_with() -> Result<()> {
     )?;
     let gui = loaded.gui.ok_or("missing menu bundle")?;
     options.resources = loaded.root.clone();
-<<<<<<< HEAD
     // Starling: a phone's setup before 0.1.6 left the sounds out.
     horizon_client::preparer::complete_sounds(&vanilla_root);
-    let audio = if !options.execution_role.is_client() {
-||||||| f8988d5a7
-    let audio = if !options.execution_role.is_client() {
-=======
     let audio = if !options.execution_role.is_client() || options.headless {
->>>>>>> 31f83499b
         Audio::silent(&options.resources)
     } else {
         Audio::with_device(&options.resources, &early_settings.sound_device)

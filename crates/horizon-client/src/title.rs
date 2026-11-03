@@ -15,20 +15,11 @@ use std::{
     sync::mpsc,
 };
 
-<<<<<<< HEAD
 mod account;
-||||||| f8988d5a7
-=======
 mod buffet;
 mod confirm_experiments;
->>>>>>> 31f83499b
 mod create_world;
-<<<<<<< HEAD
-mod data_packs;
-||||||| f8988d5a7
-=======
 mod experiments;
->>>>>>> 31f83499b
 mod flat;
 mod onboarding;
 #[cfg(test)]
@@ -36,7 +27,6 @@ mod tests;
 pub mod world_management;
 pub use buffet::State as BuffetEditor;
 pub use create_world::{DIFFICULTIES, WorldOptions};
-pub use data_packs::set_running as set_running_world_mods;
 pub use flat::{FlatLayer, FlatSettings, State as FlatEditor};
 pub use onboarding::Onboarding;
 
@@ -340,17 +330,13 @@ pub enum Mode {
         alert: Option<Alert>,
     },
     Multiplayer(crate::multiplayer::Screen),
-<<<<<<< HEAD
     /// Starling's Microsoft account (`accounts`): signing in, the game's files.
     Account,
-||||||| f8988d5a7
-=======
     /// SafetyScreen: the warning before the first Multiplayer click, with its
     /// "Do not show this screen again" box.
     MultiplayerWarning {
         check: bool,
     },
->>>>>>> 31f83499b
     /// CreateFlatWorldScreen over Create New World: the fields that screen
     /// keeps and the superflat editor on top of them.
     CreateFlat {
@@ -465,11 +451,6 @@ pub struct Title {
     recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
     /// WorldCreationGameRulesScreen, over Create New World while it is open.
     rules: RefCell<Option<RulesScreen>>,
-<<<<<<< HEAD
-    /// Starling: the Data Packs screen, over Create New World while it is open.
-    packs: RefCell<Option<data_packs::DataPacks>>,
-||||||| f8988d5a7
-=======
     /// The onboarding screen has run out: the owner saves `onboardAccessibility` as false.
     pub onboarding_finished: bool,
     /// Focused button id, for keyboard navigation.
@@ -483,7 +464,6 @@ pub struct Title {
     preparing: bool,
     /// The confirm screen's Back: the Data Packs screen reopens.
     reopen_data_packs: bool,
->>>>>>> 31f83499b
 }
 pub(crate) struct Button {
     x: f32,
@@ -808,17 +788,12 @@ impl Title {
             splash_you,
             recent: std::cell::RefCell::new(None),
             rules: RefCell::new(None),
-<<<<<<< HEAD
-            packs: RefCell::new(None),
-||||||| f8988d5a7
-=======
             onboarding_finished: false,
             focused_button: None,
             experiments: RefCell::new(None),
             confirm_experiments: RefCell::new(None),
             preparing: false,
             reopen_data_packs: false,
->>>>>>> 31f83499b
         }
     }
     /// Vanilla bypasses the selector when there are no saves.
@@ -1133,9 +1108,6 @@ impl Title {
     }
     /// The pointer moved with the button held (`mouseDragged`).
     pub fn drag(&mut self, cursor: (f32, f32), size: (f32, f32)) {
-        if let Some(packs) = self.packs.get_mut() {
-            return packs.drag(cursor.1);
-        }
         if let Some(rules) = self.rules.get_mut() {
             return rules.drag(cursor.1, size.1.ceil());
         }
@@ -1159,9 +1131,6 @@ impl Title {
     }
     /// The button was released (`onRelease`).
     pub fn release(&mut self) {
-        if let Some(packs) = self.packs.get_mut() {
-            packs.release();
-        }
         if let Some(rules) = self.rules.get_mut() {
             rules.release();
         }
@@ -1176,19 +1145,8 @@ impl Title {
         }
         self.scroll.get_mut().release();
     }
-<<<<<<< HEAD
-    /// Mouse wheel over the classic world and server lists.
-    pub fn scroll_worlds(&mut self, delta: f32, cursor: (f32, f32), size: (f32, f32)) {
-        if let Some(packs) = self.packs.get_mut() {
-            return packs.wheel(delta, cursor);
-        }
-||||||| f8988d5a7
-    /// Mouse wheel over the classic world and server lists.
-    pub fn scroll_worlds(&mut self, delta: f32, cursor: (f32, f32), size: (f32, f32)) {
-=======
     /// Mouse wheel over the classic world and server lists, or cycle buttons. Returns true if a button was cycled.
     pub fn scroll_worlds(&mut self, delta: f32, cursor: (f32, f32), size: (f32, f32)) -> bool {
->>>>>>> 31f83499b
         if let Some(rules) = self.rules.get_mut() {
             rules.wheel(delta, size.1.ceil());
             return false;
@@ -1686,15 +1644,8 @@ impl Title {
         else {
             return Action::None;
         };
-        let folder = self.target_folder(name);
-        // Starling: the Data Packs screen's choice, in place before the world first loads.
-        data_packs::copy_into(
-            &data_packs::folder(),
-            &self.saves.join(&folder),
-            &options.data_packs,
-        );
         Action::Create {
-            folder,
+            folder: self.target_folder(name),
             name: name.clone(),
             seed: parse_seed(seed),
             creative: *creative,
@@ -1728,8 +1679,8 @@ impl Title {
         folder
     }
     fn buttons(&self, w: f32, h: f32) -> Vec<Button> {
-        // The game rules and the data packs draw and press their own.
-        if self.rules.borrow().is_some() || self.packs.borrow().is_some() {
+        // The game rules draw and press their own.
+        if self.rules.borrow().is_some() {
             return Vec::new();
         }
         let (w, h) = (w.ceil(), h.ceil());
@@ -2456,9 +2407,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         hide_splash: bool,
     ) {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
-        if let Some(packs) = self.packs.borrow_mut().as_mut() {
-            return packs.draw(atlas, batch, cursor);
-        }
         if let Some(rules) = self.rules.borrow_mut().as_mut() {
             return rules.draw(batch, atlas, cursor);
         }
@@ -3368,20 +3316,12 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     /// Navigation buttons can return `Action::None` while still sounding.
     pub fn click(&mut self, x: f32, y: f32, size: (f32, f32)) -> (Action, bool) {
         self.remember_direct_address();
-<<<<<<< HEAD
-        // The game rules and the data packs take the press in `press_rules`, which has the atlas.
-        if self.rules.get_mut().is_some() || self.packs.get_mut().is_some() {
-||||||| f8988d5a7
-        // The game rules take the press in `press_rules`, which has the atlas.
-        if self.rules.get_mut().is_some() {
-=======
         // The game rules take the press in `press_rules`, which has the atlas.
         if self.rules.get_mut().is_some()
             || self.experiments.get_mut().is_some()
             || self.confirm_experiments.get_mut().is_some()
             || self.preparing
         {
->>>>>>> 31f83499b
             return (Action::None, false);
         }
         let (w, h) = (size.0.ceil(), size.1.ceil());
@@ -3497,7 +3437,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 self.mode = Mode::Multiplayer(crate::multiplayer::Screen::friend());
                 Action::None
             }
-<<<<<<< HEAD
             (Mode::Main, Some(8)) => {
                 self.mode = Mode::Account;
                 Action::None
@@ -3506,14 +3445,13 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 if account::click(id) {
                     self.mode = Mode::Main;
                 }
-||||||| f8988d5a7
-=======
+                Action::None
+            }
             (Mode::Onboarding(_), Some(onboarding::SOUNDS)) => Action::Sounds,
             (Mode::Onboarding(_), Some(onboarding::ACCESSIBILITY)) => Action::Accessibility,
             (Mode::Onboarding(_), Some(onboarding::LANGUAGE)) => Action::Language,
             (Mode::Onboarding(_), Some(onboarding::CONTINUE)) => {
                 self.onboarding_close();
->>>>>>> 31f83499b
                 Action::None
             }
             (Mode::Main, Some(3)) => Action::Options,
@@ -3754,16 +3692,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 *self.rules.get_mut() = Some(RulesScreen::for_creation(&rules));
                 Action::None
             }
-<<<<<<< HEAD
-            // CreateWorldScreen.openDataPackSelectionScreen (Starling: the game's own folder).
-            (Mode::Create { options, .. }, Some(31)) => {
-                let mods = options.mods.clone().unwrap_or_else(data_packs::running);
-                *self.packs.get_mut() =
-                    Some(data_packs::DataPacks::open(&options.data_packs, &mods));
-                Action::None
-            }
-||||||| f8988d5a7
-=======
             // CreateBuffetWorldScreen for the single-biome preset.
             (
                 Mode::Create {
@@ -3787,7 +3715,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 Action::None
             }
             // CreateFlatWorldScreen for the flat preset.
->>>>>>> 31f83499b
             (
                 Mode::Create {
                     name,
@@ -3854,7 +3781,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     }
     /// The focused text field, its id and maximum length (copy and paste).
     pub fn focused_field(&mut self) -> Option<(crate::clipboard::FieldId, &mut String, usize)> {
-        if self.rules.get_mut().is_some() || self.packs.get_mut().is_some() {
+        if self.rules.get_mut().is_some() {
             return None;
         }
         match &mut self.mode {
@@ -3864,9 +3791,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     }
     /// Whether the focused field edits at its cursor.
     pub fn has_caret_field(&mut self) -> bool {
-        if let Some(packs) = self.packs.get_mut() {
-            return packs.typing();
-        }
         // The game rules' boxes edit themselves (`edit_field`).
         if let Some(rules) = self.rules.get_mut() {
             return rules.typing();
@@ -3893,36 +3817,18 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     }
     /// EditBox.charTyped / insertText at the cursor.
     pub fn type_text(&mut self, text: &str) {
-<<<<<<< HEAD
-        if let Some(packs) = self.packs.get_mut() {
-            return packs.type_text(text);
-||||||| f8988d5a7
-=======
         // `GenericMessageScreen`: no field takes input during the read.
         if self.preparing {
             return;
->>>>>>> 31f83499b
         }
         self.edit_field(|edit| edit.insert_text(text));
     }
     pub fn backspace(&mut self) {
-        if let Some(packs) = self.packs.get_mut() {
-            return packs.backspace();
-        }
         self.field_key(winit::keyboard::KeyCode::Backspace, false, false);
     }
     /// EditBox.keyPressed: moving and deleting in the focused field.
     pub fn field_key(&mut self, key: winit::keyboard::KeyCode, ctrl: bool, shift: bool) -> bool {
-<<<<<<< HEAD
-        if let Some(packs) = self.packs.get_mut() {
-            if key == winit::keyboard::KeyCode::Backspace && packs.typing() {
-                packs.backspace();
-                return true;
-            }
-||||||| f8988d5a7
-=======
         if self.preparing {
->>>>>>> 31f83499b
             return false;
         }
         let mut handled = false;
@@ -3946,9 +3852,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     /// Whether `(x, y)` (GUI pixels) is on the focused text field, where a tap asks for an
     /// on-screen keyboard. The server screens are forms: any of their fields counts.
     pub fn text_field_at(&mut self, (x, y): (f32, f32), size: (f32, f32)) -> bool {
-        if let Some(packs) = self.packs.get_mut() {
-            return packs.search_at((x, y));
-        }
         if let Mode::Multiplayer(screen) = &mut self.mode {
             return screen.focused_text().is_some();
         }
@@ -3982,7 +3885,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         shift: bool,
     ) {
         let (w, h) = (size.0.ceil(), size.1.ceil());
-        if self.rules.get_mut().is_some() || self.packs.get_mut().is_some() {
+        if self.rules.get_mut().is_some() {
             return;
         }
         let Some(rect @ [fx, fy, fw, fh]) = self.focused_rect((w, h)) else {
@@ -3997,7 +3900,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     }
     /// The pointer moved with the button held (`EditBox.onDrag`).
     pub fn drag_field(&mut self, atlas: &HudAtlas, x: f32) {
-        if self.rules.get_mut().is_some() || self.packs.get_mut().is_some() {
+        if self.rules.get_mut().is_some() {
             return;
         }
         if let Some(field) = caret_field(&mut self.mode, self.search_focused, &mut self.search) {
@@ -4103,17 +4006,11 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         self.play(world)
     }
     pub fn tab(&mut self) {
-<<<<<<< HEAD
-        if self.rules.get_mut().is_some() || self.packs.get_mut().is_some() {
-||||||| f8988d5a7
-        if self.rules.get_mut().is_some() {
-=======
         self.tab_dir(false, (854.0, 480.0));
     }
     /// Tab navigation through widgets and fields in either forward or reverse order.
     pub fn tab_dir(&mut self, reverse: bool, size: (f32, f32)) {
         if self.rules.get_mut().is_some() {
->>>>>>> 31f83499b
             return;
         }
         if matches!(self.mode, Mode::Multiplayer(_)) {
@@ -4416,14 +4313,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     /// A left press on the game rules (they need the atlas for text): whether
     /// it lands on a button, for its sound.
     pub fn press_rules(&mut self, atlas: &HudAtlas, cursor: (f32, f32), size: (f32, f32)) -> bool {
-        // The data packs need the atlas too, and take the press the same way.
-        if let Some(packs) = self.packs.get_mut() {
-            let (sound, done) = packs.press(atlas, cursor, size);
-            if let Some(chosen) = done {
-                self.close_packs(chosen);
-            }
-            return sound;
-        }
         let size = (size.0.ceil(), size.1.ceil());
         if self.confirm_experiments.borrow().is_some() {
             let click = self
@@ -4550,17 +4439,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
         }
     }
-<<<<<<< HEAD
-    /// The data packs' `onClose`: their choice kept for the world being created, the world mods
-    /// with it.
-    fn close_packs(&mut self, chosen: Vec<String>) {
-        *self.packs.get_mut() = None;
-        if let Mode::Create { options, .. } = &mut self.mode {
-            let (packs, mods) = data_packs::split(chosen);
-            options.data_packs = packs;
-            options.mods = Some(mods);
-||||||| f8988d5a7
-=======
     /// `Gui.buildInitialScreens`' chain: the next queued ban notice, else the title.
     fn next_ban_notice(&mut self) {
         self.mode = match self.ban_queue.pop_front() {
@@ -4606,16 +4484,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         }
         if matches!(self.mode, Mode::Main) {
             self.next_ban_notice();
->>>>>>> 31f83499b
         }
     }
     pub fn escape(&mut self) {
-<<<<<<< HEAD
-        if let Some(packs) = self.packs.get_mut() {
-            let chosen = packs.commit();
-            return self.close_packs(chosen);
-||||||| f8988d5a7
-=======
         // GenericMessageScreen.shouldCloseOnEsc is false: the preparing
         // read takes no input, the player's options survive it.
         if self.preparing {
@@ -4627,7 +4498,6 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         }
         if self.experiments.get_mut().take().is_some() {
             return;
->>>>>>> 31f83499b
         }
         if let Some(rules) = self.rules.get_mut() {
             if let Some(exit) = rules.escape() {

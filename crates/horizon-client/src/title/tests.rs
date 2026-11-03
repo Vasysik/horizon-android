@@ -1050,95 +1050,14 @@ fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
             bonus_chest: true
         }
     );
-<<<<<<< HEAD
-    // The More tab's Experiments screen doesn't exist yet; Data Packs is Starling's.
-||||||| f8988d5a7
-    // The More tab's Experiments and Data Packs screens don't exist yet.
-=======
     // The More tab: Game Rules, Experiments and Data Packs all open; Data
     // Packs opens on a new pack folder, and its selection reaches the action.
->>>>>>> 31f83499b
     f.title.click(54.0 + 248.0 + 10.0, 10.0, size);
     let more = labels(&f);
     assert_eq!(
         more[..3].iter().map(|b| b.3).collect::<Vec<_>>(),
-<<<<<<< HEAD
-        [true, false, true]
-||||||| f8988d5a7
-        labels(&f)[..3].iter().map(|b| b.3).collect::<Vec<_>>(),
-        [true, false, false]
-=======
         [true, true, true]
->>>>>>> 31f83499b
     );
-<<<<<<< HEAD
-    // It opens over Create New World (which draws no buttons of its own then), and Escape
-    // closes it with its choice: vanilla's own only, which is not kept.
-    f.title.click(more[2].1 + 10.0, more[2].2 + 10.0, size);
-    assert!(f.title.packs.borrow().is_some() && f.title.buttons(480.0, 262.0).is_empty());
-    f.title.escape();
-    assert!(f.title.packs.borrow().is_none());
-    let Mode::Create { options, .. } = &f.title.mode else {
-        panic!()
-    };
-    assert!(options.data_packs.is_empty());
-}
-
-#[test]
-fn chosen_data_packs_are_copied_into_the_new_world() {
-    let f = Fixture::new();
-    let from = f.root.join("datapacks");
-    fs::create_dir_all(from.join("folder pack/data/x/function")).unwrap();
-    fs::write(from.join("folder pack/pack.mcmeta"), b"{}").unwrap();
-    fs::write(
-        from.join("folder pack/data/x/function/f.mcfunction"),
-        b"say hi",
-    )
-    .unwrap();
-    fs::write(from.join("zipped.zip"), b"zip").unwrap();
-    fs::write(from.join("left out.zip"), b"zip").unwrap();
-    let world = f.title.saves.join("New World");
-    super::data_packs::copy_into(
-        &from,
-        &world,
-        &["file/folder pack".into(), "file/zipped.zip".into()],
-    );
-    let packs = world.join("datapacks");
-    assert_eq!(
-        fs::read(packs.join("folder pack/data/x/function/f.mcfunction")).unwrap(),
-        b"say hi"
-    );
-    assert!(packs.join("zipped.zip").is_file() && !packs.join("left out.zip").exists());
-}
-
-#[test]
-fn the_screen_choice_splits_into_data_packs_and_world_mods() {
-    let (packs, mods) =
-        super::data_packs::split(vec!["mod/create".into(), "file/zipped.zip".into()]);
-    assert_eq!(packs, ["file/zipped.zip"]);
-    assert_eq!(mods, ["create".to_owned()].into());
-}
-
-#[test]
-fn world_options_survive_the_restart_as_json() {
-    let mut options = WorldOptions {
-        hardcore: true,
-        flat: true,
-        flat_settings: Some(FlatSettings::default()),
-        data_packs: vec!["file/zipped.zip".into()],
-        mods: Some(["create".to_owned()].into()),
-        ..WorldOptions::default()
-    };
-    assert!(options.rules.set_string("keep_inventory", "true"));
-    assert!(options.rules.set_string("random_tick_speed", "7"));
-    let json = serde_json::to_value(&options).unwrap();
-    let back: WorldOptions = serde_json::from_value(json).unwrap();
-    assert_eq!(back, options);
-    // An older file without the newer fields reads as their defaults.
-    let old: WorldOptions = serde_json::from_str(r#"{"hardcore":true}"#).unwrap();
-    assert_eq!(old.mods, None);
-||||||| f8988d5a7
-=======
     let (action, sound) = f.title.click(more[2].1 + 10.0, more[2].2 + 10.0, size);
     let Action::DataPacks { dir, selected } = action else {
         panic!("{action:?}")
@@ -1213,7 +1132,6 @@ fn ctrl_digits_and_ctrl_tab_switch_the_create_world_tabs() {
     f.click("Cancel");
     assert!(matches!(f.title.mode, Mode::Main));
     assert_eq!(f.title.tab_bar_key(KeyCode::Digit2, true, false), None);
->>>>>>> 31f83499b
 }
 
 #[test]
@@ -2483,4 +2401,24 @@ fn the_multiplayer_screens_have_their_own_ids() {
         .id(),
         "disconnected"
     );
+}
+
+#[test]
+fn world_options_survive_the_restart_as_json() {
+    let mut options = WorldOptions {
+        hardcore: true,
+        world_type: crate::save::WorldPreset::Flat,
+        flat_settings: Some(FlatSettings::default()),
+        data_packs: vec!["vanilla".into(), "file/zipped.zip".into()],
+        mods: Some(["create".to_owned()].into()),
+        ..WorldOptions::default()
+    };
+    assert!(options.rules.set_string("keep_inventory", "true"));
+    assert!(options.rules.set_string("random_tick_speed", "7"));
+    let json = serde_json::to_value(&options).unwrap();
+    let back: WorldOptions = serde_json::from_value(json).unwrap();
+    assert_eq!(back, options);
+    // An older file without the newer fields reads as their defaults.
+    let old: WorldOptions = serde_json::from_str(r#"{"hardcore":true}"#).unwrap();
+    assert_eq!(old.mods, None);
 }

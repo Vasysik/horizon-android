@@ -3,12 +3,12 @@
 //! touch-layout.json says (edited in place: a long press on pause); on every other screen the
 //! first finger is the pointer, with a close button over the screens a world opens. Android's
 //! back key is Escape, and the chat raises the on-screen keyboard and moves above it. On the
-//! screens with slots a finger works them as Bedrock's touch inventory does (slots.rs). The mods'
-//! buttons are in the layout as the game's own (game/mod_widgets.rs).
+//! screens with slots a finger works them as Bedrock's touch inventory does (slots.rs). The player's
+//! own buttons are in the layout as the game's own.
 mod slots;
 mod text_mirror;
 
-use super::{Game, Screen, mod_widgets::ModFace};
+use super::{Game, Screen};
 use horizon_client::debug_keys::KeyAction;
 use horizon_client::gamepad::ServerStick;
 use horizon_client::input_mode::InputMode;
@@ -44,6 +44,30 @@ pub(super) const BREAK_BUZZ: u32 = 25;
 const SPLIT_BUZZ: u32 = 15;
 /// The layout's file, beside options.txt.
 pub(super) const LAYOUT_FILE: &str = "touch-layout.json";
+
+/// A button of the player's own on the touch controls, as it is drawn.
+#[derive(Clone, Debug)]
+pub(super) struct ModFace {
+    /// `<custom buttons>:<button id>`, its name in the layout.
+    pub(super) key: String,
+    pub(super) label: String,
+    /// The atlas sprite drawn on it instead of the label.
+    pub(super) icon: Option<String>,
+    /// A sprite that is the whole button, and its pressed one (a custom button's look).
+    pub(super) skin: Option<(String, String)>,
+    pub(super) shape: Shape,
+}
+
+/// How one of the game's touch buttons looks: a pack's sprite, else drawn.
+pub(super) struct ControlFace {
+    pub(super) label: String,
+    /// A resource pack's whole button: its sprite and its pressed sprite.
+    pub(super) skin: Option<(String, Option<String>)>,
+    pub(super) shape: Shape,
+}
+
+/// A wide button: 16 GUI pixels tall, as wide as its label, as vanilla's buttons.
+const WIDE_HEIGHT: f32 = 16.0;
 
 /// The layout in its file, for the title's options (no game yet).
 fn saved_layout() -> LayoutConfig {
@@ -784,9 +808,8 @@ impl Game<'_> {
         // The mods' buttons, where the player put them (or their mods do).
         if self.touch_shown() {
             let (faces, offered): (Vec<_>, Vec<_>) = self
-                .mod_touch_buttons()
+                .custom_touch_buttons()
                 .into_iter()
-                .chain(self.custom_touch_buttons())
                 .map(|(face, place)| {
                     let offer = (face.key.clone(), place, face.shape);
                     (face, offer)
@@ -1627,5 +1650,86 @@ impl Game<'_> {
         self.keys.remove(&key);
         self.physical_keys.remove(&key);
         Ok(())
+    }
+}
+
+impl Game<'_> {
+    /// The atlas key of a GUI sprite: `<namespace>:my_icon` (a content mod's or a pack's,
+    /// `assets/<namespace>/textures/gui/sprites/my_icon.png`) or a plain path.
+    pub(super) fn mod_sprite(&self, sprite: &str) -> Option<String> {
+        let atlas = &self.gui.atlas;
+        let (ns, path) = sprite.split_once(':').unwrap_or(("minecraft", sprite));
+        [
+            format!("gui/sprites/{path}"),
+            format!("{ns}:gui/sprites/{path}"),
+            sprite.to_owned(),
+        ]
+        .into_iter()
+        .filter(|k| ns == "minecraft" || !k.starts_with("gui/"))
+        .find(|k| atlas.sprites.contains_key(k))
+    }
+
+    /// The player's own buttons on the touch controls: wide, what they do on them, in a column
+    /// until they are placed.
+    pub(super) fn custom_touch_buttons(&self) -> Vec<(ModFace, touch::Place)> {
+        let Some(config) = &self.touch.config else {
+            return Vec::new();
+        };
+        let [w, h] = self.touch_size();
+        let (w, h) = (w as f32, h as f32);
+        let scale = HudBatch::new([w as u32, h as u32]).scale;
+        let size = WIDE_HEIGHT / 2.0 * scale / touch::unit(w, h);
+        config
+            .custom
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let label: String = b.label().chars().take(14).collect();
+                let width = HudBatch::text_width(&self.gui.atlas, &label) + 10.0;
+                let sprite = |name: &str| self.mod_sprite(&format!("starling:touch/{name}"));
+                // Its own image goes dim while pressed; an icon has a pressed sprite.
+                let skin = if b.image {
+                    sprite(&format!("own_{}", b.id)).map(|own| (own.clone(), own))
+                } else {
+                    b.icon.as_deref().and_then(|icon| {
+                        let up = sprite(&format!("custom_{icon}"))?;
+                        Some((up, sprite(&format!("custom_{icon}_pressed"))?))
+                    })
+                };
+                let face = ModFace {
+                    key: format!("{}:{}", touch::CUSTOM_BUTTONS, b.id),
+                    label,
+                    icon: None,
+                    shape: if skin.is_some() {
+                        Shape::Square
+                    } else {
+                        Shape::Wide(width / WIDE_HEIGHT)
+                    },
+                    skin,
+                };
+                let place = touch::Place {
+                    x: 0.5,
+                    y: 0.25 + 0.1 * (i % 5) as f32,
+                    size: if face.skin.is_some() { 0.5 } else { size },
+                    show: Show::On,
+                    opacity: 1.0,
+                };
+                (face, place)
+            })
+            .collect()
+    }
+
+    /// How one of the game's touch buttons looks now.
+    pub(super) fn control_face(&self, button: Button) -> ControlFace {
+        let name = button.id();
+        let skin = self.mod_sprite(&format!("starling:touch/{name}")).map(|s| {
+            let pressed = self.mod_sprite(&format!("starling:touch/{name}_pressed"));
+            (s, pressed)
+        });
+        ControlFace {
+            label: button.label().to_owned(),
+            skin,
+            shape: Shape::Round,
+        }
     }
 }
