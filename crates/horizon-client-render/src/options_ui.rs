@@ -2300,7 +2300,8 @@ fn narrate_widget(
     use crate::widgets::What;
     if let WKind::Button {
         label, active, act, ..
-    } = &wd.kind {
+    } = &wd.kind
+    {
         let t = |key: &str, args: &[Text]| Text::translate(key, args).plain();
         let bind = |name: Text, bound: bool| {
             if bound {
@@ -3447,9 +3448,7 @@ impl OptionsUi {
                 rows.push(Row::Note(shader_folder_note()));
                 rows.push(pick(choice.is_none(), "Off", Act::PickShaderPack(None)));
                 if s.shader_packs.is_empty() {
-                    rows.push(Row::Header(
-                        "horizon.shader_packs.empty",
-                    ));
+                    rows.push(Row::Header("horizon.shader_packs.empty"));
                 }
                 for (i, pack) in s.shader_packs.iter().enumerate() {
                     let on = choice.as_ref().is_some_and(|(p, _)| *p == pack.file);
@@ -4564,7 +4563,10 @@ impl OptionsUi {
             }
             match &wd.kind {
                 WKind::Button {
-                    label, active, icon, ..
+                    label,
+                    active,
+                    icon,
+                    ..
                 } => {
                     match icon.as_deref().filter(|i| atlas.sprites.contains_key(*i)) {
                         Some(icon) => {

@@ -312,7 +312,9 @@ fn unpack(bytes: &[u8], dir: &Path) -> Result<(), String> {
         let Some(name) = entry.enclosed_name() else {
             return Err(format!(
                 "The app's archive names {}",
-                entry.name().map_or_else(|e| e.to_string(), |n| n.into_owned())
+                entry
+                    .name()
+                    .map_or_else(|e| e.to_string(), |n| n.into_owned())
             ));
         };
         let path = dir.join(name);

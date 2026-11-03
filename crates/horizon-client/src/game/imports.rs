@@ -79,7 +79,6 @@ impl Imports {
         finished
     }
 
-
     /// Replace the note (an import that finished, told in other words by the caller).
     pub(super) fn say(&mut self, text: String) {
         self.note = Some(Note {

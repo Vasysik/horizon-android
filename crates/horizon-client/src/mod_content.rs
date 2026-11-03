@@ -640,12 +640,12 @@ fn turned_shapes<'a>(
                 .iter()
                 .find(|(key, _)| key == name)
                 .map(|(_, value)| value.clone())
-                .or_else(
-                    || match properties(states.start + state).and_then(|props| props.get(name)) {
+                .or_else(|| {
+                    match properties(states.start + state).and_then(|props| props.get(name)) {
                         Some(J::Str(value)) => Some(value.clone()),
                         _ => None,
-                    },
-                )
+                    }
+                })
         };
         let toward = match (value("facing"), value("axis")) {
             (Some(facing), _) => horizon_mods::content::direction(&facing),

@@ -3,9 +3,9 @@
 //! here from the input hook (android.rs) and go on as the window events a computer's mouse
 //! makes; a physical keyboard's keys and a controller (game/pad.rs) also count as the input used.
 use super::Game;
-use horizon_client::input_mode::InputMode;
 #[cfg(target_os = "android")]
 use super::{event_loop::EventLoopCtl, input_trace::InputOrigin};
+use horizon_client::input_mode::InputMode;
 #[cfg(target_os = "android")]
 use winit::{
     dpi::PhysicalPosition,

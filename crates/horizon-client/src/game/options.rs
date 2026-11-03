@@ -565,7 +565,12 @@ impl Game<'_> {
                 s.file.int("textureFiltering"),
                 s.file.int("maxAnisotropyBit"),
             );
-            r.set_world_post(scale, s.horizon.fxaa, s.horizon.taa, s.horizon.upscaling.ratio());
+            r.set_world_post(
+                scale,
+                s.horizon.fxaa,
+                s.horizon.taa,
+                s.horizon.upscaling.ratio(),
+            );
             r.set_frame_generation(
                 s.horizon.frame_generation != horizon_client::graphics::FrameGeneration::Off,
             );

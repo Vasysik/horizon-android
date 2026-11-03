@@ -20363,8 +20363,8 @@ fn load_world_rest(
     progress.set(8);
     let _tail = startup::step("rest.tail");
     // Content mods' kinetic blocks (none without them): their networks (game/kinetics.rs).
-    let kinetics = horizon_client::kinetics::KineticTable::load(root, registry)
-        .unwrap_or_else(|e| {
+    let kinetics =
+        horizon_client::kinetics::KineticTable::load(root, registry).unwrap_or_else(|e| {
             log::warn!("Horizon: kinetic parts not loaded: {e}");
             Default::default()
         });

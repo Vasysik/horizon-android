@@ -8,8 +8,8 @@
 mod slots;
 mod text_mirror;
 
-use super::{Game, Screen, event_loop::EventLoopCtl};
 use super::input_trace::InputOrigin;
+use super::{Game, Screen, event_loop::EventLoopCtl};
 use horizon_client::debug_keys::KeyAction;
 use horizon_client::gamepad::ServerStick;
 use horizon_client::input_mode::InputMode;

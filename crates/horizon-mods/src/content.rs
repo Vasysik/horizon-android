@@ -1981,8 +1981,7 @@ capabilities = ["registries"]
     #[test]
     fn a_kinetic_block_names_its_part_its_models_and_a_render_shape() {
         let block = |json: &str| {
-            let files: &[(&str, &[u8])] =
-                &[("data/ruby/horizon/block/part.json", json.as_bytes())];
+            let files: &[(&str, &[u8])] = &[("data/ruby/horizon/block/part.json", json.as_bytes())];
             hmod("kinetic", MANIFEST_TEXT, files)
         };
         let content = block(
@@ -1994,8 +1993,14 @@ capabilities = ["registries"]
         let kinetic = content.blocks[0].kinetic.clone().unwrap();
         assert_eq!(kinetic.part, KineticPart::LargeCogwheel);
         assert!(kinetic.spins && kinetic.half.is_none() && kinetic.rpm == 0.0);
-        assert!(block(r#"{"template":"minecraft:iron_chain","properties":{"render_shape":"SPIN"}}"#).is_err());
-        assert!(block(r#"{"template":"minecraft:iron_chain","kinetic":{"part":"motor","rpm":300}}"#).is_err());
+        assert!(
+            block(r#"{"template":"minecraft:iron_chain","properties":{"render_shape":"SPIN"}}"#)
+                .is_err()
+        );
+        assert!(
+            block(r#"{"template":"minecraft:iron_chain","kinetic":{"part":"motor","rpm":300}}"#)
+                .is_err()
+        );
         assert!(block(r#"{"template":"minecraft:oak_log","kinetic":{"part":"gearbox","half":"shaft_half"}}"#).is_err());
         assert!(block(r#"{"template":"minecraft:lightning_rod","kinetic":{"part":"crank","extra_facing":"in"}}"#).is_err());
         // A shape of its own: boxes in sixteenths, a block out at most, least corner first.
@@ -2003,9 +2008,18 @@ capabilities = ["registries"]
             r#"{"template":"minecraft:oak_log","properties":{"shape":[[0,6,0,16,10,16],[-8,0,6,24,16,10]]}}"#,
         )
         .unwrap();
-        assert_eq!(shaped.blocks[0].properties.shape.as_ref().map(Vec::len), Some(2));
-        assert!(block(r#"{"template":"minecraft:oak_log","properties":{"shape":[[0,0,0,16,40,16]]}}"#).is_err());
-        assert!(block(r#"{"template":"minecraft:oak_log","properties":{"shape":[[8,0,0,4,16,16]]}}"#).is_err());
+        assert_eq!(
+            shaped.blocks[0].properties.shape.as_ref().map(Vec::len),
+            Some(2)
+        );
+        assert!(
+            block(r#"{"template":"minecraft:oak_log","properties":{"shape":[[0,0,0,16,40,16]]}}"#)
+                .is_err()
+        );
+        assert!(
+            block(r#"{"template":"minecraft:oak_log","properties":{"shape":[[8,0,0,4,16,16]]}}"#)
+                .is_err()
+        );
         assert!(block(r#"{"template":"minecraft:oak_log","properties":{"shape":[]}}"#).is_err());
         let crank = block(
             r#"{"template":"minecraft:lightning_rod","kinetic":{"part":"crank",
@@ -2013,11 +2027,18 @@ capabilities = ["registries"]
         )
         .unwrap();
         assert_eq!(
-            crank.blocks[0].kinetic.as_ref().unwrap().extra_facing.as_deref(),
+            crank.blocks[0]
+                .kinetic
+                .as_ref()
+                .unwrap()
+                .extra_facing
+                .as_deref(),
             Some("north")
         );
         // A part the game does not know is not read at all.
-        assert!(block(r#"{"template":"minecraft:iron_chain","kinetic":{"part":"flywheel"}}"#).is_err());
+        assert!(
+            block(r#"{"template":"minecraft:iron_chain","kinetic":{"part":"flywheel"}}"#).is_err()
+        );
     }
 
     #[test]

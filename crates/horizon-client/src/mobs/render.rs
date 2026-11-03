@@ -2151,7 +2151,8 @@ fn render_visible(
                 None => continue,
             },
         };
-        let Some((drawn, mut uv)) = sprite(texture).or_else(|| Some((texture, atlas(texture)?))) else {
+        let Some((drawn, mut uv)) = sprite(texture).or_else(|| Some((texture, atlas(texture)?)))
+        else {
             continue;
         };
         // A pack's custom armour in the leather texture (`custom_armor`), picked by the dye

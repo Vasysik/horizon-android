@@ -346,7 +346,6 @@ impl Game<'_> {
         false
     }
 
-
     /// `FunnelBlock.useItemOn` on its open face: what the player holds into the inventory
     /// behind it, as much as it takes. True when it took the click.
     pub(super) fn use_funnel(&mut self, pos: [i32; 3], face: [i32; 3]) -> bool {

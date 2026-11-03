@@ -9,8 +9,8 @@
 //! finger on a slot's frame or just past it still means that slot. A finger dragged across the
 //! player turns it round. A finger that moves from a slot (nothing picked) scrolls or drags as the
 //! pointer does elsewhere.
-use super::super::{Game, Screen, event_loop::EventLoopCtl};
 use super::super::input_trace::InputOrigin;
+use super::super::{Game, Screen, event_loop::EventLoopCtl};
 use horizon_client::{
     creative::Creative,
     hud::{HudBatch, rgba},
@@ -296,7 +296,11 @@ impl Game<'_> {
     }
 
     /// Once a frame: a finger resting on a stack picks half of it.
-    pub(in crate::game) fn slot_touch_frame(&mut self, event_loop: &dyn EventLoopCtl, id: WindowId) {
+    pub(in crate::game) fn slot_touch_frame(
+        &mut self,
+        event_loop: &dyn EventLoopCtl,
+        id: WindowId,
+    ) {
         if !self.slot_touch_screen() {
             self.touch.slots = SlotTouch::default();
             return;

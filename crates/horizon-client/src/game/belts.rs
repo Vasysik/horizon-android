@@ -45,7 +45,9 @@ pub(super) struct Segment {
 }
 
 impl Segment {
-    pub(super) fn of(props: &horizon_world::block_state_properties::BlockProperties) -> Option<Self> {
+    pub(super) fn of(
+        props: &horizon_world::block_state_properties::BlockProperties,
+    ) -> Option<Self> {
         let facing = horizon_mods::content::direction(props.get("facing")?)?;
         let slope = match props.get("slope").map(String::as_str) {
             Some("upward") => Slope::Upward,

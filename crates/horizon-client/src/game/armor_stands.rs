@@ -4,10 +4,10 @@
 //! the default pose, the hit wobble and humanoid armor layers.
 use super::{Game, InteractTarget};
 use horizon_client::{
-    custom_armor::{ArmorAtlas, layer_look},
     Result,
     cit::{Hand, Kind, Rule},
     cit_armor,
+    custom_armor::{ArmorAtlas, layer_look},
     entities::ArmorStand,
     items::ItemStack,
     mesher::Vertex,
@@ -240,7 +240,11 @@ impl Game<'_> {
             } else {
                 "humanoid"
             };
-            let Some(layers) = assets.equipment_layers.get(&asset).and_then(|k| k.get(kind)) else {
+            let Some(layers) = assets
+                .equipment_layers
+                .get(&asset)
+                .and_then(|k| k.get(kind))
+            else {
                 continue;
             };
             let Some(part) = assets.player.get(layer) else {
@@ -1111,7 +1115,11 @@ impl Game<'_> {
             } else {
                 "humanoid"
             };
-            let Some(layers) = assets.equipment_layers.get(&asset).and_then(|k| k.get(kind)) else {
+            let Some(layers) = assets
+                .equipment_layers
+                .get(&asset)
+                .and_then(|k| k.get(kind))
+            else {
                 continue;
             };
             let Some(part) = assets.layers.get(&(layer, a.small)) else {
