@@ -3,7 +3,7 @@ run-name: Android dev · ${{ github.sha }}
 
 on:
   push:
-    branches: [android]
+    branches: [android, controls-overhaul-zip]
     paths:
       - 'crates/**'
       - 'Cargo.toml'
@@ -33,7 +33,7 @@ concurrency:
 jobs:
   build:
     # Never expose a signing secret to pull requests or arbitrary dispatch refs.
-    if: github.ref == 'refs/heads/android'
+    if: github.ref == 'refs/heads/android' || github.ref == 'refs/heads/controls-overhaul-zip'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
