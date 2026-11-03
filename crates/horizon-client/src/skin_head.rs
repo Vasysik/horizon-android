@@ -37,6 +37,13 @@ pub fn head(player: &str) -> Option<HeadSkin> {
     if let Some(found) = map.get(name) {
         return *found;
     }
+    // The game already prepared the selected account's skin (wardrobe, cloud
+    // or local file) into this launch's appearance handoff. That is the skin
+    // the game will show, so it wins over a public-profile lookup.
+    if let Some(skin) = prepared_skin() {
+        map.insert(name.to_owned(), Some(skin));
+        return Some(skin);
+    }
     // One attempt per name and session: a miss is cached as a miss.
     map.insert(name.to_owned(), None);
     let wanted = name.to_owned();
@@ -47,6 +54,13 @@ pub fn head(player: &str) -> Option<HeadSkin> {
         }
     });
     None
+}
+
+/// The skin this launch will actually use, already normalized to 64x64 RGBA.
+fn prepared_skin() -> Option<HeadSkin> {
+    let appearance = crate::skins::appearance::current()?;
+    let (rgba, _slim) = appearance.skin.as_ref()?;
+    from_rgba(64, 64, rgba)
 }
 
 fn agent() -> ureq::Agent {
