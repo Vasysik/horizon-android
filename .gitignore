@@ -56,3 +56,6 @@
 
 # Local artwork workspace and original reference images.
 /art/
+
+# Local PR description draft.
+/PR_DESCRIPTION.txt

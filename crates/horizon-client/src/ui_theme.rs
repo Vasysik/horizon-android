@@ -1010,150 +1010,69 @@ impl<'a> Ui<'a> {
         self.icon(Icon::HorizonLogo, x, y, size, primary);
     }
 
-    /// The account's real head from its skin, with the drawn Steve head only
-    /// as the offline fallback while the profile is being fetched.
-    pub fn avatar_head_3d(&mut self, x: f32, y: f32, size: f32, player_name: &str) {
-        match crate::skin_head::head(player_name) {
-            Some(skin) => self.skin_head_3d(x, y, size, &skin),
-            None => self.steve_head_3d(x, y, size),
-        }
-    }
-
-    /// The real skin's top, right side and face, plus its hat layer.
-    fn skin_head_3d(&mut self, x: f32, y: f32, size: f32, skin: &crate::skin_head::HeadSkin) {
-        self.rounded(x, y, size, size, size * 0.28, color::hex(0x231E38, 255));
-        self.border(x, y, size, size, size * 0.28, color::hex(0x4E4275, 255));
-        self.rounded(
-            x + size * 0.18,
-            y + size * 0.78,
-            size * 0.64,
-            size * 0.12,
-            size * 0.06,
-            color::hex(0x08060E, 175),
-        );
-        let pw = size * 0.088;
-        let face = pw * 8.0;
-        let cx = x + (size - face - pw * 3.2) * 0.5 + pw * 1.6;
-        let cy = y + (size - face) * 0.53;
-        let shade = |rgb: u32, k: f32| {
-            let ch = |v: u32| ((v as f32 * k).min(255.0)) as u32;
-            color::hex(
-                (ch((rgb >> 16) & 0xFF) << 16) | (ch((rgb >> 8) & 0xFF) << 8) | ch(rgb & 0xFF),
-                255,
-            )
-        };
-        for row in 0..8 {
-            for col in 0..8 {
-                let px = cx + col as f32 * pw + row as f32 * pw * 0.42;
-                let py = cy - row as f32 * pw * 0.48 - pw * 0.48;
-                self.fill(
-                    px,
-                    py,
-                    pw + 0.5,
-                    pw * 0.5 + 0.5,
-                    shade(skin.top[row][col], 1.1),
-                );
-            }
-        }
-        for row in 0..8 {
-            for col in 0..8 {
-                let px = cx + face + row as f32 * pw * 0.42;
-                let py = cy + col as f32 * pw - row as f32 * pw * 0.48;
-                self.fill(px, py, pw + 0.5, pw + 0.5, shade(skin.side[row][col], 0.74));
-            }
-        }
-        for row in 0..8 {
-            for col in 0..8 {
-                let px = cx + col as f32 * pw;
-                let py = cy + row as f32 * pw;
-                self.fill(px, py, pw + 0.5, pw + 0.5, shade(skin.front[row][col], 1.0));
-                let hat = skin.hat[row][col];
-                if hat >> 24 != 0 {
+    /// The account's real head as a flat 8x8 skin face (no 3D build), so the
+    /// header paints it in the same frame: prepared skin, cached skin, Steve.
+    pub fn avatar_head_2d(&mut self, x: f32, y: f32, size: f32, player_name: &str) {
+        let radius = size * 0.30;
+        self.rounded(x, y, size, size, radius, color::hex(0x241E38, 255));
+        let inset = (size * 0.07).max(1.0);
+        let face = (size - inset * 2.0).max(8.0);
+        let pw = face / 8.0;
+        if let Some(skin) = crate::skin_head::head(player_name) {
+            for row in 0..8 {
+                for col in 0..8 {
+                    let px = x + inset + col as f32 * pw;
+                    let py = y + inset + row as f32 * pw;
                     self.fill(
                         px,
                         py,
-                        pw + 0.5,
-                        pw + 0.5,
-                        color::hex(hat & 0xFFFFFF, (hat >> 24) as u8),
+                        pw + 0.4,
+                        pw + 0.4,
+                        color::hex(skin.front[row][col], 255),
+                    );
+                    let hat = skin.hat[row][col];
+                    if hat >> 24 != 0 {
+                        self.fill(
+                            px,
+                            py,
+                            pw + 0.4,
+                            pw + 0.4,
+                            color::hex(hat & 0xFFFFFF, (hat >> 24) as u8),
+                        );
+                    }
+                }
+            }
+        } else {
+            const HAIR: u32 = 0x3B2A1B;
+            const SKIN: u32 = 0xC68E5E;
+            const EYE: u32 = 0xF4F4F4;
+            const IRIS: u32 = 0x4E6E9E;
+            const NOSE: u32 = 0xA87548;
+            const MOUTH: u32 = 0x6B4A32;
+            const BEARD: u32 = 0x2E2117;
+            const FACE: [[u32; 8]; 8] = [
+                [HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR],
+                [HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR],
+                [HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR],
+                [HAIR, SKIN, SKIN, SKIN, SKIN, SKIN, SKIN, HAIR],
+                [SKIN, EYE, IRIS, SKIN, SKIN, IRIS, EYE, SKIN],
+                [SKIN, SKIN, SKIN, NOSE, NOSE, SKIN, SKIN, SKIN],
+                [SKIN, MOUTH, MOUTH, MOUTH, MOUTH, MOUTH, MOUTH, SKIN],
+                [SKIN, BEARD, BEARD, BEARD, BEARD, BEARD, BEARD, SKIN],
+            ];
+            for (row, pixels) in FACE.iter().enumerate() {
+                for (col, tone) in pixels.iter().enumerate() {
+                    self.fill(
+                        x + inset + col as f32 * pw,
+                        y + inset + row as f32 * pw,
+                        pw + 0.4,
+                        pw + 0.4,
+                        color::hex(*tone, 255),
                     );
                 }
             }
         }
-    }
-
-    /// The bundled Steve head: shown for offline names and while a real skin
-    /// is still being fetched.
-    fn steve_head_3d(&mut self, x: f32, y: f32, size: f32) {
-        self.rounded(x, y, size, size, size * 0.28, color::hex(0x231E38, 255));
-        self.border(x, y, size, size, size * 0.28, color::hex(0x4E4275, 255));
-        self.rounded(
-            x + size * 0.18,
-            y + size * 0.78,
-            size * 0.64,
-            size * 0.12,
-            size * 0.06,
-            color::hex(0x08060E, 175),
-        );
-
-        const HAIR: u32 = 0x3B2A1B;
-        const HAIR_HI: u32 = 0x4C3624;
-        const SKIN: u32 = 0xC68E5E;
-        const SKIN_SIDE: u32 = 0x9E6B42;
-        const EYE: u32 = 0xF4F4F4;
-        const IRIS: u32 = 0x4E6E9E;
-        const NOSE: u32 = 0xA87548;
-        const MOUTH: u32 = 0x6B4A32;
-        const BEARD: u32 = 0x2E2117;
-
-        // The classic Steve face, one entry per skin pixel.
-        const FACE: [[u32; 8]; 8] = [
-            [HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR],
-            [HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR],
-            [HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR],
-            [HAIR, SKIN, SKIN, SKIN, SKIN, SKIN, SKIN, HAIR],
-            [SKIN, EYE, IRIS, SKIN, SKIN, IRIS, EYE, SKIN],
-            [SKIN, SKIN, SKIN, NOSE, NOSE, SKIN, SKIN, SKIN],
-            [SKIN, MOUTH, MOUTH, MOUTH, MOUTH, MOUTH, MOUTH, SKIN],
-            [SKIN, BEARD, BEARD, BEARD, BEARD, BEARD, BEARD, SKIN],
-        ];
-
-        let pw = size * 0.088;
-        let face = pw * 8.0;
-        let cx = x + (size - face - pw * 3.2) * 0.5 + pw * 1.6;
-        let cy = y + (size - face) * 0.53;
-
-        // Top: hair, skewed up and to the right.
-        for row in 0..8 {
-            for col in 0..8 {
-                let px = cx + col as f32 * pw + row as f32 * pw * 0.42;
-                let py = cy - row as f32 * pw * 0.48 - pw * 0.48;
-                let tone = if (row + col) % 3 == 0 { HAIR_HI } else { HAIR };
-                self.fill(px, py, pw + 0.5, pw * 0.5 + 0.5, color::hex(tone, 255));
-            }
-        }
-        // Right side: hair across the top, shaded skin below.
-        for row in 0..8 {
-            for col in 0..8 {
-                let px = cx + face + row as f32 * pw * 0.42;
-                let py = cy + col as f32 * pw - row as f32 * pw * 0.48;
-                let tone = if col < 2 { HAIR } else { SKIN_SIDE };
-                self.fill(px, py, pw + 0.5, pw + 0.5, color::hex(tone, 255));
-            }
-        }
-        // Front: the real texture.
-        for (row, pixels) in FACE.iter().enumerate() {
-            for (col, tone) in pixels.iter().enumerate() {
-                self.fill(
-                    cx + col as f32 * pw,
-                    cy + row as f32 * pw,
-                    pw + 0.5,
-                    pw + 0.5,
-                    color::hex(*tone, 255),
-                );
-            }
-        }
-        // The hair's highlight runs along the top edge of the face.
-        self.fill(cx, cy, face, pw * 0.45, color::hex(HAIR_HI, 210));
+        self.border(x, y, size, size, radius, color::hex(0x4E4275, 255));
     }
 
     /// Draw an authentic Material You 3 Switch (`52x28dp` pill track with sliding thumb and checkmark).
@@ -1217,50 +1136,6 @@ impl<'a> Ui<'a> {
         } else {
             size
         }
-    }
-
-    /// Draw the circular player head avatar badge inside the top-right account pill.
-    pub fn avatar_head(&mut self, x: f32, y: f32, size: f32) {
-        let r = size / 2.0;
-        self.rounded(x, y, size, size, r, color::hex(0x6E56C4, 255));
-        // Hair/top cap and face details inside the circular badge.
-        let inset = size * 0.18;
-        let face_w = size - inset * 2.0;
-        self.rounded(
-            x + inset,
-            y + inset,
-            face_w,
-            face_w,
-            face_w * 0.28,
-            color::hex(0xB89EFF, 255),
-        );
-        self.rounded(
-            x + inset,
-            y + inset,
-            face_w,
-            face_w * 0.36,
-            face_w * 0.2,
-            color::hex(0x41307A, 255),
-        );
-        let eye_w = (size * 0.11).max(2.0);
-        let eye_h = (size * 0.13).max(2.0);
-        let eye_y = y + size * 0.48;
-        self.rounded(
-            x + size * 0.31,
-            eye_y,
-            eye_w,
-            eye_h,
-            1.0,
-            color::hex(0x231942, 255),
-        );
-        self.rounded(
-            x + size * 0.58,
-            eye_y,
-            eye_w,
-            eye_h,
-            1.0,
-            color::hex(0x231942, 255),
-        );
     }
 
     /// Draw a cached RGBA project icon (`w x h`) into `(x, y, dw, dh)` dp.

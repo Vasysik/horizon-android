@@ -744,10 +744,8 @@ impl Launcher {
         ui.batch
             .fill(&gui.atlas, 0.0, 0.0, w * scale, h * scale, MY3_BG);
 
-        // ---- Top Header Bar (H Logo | Horizon Android <version> ... Account Pill) ----
-        ui.horizon_logo(20.0, 15.0, 25.0);
-        ui.rounded(55.0, 18.0, 1.5, 20.0, 0.75, MY3_BORDER);
-        let header_title = format!("Horizon Android {}", crate::backend::VERSION);
+        // ---- Top Header Bar (brand lockup ... account pill) ----
+        ui.horizon_logo(18.0, 12.0, 28.0);
         let account_name = self
             .login
             .profile
@@ -785,9 +783,11 @@ impl Launcher {
         );
         self.targets.push((eq_btn_rect, Action::OpenControlEditor));
 
-        let max_title_w = (eq_btn_rect[0] - 76.0).max(80.0);
-        let fitted_header = ui.fit_text(Face::SemiBold, 15.5, &header_title, max_title_w);
-        ui.text(Face::SemiBold, 15.5, 67.0, 17.0, MY3_TEXT, &fitted_header);
+        let brand_w = (eq_btn_rect[0] - 66.0).max(70.0);
+        ui.text(Face::SemiBold, 16.0, 54.0, 10.0, MY3_TEXT, "Horizon");
+        let version_line = format!("Android {}", crate::backend::VERSION);
+        let fitted_version = ui.fit_text(Face::Regular, 11.0, &version_line, brand_w);
+        ui.text(Face::Regular, 11.0, 54.0, 30.0, MY3_MUTED, &fitted_version);
 
         // Top-right Account Selector Pill with circular avatar head, username, and chevron.
         ui.rounded(
@@ -806,7 +806,18 @@ impl Launcher {
             pill_h * 0.5,
             color::hex(0x312C45, 255),
         );
-        ui.avatar_head_3d(pill_x + 6.0, pill_y + 4.0, 28.0, &account_name);
+        ui.avatar_head_2d(pill_x + 6.0, pill_y + 4.0, 28.0, &account_name);
+        if self.login.signed_in {
+            ui.rounded(pill_x + 26.0, pill_y + 24.0, 9.0, 9.0, 4.5, MY3_BG);
+            ui.rounded(
+                pill_x + 27.0,
+                pill_y + 25.0,
+                7.0,
+                7.0,
+                3.5,
+                color::hex(0x59D98E, 255),
+            );
+        }
         let fitted_acct = ui.fit_text(Face::Medium, 13.5, &account_name, pill_w - 62.0);
         ui.text(
             Face::Medium,
@@ -3536,10 +3547,10 @@ impl Launcher {
                 self.login.ely = false;
             }
             Some(Action::SavedPage(next)) => {
-                if next && self.login.account_offset + 5 < self.login.saved_accounts.len() {
-                    self.login.account_offset += 5;
+                if next && self.login.account_offset + 3 < self.login.saved_accounts.len() {
+                    self.login.account_offset += 3;
                 } else if !next {
-                    self.login.account_offset = self.login.account_offset.saturating_sub(5);
+                    self.login.account_offset = self.login.account_offset.saturating_sub(3);
                 }
             }
             Some(Action::SelectAccount(index)) => {

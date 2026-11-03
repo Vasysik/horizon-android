@@ -1095,9 +1095,17 @@ impl Catalog {
         } else if self.page == Page::Mods
             && self.config.mod_source == crate::shader_catalog::Origin::Modrinth
         {
-            format!("{} Modrinth mods ready to port and install", items.len())
+            format!(
+                "{} Java mods - browsing only; this Rust client cannot run Java loaders",
+                items.len()
+            )
         } else if self.page == Page::Mods {
-            format!("{} Horizon mods available to install", items.len())
+            let source_only = items.iter().filter(|p| source_only_mod(p)).count();
+            format!(
+                "{} .hmod / {} source-only .hnmod (not supported yet)",
+                items.len().saturating_sub(source_only),
+                source_only
+            )
         } else {
             format!("{} results - select Install to download", items.len())
         };
@@ -1193,6 +1201,14 @@ impl Catalog {
         let Some(project) = self.results.get(index).cloned() else {
             return;
         };
+        if source_only_mod(&project) {
+            self.status = "This .hnmod needs a separately compiled client. Android support is planned; sandboxed .hmod mods can be installed now.".into();
+            return;
+        }
+        if project.kind == Kind::Mod && project.source == browser::SourceId::Modrinth {
+            self.status = "Modrinth Java mods are not supported on Android; this list is for browsing. Horizon .hmod mods install normally.".into();
+            return;
+        }
         if self.busy() || self.download_label(&project).is_some() {
             return;
         }
