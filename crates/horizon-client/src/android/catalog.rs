@@ -79,6 +79,10 @@ pub struct Config {
     pub last_name_changed: String,
     #[serde(default)]
     pub custom_profile_name: String,
+    #[serde(default)]
+    pub custom_profile_desc: String,
+    #[serde(default)]
+    pub preset_edit_mode: String,
 }
 
 fn default_true() -> bool {

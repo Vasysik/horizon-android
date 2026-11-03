@@ -75,10 +75,18 @@ pub struct Editor {
     pub redo_stack: Vec<Settings>,
     /// Status banner message inside editor.
     pub status_msg: Option<String>,
-    /// Custom profile name input inside the Control Manager dialog.
+    /// Custom profile name input inside the Save / Control Manager dialog.
     pub save_name_input: String,
+    /// Custom profile description input inside the Save / Control Manager dialog.
+    pub save_desc_input: String,
     /// Whether the custom profile name field is actively focused.
     pub editing_save_name: bool,
+    /// Whether the custom profile description field is actively focused.
+    pub editing_save_desc: bool,
+    /// True when the Editor Save Dialog (Option A: Replace existing preset, Option B: Create new preset as...) is open.
+    pub save_dialog_open: bool,
+    /// True when Option B (Create a new preset as...) is selected in the Save Dialog.
+    pub save_create_new_mode: bool,
 }
 
 enum Drag {
@@ -89,6 +97,7 @@ enum Drag {
 impl TouchControls {
     pub fn open_editor(&mut self) {
         self.clear();
+        let is_default = self.settings.is_default_preset();
         self.editor = Some(Editor {
             selected: Some(Control::Move),
             option: None,
@@ -113,8 +122,20 @@ impl TouchControls {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             status_msg: None,
-            save_name_input: self.settings.active_profile.clone(),
+            save_name_input: if is_default {
+                String::new()
+            } else {
+                self.settings.preset_name.clone()
+            },
+            save_desc_input: if is_default {
+                String::new()
+            } else {
+                self.settings.preset_description.clone()
+            },
             editing_save_name: false,
+            editing_save_desc: false,
+            save_dialog_open: false,
+            save_create_new_mode: is_default,
         });
     }
     pub fn cancel_editor(&mut self) {
@@ -148,14 +169,11 @@ impl TouchControls {
                 self.clear();
                 return true;
             } else if layout::contains([0.25, 0.04, 0.105, 0.075], p) {
+                let def = Settings::default_for_style(self.settings.control_style);
                 self.settings.layouts[self.settings.mode.index()] =
-                    Settings::default().layouts[self.settings.mode.index()];
-                // Reset returns to the factory GoyControl engine, not a hidden MCPE row.
-                self.settings.set_control_style(ControlStyle::GoyControl);
-                for (i, button) in self.settings.custom_buttons.iter_mut().enumerate() {
-                    button.layouts[self.settings.mode.index()] =
-                        CustomButton::new(button.key.clone(), i).layouts
-                            [self.settings.mode.index()];
+                    def.layouts[self.settings.mode.index()];
+                if self.settings.control_style == ControlStyle::GoyControl {
+                    self.settings.custom_buttons = def.custom_buttons;
                 }
             } else if layout::contains([0.02, 0.13, 0.335, 0.075], p) {
                 e.palette = !e.palette;
@@ -173,16 +191,22 @@ impl TouchControls {
             } else if layout::contains([0.365, 0.04, 0.14, 0.075], p) {
                 self.settings.snap_to_grid = !self.settings.snap_to_grid;
             } else if layout::contains([0.515, 0.04, 0.22, 0.075], p) {
-                let presets = ["default", "pvp", "building", "speedrun"];
-                let idx = presets
-                    .iter()
-                    .position(|n| *n == self.settings.active_profile)
-                    .unwrap_or(0);
-                let next = presets[(idx + 1) % presets.len()];
-                let _ = self
-                    .settings
-                    .save_profile(std::path::Path::new("."), &self.settings.active_profile);
-                self.settings = Settings::load_profile(std::path::Path::new("."), next);
+                let presets = Settings::list_presets(
+                    std::path::Path::new("."),
+                    self.settings.control_style,
+                );
+                if !presets.is_empty() {
+                    let idx = presets
+                        .iter()
+                        .position(|m| m.id == self.settings.preset_id)
+                        .unwrap_or(0);
+                    let next = &presets[(idx + 1) % presets.len()].id;
+                    self.settings.select_preset(
+                        std::path::Path::new("."),
+                        self.settings.control_style,
+                        next,
+                    );
+                }
             } else if layout::contains([0.32, 0.46, 0.115, 0.06], p) && e.selected.is_some() {
                 let slot = self.settings.slot(e.selected.unwrap());
                 self.settings.layouts[self.settings.mode.index()][slot].passthrough ^= true;

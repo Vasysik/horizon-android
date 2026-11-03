@@ -1462,10 +1462,16 @@ impl Game<'_> {
     /// The pad's cursor (pointer mode) or focus highlight (focus mode), and
     /// the on-screen keyboard, over everything else.
     pub(super) fn draw_pad_cursor(&self, batch: &mut HudBatch) {
-        if !self.pad_in_menu() {
+        #[cfg(target_os = "android")]
+        let virtual_mouse = self.pad.touch_ui.virtual_mouse;
+        #[cfg(not(target_os = "android"))]
+        let virtual_mouse = false;
+        if !self.pad_in_menu() && !virtual_mouse {
             return;
         }
-        if let Some(keyboard) = &self.pad.menu.osk {
+        if self.pad_in_menu()
+            && let Some(keyboard) = &self.pad.menu.osk
+        {
             let at_top = self
                 .pad
                 .menu
@@ -1477,10 +1483,6 @@ impl Game<'_> {
             ui.finish();
             return;
         }
-        #[cfg(target_os = "android")]
-        let virtual_mouse = self.pad.touch_ui.virtual_mouse;
-        #[cfg(not(target_os = "android"))]
-        let virtual_mouse = false;
         let pointer = if virtual_mouse {
             Some(self.cursor)
         } else {

@@ -98,11 +98,39 @@ pub enum ControlStyle {
 impl ControlStyle {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Mcpe => "MCPE Style Touch Controls",
-            Self::GoyControl => "GoyControl (Custom Static)",
+            Self::Mcpe => "MCPE (Default)",
+            Self::GoyControl => "GoyControl",
+        }
+    }
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Self::Mcpe => "Vanilla touch controls",
+            Self::GoyControl => "Custom layout with more options",
+        }
+    }
+    pub fn section_title(self) -> &'static str {
+        match self {
+            Self::Mcpe => "MCPE Controls",
+            Self::GoyControl => "GoyControl Controls",
+        }
+    }
+    pub fn storage_subdir(self) -> &'static str {
+        match self {
+            Self::Mcpe => "controls/mcpe",
+            Self::GoyControl => "controls/goycontrol",
         }
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresetMeta {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub system: ControlStyle,
+    pub is_default: bool,
+}
+
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -413,6 +441,8 @@ pub struct Settings {
     pub sensitivity: f32,
     pub sensitivity_horizontal: f32,
     pub sensitivity_vertical: f32,
+    #[serde(default)]
+    pub invert_y: bool,
     pub offhand_button: bool,
     pub shield_button: bool,
     pub circle_size: f32,
@@ -442,6 +472,16 @@ pub struct Settings {
     pub active_profile: String,
     #[serde(default = "default_profile_name")]
     pub default_profile: String,
+    #[serde(default = "default_profile_name")]
+    pub preset_id: String,
+    #[serde(default = "default_preset_display_name")]
+    pub preset_name: String,
+    #[serde(default = "default_mcpe_preset_desc")]
+    pub preset_description: String,
+    #[serde(default = "default_profile_name")]
+    pub active_mcpe_preset: String,
+    #[serde(default = "default_profile_name")]
+    pub active_goy_preset: String,
     #[serde(default)]
     pub control_style: ControlStyle,
     #[serde(default)]
@@ -455,6 +495,15 @@ pub struct Settings {
 }
 fn default_profile_name() -> String {
     "default".into()
+}
+fn default_preset_display_name() -> String {
+    "Default".into()
+}
+fn default_mcpe_preset_desc() -> String {
+    "Vanilla touch controls".into()
+}
+fn default_goy_preset_desc() -> String {
+    "Custom layout with more options".into()
 }
 fn default_floating_pos() -> [f32; 2] {
     [0.44, 0.05]
@@ -508,14 +557,7 @@ impl Default for Settings {
         layouts[2][Control::Sneak as usize] = Placement::new(0.13, 0.76, 0.10);
         layouts[2][Control::Jump as usize] = Placement::new(0.90, 0.78, 0.14);
         for row in &mut layouts {
-            for c in [
-                Control::Move,
-                Control::Sprint,
-                Control::Jump,
-                Control::Sneak,
-                Control::Offhand,
-                Control::Shield,
-            ] {
+            for c in Control::ALL {
                 row[c as usize].visible_in_game = true;
                 row[c as usize].visible_in_menu = false;
             }
@@ -530,6 +572,7 @@ impl Default for Settings {
             sensitivity: 1.0,
             sensitivity_horizontal: 1.0,
             sensitivity_vertical: 1.0,
+            invert_y: false,
             offhand_button: false,
             shield_button: true,
             circle_size: 32.0,
@@ -552,6 +595,11 @@ impl Default for Settings {
             vertical_margin: 0.0,
             active_profile: default_profile_name(),
             default_profile: default_profile_name(),
+            preset_id: default_profile_name(),
+            preset_name: default_preset_display_name(),
+            preset_description: default_mcpe_preset_desc(),
+            active_mcpe_preset: default_profile_name(),
+            active_goy_preset: default_profile_name(),
             control_style: ControlStyle::Mcpe,
             joystick_style: JoystickStyle::default(),
             floating_menu_pos: default_floating_pos(),
@@ -561,6 +609,63 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    /// Protected factory Default layout for MCPE Controls.
+    pub fn default_mcpe() -> Self {
+        Self::default()
+    }
+
+    /// Protected factory Default layout for GoyControl.
+    pub fn default_goycontrol() -> Self {
+        let mut s = Self {
+            control_style: ControlStyle::GoyControl,
+            mode: Mode::Crosshair,
+            split_controls: true,
+            preset_id: default_profile_name(),
+            active_profile: default_profile_name(),
+            preset_name: default_preset_display_name(),
+            preset_description: default_goy_preset_desc(),
+            joystick_style: JoystickStyle::default(),
+            custom_buttons: Self::default_goy_buttons(),
+            ..Self::default()
+        };
+        for c in Control::ALL {
+            s.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
+        }
+        s.sanitize();
+        s
+    }
+
+    /// Returns the protected Default configuration for the specified control system.
+    pub fn default_for_style(style: ControlStyle) -> Self {
+        match style {
+            ControlStyle::Mcpe => Self::default_mcpe(),
+            ControlStyle::GoyControl => Self::default_goycontrol(),
+        }
+    }
+
+    /// Storage directory for a control system (`controls/mcpe` or `controls/goycontrol`).
+    pub fn system_dir(game_home: &std::path::Path, style: ControlStyle) -> std::path::PathBuf {
+        game_home.join(style.storage_subdir())
+    }
+
+    /// Returns true if this configuration represents the protected Default preset of its system.
+    pub fn is_default_preset(&self) -> bool {
+        Self::sanitize_profile_name(&self.preset_id) == "default"
+    }
+
+    /// Returns the active preset ID for the given control system.
+    pub fn active_preset_for(&self, style: ControlStyle) -> &str {
+        let id = match style {
+            ControlStyle::Mcpe => self.active_mcpe_preset.as_str(),
+            ControlStyle::GoyControl => self.active_goy_preset.as_str(),
+        };
+        if id.trim().is_empty() {
+            "default"
+        } else {
+            id
+        }
+    }
+
     pub fn load() -> Self {
         Self::load_from(std::path::Path::new("horizon-touch.json"))
     }
@@ -706,6 +811,39 @@ impl Settings {
         if self.default_profile.trim().is_empty() {
             self.default_profile = default_profile_name();
         }
+        if self.preset_id.trim().is_empty() {
+            self.preset_id = Self::sanitize_profile_name(&self.active_profile);
+        } else {
+            self.preset_id = Self::sanitize_profile_name(&self.preset_id);
+        }
+        if self.active_mcpe_preset.trim().is_empty() {
+            self.active_mcpe_preset = default_profile_name();
+        } else {
+            self.active_mcpe_preset = Self::sanitize_profile_name(&self.active_mcpe_preset);
+        }
+        if self.active_goy_preset.trim().is_empty() {
+            self.active_goy_preset = default_profile_name();
+        } else {
+            self.active_goy_preset = Self::sanitize_profile_name(&self.active_goy_preset);
+        }
+        if self.preset_id == "default" {
+            self.preset_name = "Default".into();
+            if self.preset_description.trim().is_empty()
+                || (self.control_style == ControlStyle::GoyControl
+                    && self.preset_description == default_mcpe_preset_desc())
+                || (self.control_style == ControlStyle::Mcpe
+                    && self.preset_description == default_goy_preset_desc())
+            {
+                self.preset_description = match self.control_style {
+                    ControlStyle::Mcpe => default_mcpe_preset_desc(),
+                    ControlStyle::GoyControl => default_goy_preset_desc(),
+                };
+            }
+        } else if self.preset_name.trim().is_empty()
+            || (self.preset_name == "Default" && self.preset_id != "default")
+        {
+            self.preset_name = self.preset_id.clone();
+        }
         self.joystick_style.sanitize();
         for (i, v) in self.floating_menu_pos.iter_mut().enumerate() {
             let def = default_floating_pos()[i];
@@ -720,10 +858,20 @@ impl Settings {
         }
     }
     pub fn save(&self) -> std::io::Result<()> {
-        let _ = self.save_profile(std::path::Path::new("."), &self.active_profile);
+        let home = std::path::Path::new(".");
+        if !self.is_default_preset() {
+            let _ = self.save_profile(home, &self.preset_id);
+        } else {
+            Self::ensure_system_storage(home, self.control_style);
+        }
         self.save_to(std::path::Path::new("horizon-touch.json"))
     }
     pub fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
         let temp = path.with_extension("json.tmp");
         std::fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(temp, path)
@@ -747,66 +895,450 @@ impl Settings {
             trimmed.chars().take(40).collect()
         }
     }
-    pub fn list_profiles(game_home: &std::path::Path) -> Vec<String> {
-        let mut names = vec!["default".to_owned()];
-        let dir = game_home.join("controlmap");
+
+    /// Ensures the independent storage directory for `style` (`controls/mcpe` or
+    /// `controls/goycontrol`) exists, guarantees its protected `default.json` is intact,
+    /// and migrates any legacy user profiles from `controlmap/` that match `style`.
+    pub fn ensure_system_storage(game_home: &std::path::Path, style: ControlStyle) {
+        let sys_dir = Self::system_dir(game_home, style);
+        let _ = std::fs::create_dir_all(&sys_dir);
+        let default_path = sys_dir.join("default.json");
+        let needs_default = !default_path.is_file()
+            || std::fs::read(&default_path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Self>(&b).ok())
+                .is_none_or(|s| s.control_style != style || s.preset_id != "default");
+        if needs_default {
+            let def = Self::default_for_style(style);
+            let _ = def.save_to(&default_path);
+        }
+        // Migrate legacy user profiles from `controlmap/` into the matching system directory once.
+        let legacy_dir = game_home.join("controlmap");
+        if legacy_dir.is_dir() {
+            for entry in std::fs::read_dir(&legacy_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                if !entry.file_type().is_ok_and(|t| t.is_file()) {
+                    continue;
+                }
+                let fname = entry.file_name().to_string_lossy().into_owned();
+                let Some(stem) = fname.strip_suffix(".json") else {
+                    continue;
+                };
+                let clean = Self::sanitize_profile_name(stem);
+                if clean == "default" {
+                    continue;
+                }
+                let target = sys_dir.join(format!("{clean}.json"));
+                if target.exists() {
+                    continue;
+                }
+                if let Ok(bytes) = std::fs::read(entry.path())
+                    && let Ok(mut parsed) = serde_json::from_slice::<Self>(&bytes)
+                {
+                    if parsed.control_style == style {
+                        parsed.preset_id = clean.clone();
+                        parsed.active_profile = clean.clone();
+                        if parsed.preset_name.trim().is_empty() || parsed.preset_name == "Default" {
+                            parsed.preset_name = stem.to_owned();
+                        }
+                        if parsed.preset_description.trim().is_empty() {
+                            parsed.preset_description = format!("Saved {} preset", style.label());
+                        }
+                        parsed.sanitize();
+                        let _ = parsed.save_to(&target);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Lists all presets belonging to `style` (`MCPE` or `GoyControl` independently).
+    /// Always includes the protected `Default` preset first, followed by user-created presets.
+    pub fn list_presets(game_home: &std::path::Path, style: ControlStyle) -> Vec<PresetMeta> {
+        Self::ensure_system_storage(game_home, style);
+        let default_desc = match style {
+            ControlStyle::Mcpe => default_mcpe_preset_desc(),
+            ControlStyle::GoyControl => default_goy_preset_desc(),
+        };
+        let mut out = vec![PresetMeta {
+            id: "default".into(),
+            name: "Default".into(),
+            description: default_desc,
+            system: style,
+            is_default: true,
+        }];
+        let dir = Self::system_dir(game_home, style);
+        let mut user_presets = Vec::new();
         for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
             if !entry.file_type().is_ok_and(|t| t.is_file()) {
                 continue;
             }
             let file_name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(stem) = file_name.strip_suffix(".json") {
-                let clean = Self::sanitize_profile_name(stem);
-                if !names.contains(&clean) {
-                    names.push(clean);
-                }
+            let Some(stem) = file_name.strip_suffix(".json") else {
+                continue;
+            };
+            let clean = Self::sanitize_profile_name(stem);
+            if clean == "default" {
+                continue;
+            }
+            if let Ok(bytes) = std::fs::read(entry.path())
+                && let Ok(parsed) = serde_json::from_slice::<Self>(&bytes)
+            {
+                let name =
+                    if parsed.preset_name.trim().is_empty() || parsed.preset_name == "Default" {
+                        clean.clone()
+                    } else {
+                        parsed.preset_name.trim().to_owned()
+                    };
+                let description = if parsed.preset_description.trim().is_empty() {
+                    format!("Custom {} layout", style.label())
+                } else {
+                    parsed.preset_description.trim().to_owned()
+                };
+                user_presets.push(PresetMeta {
+                    id: clean,
+                    name,
+                    description,
+                    system: style,
+                    is_default: false,
+                });
             }
         }
-        names
+        user_presets.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        user_presets.dedup_by(|a, b| a.id == b.id);
+        out.extend(user_presets);
+        out
+    }
+
+    /// Loads a preset for a specific control system (`MCPE` or `GoyControl`).
+    /// Loading `"default"` always returns the protected factory Default for that system.
+    pub fn load_preset(game_home: &std::path::Path, style: ControlStyle, id: &str) -> Self {
+        Self::ensure_system_storage(game_home, style);
+        let clean = Self::sanitize_profile_name(id);
+        if clean == "default" {
+            let def = Self::default_for_style(style);
+            let default_path = Self::system_dir(game_home, style).join("default.json");
+            let _ = def.save_to(&default_path);
+            return def;
+        }
+        let candidate = Self::system_dir(game_home, style).join(format!("{clean}.json"));
+        if candidate.is_file() {
+            let mut loaded = Self::load_from(&candidate);
+            loaded.control_style = style;
+            loaded.preset_id = clean.clone();
+            loaded.active_profile = clean;
+            if loaded.preset_name.trim().is_empty() || loaded.preset_name == "Default" {
+                loaded.preset_name = loaded.preset_id.clone();
+            }
+            loaded.sanitize();
+            loaded
+        } else {
+            Self::default_for_style(style)
+        }
+    }
+
+    /// Allocates a unique user preset ID inside `controls/<style>/` that is never `"default"`.
+    pub fn allocate_unique_preset_id(
+        game_home: &std::path::Path,
+        style: ControlStyle,
+        desired_name: &str,
+    ) -> String {
+        Self::ensure_system_storage(game_home, style);
+        let base_raw = Self::sanitize_profile_name(desired_name);
+        let base = if base_raw == "default" {
+            "custom-preset".to_owned()
+        } else {
+            base_raw
+        };
+        let dir = Self::system_dir(game_home, style);
+        if !dir.join(format!("{base}.json")).exists() {
+            return base;
+        }
+        for index in 2..=999 {
+            let candidate = format!("{base}-{index}");
+            if !dir.join(format!("{candidate}.json")).exists() {
+                return candidate;
+            }
+        }
+        format!("{base}-copy")
+    }
+
+    /// Duplicates any preset in `style` (including `"default"`) into a brand-new independent preset
+    /// with the specified `new_name` and `new_description`. Never modifies the original preset.
+    pub fn copy_preset(
+        game_home: &std::path::Path,
+        style: ControlStyle,
+        source_id: &str,
+        new_name: &str,
+        new_description: &str,
+    ) -> std::io::Result<PresetMeta> {
+        let trimmed_name = new_name.trim();
+        let display_name = if trimmed_name.is_empty() || trimmed_name.eq_ignore_ascii_case("default")
+        {
+            "Custom Copy".to_owned()
+        } else {
+            trimmed_name.chars().take(48).collect()
+        };
+        let trimmed_desc = new_description.trim();
+        let display_desc = if trimmed_desc.is_empty() {
+            format!("Copied from {source_id}")
+        } else {
+            trimmed_desc.chars().take(120).collect()
+        };
+        let mut duplicated = Self::load_preset(game_home, style, source_id);
+        let new_id = Self::allocate_unique_preset_id(game_home, style, &display_name);
+        duplicated.control_style = style;
+        duplicated.preset_id = new_id.clone();
+        duplicated.active_profile = new_id.clone();
+        duplicated.preset_name = display_name.clone();
+        duplicated.preset_description = display_desc.clone();
+        match style {
+            ControlStyle::Mcpe => duplicated.active_mcpe_preset = new_id.clone(),
+            ControlStyle::GoyControl => duplicated.active_goy_preset = new_id.clone(),
+        }
+        duplicated.sanitize();
+        let target = Self::system_dir(game_home, style).join(format!("{new_id}.json"));
+        duplicated.save_to(&target)?;
+        Ok(PresetMeta {
+            id: new_id,
+            name: display_name,
+            description: display_desc,
+            system: style,
+            is_default: false,
+        })
+    }
+
+    /// Updates the name and description of a user-created preset.
+    /// Rejects modifying the protected `"default"` preset.
+    pub fn update_preset_meta(
+        &mut self,
+        game_home: &std::path::Path,
+        style: ControlStyle,
+        id: &str,
+        new_name: &str,
+        new_description: &str,
+    ) -> std::io::Result<PresetMeta> {
+        let clean = Self::sanitize_profile_name(id);
+        if clean == "default" {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "The Default preset is protected and cannot be modified",
+            ));
+        }
+        let target = Self::system_dir(game_home, style).join(format!("{clean}.json"));
+        if !target.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Preset not found",
+            ));
+        }
+        let mut preset = Self::load_from(&target);
+        let name_str: String = new_name.trim().chars().take(48).collect();
+        let desc_str: String = new_description.trim().chars().take(120).collect();
+        preset.control_style = style;
+        preset.preset_id = clean.clone();
+        preset.active_profile = clean.clone();
+        if !name_str.is_empty() && !name_str.eq_ignore_ascii_case("default") {
+            preset.preset_name = name_str;
+        }
+        preset.preset_description = desc_str;
+        preset.sanitize();
+        preset.save_to(&target)?;
+        if self.control_style == style && self.preset_id == clean {
+            self.preset_name = preset.preset_name.clone();
+            self.preset_description = preset.preset_description.clone();
+            let _ = self.save_to(&game_home.join("horizon-touch.json"));
+        }
+        Ok(PresetMeta {
+            id: clean,
+            name: preset.preset_name,
+            description: preset.preset_description,
+            system: style,
+            is_default: false,
+        })
+    }
+
+    /// Selects and activates a preset within `style`, preserving both systems' remembered selections.
+    pub fn select_preset(&mut self, game_home: &std::path::Path, style: ControlStyle, id: &str) {
+        let prev_mcpe = self.active_mcpe_preset.clone();
+        let prev_goy = self.active_goy_preset.clone();
+        let prev_floating = self.floating_menu_pos;
+        let prev_invert_y = self.invert_y;
+        let mut loaded = Self::load_preset(game_home, style, id);
+        let clean = loaded.preset_id.clone();
+        loaded.active_mcpe_preset = if style == ControlStyle::Mcpe {
+            clean.clone()
+        } else {
+            prev_mcpe
+        };
+        loaded.active_goy_preset = if style == ControlStyle::GoyControl {
+            clean.clone()
+        } else {
+            prev_goy
+        };
+        loaded.floating_menu_pos = prev_floating;
+        loaded.invert_y = prev_invert_y;
+        *self = loaded;
+        let _ = self.save_to(&game_home.join("horizon-touch.json"));
+    }
+
+    /// Switches between MCPE and GoyControl.
+    /// Immediately activates the selected system's saved configuration and remembered preset
+    /// without transferring, merging, resetting, or overwriting the other system's layouts.
+    pub fn switch_control_system(&mut self, game_home: &std::path::Path, target: ControlStyle) {
+        Self::ensure_system_storage(game_home, ControlStyle::Mcpe);
+        Self::ensure_system_storage(game_home, ControlStyle::GoyControl);
+        // Remember current system's active preset ID
+        let current_id = Self::sanitize_profile_name(&self.preset_id);
+        match self.control_style {
+            ControlStyle::Mcpe => self.active_mcpe_preset = current_id,
+            ControlStyle::GoyControl => self.active_goy_preset = current_id,
+        }
+        // Persist any unsaved state of a user-created preset in its own system folder before switching
+        if !self.is_default_preset() {
+            let current_path = Self::system_dir(game_home, self.control_style)
+                .join(format!("{}.json", self.preset_id));
+            let _ = self.save_to(&current_path);
+        }
+        let target_preset_id = match target {
+            ControlStyle::Mcpe => self.active_mcpe_preset.clone(),
+            ControlStyle::GoyControl => self.active_goy_preset.clone(),
+        };
+        let prev_mcpe = self.active_mcpe_preset.clone();
+        let prev_goy = self.active_goy_preset.clone();
+        let prev_floating = self.floating_menu_pos;
+        let prev_invert_y = self.invert_y;
+        let mut loaded = Self::load_preset(game_home, target, &target_preset_id);
+        loaded.control_style = target;
+        loaded.active_mcpe_preset = prev_mcpe;
+        loaded.active_goy_preset = prev_goy;
+        loaded.floating_menu_pos = prev_floating;
+        loaded.invert_y = prev_invert_y;
+        *self = loaded;
+        let _ = self.save_to(&game_home.join("horizon-touch.json"));
+    }
+
+    /// Control Editor Save Option A: Replace the currently selected user-created preset.
+    /// Protected: Returns PermissionDenied if the currently selected preset is `"default"`.
+    pub fn save_replace_preset(&mut self, game_home: &std::path::Path) -> std::io::Result<()> {
+        if self.is_default_preset() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "The Default preset cannot be replaced. Create a new preset instead.",
+            ));
+        }
+        Self::ensure_system_storage(game_home, self.control_style);
+        let clean = Self::sanitize_profile_name(&self.preset_id);
+        self.preset_id = clean.clone();
+        self.active_profile = clean.clone();
+        match self.control_style {
+            ControlStyle::Mcpe => self.active_mcpe_preset = clean.clone(),
+            ControlStyle::GoyControl => self.active_goy_preset = clean.clone(),
+        }
+        self.sanitize();
+        let target = Self::system_dir(game_home, self.control_style).join(format!("{clean}.json"));
+        self.save_to(&target)?;
+        self.save_to(&game_home.join("horizon-touch.json"))
+    }
+
+    /// Control Editor Save Option B: Save the current editor layout as a new independent preset
+    /// in the active control system's storage directory and make it active.
+    pub fn save_new_preset(
+        &mut self,
+        game_home: &std::path::Path,
+        name: &str,
+        description: &str,
+    ) -> std::io::Result<PresetMeta> {
+        let trimmed_name = name.trim();
+        if trimmed_name.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Preset name cannot be empty",
+            ));
+        }
+        if trimmed_name.eq_ignore_ascii_case("default") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Cannot name a preset Default",
+            ));
+        }
+        let style = self.control_style;
+        let new_id = Self::allocate_unique_preset_id(game_home, style, trimmed_name);
+        let display_name: String = trimmed_name.chars().take(48).collect();
+        let display_desc: String = if description.trim().is_empty() {
+            format!("Custom {} preset", style.label())
+        } else {
+            description.trim().chars().take(120).collect()
+        };
+        self.preset_id = new_id.clone();
+        self.active_profile = new_id.clone();
+        self.preset_name = display_name.clone();
+        self.preset_description = display_desc.clone();
+        match style {
+            ControlStyle::Mcpe => self.active_mcpe_preset = new_id.clone(),
+            ControlStyle::GoyControl => self.active_goy_preset = new_id.clone(),
+        }
+        self.sanitize();
+        let target = Self::system_dir(game_home, style).join(format!("{new_id}.json"));
+        self.save_to(&target)?;
+        self.save_to(&game_home.join("horizon-touch.json"))?;
+        Ok(PresetMeta {
+            id: new_id,
+            name: display_name,
+            description: display_desc,
+            system: style,
+            is_default: false,
+        })
+    }
+
+    pub fn list_profiles(game_home: &std::path::Path) -> Vec<String> {
+        let active = Self::load_from(&game_home.join("horizon-touch.json"));
+        Self::list_presets(game_home, active.control_style)
+            .into_iter()
+            .map(|p| p.id)
+            .collect()
     }
     pub fn save_profile(
         &self,
         game_home: &std::path::Path,
         name: &str,
     ) -> std::io::Result<std::path::PathBuf> {
+        let style = self.control_style;
+        Self::ensure_system_storage(game_home, style);
         let clean = Self::sanitize_profile_name(name);
-        let dir = game_home.join("controlmap");
+        let dir = Self::system_dir(game_home, style);
         std::fs::create_dir_all(&dir)?;
+        if clean == "default" {
+            let def = Self::default_for_style(style);
+            let target = dir.join("default.json");
+            let _ = def.save_to(&target);
+            let _ = self.save_to(&game_home.join("horizon-touch.json"));
+            return Ok(target);
+        }
         let mut copy = self.clone();
         copy.active_profile = clean.clone();
+        copy.preset_id = clean.clone();
+        if copy.preset_name.trim().is_empty() || copy.preset_name == "Default" {
+            copy.preset_name = name.trim().to_owned();
+        }
+        match style {
+            ControlStyle::Mcpe => copy.active_mcpe_preset = clean.clone(),
+            ControlStyle::GoyControl => copy.active_goy_preset = clean.clone(),
+        }
         let target = dir.join(format!("{clean}.json"));
         copy.save_to(&target)?;
         let active_file = game_home.join("horizon-touch.json");
         let _ = copy.save_to(&active_file);
         Ok(target)
     }
-    pub const PRESETS: [(&'static str, &'static str, &'static str); 5] = [
-        (
-            "default",
-            "MCPE Style (Default)",
-            "Authentic Bedrock D-Pad/Joystick & classic HUD buttons",
-        ),
-        (
-            "goycontrol",
-            "GoyControl (Custom Static)",
-            "Super-optimized static buttons, analog stick & multi-event macros",
-        ),
-        (
-            "pvp",
-            "GoyControl PvP Claw",
-            "4-finger claw layout with top-corner Attack/Use & pass-through",
-        ),
-        (
-            "building",
-            "Builder Split Crosshair",
-            "Analog Joystick + Center Crosshair + dedicated Break/Place/Swap",
-        ),
-        (
-            "speedrun",
-            "Speedrun Pro",
-            "Competitive HUD with F3, F5, Swap, Inventory & fast triggers",
-        ),
-    ];
+    pub const PRESETS: [(&'static str, &'static str, &'static str); 1] = [(
+        "default",
+        "Default",
+        "Protected default layout for the active control system",
+    )];
 
     /// Builds the super-optimized default GoyControl button layout (static buttons, no icons,
     /// custom stroke/shadow/roundness, comfortable touch sizes, dedicated Mouse button, and
@@ -1070,17 +1602,22 @@ impl Settings {
     /// Applies the smart preset visibility (`Visible in Game` vs `Visible in Menu`) across all
     /// built-in controls and custom GoyControl buttons.
     pub fn apply_visibility_preset_all(&mut self) {
+        let is_mcpe = self.control_style == ControlStyle::Mcpe;
         for row in &mut self.layouts {
             for c in Control::ALL {
-                let in_menu = !matches!(
-                    c,
-                    Control::Move
-                        | Control::Jump
-                        | Control::Sneak
-                        | Control::Sprint
-                        | Control::Offhand
-                        | Control::Shield
-                );
+                let in_menu = if is_mcpe {
+                    false
+                } else {
+                    !matches!(
+                        c,
+                        Control::Move
+                            | Control::Jump
+                            | Control::Sneak
+                            | Control::Sprint
+                            | Control::Offhand
+                            | Control::Shield
+                    )
+                };
                 row[c as usize].visible_in_game = true;
                 row[c as usize].visible_in_menu = in_menu;
             }
@@ -1115,20 +1652,8 @@ impl Settings {
         self.control_style = style;
         match style {
             ControlStyle::Mcpe => {
-                // The classic Bedrock HUD: every built-in control, in the MCPE look.
                 self.button_visibility = [0; 14];
-                // Drop the untouched factory Goy buttons so the editor does not
-                // draw two full sets; buttons the player made stay.
-                let factory = Self::default_goy_buttons();
-                if self.custom_buttons.len() == factory.len()
-                    && self
-                        .custom_buttons
-                        .iter()
-                        .zip(&factory)
-                        .all(|(a, b)| a.key == b.key && a.custom_label == b.custom_label)
-                {
-                    self.custom_buttons.clear();
-                }
+                self.custom_buttons.clear();
             }
             ControlStyle::GoyControl => {
                 self.mode = Mode::Crosshair;
@@ -1136,8 +1661,6 @@ impl Settings {
                 if self.custom_buttons.is_empty() {
                     self.custom_buttons = Self::default_goy_buttons();
                 }
-                // In GoyControl mode, only Move (the customizable GoyControl Joystick) is shown from built-ins by default;
-                // all actions come from the customizable GoyControl static buttons.
                 for c in Control::ALL {
                     self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
                 }
@@ -1148,87 +1671,51 @@ impl Settings {
 
     pub fn apply_preset(&mut self, name: &str) {
         let clean = Self::sanitize_profile_name(name);
-        let base_default = Self::default();
-        self.layouts = base_default.layouts;
-        self.button_visibility = [0; 14];
-        match clean.as_str() {
-            "default" | "mcpe" | "pocket" => {
-                self.control_style = ControlStyle::Mcpe;
-                self.mode = Mode::Crosshair;
-                self.split_controls = false;
-                self.custom_buttons.clear();
-                self.button_visibility = [0; 14];
+        if clean == "default" {
+            let style = self.control_style;
+            let prev_mcpe = self.active_mcpe_preset.clone();
+            let prev_goy = self.active_goy_preset.clone();
+            let prev_floating = self.floating_menu_pos;
+            let prev_invert_y = self.invert_y;
+            *self = Self::default_for_style(style);
+            self.active_mcpe_preset = prev_mcpe;
+            self.active_goy_preset = prev_goy;
+            self.floating_menu_pos = prev_floating;
+            self.invert_y = prev_invert_y;
+            match style {
+                ControlStyle::Mcpe => self.active_mcpe_preset = "default".into(),
+                ControlStyle::GoyControl => self.active_goy_preset = "default".into(),
             }
-            "goycontrol" | "goy" => {
-                self.control_style = ControlStyle::GoyControl;
-                self.mode = Mode::Crosshair;
-                self.split_controls = true;
-                self.joystick_style = JoystickStyle::default();
-                self.custom_buttons = Self::default_goy_buttons();
-                for c in Control::ALL {
-                    self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
-                }
-            }
-            "pvp" => {
-                self.control_style = ControlStyle::GoyControl;
-                self.mode = Mode::Crosshair;
-                self.split_controls = true;
-                self.custom_buttons = Self::default_goy_buttons();
-                // Move PRI and SEC to top index-finger claw positions
-                if self.custom_buttons.len() >= 2 {
-                    for m in 0..3 {
-                        self.custom_buttons[0].layouts[m].center = [0.13, 0.22];
-                        self.custom_buttons[0].layouts[m].size = 0.155;
-                        self.custom_buttons[1].layouts[m].center = [0.87, 0.22];
-                        self.custom_buttons[1].layouts[m].size = 0.155;
-                    }
-                }
-                for c in Control::ALL {
-                    self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
-                }
-            }
-            "building" | "split" => {
-                self.control_style = ControlStyle::GoyControl;
-                self.mode = Mode::Crosshair;
-                self.split_controls = true;
-                self.offhand_button = true;
-                self.button_visibility[Control::Attack as usize] = 1;
-                self.button_visibility[Control::Use as usize] = 1;
-                self.button_visibility[Control::Offhand as usize] = 1;
-            }
-            "speedrun" => {
-                self.control_style = ControlStyle::GoyControl;
-                self.mode = Mode::Crosshair;
-                self.split_controls = true;
-                self.custom_buttons = Self::default_goy_buttons();
-                for c in Control::ALL {
-                    self.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
-                }
-            }
-            _ => {}
+            return;
         }
-        self.active_profile = clean;
+        self.active_profile = clean.clone();
+        self.preset_id = clean;
         self.sanitize();
     }
 
     pub fn set_as_default_always(&mut self, game_home: &std::path::Path) {
-        self.default_profile = self.active_profile.clone();
-        let _ = self.save_profile(game_home, &self.active_profile);
+        self.default_profile = self.preset_id.clone();
+        match self.control_style {
+            ControlStyle::Mcpe => self.active_mcpe_preset = self.preset_id.clone(),
+            ControlStyle::GoyControl => self.active_goy_preset = self.preset_id.clone(),
+        }
+        if !self.is_default_preset() {
+            let _ = self.save_profile(game_home, &self.preset_id);
+        }
         let _ = self.save_to(&game_home.join("horizon-touch.json"));
     }
 
     pub fn load_profile(game_home: &std::path::Path, name: &str) -> Self {
-        let clean = Self::sanitize_profile_name(name);
-        let candidate = game_home.join("controlmap").join(format!("{clean}.json"));
-        let mut loaded = if candidate.is_file() {
-            Self::load_from(&candidate)
-        } else {
-            let mut s = Self::load_from(&game_home.join("horizon-touch.json"));
-            s.apply_preset(&clean);
-            let _ = s.save_profile(game_home, &clean);
-            s
-        };
-        loaded.active_profile = clean;
+        let active = Self::load_from(&game_home.join("horizon-touch.json"));
+        let mut loaded = Self::load_preset(game_home, active.control_style, name);
+        loaded.active_mcpe_preset = active.active_mcpe_preset;
+        loaded.active_goy_preset = active.active_goy_preset;
+        loaded.floating_menu_pos = active.floating_menu_pos;
+        loaded.invert_y = active.invert_y;
+        match loaded.control_style {
+            ControlStyle::Mcpe => loaded.active_mcpe_preset = loaded.preset_id.clone(),
+            ControlStyle::GoyControl => loaded.active_goy_preset = loaded.preset_id.clone(),
+        }
         let _ = loaded.save_to(&game_home.join("horizon-touch.json"));
         loaded
     }
@@ -1239,7 +1726,9 @@ impl Settings {
         name: &str,
     ) -> std::io::Result<std::path::PathBuf> {
         let clean = Self::sanitize_profile_name(name);
-        let _ = self.save_profile(game_home, &clean);
+        if clean != "default" {
+            let _ = self.save_profile(game_home, &clean);
+        }
         let reports = root_home.join("performance");
         std::fs::create_dir_all(&reports)?;
         let exported = reports.join(format!("horizon-controls-{clean}.json"));
@@ -1250,6 +1739,9 @@ impl Settings {
         self.mode == Mode::Crosshair || self.split_controls
     }
     pub fn visible(&self, c: Control) -> bool {
+        if self.control_style == ControlStyle::GoyControl && c != Control::Move {
+            return false;
+        }
         match self.button_visibility[c as usize] {
             1 => return true,
             2 => return false,
@@ -1473,4 +1965,82 @@ mod tests {
         assert_eq!(loaded.active_profile, "my-custom-pvp");
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn independent_mcpe_and_goycontrol_storage_and_protected_defaults() {
+        let tmp = std::env::temp_dir().join(format!("horizon-sep-systems-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        // Fresh default is MCPE Default
+        let mut settings = Settings::default();
+        assert_eq!(settings.control_style, ControlStyle::Mcpe);
+        assert!(settings.is_default_preset());
+
+        // Default preset cannot be replaced
+        assert!(settings.save_replace_preset(&tmp).is_err());
+
+        // Copy Default MCPE preset into a new MCPE preset
+        let mcpe_copy = Settings::copy_preset(
+            &tmp,
+            ControlStyle::Mcpe,
+            "default",
+            "My MCPE Layout",
+            "Customized Bedrock layout",
+        )
+        .unwrap();
+        assert_eq!(mcpe_copy.id, "my-mcpe-layout");
+        assert_eq!(mcpe_copy.system, ControlStyle::Mcpe);
+        assert!(!mcpe_copy.is_default);
+        assert!(
+            tmp.join("controls/mcpe/my-mcpe-layout.json").is_file(),
+            "MCPE preset stored in controls/mcpe/"
+        );
+        assert!(
+            !tmp.join("controls/goycontrol/my-mcpe-layout.json")
+                .is_file(),
+            "MCPE preset never leaks into controls/goycontrol/"
+        );
+
+        // Select MCPE custom preset and modify Jump position, then Replace existing preset
+        settings.select_preset(&tmp, ControlStyle::Mcpe, &mcpe_copy.id);
+        assert!(!settings.is_default_preset());
+        settings.layouts[0][Control::Jump as usize].center = [0.85, 0.70];
+        settings.save_replace_preset(&tmp).unwrap();
+
+        // Switch to GoyControl: activates GoyControl Default, remembers MCPE preset
+        settings.switch_control_system(&tmp, ControlStyle::GoyControl);
+        assert_eq!(settings.control_style, ControlStyle::GoyControl);
+        assert_eq!(settings.preset_id, "default");
+        assert_eq!(settings.active_mcpe_preset, "my-mcpe-layout");
+
+        // Save a new GoyControl preset via Option B (Create new preset as...)
+        settings.custom_buttons[0].layouts[0].center = [0.20, 0.25];
+        let goy_new = settings
+            .save_new_preset(&tmp, "Claw Pro", "4-finger GoyControl claw")
+            .unwrap();
+        assert_eq!(goy_new.id, "claw-pro");
+        assert!(tmp.join("controls/goycontrol/claw-pro.json").is_file());
+        assert!(!tmp.join("controls/mcpe/claw-pro.json").is_file());
+
+        // Switch back to MCPE: immediately restores "my-mcpe-layout" and its Jump position,
+        // while remembering GoyControl's "claw-pro"
+        settings.switch_control_system(&tmp, ControlStyle::Mcpe);
+        assert_eq!(settings.control_style, ControlStyle::Mcpe);
+        assert_eq!(settings.preset_id, "my-mcpe-layout");
+        assert_eq!(settings.active_goy_preset, "claw-pro");
+        assert_eq!(
+            settings.layouts[0][Control::Jump as usize].center,
+            [0.85, 0.70]
+        );
+
+        // Verify MCPE Default was never modified
+        let mcpe_def = Settings::load_preset(&tmp, ControlStyle::Mcpe, "default");
+        assert_eq!(
+            mcpe_def.layouts[0][Control::Jump as usize].center,
+            [0.92, 0.78]
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
+

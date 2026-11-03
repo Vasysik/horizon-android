@@ -98,12 +98,20 @@ impl Launcher {
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
         horizon_client::ui_theme::set_ui_scale_percent(catalog.config.ui_scale_percent);
-        // First run: the launcher's control editor and the game both start
-        // from the GoyControl factory layout.
-        let touch_file = catalog.config.game_home(&home).join("horizon-touch.json");
+        // First run: ensure independent MCPE and GoyControl storage directories exist,
+        // and initialize MCPE Controls as the default active control system on fresh installs.
+        let game_home = catalog.config.game_home(&home);
+        horizon_client::touch::Settings::ensure_system_storage(
+            &game_home,
+            horizon_client::touch::ControlStyle::Mcpe,
+        );
+        horizon_client::touch::Settings::ensure_system_storage(
+            &game_home,
+            horizon_client::touch::ControlStyle::GoyControl,
+        );
+        let touch_file = game_home.join("horizon-touch.json");
         if !touch_file.exists() {
-            let mut touch = horizon_client::touch::Settings::default();
-            touch.set_control_style(horizon_client::touch::ControlStyle::GoyControl);
+            let touch = horizon_client::touch::Settings::default_mcpe();
             if let Some(dir) = touch_file.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
@@ -246,8 +254,17 @@ impl Launcher {
             events.create_window(Window::default_attributes().with_title("Horizon Android"))?,
         );
         crate::display::prepare(&window)?;
+        let vanilla_dir = self
+            .home
+            .join(".local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        let atlas_root = if vanilla_dir.join("assets/minecraft/textures/gui").is_dir() {
+            vanilla_dir
+        } else {
+            self.home.join("installer")
+        };
         let gui = game::UiResources {
-            atlas: HudAtlas::build(&self.home.join("installer"))?,
+            atlas: HudAtlas::build(&atlas_root)?,
             panorama: Arc::new(horizon_client::gfx::panorama::Faces {
                 size: 1,
                 pixels: [0u8; 4].repeat(6),
@@ -272,10 +289,17 @@ impl Launcher {
 
     fn request_back(&mut self) {
         crate::platform::hide();
-        if let Some(editor) = self.control_editor.take() {
-            let game_home = self.catalog.config.game_home(&self.home);
-            let _ = editor.settings.save_profile(&game_home, &editor.settings.active_profile.clone());
-            self.catalog.status = "Saved HUD touch control layout.".into();
+        if let Some(tc) = &mut self.control_editor {
+            if let Some(ed) = &mut tc.editor {
+                if ed.save_dialog_open {
+                    ed.save_dialog_open = false;
+                } else {
+                    ed.save_dialog_open = true;
+                    ed.save_create_new_mode = tc.settings.is_default_preset();
+                }
+                return;
+            }
+            self.control_editor = None;
             return;
         }
         if self.exit_confirmation {

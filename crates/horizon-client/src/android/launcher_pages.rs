@@ -2408,97 +2408,190 @@ impl Launcher {
                 ui.set_clip(None);
             }
             SettingsCategory::Controls => {
-                let count = 13;
+                let count = 15;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
-                let saved_profiles = horizon_client::touch::Settings::list_profiles(&game_home);
-                let profile_label = format!(
-                    "{} ({} saved) v",
-                    touch_cfg.active_profile,
-                    saved_profiles.len()
+                let style = touch_cfg.control_style;
+                let is_mcpe = style == horizon_client::touch::ControlStyle::Mcpe;
+                let is_goy = style == horizon_client::touch::ControlStyle::GoyControl;
+                let sys_name = style.label();
+                let sys_presets =
+                    horizon_client::touch::Settings::list_presets(&game_home, style);
+                let preset_label = format!(
+                    "{} ({} presets) v",
+                    touch_cfg.preset_name,
+                    sys_presets.len()
                 );
-                let save_as_label = if self.catalog.editing == Some("profile_name") {
-                    if self.catalog.config.custom_profile_name.is_empty() {
-                        "Type name...".to_owned()
+                let preset_sub = format!(
+                    "{}  •  controls/{}/{}.json{}",
+                    touch_cfg.preset_description,
+                    style.storage_subdir(),
+                    touch_cfg.preset_id,
+                    if touch_cfg.is_default_preset() {
+                        " (Protected Default)"
                     } else {
-                        self.catalog.config.custom_profile_name.clone()
+                        ""
                     }
-                } else {
-                    "Save As Name...".to_owned()
+                );
+                let editor_title = format!("{} Control Editor", sys_name);
+                let editor_sub = match style {
+                    horizon_client::touch::ControlStyle::Mcpe => {
+                        "Customize MCPE controls with exact Minecraft sprites, size, opacity & alignment"
+                    }
+                    horizon_client::touch::ControlStyle::GoyControl => {
+                        "Customize GoyControl buttons, custom keys, toggle, swipe & pass-through"
+                    }
                 };
+                let preset_row_title = format!("{} Preset Selector", sys_name);
+                let copy_title = format!("Copy {} Preset ('{}')", sys_name, touch_cfg.preset_name);
+                let copy_btn_label = if self.catalog.editing == Some("profile_name")
+                    && self.catalog.config.preset_edit_mode == "copy"
+                {
+                    "Typing Name..."
+                } else if self.catalog.editing == Some("profile_desc")
+                    && self.catalog.config.preset_edit_mode == "copy"
+                {
+                    "Typing Desc..."
+                } else {
+                    "Copy Preset"
+                };
+                let edit_meta_title = format!("Edit {} Preset Name & Description", sys_name);
+                let edit_meta_sub = if touch_cfg.is_default_preset() {
+                    "Default layout is protected and cannot be renamed or overwritten; use Copy Preset"
+                } else {
+                    "Pencil / Edit: rename or update description of the selected user preset"
+                };
+                let edit_meta_btn = if touch_cfg.is_default_preset() {
+                    "Protected"
+                } else if self.catalog.editing == Some("profile_name")
+                    && self.catalog.config.preset_edit_mode == "edit"
+                {
+                    "Typing Name..."
+                } else if self.catalog.editing == Some("profile_desc")
+                    && self.catalog.config.preset_edit_mode == "edit"
+                {
+                    "Typing Desc..."
+                } else {
+                    "Edit (Pencil)"
+                };
+
                 let mouse_sens = format!("{:.0}%", opts.sensitivity * 200.0);
                 let touch_sens = format!("{:.0}%", touch_cfg.sensitivity * 100.0);
                 let vmouse_spd = format!("{:.0}%", touch_cfg.virtual_mouse_sensitivity * 100.0);
                 let btn_scale = format!("{:.0}%", touch_cfg.button_scale * 100.0);
                 let scheme_str = touch_cfg.mode.label();
+                let invert_y_active = opts.invert_y || touch_cfg.invert_y;
 
-                let rows: [(&str, &str, SettingControl<'_>); 13] = [
+                let rows: [(&str, &str, SettingControl<'_>); 15] = [
                     (
-                        "Customize HUD Controls (Control Editor)",
-                        "Move buttons, add custom keys, and set Visible in Game / Menu, Toggle & Swipe",
-                        SettingControl::Button("Open Editor", Action::OpenControlEditor, true),
+                        "Control Mode: MCPE (Default)",
+                        "Vanilla Minecraft/MCPE-style touch controls (default on fresh install)",
+                        SettingControl::Button(
+                            if is_mcpe { "● Active" } else { "○ Select MCPE" },
+                            Action::SelectControlMode(horizon_client::touch::ControlStyle::Mcpe),
+                            is_mcpe,
+                        ),
                     ),
                     (
-                        "Saved & preset control profiles",
-                        "View all saved control layouts in controlmap/ and load any profile",
-                        SettingControl::Button(&profile_label, Action::ControlProfileChooser, false),
+                        "Control Mode: GoyControl",
+                        "Independent custom touch control system with its own layouts & editor",
+                        SettingControl::Button(
+                            if is_goy { "● Active" } else { "○ Select GoyControl" },
+                            Action::SelectControlMode(
+                                horizon_client::touch::ControlStyle::GoyControl,
+                            ),
+                            is_goy,
+                        ),
                     ),
                     (
-                        "Save current layout under custom name",
-                        "Type a custom name to save your layout in controlmap/<name>.json",
-                        SettingControl::Button(&save_as_label, Action::SaveControlProfileAsNew, false),
+                        &editor_title,
+                        editor_sub,
+                        SettingControl::Button("Customize Controls", Action::OpenControlEditor, true),
                     ),
                     (
-                        "Export control layout file (.json)",
-                        "Exports horizon-controls-<profile>.json to share or back up",
-                        SettingControl::Button("Export JSON", Action::ExportControlProfile, false),
+                        &preset_row_title,
+                        &preset_sub,
+                        SettingControl::Button(&preset_label, Action::ControlProfileChooser, false),
                     ),
                     (
-                        "Import / open controlmap folder",
-                        "Open controlmap folder in system Files to import custom JSON layouts",
-                        SettingControl::Button("Import / Folder", Action::ImportControlProfile, false),
+                        &copy_title,
+                        "Duplicate selected layout into a new independent preset with custom name & description",
+                        SettingControl::Button(copy_btn_label, Action::CopyActivePreset, false),
                     ),
                     (
-                        "Mouse & camera sensitivity",
-                        "In-game 3D look sensitivity for mouse and touch camera",
-                        SettingControl::Stepper(&mouse_sens, Action::MouseSensDelta(-0.05), Action::MouseSensDelta(0.05)),
+                        &edit_meta_title,
+                        edit_meta_sub,
+                        SettingControl::Button(
+                            edit_meta_btn,
+                            Action::EditActivePresetMeta,
+                            false,
+                        ),
                     ),
                     (
-                        "Touch look speed multiplier",
-                        "Direct finger drag rotation speed across the screen",
-                        SettingControl::Stepper(&touch_sens, Action::TouchSensDelta(-0.10), Action::TouchSensDelta(0.10)),
+                        "Sensitivity (Touch Look Speed)",
+                        "Direct finger drag camera rotation speed multiplier",
+                        SettingControl::Stepper(
+                            &touch_sens,
+                            Action::TouchSensDelta(-0.10),
+                            Action::TouchSensDelta(0.10),
+                        ),
                     ),
                     (
-                        "Virtual mouse pointer speed",
-                        "Zero-lag virtual cursor speed in inventories and menus",
-                        SettingControl::Stepper(&vmouse_spd, Action::VirtualMouseSpeedDelta(-0.15), Action::VirtualMouseSpeedDelta(0.15)),
+                        "Invert Y-Axis",
+                        "Inverts vertical camera look direction for touch and mouse",
+                        SettingControl::Toggle(invert_y_active, Action::ToggleInvertY),
                     ),
                     (
-                        "HUD button scale",
-                        "Global size multiplier for all on-screen touch buttons",
-                        SettingControl::Stepper(&btn_scale, Action::ButtonScaleDelta(-0.10), Action::ButtonScaleDelta(0.10)),
+                        "Split Touch (Aim & Look)",
+                        "Separates aiming and camera look with center crosshair",
+                        SettingControl::Toggle(
+                            touch_cfg.split_controls,
+                            Action::ToggleSplitControls,
+                        ),
                     ),
                     (
-                        "Movement control scheme",
+                        "Virtual Mouse Pointer Speed",
+                        "Zero-lag virtual cursor speed in menus, inventories and HUD",
+                        SettingControl::Stepper(
+                            &vmouse_spd,
+                            Action::VirtualMouseSpeedDelta(-0.15),
+                            Action::VirtualMouseSpeedDelta(0.15),
+                        ),
+                    ),
+                    (
+                        "HUD Button Scale",
+                        "Global size multiplier for on-screen touch buttons",
+                        SettingControl::Stepper(
+                            &btn_scale,
+                            Action::ButtonScaleDelta(-0.10),
+                            Action::ButtonScaleDelta(0.10),
+                        ),
+                    ),
+                    (
+                        "Movement Control Scheme",
                         "Switch between classic D-Pad buttons and analog thumb joystick",
                         SettingControl::Button(scheme_str, Action::ToggleControlScheme, false),
                     ),
                     (
-                        "Split controls (center crosshair)",
-                        "Aim blocks with the center crosshair instead of tap-anywhere",
-                        SettingControl::Toggle(touch_cfg.split_controls, Action::ToggleSplitControls),
-                    ),
-                    (
-                        "Sprint latch toggle & Left-handed HUD",
-                        "Tap to toggle left-handed HUD mirroring (movement on right)",
+                        "Left-Handed HUD Mirroring",
+                        "Mirrors movement controls to the right side of the screen",
                         SettingControl::Toggle(touch_cfg.left_handed, Action::ToggleLeftHanded),
                     ),
                     (
-                        "Gyroscope aiming",
+                        "Gyroscope Aiming",
                         "Tilt your phone for fine bow and crosshair aiming adjustments",
                         SettingControl::Toggle(touch_cfg.gyroscope, Action::ToggleGyro),
+                    ),
+                    (
+                        "3D Camera Base Sensitivity",
+                        "Base in-game 3D look sensitivity stored in options.txt",
+                        SettingControl::Stepper(
+                            &mouse_sens,
+                            Action::MouseSensDelta(-0.05),
+                            Action::MouseSensDelta(0.05),
+                        ),
                     ),
                 ];
 
@@ -2917,6 +3010,18 @@ impl Launcher {
                 .into();
             }
             // Controls & Control Editor actions
+            Some(Action::SelectControlMode(style)) => {
+                let game_home = self.catalog.config.game_home(&self.home);
+                let mut touch = horizon_client::touch::Settings::load_from(
+                    &game_home.join("horizon-touch.json"),
+                );
+                touch.switch_control_system(&game_home, style);
+                self.catalog.status = format!(
+                    "Control Mode set to {} (Active preset: '{}').",
+                    style.label(),
+                    touch.preset_name
+                );
+            }
             Some(Action::OpenControlEditor) => {
                 let game_home = self.catalog.config.game_home(&self.home);
                 let mut tc = horizon_client::touch::TouchControls::default();
@@ -2927,15 +3032,17 @@ impl Launcher {
                 self.control_editor = Some(tc);
             }
             Some(Action::CloseControlEditor) => {
-                if let Some(tc) = self.control_editor.take() {
+                if let Some(mut tc) = self.control_editor.take() {
                     let game_home = self.catalog.config.game_home(&self.home);
-                    let _ = tc
-                        .settings
-                        .save_profile(&game_home, &tc.settings.active_profile.clone());
-                    let _ = tc.settings.save_to(&game_home.join("horizon-touch.json"));
+                    if !tc.settings.is_default_preset() {
+                        let _ = tc.settings.save_replace_preset(&game_home);
+                    } else {
+                        let _ = tc.settings.save_to(&game_home.join("horizon-touch.json"));
+                    }
                     self.catalog.status = format!(
-                        "Saved HUD control layout '{}' with Pass-Through, Toggle & Swipe settings.",
-                        tc.settings.active_profile
+                        "Saved {} preset '{}'.",
+                        tc.settings.control_style.label(),
+                        tc.settings.preset_name
                     );
                 }
             }
@@ -2944,43 +3051,72 @@ impl Launcher {
             }
             Some(Action::ChooseControlProfile(idx)) => {
                 let game_home = self.catalog.config.game_home(&self.home);
-                let mut profiles = Vec::new();
-                for (id, _, _) in horizon_client::touch::Settings::PRESETS {
-                    profiles.push((*id).to_owned());
-                }
-                for saved in horizon_client::touch::Settings::list_profiles(&game_home) {
-                    if !profiles.iter().any(|p| p.eq_ignore_ascii_case(&saved)) {
-                        profiles.push(saved);
-                    }
-                }
-                if let Some(name) = profiles.get(idx as usize) {
-                    let mut loaded = horizon_client::touch::Settings::load_profile(&game_home, name);
-                    if horizon_client::touch::Settings::PRESETS
-                        .iter()
-                        .any(|(id, _, _)| id.eq_ignore_ascii_case(name))
-                    {
-                        loaded.apply_preset(name);
-                        let _ = loaded.save_profile(&game_home, name);
-                        let _ = loaded.save_to(&game_home.join("horizon-touch.json"));
-                    }
-                    self.catalog.status = format!("Applied HUD control layout '{name}'.");
-                }
-                self.chooser = None;
-            }
-            Some(Action::SaveControlProfileAsNew) => {
-                let game_home = self.catalog.config.game_home(&self.home);
                 let mut touch = horizon_client::touch::Settings::load_from(
                     &game_home.join("horizon-touch.json"),
                 );
-                let existing = horizon_client::touch::Settings::list_profiles(&game_home);
-                let next_name = format!("goy-custom-{}", existing.len());
-                touch.active_profile = next_name.clone();
-                let _ = touch.save_profile(&game_home, &next_name);
-                self.catalog.config.custom_profile_name = next_name.clone();
+                let style = touch.control_style;
+                let presets = horizon_client::touch::Settings::list_presets(&game_home, style);
+                if let Some(meta) = presets.get(idx as usize) {
+                    touch.select_preset(&game_home, style, &meta.id);
+                    self.catalog.status = format!(
+                        "Selected {} preset '{}' ({}).",
+                        style.label(),
+                        meta.name,
+                        meta.description
+                    );
+                }
+                self.chooser = None;
+            }
+            Some(Action::CopyActivePreset) => {
+                let game_home = self.catalog.config.game_home(&self.home);
+                let touch = horizon_client::touch::Settings::load_from(
+                    &game_home.join("horizon-touch.json"),
+                );
+                self.catalog.config.preset_edit_mode = "copy".into();
+                self.catalog.config.custom_profile_name = format!("{} Copy", touch.preset_name);
+                self.catalog.config.custom_profile_desc = touch.preset_description.clone();
                 self.catalog.editing = Some("profile_name");
                 crate::platform::show(&self.catalog.config.custom_profile_name);
                 self.catalog.status = format!(
-                    "Saved as '{next_name}'. Type a custom name and press Enter to rename, or view in Saved Profiles."
+                    "Step 1/2: Enter new {} preset name and press Enter.",
+                    touch.control_style.label()
+                );
+            }
+            Some(Action::EditActivePresetMeta) => {
+                let game_home = self.catalog.config.game_home(&self.home);
+                let touch = horizon_client::touch::Settings::load_from(
+                    &game_home.join("horizon-touch.json"),
+                );
+                if touch.is_default_preset() {
+                    self.catalog.status = format!(
+                        "{} Default preset is protected and cannot be renamed or overwritten. Use 'Copy Preset' to create an editable copy.",
+                        touch.control_style.label()
+                    );
+                } else {
+                    self.catalog.config.preset_edit_mode = "edit".into();
+                    self.catalog.config.custom_profile_name = touch.preset_name.clone();
+                    self.catalog.config.custom_profile_desc = touch.preset_description.clone();
+                    self.catalog.editing = Some("profile_name");
+                    crate::platform::show(&self.catalog.config.custom_profile_name);
+                    self.catalog.status = format!(
+                        "Step 1/2: Edit {} preset name and press Enter.",
+                        touch.control_style.label()
+                    );
+                }
+            }
+            Some(Action::SaveControlProfileAsNew) => {
+                let game_home = self.catalog.config.game_home(&self.home);
+                let touch = horizon_client::touch::Settings::load_from(
+                    &game_home.join("horizon-touch.json"),
+                );
+                self.catalog.config.preset_edit_mode = "copy".into();
+                self.catalog.config.custom_profile_name = format!("{} Copy", touch.preset_name);
+                self.catalog.config.custom_profile_desc = touch.preset_description.clone();
+                self.catalog.editing = Some("profile_name");
+                crate::platform::show(&self.catalog.config.custom_profile_name);
+                self.catalog.status = format!(
+                    "Step 1/2: Enter new {} preset name and press Enter.",
+                    touch.control_style.label()
                 );
             }
             Some(Action::ExportControlProfile) => {
@@ -2988,7 +3124,7 @@ impl Launcher {
                 let touch = horizon_client::touch::Settings::load_from(
                     &game_home.join("horizon-touch.json"),
                 );
-                match touch.export_profile(&self.home, &game_home, &touch.active_profile) {
+                match touch.export_profile(&self.home, &game_home, &touch.preset_id) {
                     Ok(path) => {
                         let file_name = path
                             .file_name()
@@ -2997,8 +3133,10 @@ impl Launcher {
                             .into_owned();
                         let _ = crate::platform::open_documents("reports");
                         self.catalog.status = format!(
-                            "Exported '{}' to Reports & controlmap/{}.json.",
-                            file_name, touch.active_profile
+                            "Exported '{}' to Reports & controls/{}/{}.json.",
+                            file_name,
+                            touch.control_style.storage_subdir(),
+                            touch.preset_id
                         );
                     }
                     Err(e) => self.catalog.status = e.to_string(),
@@ -3006,10 +3144,20 @@ impl Launcher {
             }
             Some(Action::ImportControlProfile) => {
                 let game_home = self.catalog.config.game_home(&self.home);
-                let _ = std::fs::create_dir_all(game_home.join("controlmap"));
+                let touch = horizon_client::touch::Settings::load_from(
+                    &game_home.join("horizon-touch.json"),
+                );
+                let _ = std::fs::create_dir_all(
+                    game_home
+                        .join("controls")
+                        .join(touch.control_style.storage_subdir()),
+                );
                 let _ = crate::platform::open_documents(crate::document_store::ROOT);
-                self.catalog.status =
-                    "Place any .json control file in controlmap/ and select it under Active control layout profile.".into();
+                self.catalog.status = format!(
+                    "Place any .json preset file in controls/{}/ and select it under {} Preset Selector.",
+                    touch.control_style.storage_subdir(),
+                    touch.control_style.label()
+                );
             }
             Some(Action::MouseSensDelta(delta)) => {
                 self.modify_game_settings(|s| {
@@ -3051,7 +3199,12 @@ impl Launcher {
                 self.modify_touch_settings(|t| t.left_handed = !t.left_handed);
             }
             Some(Action::ToggleInvertY) => {
-                self.modify_game_settings(|s| s.invert_y = !s.invert_y);
+                let mut next = false;
+                self.modify_game_settings(|s| {
+                    s.invert_y = !s.invert_y;
+                    next = s.invert_y;
+                });
+                self.modify_touch_settings(|t| t.invert_y = next);
             }
             Some(Action::ToggleGyro) => {
                 self.modify_touch_settings(|t| t.gyroscope = !t.gyroscope);
@@ -3247,6 +3400,7 @@ impl Launcher {
                 let initial = match name {
                     "name" => &self.catalog.config.name,
                     "profile_name" => &self.catalog.config.custom_profile_name,
+                    "profile_desc" => &self.catalog.config.custom_profile_desc,
                     "server" => &self.catalog.config.server,
                     "render_scale" => &self.catalog.render_scale_text,
                     "client_id" => &self.catalog.config.microsoft_client_id,
@@ -3396,8 +3550,11 @@ impl Launcher {
         let mut t =
             horizon_client::touch::Settings::load_from(&game_home.join("horizon-touch.json"));
         f(&mut t);
-        let _ = t.save_profile(&game_home, &t.active_profile.clone());
-        let _ = t.save_to(&game_home.join("horizon-touch.json"));
+        if !t.is_default_preset() {
+            let _ = t.save_replace_preset(&game_home);
+        } else {
+            let _ = t.save_to(&game_home.join("horizon-touch.json"));
+        }
     }
 
     pub(super) fn ui_density(&self) -> f32 {
@@ -3417,7 +3574,7 @@ impl Launcher {
         self.cursor = (t.location.x, t.location.y);
 
         // Route all touches in the MCPE + GoyControl Editor through touch_hud_editor
-        // and persist changes directly to game_home/horizon-touch.json and controlmap/.
+        // and persist changes directly to the active profile's game_home.
         if self.control_editor.is_some() {
             let (rw, rh) = self
                 .renderer
@@ -3426,6 +3583,8 @@ impl Launcher {
                     (r.config.width.max(1), r.config.height.max(1))
                 });
             let game_home = self.catalog.config.game_home(&self.home);
+            let prev_cwd = std::env::current_dir().ok();
+            let _ = std::env::set_current_dir(&game_home);
             if let (Some(tc), Some(gui)) = (&mut self.control_editor, &self.gui) {
                 tc.viewport(rw, rh);
                 let mut b = HudBatch::new([rw, rh]);
@@ -3444,19 +3603,21 @@ impl Launcher {
                     ended,
                 );
                 if ended || closed {
-                    let _ = tc
-                        .settings
-                        .save_profile(&game_home, &tc.settings.active_profile.clone());
                     let _ = tc.settings.save_to(&game_home.join("horizon-touch.json"));
                 }
                 if closed || tc.editor.is_none() {
                     self.catalog.status = format!(
-                        "Saved {} layout '{}'.",
+                        "Saved {} preset '{}' (controls/{}/{}.json).",
                         tc.settings.control_style.label(),
-                        tc.settings.active_profile
+                        tc.settings.preset_name,
+                        tc.settings.control_style.storage_subdir(),
+                        tc.settings.preset_id
                     );
                     self.control_editor = None;
                 }
+            }
+            if let Some(prev) = prev_cwd {
+                let _ = std::env::set_current_dir(prev);
             }
             return Ok(());
         }

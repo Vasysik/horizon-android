@@ -9,11 +9,27 @@ use std::{
 };
 use winit::{event::TouchPhase, keyboard::KeyCode};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresetDialogState {
+    pub is_copy: bool,
+    pub target_id: String,
+    pub name_input: String,
+    pub desc_input: String,
+    pub editing_desc: bool,
+}
+
 #[derive(Default)]
 pub struct TouchUi {
     pub expanded: bool,
     pub floating_menu: bool,
     pub floating_drag: Option<(u64, [f32; 2], bool)>,
+    pub hub_tab: u8,
+    pub presets_modal_open: bool,
+    pub preset_dialog: Option<PresetDialogState>,
+    pub cached_presets: Vec<crate::touch::PresetMeta>,
+    pub cached_presets_style: Option<crate::touch::ControlStyle>,
+    pub sensitivity_dragging: bool,
+    pub goy_mode: bool,
     pub virtual_mouse: bool,
     mouse_buttons: BTreeMap<u64, bool>,
     relative: Option<RelativeTouch>,
@@ -25,20 +41,37 @@ pub struct TouchUi {
     pub f3_latched: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum InGameMenuAction {
     Close,
     OpenControlEditor,
     SetControlStyle(crate::touch::ControlStyle),
+    SelectPreset(String),
+    CopyPreset {
+        source_id: String,
+        name: String,
+        description: String,
+    },
+    UpdatePresetMeta {
+        id: String,
+        name: String,
+        description: String,
+    },
     ApplyPreset(&'static str),
     LoadSavedProfile(usize),
     PresetVisibilityAll,
     CycleMovementMode,
     CycleJoystickArea,
     ToggleSplitTouch,
+    ToggleInvertY,
     ToggleLeftHanded,
     ToggleGyro,
     ToggleVirtualMouse,
+    ToggleSprintMode,
+    ToggleInventoryControls,
+    ToggleVibrate,
+    ToggleAutoJump,
+    SetTouchSensitivity(f32),
     StepTouchSensitivity(i32),
     StepButtonScale(i32),
     TriggerKey(KeyCode),
@@ -100,6 +133,13 @@ const KEYS: [(&str, KeyCode); 28] = [
     ("F3+T", KeyCode::KeyT),
 ];
 
+fn mouse_button_rects(w: f32, h: f32) -> [([f32; 4], bool); 2] {
+    [
+        ([w - 53.0, h - 52.0, 48.0, 22.0], false),
+        ([w - 53.0, h - 28.0, 48.0, 22.0], true),
+    ]
+}
+
 /// Shared outlined pointer for virtual mouse and controller menus.
 pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
     let (x, y) = (cursor.0, cursor.1);
@@ -128,6 +168,16 @@ pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) 
 }
 
 impl TouchUi {
+    pub fn refresh_presets_cache(&mut self, style: crate::touch::ControlStyle) {
+        self.cached_presets =
+            crate::touch::Settings::list_presets(std::path::Path::new("."), style);
+        self.cached_presets_style = Some(style);
+    }
+    pub fn ensure_presets_cache(&mut self, style: crate::touch::ControlStyle) {
+        if self.cached_presets_style != Some(style) || self.cached_presets.is_empty() {
+            self.refresh_presets_cache(style);
+        }
+    }
     pub fn key_down(&mut self, id: u64, key: KeyCode) -> bool {
         let first = !self.key_held(key);
         self.held_keys.insert(id, key);
@@ -181,6 +231,7 @@ impl TouchUi {
         self.pointer_drag = None;
         self.relative = None;
         self.relative_click = None;
+        self.sensitivity_dragging = false;
     }
     pub fn cancel_relative(&mut self) {
         self.relative = None;
@@ -322,31 +373,35 @@ impl TouchUi {
         }
     }
     pub fn action(&self, w: f32, h: f32, p: [f32; 2], menu: bool) -> Option<Action> {
-        if menu && (3.0..23.0).contains(&p[1]) && (w - 86.0..w - 50.0).contains(&p[0]) {
-            return Some(Action::VirtualMouse);
-        }
-        if menu && self.virtual_mouse && (w - 48.0..w - 6.0).contains(&p[0]) {
-            if (h - 52.0..h - 30.0).contains(&p[1]) {
-                return Some(Action::MouseButton(false));
+        if !self.goy_mode {
+            if menu && self.virtual_mouse {
+                for ([x, y, width, height], right) in mouse_button_rects(w, h) {
+                    if (x..x + width).contains(&p[0]) && (y..y + height).contains(&p[1]) {
+                        return Some(Action::MouseButton(right));
+                    }
+                }
             }
-            if (h - 28.0..h - 6.0).contains(&p[1]) {
-                return Some(Action::MouseButton(true));
+            if menu && (3.0..23.0).contains(&p[1]) && (w - 108.0..w - 50.0).contains(&p[0]) {
+                return Some(Action::VirtualMouse);
+            }
+            if menu && (3.0..23.0).contains(&p[1]) && (w - 50.0..w - 3.0).contains(&p[0]) {
+                return Some(Action::Key(KeyCode::Escape));
             }
         }
-        if self.expanded && (3.0..23.0).contains(&p[1]) {
+        if (!self.goy_mode || self.expanded) && (3.0..23.0).contains(&p[1]) {
             if (3.0..36.0).contains(&p[0]) {
                 return Some(Action::More);
             }
-            if (39.0..72.0).contains(&p[0]) {
+            if self.expanded && (39.0..72.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::F3));
             }
-            if (75.0..108.0).contains(&p[0]) {
+            if self.expanded && (75.0..108.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::F5));
             }
-            if (111.0..144.0).contains(&p[0]) {
+            if self.expanded && (111.0..144.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::KeyT));
             }
-            if (147.0..186.0).contains(&p[0]) {
+            if self.expanded && (147.0..186.0).contains(&p[0]) {
                 return Some(Action::Keyboard);
             }
         }
@@ -363,8 +418,8 @@ impl TouchUi {
         }
         None
     }
-    pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas, _menu: bool) {
-        if !self.expanded {
+    pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas, menu: bool) {
+        if self.goy_mode && !self.expanded {
             return;
         }
         for (label, x, width) in [
@@ -374,6 +429,9 @@ impl TouchUi {
             ("Chat", 111.0, 33.0),
             ("Keys", 147.0, 39.0),
         ] {
+            if label != "..." && !self.expanded {
+                continue;
+            }
             button(
                 b,
                 a,
@@ -386,6 +444,26 @@ impl TouchUi {
                 3.0,
                 width,
             );
+        }
+        if menu && !self.goy_mode {
+            button(
+                b,
+                a,
+                if self.virtual_mouse {
+                    "Mouse ON"
+                } else {
+                    "Mouse"
+                },
+                b.width - 108.0,
+                3.0,
+                50.0,
+            );
+            if self.virtual_mouse {
+                for ([x, y, width, _], right) in mouse_button_rects(b.width, b.height) {
+                    button(b, a, if right { "RMB" } else { "LMB" }, x, y, width);
+                }
+            }
+            button(b, a, "Back", b.width - 53.0, 3.0, 50.0);
         }
         if self.expanded {
             button(
@@ -599,6 +677,137 @@ const MOUSE_AND_ACTION_ITEMS: &[(&str, &str)] = &[
     ("Action: Advancements (L)", "action:key.advancements"),
 ];
 
+const MINI_KB_ROWS: [&[&str]; 4] = [
+    &["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-"],
+    &["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+    &["A", "S", "D", "F", "G", "H", "J", "K", "L", "Clear"],
+    &["Z", "X", "C", "V", "B", "N", "M", "Space", "Bksp"],
+];
+
+fn draw_mini_keyboard(ui: &mut crate::ui_theme::Ui<'_>, rect: [f32; 4]) {
+    use crate::ui_theme::{Face, color};
+    let [x, y, w, h] = rect;
+    let bg_key = color::hex(0x25213A, 250);
+    let bg_spec = color::hex(0x362C59, 250);
+    let border_c = color::hex(0x433B66, 255);
+    let text_c = color::hex(0xF4EFFA, 255);
+    let accent = color::hex(0x9A7BFF, 255);
+    let gap = 3.0;
+    let row_h = ((h - gap * 3.0) / 4.0).max(16.0);
+    for (r_idx, row) in MINI_KB_ROWS.iter().enumerate() {
+        let ry = y + r_idx as f32 * (row_h + gap);
+        let total_units: f32 = row
+            .iter()
+            .map(|k| match *k {
+                "Space" => 2.6,
+                "Bksp" | "Clear" => 1.7,
+                _ => 1.0,
+            })
+            .sum();
+        let unit_w = (w - gap * (row.len() as f32 - 1.0)) / total_units;
+        let mut kx = x;
+        for &key in *row {
+            let mult = match key {
+                "Space" => 2.6,
+                "Bksp" | "Clear" => 1.7,
+                _ => 1.0,
+            };
+            let kw = unit_w * mult;
+            let special = matches!(key, "Space" | "Bksp" | "Clear");
+            ui.rounded(
+                kx,
+                ry,
+                kw,
+                row_h,
+                5.0,
+                if special { bg_spec } else { bg_key },
+            );
+            ui.border(
+                kx,
+                ry,
+                kw,
+                row_h,
+                5.0,
+                if special { accent } else { border_c },
+            );
+            ui.centered_fit(
+                Face::SemiBold,
+                9.5,
+                [kx + 2.0, ry, kw - 4.0, row_h],
+                if special { accent } else { text_c },
+                key,
+            );
+            kx += kw + gap;
+        }
+    }
+}
+
+fn hit_mini_keyboard(rect: [f32; 4], p: [f32; 2], target: &mut String, max_len: usize) -> bool {
+    let [x, y, w, h] = rect;
+    if p[0] < x || p[0] > x + w || p[1] < y || p[1] > y + h {
+        return false;
+    }
+    let gap = 3.0;
+    let row_h = ((h - gap * 3.0) / 4.0).max(16.0);
+    for (r_idx, row) in MINI_KB_ROWS.iter().enumerate() {
+        let ry = y + r_idx as f32 * (row_h + gap);
+        if p[1] < ry || p[1] > ry + row_h {
+            continue;
+        }
+        let total_units: f32 = row
+            .iter()
+            .map(|k| match *k {
+                "Space" => 2.6,
+                "Bksp" | "Clear" => 1.7,
+                _ => 1.0,
+            })
+            .sum();
+        let unit_w = (w - gap * (row.len() as f32 - 1.0)) / total_units;
+        let mut kx = x;
+        for &key in *row {
+            let mult = match key {
+                "Space" => 2.6,
+                "Bksp" | "Clear" => 1.7,
+                _ => 1.0,
+            };
+            let kw = unit_w * mult;
+            if p[0] >= kx && p[0] <= kx + kw {
+                match key {
+                    "Bksp" => {
+                        target.pop();
+                    }
+                    "Clear" => {
+                        target.clear();
+                    }
+                    "Space" => {
+                        if target.len() < max_len && !target.ends_with(' ') && !target.is_empty() {
+                            target.push(' ');
+                        }
+                    }
+                    ch => {
+                        if target.len() < max_len {
+                            let use_lower = target
+                                .chars()
+                                .last()
+                                .is_some_and(|c| c.is_alphabetic());
+                            if use_lower {
+                                for lc in ch.chars().flat_map(char::to_lowercase) {
+                                    target.push(lc);
+                                }
+                            } else {
+                                target.push_str(ch);
+                            }
+                        }
+                    }
+                }
+                return true;
+            }
+            kx += kw + gap;
+        }
+    }
+    false
+}
+
 /// Renders the live GoyControl HUD (Analog Joystick + Static Buttons) in-game and in menus
 /// using the exact same `Ui::mobile` TrueType & rounded-shape pipeline as `draw_hud_editor`.
 pub fn draw_goy_hud(
@@ -610,7 +819,7 @@ pub fn draw_goy_hud(
 ) {
     use crate::touch::{Control, ControlStyle};
     use crate::ui_theme::{Face, Ui, color};
-    if tc.editor.is_some() {
+    if tc.editor.is_some() || tc.settings.control_style != ControlStyle::GoyControl {
         return;
     }
     let mut ui = Ui::mobile(a, b, (0.0, 0.0));
@@ -618,66 +827,32 @@ pub fn draw_goy_hud(
     let text_c = color::hex(0xF4EFFA, 255);
     let state = tc.state();
 
-    // 1. Built-in controls that use GoyControl style (including the GoyControl Analog Joystick)
-    for c in Control::ALL {
-        if !tc.visible_for_state(c, in_menu) {
-            continue;
-        }
-        let p = tc.placement(c);
-        if tc.settings.control_style != ControlStyle::GoyControl && !p.use_goy_style {
-            continue;
-        }
+    // 1. GoyControl Analog Joystick (Control::Move)
+    if tc.visible_for_state(Control::Move, in_menu) {
+        let p = tc.placement(Control::Move);
         let [nx, ny, nw, nh] = p.rect(tc.aspect());
         let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
         let alpha = p.opacity.clamp(0.15, 1.0);
-        if c == Control::Move {
-            let js = &tc.settings.joystick_style;
-            let side = rw.min(rh);
-            let jx = rx + (rw - side) * 0.5;
-            let jy = ry + (rh - side) * 0.5;
-            let base_fill = color::with_alpha(js.base_color, js.base_opacity * alpha);
-            let base_stroke = color::with_alpha(js.base_stroke_color, js.base_opacity * alpha);
-            let br = (side * (js.base_roundness / 100.0)).clamp(0.0, side * 0.5);
-            ui.rounded(jx, jy, side, side, br, base_fill);
-            if js.base_stroke > 0.1 {
-                ui.stroke_rounded(jx, jy, side, side, br, js.base_stroke, base_stroke);
-            }
-            let kside = side * js.stick_size.clamp(0.20, 0.85);
-            let kx = jx + (side - kside) * 0.5 + state.left[0] * (side * 0.26);
-            let ky = jy + (side - kside) * 0.5 - state.left[1] * (side * 0.26);
-            let kr = kside * 0.5;
-            let stick_fill = color::with_alpha(js.stick_color, js.stick_opacity * alpha);
-            let stick_stroke = color::with_alpha(js.stick_stroke_color, js.stick_opacity * alpha);
-            ui.rounded(kx, ky, kside, kside, kr, stick_fill);
-            if js.stick_stroke > 0.1 {
-                ui.stroke_rounded(kx, ky, kside, kside, kr, js.stick_stroke, stick_stroke);
-            }
-        } else {
-            let fill_c = color::with_alpha(p.button_color, alpha);
-            let stroke_c = color::with_alpha(p.stroke_color, alpha);
-            let shadow_c = color::with_alpha(p.shadow_color, alpha);
-            ui.goy_box(
-                rx,
-                ry,
-                rw,
-                rh,
-                p.shape,
-                p.roundness,
-                fill_c,
-                p.stroke_size,
-                p.stroke_margin,
-                p.stroke_roundness,
-                stroke_c,
-                p.shadow_size,
-                shadow_c,
-            );
-            ui.centered_fit(
-                Face::SemiBold,
-                (rh * 0.28).clamp(9.5, 14.5),
-                [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
-                color::with_alpha(text_c, alpha),
-                c.name(),
-            );
+        let js = &tc.settings.joystick_style;
+        let side = rw.min(rh);
+        let jx = rx + (rw - side) * 0.5;
+        let jy = ry + (rh - side) * 0.5;
+        let base_fill = color::with_alpha(js.base_color, js.base_opacity * alpha);
+        let base_stroke = color::with_alpha(js.base_stroke_color, js.base_opacity * alpha);
+        let br = (side * (js.base_roundness / 100.0)).clamp(0.0, side * 0.5);
+        ui.rounded(jx, jy, side, side, br, base_fill);
+        if js.base_stroke > 0.1 {
+            ui.stroke_rounded(jx, jy, side, side, br, js.base_stroke, base_stroke);
+        }
+        let kside = side * js.stick_size.clamp(0.20, 0.85);
+        let kx = jx + (side - kside) * 0.5 + state.left[0] * (side * 0.26);
+        let ky = jy + (side - kside) * 0.5 - state.left[1] * (side * 0.26);
+        let kr = kside * 0.5;
+        let stick_fill = color::with_alpha(js.stick_color, js.stick_opacity * alpha);
+        let stick_stroke = color::with_alpha(js.stick_stroke_color, js.stick_opacity * alpha);
+        ui.rounded(kx, ky, kside, kside, kr, stick_fill);
+        if js.stick_stroke > 0.1 {
+            ui.stroke_rounded(kx, ky, kside, kside, kr, js.stick_stroke, stick_stroke);
         }
     }
 
@@ -746,7 +921,7 @@ pub fn draw_goy_hud(
 }
 
 impl TouchUi {
-    /// Handles touch events for the draggable Material You 3 Floating '=' Button and Floating Hub Dialog.
+    /// Handles touch events for the draggable Floating '=' Button and the redesigned Horizon Control Hub.
     pub fn floating_menu_touch(
         &mut self,
         b: &mut HudBatch,
@@ -756,6 +931,8 @@ impl TouchUi {
         p_gui: [f32; 2],
         settings: &mut crate::touch::Settings,
     ) -> Option<InGameMenuAction> {
+        use crate::touch::ControlStyle;
+        self.goy_mode = settings.control_style == ControlStyle::GoyControl;
         let ui = crate::ui_theme::Ui::mobile(a, b, (0.0, 0.0));
         let (w, h) = (ui.w, ui.h);
         let p = [
@@ -796,6 +973,13 @@ impl TouchUi {
                             let _ = settings.save();
                         } else if phase == TouchPhase::Ended {
                             self.floating_menu = !self.floating_menu;
+                            if self.floating_menu {
+                                self.refresh_presets_cache(settings.control_style);
+                            } else {
+                                self.presets_modal_open = false;
+                                self.preset_dialog = None;
+                                self.sensitivity_dragging = false;
+                            }
                         }
                         return Some(InGameMenuAction::Close);
                     }
@@ -809,145 +993,320 @@ impl TouchUi {
             return Some(InGameMenuAction::Close);
         }
 
-        if !self.floating_menu || phase != TouchPhase::Started {
+        if !self.floating_menu {
             return None;
         }
 
-        let dw = (w - 24.0).clamp(320.0, 560.0);
-        let dh = (h - 16.0).clamp(264.0, 396.0);
+        let dw = (w - 20.0).clamp(340.0, 580.0);
+        let dh = (h - 14.0).clamp(256.0, 396.0);
         let dx = (w - dw) * 0.5;
         let dy = (h - dh) * 0.5;
-        if !inside([dx, dy, dw, dh]) || inside([dx + dw - 78.0, dy + 12.0, 64.0, 32.0]) {
+        let side_w = (dw * 0.25).clamp(112.0, 142.0);
+        let cx = dx + side_w + 14.0;
+        let cw = dw - side_w - 28.0;
+
+        // Handle ongoing sensitivity slider drag on Tab 0
+        if self.sensitivity_dragging {
+            match phase {
+                TouchPhase::Moved => {
+                    let sl_x = cx + 8.0;
+                    let sl_w = (cw - 16.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    let sens = (0.20 + t * 1.80).clamp(0.20, 2.00);
+                    return Some(InGameMenuAction::SetTouchSensitivity(sens));
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    self.sensitivity_dragging = false;
+                    return Some(InGameMenuAction::Close);
+                }
+                _ => {}
+            }
+        }
+
+        if phase != TouchPhase::Started {
+            return Some(InGameMenuAction::Close);
+        }
+
+        // 1. If Copy / Edit Preset Dialog is open:
+        if let Some(mut dlg) = self.preset_dialog.take() {
+            let mdw = (w - 28.0).clamp(310.0, 480.0);
+            let mdh = (h - 16.0).clamp(242.0, 330.0);
+            let mdx = (w - mdw) * 0.5;
+            let mdy = (h - mdh) * 0.5;
+            if !inside([mdx, mdy, mdw, mdh]) || inside([mdx + mdw - 76.0, mdy + 10.0, 64.0, 26.0]) {
+                return Some(InGameMenuAction::Close);
+            }
+            let name_r = [mdx + 14.0, mdy + 42.0, (mdw - 36.0) * 0.45, 32.0];
+            let desc_r = [
+                mdx + 22.0 + (mdw - 36.0) * 0.45,
+                mdy + 42.0,
+                (mdw - 36.0) * 0.55,
+                32.0,
+            ];
+            if inside(name_r) {
+                dlg.editing_desc = false;
+                self.preset_dialog = Some(dlg);
+                return Some(InGameMenuAction::Close);
+            }
+            if inside(desc_r) {
+                dlg.editing_desc = true;
+                self.preset_dialog = Some(dlg);
+                return Some(InGameMenuAction::Close);
+            }
+            let kb_r = [mdx + 14.0, mdy + 80.0, mdw - 28.0, mdh - 126.0];
+            let target_str = if dlg.editing_desc {
+                &mut dlg.desc_input
+            } else {
+                &mut dlg.name_input
+            };
+            let max_l = if dlg.editing_desc { 56 } else { 24 };
+            if hit_mini_keyboard(kb_r, p, target_str, max_l) {
+                self.preset_dialog = Some(dlg);
+                return Some(InGameMenuAction::Close);
+            }
+            let save_r = [mdx + 14.0, mdy + mdh - 38.0, mdw - 28.0, 30.0];
+            if inside(save_r) {
+                let name = if dlg.name_input.trim().is_empty() {
+                    "Custom Preset".to_owned()
+                } else {
+                    dlg.name_input.trim().to_owned()
+                };
+                let description = if dlg.desc_input.trim().is_empty() {
+                    format!("Custom {} layout", settings.control_style.label())
+                } else {
+                    dlg.desc_input.trim().to_owned()
+                };
+                if dlg.is_copy {
+                    return Some(InGameMenuAction::CopyPreset {
+                        source_id: dlg.target_id,
+                        name,
+                        description,
+                    });
+                } else {
+                    return Some(InGameMenuAction::UpdatePresetMeta {
+                        id: dlg.target_id,
+                        name,
+                        description,
+                    });
+                }
+            }
+            self.preset_dialog = Some(dlg);
+            return Some(InGameMenuAction::Close);
+        }
+
+        // 2. If Preset Management Modal is open:
+        if self.presets_modal_open {
+            self.ensure_presets_cache(settings.control_style);
+            let mdw = (w - 24.0).clamp(320.0, 520.0);
+            let mdh = (h - 18.0).clamp(248.0, 360.0);
+            let mdx = (w - mdw) * 0.5;
+            let mdy = (h - mdh) * 0.5;
+            if !inside([mdx, mdy, mdw, mdh]) || inside([mdx + mdw - 78.0, mdy + 10.0, 64.0, 28.0]) {
+                self.presets_modal_open = false;
+                return Some(InGameMenuAction::Close);
+            }
+            let list_y = mdy + 48.0;
+            let row_h = 46.0;
+            let max_rows = ((mdh - 60.0) / (row_h + 6.0)).floor().max(1.0) as usize;
+            let presets = self.cached_presets.clone();
+            for (idx, preset) in presets.iter().take(max_rows).enumerate() {
+                let ry = list_y + idx as f32 * (row_h + 6.0);
+                let row_r = [mdx + 14.0, ry, mdw - 28.0, row_h];
+                let copy_r = [row_r[0] + row_r[2] - 68.0, ry + 8.0, 60.0, 30.0];
+                let edit_r = [row_r[0] + row_r[2] - 104.0, ry + 8.0, 30.0, 30.0];
+                if inside(copy_r) {
+                    self.preset_dialog = Some(PresetDialogState {
+                        is_copy: true,
+                        target_id: preset.id.clone(),
+                        name_input: format!("{} Copy", preset.name),
+                        desc_input: preset.description.clone(),
+                        editing_desc: false,
+                    });
+                    return Some(InGameMenuAction::Close);
+                }
+                if !preset.is_default && inside(edit_r) {
+                    self.preset_dialog = Some(PresetDialogState {
+                        is_copy: false,
+                        target_id: preset.id.clone(),
+                        name_input: preset.name.clone(),
+                        desc_input: preset.description.clone(),
+                        editing_desc: false,
+                    });
+                    return Some(InGameMenuAction::Close);
+                }
+                if inside(row_r) {
+                    return Some(InGameMenuAction::SelectPreset(preset.id.clone()));
+                }
+            }
+            return Some(InGameMenuAction::Close);
+        }
+
+        // 3. Main Horizon Control Hub Dialog
+        if !inside([dx, dy, dw, dh]) || inside([dx + dw - 76.0, dy + 10.0, 62.0, 30.0]) {
             self.floating_menu = false;
             return Some(InGameMenuAction::Close);
         }
-        if inside([dx + dw - 222.0, dy + 12.0, 138.0, 32.0]) {
-            self.floating_menu = false;
-            return Some(InGameMenuAction::OpenControlEditor);
-        }
 
-        // Row 1: Saved Profiles & Quick Presets
-        let py = dy + 64.0;
-        let pw = (dw - 32.0 - 16.0) / 5.0;
-        let presets = ["default", "goycontrol", "pvp", "building", "speedrun"];
-        for (i, preset_id) in presets.iter().enumerate() {
-            let rx = dx + 16.0 + i as f32 * (pw + 4.0);
-            if inside([rx, py, pw, 30.0]) {
-                return Some(InGameMenuAction::ApplyPreset(preset_id));
+        // Left Sidebar Category Tabs (Controls, Aiming, Buttons, Advanced)
+        let tab_start_y = dy + 58.0;
+        for ti in 0..4u8 {
+            let ty = tab_start_y + ti as f32 * 42.0;
+            if inside([dx + 10.0, ty, side_w - 16.0, 36.0]) {
+                self.hub_tab = ti;
+                return Some(InGameMenuAction::Close);
             }
         }
 
-        // Row 2: Saved Custom Profiles bar (up to 4 saved profiles + Preset Visibility)
-        let spy = py + 36.0;
-        let saved_list = crate::touch::Settings::list_profiles(std::path::Path::new("."));
-        let sp_count = saved_list.len().clamp(1, 4);
-        let sp_w = (dw - 32.0 - 4.0 * sp_count as f32) / (sp_count as f32 + 1.0);
-        for i in 0..sp_count {
-            let rx = dx + 16.0 + i as f32 * (sp_w + 4.0);
-            if inside([rx, spy, sp_w, 28.0]) {
-                return Some(InGameMenuAction::LoadSavedProfile(i));
+        let body_y = dy + 54.0;
+        match self.hub_tab {
+            0 => {
+                // Tab 0: Controls (matches reference design)
+                // Section 1: Control Mode (MCPE (Default) vs GoyControl)
+                let mode_y = body_y + 16.0;
+                let half_w = (cw - 8.0) * 0.5;
+                if inside([cx, mode_y, half_w, 44.0]) {
+                    return Some(InGameMenuAction::SetControlStyle(ControlStyle::Mcpe));
+                }
+                if inside([cx + half_w + 8.0, mode_y, half_w, 44.0]) {
+                    return Some(InGameMenuAction::SetControlStyle(ControlStyle::GoyControl));
+                }
+
+                // Section 2: <Active System> Controls (Customize Controls | Control Presets)
+                let act_y = mode_y + 64.0;
+                if inside([cx, act_y, half_w, 38.0]) {
+                    self.floating_menu = false;
+                    return Some(InGameMenuAction::OpenControlEditor);
+                }
+                if inside([cx + half_w + 8.0, act_y, half_w, 38.0]) {
+                    self.refresh_presets_cache(settings.control_style);
+                    self.presets_modal_open = true;
+                    return Some(InGameMenuAction::Close);
+                }
+
+                // Section 3: Sensitivity Slider
+                let sens_y = act_y + 46.0;
+                let track_r = [cx, sens_y + 14.0, cw, 24.0];
+                if inside(track_r) {
+                    self.sensitivity_dragging = true;
+                    let sl_x = cx + 8.0;
+                    let sl_w = (cw - 16.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    let sens = (0.20 + t * 1.80).clamp(0.20, 2.00);
+                    return Some(InGameMenuAction::SetTouchSensitivity(sens));
+                }
+
+                // Section 4: Other (Invert Y-Axis & Split Touch (Aim & Look))
+                let other_y = sens_y + 52.0;
+                if inside([cx, other_y, cw, 34.0]) {
+                    return Some(InGameMenuAction::ToggleInvertY);
+                }
+                if inside([cx, other_y + 38.0, cw, 38.0]) {
+                    return Some(InGameMenuAction::ToggleSplitTouch);
+                }
             }
-        }
-        let preset_vis_x = dx + 16.0 + sp_count as f32 * (sp_w + 4.0);
-        if inside([preset_vis_x, spy, sp_w, 28.0]) {
-            return Some(InGameMenuAction::PresetVisibilityAll);
-        }
-
-        // Row 3: Movement, JoystickMoveArea, Split Crosshair, Gyro (M3 Cards)
-        let ty = spy + 44.0;
-        let tw = (dw - 32.0 - 12.0) / 4.0;
-        if inside([dx + 16.0, ty, tw, 34.0]) {
-            return Some(InGameMenuAction::CycleMovementMode);
-        }
-        if inside([dx + 16.0 + (tw + 4.0), ty, tw, 34.0]) {
-            return Some(InGameMenuAction::CycleJoystickArea);
-        }
-        if inside([dx + 16.0 + (tw + 4.0) * 2.0, ty, tw, 34.0]) {
-            return Some(InGameMenuAction::ToggleSplitTouch);
-        }
-        if inside([dx + 16.0 + (tw + 4.0) * 3.0, ty, tw, 34.0]) {
-            return Some(InGameMenuAction::ToggleGyro);
-        }
-
-        // Row 4: Sensitivity, Scale, Virtual Mouse, Left-Handed
-        let sy = ty + 48.0;
-        let sw = (dw - 32.0 - 12.0) / 4.0;
-        let s0 = dx + 16.0;
-        if inside([s0, sy, sw * 0.5, 34.0]) {
-            return Some(InGameMenuAction::StepTouchSensitivity(-1));
-        }
-        if inside([s0 + sw * 0.5, sy, sw * 0.5, 34.0]) {
-            return Some(InGameMenuAction::StepTouchSensitivity(1));
-        }
-        let s1 = dx + 16.0 + (sw + 4.0);
-        if inside([s1, sy, sw * 0.5, 34.0]) {
-            return Some(InGameMenuAction::StepButtonScale(-1));
-        }
-        if inside([s1 + sw * 0.5, sy, sw * 0.5, 34.0]) {
-            return Some(InGameMenuAction::StepButtonScale(1));
-        }
-        let s2 = dx + 16.0 + (sw + 4.0) * 2.0;
-        if inside([s2, sy, sw, 34.0]) {
-            return Some(InGameMenuAction::ToggleVirtualMouse);
-        }
-        let s3 = dx + 16.0 + (sw + 4.0) * 3.0;
-        if inside([s3, sy, sw, 34.0]) {
-            return Some(InGameMenuAction::ToggleLeftHanded);
-        }
-
-        // Row 5: Quick Desktop Keys
-        let ky = sy + 48.0;
-        let kw = (dw - 32.0 - 20.0) / 6.0;
-        let quick = [
-            KeyCode::F1,
-            KeyCode::F3,
-            KeyCode::F5,
-            KeyCode::KeyE,
-            KeyCode::KeyT,
-        ];
-        for (i, key) in quick.iter().enumerate() {
-            let rx = dx + 16.0 + i as f32 * (kw + 4.0);
-            if inside([rx, ky, kw, 32.0]) {
-                self.floating_menu = false;
-                return Some(InGameMenuAction::TriggerKey(*key));
+            1 => {
+                // Tab 1: Aiming
+                let r1 = [cx, body_y + 16.0, cw, 40.0];
+                let r2 = [cx, body_y + 62.0, cw, 40.0];
+                let r3 = [cx, body_y + 108.0, cw, 40.0];
+                let r4 = [cx, body_y + 154.0, cw, 40.0];
+                if inside(r1) {
+                    return Some(InGameMenuAction::CycleMovementMode);
+                }
+                if inside(r2) {
+                    return Some(InGameMenuAction::CycleJoystickArea);
+                }
+                if inside(r3) {
+                    return Some(InGameMenuAction::ToggleGyro);
+                }
+                if inside(r4) {
+                    return Some(InGameMenuAction::ToggleVirtualMouse);
+                }
             }
-        }
-        if inside([dx + 16.0 + 5.0 * (kw + 4.0), ky, kw, 32.0]) {
-            self.floating_menu = false;
-            return Some(InGameMenuAction::OpenKeyboard);
+            2 => {
+                // Tab 2: Buttons
+                let scale_y = body_y + 16.0;
+                if inside([cx, scale_y, cw * 0.5, 40.0]) {
+                    return Some(InGameMenuAction::StepButtonScale(-1));
+                }
+                if inside([cx + cw * 0.5, scale_y, cw * 0.5, 40.0]) {
+                    return Some(InGameMenuAction::StepButtonScale(1));
+                }
+                if inside([cx, body_y + 62.0, cw, 40.0]) {
+                    return Some(InGameMenuAction::ToggleLeftHanded);
+                }
+                if inside([cx, body_y + 108.0, cw, 40.0]) {
+                    return Some(InGameMenuAction::ToggleSprintMode);
+                }
+                if inside([cx, body_y + 154.0, cw, 40.0]) {
+                    return Some(InGameMenuAction::ToggleInventoryControls);
+                }
+            }
+            _ => {
+                // Tab 3: Advanced
+                if inside([cx, body_y + 16.0, cw, 38.0]) {
+                    return Some(InGameMenuAction::ToggleVibrate);
+                }
+                if inside([cx, body_y + 58.0, cw, 38.0]) {
+                    return Some(InGameMenuAction::ToggleAutoJump);
+                }
+                if inside([cx, body_y + 100.0, cw, 38.0]) {
+                    return Some(InGameMenuAction::PresetVisibilityAll);
+                }
+                let ky = body_y + 156.0;
+                let kw = (cw - 20.0) / 6.0;
+                let quick = [
+                    KeyCode::F1,
+                    KeyCode::F3,
+                    KeyCode::F5,
+                    KeyCode::KeyE,
+                    KeyCode::KeyT,
+                ];
+                for (i, key) in quick.iter().enumerate() {
+                    let rx = cx + i as f32 * (kw + 4.0);
+                    if inside([rx, ky, kw, 32.0]) {
+                        self.floating_menu = false;
+                        return Some(InGameMenuAction::TriggerKey(*key));
+                    }
+                }
+                if inside([cx + 5.0 * (kw + 4.0), ky, kw, 32.0]) {
+                    self.floating_menu = false;
+                    return Some(InGameMenuAction::OpenKeyboard);
+                }
+            }
         }
 
         Some(InGameMenuAction::Close)
     }
 
-    /// Draws the larger Material You 3 Floating '=' Button (`48x42dp`) and the revamped
-    /// Material You 3 In-Game Control & Launcher Hub Dialog.
+    /// Draws the Floating '=' Button and the redesigned Horizon Control Hub matching the reference image.
     pub fn draw_floating_menu(
         &self,
         b: &mut HudBatch,
         a: &HudAtlas,
         settings: &crate::touch::Settings,
     ) {
+        use crate::touch::ControlStyle;
         use crate::ui_theme::{Face, Icon, Ui, color};
         let mut ui = Ui::mobile(a, b, (0.0, 0.0));
         let (w, h) = (ui.w, ui.h);
 
-        let m3_surface = color::hex(0x151320, 250);
-        let m3_card = color::hex(0x211E30, 248);
-        let m3_tonal = color::hex(0x362C59, 248);
-        let m3_border = color::hex(0x3E375C, 255);
-        let accent = color::hex(0x9A7BFF, 255);
-        let on_accent = color::hex(0x16102C, 255);
-        let text_c = color::hex(0xF4EFFA, 255);
-        let muted_c = color::hex(0xB2ABC7, 255);
+        let surface_bg = color::hex(0x161224, 248);
+        let sidebar_bg = color::hex(0x120F1E, 250);
+        let card_bg = color::hex(0x211C34, 248);
+        let card_sel = color::hex(0x2E2452, 252);
+        let border_c = color::hex(0x352E52, 255);
+        let accent = color::hex(0x8B6BFF, 255);
+        let accent_hi = color::hex(0xA489FF, 255);
+        let text_c = color::hex(0xF5F2FC, 255);
+        let muted_c = color::hex(0x9E96B8, 255);
 
-        // Draw moveable Material You 3 Floating Menu Button (48x42dp)
+        // Draw moveable Floating Menu Button (48x42dp)
         if !self.expanded {
             let btn_w = 48.0;
             let btn_h = 42.0;
             let btn_x = (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
             let btn_y = (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
-            // Soft M3 elevation shadow
             ui.rounded(
                 btn_x + 1.5,
                 btn_y + 3.0,
@@ -962,7 +1321,7 @@ impl TouchUi {
                 btn_w,
                 btn_h,
                 14.0,
-                if self.floating_menu { accent } else { m3_card },
+                if self.floating_menu { accent } else { card_bg },
             );
             ui.stroke_rounded(
                 btn_x,
@@ -970,7 +1329,7 @@ impl TouchUi {
                 btn_w,
                 btn_h,
                 14.0,
-                1.8,
+                1.6,
                 if self.floating_menu {
                     color::hex(0xE5DEFF, 255)
                 } else {
@@ -983,9 +1342,9 @@ impl TouchUi {
                 btn_y + (btn_h - 22.0) * 0.5,
                 22.0,
                 if self.floating_menu {
-                    on_accent
+                    color::hex(0x140E26, 255)
                 } else {
-                    accent
+                    accent_hi
                 },
             );
         }
@@ -995,304 +1354,640 @@ impl TouchUi {
             return;
         }
 
-        // Scrim & Material You 3 Extra-Large Dialog Surface
-        ui.fill(0.0, 0.0, w, h, rgba(5, 4, 12, 188));
-        let dw = (w - 24.0).clamp(320.0, 560.0);
-        let dh = (h - 16.0).clamp(264.0, 396.0);
+        // Backdrop scrim & Modal Shell
+        ui.fill(0.0, 0.0, w, h, rgba(6, 5, 14, 185));
+        let dw = (w - 20.0).clamp(340.0, 580.0);
+        let dh = (h - 14.0).clamp(256.0, 396.0);
         let dx = (w - dw) * 0.5;
         let dy = (h - dh) * 0.5;
-        ui.rounded(dx + 2.0, dy + 5.0, dw, dh, 24.0, rgba(0, 0, 0, 150));
-        ui.rounded(dx, dy, dw, dh, 24.0, m3_surface);
-        ui.stroke_rounded(dx, dy, dw, dh, 24.0, 1.5, m3_border);
+        ui.rounded(dx + 2.0, dy + 6.0, dw, dh, 20.0, rgba(0, 0, 0, 165));
+        ui.rounded(dx, dy, dw, dh, 20.0, surface_bg);
 
-        // M3 Top App Header Bar inside Dialog
-        ui.rounded(dx + 16.0, dy + 12.0, 32.0, 32.0, 10.0, m3_tonal);
-        ui.icon(Icon::MenuEquals, dx + 23.0, dy + 19.0, 18.0, accent);
+        // Left Sidebar Background & Vertical Divider
+        let side_w = (dw * 0.25).clamp(112.0, 142.0);
+        ui.rounded(dx + 2.0, dy + 48.0, side_w, dh - 50.0, 16.0, sidebar_bg);
+        ui.fill(
+            dx + side_w,
+            dy + 48.0,
+            1.0,
+            dh - 48.0,
+            color::hex(0x2B2542, 255),
+        );
+        ui.fill(
+            dx,
+            dy + 47.0,
+            dw,
+            1.0,
+            color::hex(0x2B2542, 255),
+        );
+        ui.stroke_rounded(dx, dy, dw, dh, 20.0, 1.4, border_c);
+
+        // Top Header Bar (Matches reference: Purple Sliders Icon Box + Title + Subtitle + Done button)
+        ui.rounded(dx + 14.0, dy + 9.0, 30.0, 30.0, 9.0, card_sel);
+        ui.border(dx + 14.0, dy + 9.0, 30.0, 30.0, 9.0, accent);
+        ui.icon(Icon::Sliders, dx + 20.0, dy + 15.0, 18.0, accent_hi);
         ui.text(
             Face::SemiBold,
-            15.0,
-            dx + 56.0,
-            dy + 13.0,
+            13.5,
+            dx + 52.0,
+            dy + 8.0,
             text_c,
             "Horizon Control Hub",
         );
         ui.text(
             Face::Regular,
-            10.5,
-            dx + 56.0,
-            dy + 30.0,
+            9.5,
+            dx + 52.0,
+            dy + 25.0,
             muted_c,
-            &format!(
-                "Active Layout: {} • {}",
-                settings.active_profile,
-                settings.control_style.label()
-            ),
+            "Configure your touch controls",
         );
 
-        // Primary M3 Filled Pill: Open Control Editor
-        ui.rounded(dx + dw - 222.0, dy + 12.0, 138.0, 32.0, 16.0, accent);
-        ui.centered_fit(
-            Face::SemiBold,
-            11.5,
-            [dx + dw - 218.0, dy + 12.0, 130.0, 32.0],
-            on_accent,
-            "Open Control Editor",
-        );
-        // Secondary M3 Tonal Pill: Close
-        ui.rounded(dx + dw - 78.0, dy + 12.0, 62.0, 32.0, 16.0, m3_card);
-        ui.border(dx + dw - 78.0, dy + 12.0, 62.0, 32.0, 16.0, m3_border);
-        ui.centered_fit(
-            Face::SemiBold,
-            11.5,
-            [dx + dw - 76.0, dy + 12.0, 58.0, 32.0],
-            text_c,
-            "Done",
-        );
+        // "Done" Button in top-right
+        let done_r = [dx + dw - 76.0, dy + 10.0, 62.0, 28.0];
+        ui.rounded(done_r[0], done_r[1], done_r[2], done_r[3], 9.0, card_bg);
+        ui.border(done_r[0], done_r[1], done_r[2], done_r[3], 9.0, border_c);
+        ui.centered_fit(Face::SemiBold, 11.0, done_r, text_c, "Done");
 
-        // Row 1: Preset Layouts + Saved Profiles
-        ui.text(
-            Face::SemiBold,
-            10.0,
-            dx + 16.0,
-            dy + 50.0,
-            accent,
-            "PRESETS & SAVED CONTROL PROFILES",
-        );
-        let py = dy + 64.0;
-        let pw = (dw - 32.0 - 16.0) / 5.0;
-        for (i, (id, title)) in [
-            ("default", "MCPE Default"),
-            ("goycontrol", "GoyControl"),
-            ("pvp", "PvP Claw"),
-            ("building", "Builder"),
-            ("speedrun", "Speedrun"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let rx = dx + 16.0 + i as f32 * (pw + 4.0);
-            let active = settings.active_profile.eq_ignore_ascii_case(id);
-            ui.rounded(
-                rx,
-                py,
-                pw,
-                30.0,
-                15.0,
-                if active { accent } else { m3_card },
-            );
-            if !active {
-                ui.border(rx, py, pw, 30.0, 15.0, m3_border);
+        // Left Sidebar Navigation Tabs (Controls, Aiming, Buttons, Advanced)
+        let tabs: [(Icon, &str); 4] = [
+            (Icon::Gamepad, "Controls"),
+            (Icon::Crosshair, "Aiming"),
+            (Icon::MicrosoftGrid, "Buttons"),
+            (Icon::Flask, "Advanced"),
+        ];
+        let tab_start_y = dy + 58.0;
+        for (ti, (ic, lbl)) in tabs.into_iter().enumerate() {
+            let ty = tab_start_y + ti as f32 * 42.0;
+            let active = self.hub_tab == ti as u8;
+            let tr = [dx + 10.0, ty, side_w - 18.0, 34.0];
+            if active {
+                ui.rounded(tr[0], tr[1], tr[2], tr[3], 10.0, accent);
             }
-            ui.centered_fit(
-                Face::SemiBold,
-                10.5,
-                [rx + 3.0, py, pw - 6.0, 30.0],
-                if active { on_accent } else { text_c },
-                title,
-            );
-        }
-
-        // Row 2: Saved Profiles from controlmap/ + Preset Visibility
-        let spy = py + 36.0;
-        let saved_list = crate::touch::Settings::list_profiles(std::path::Path::new("."));
-        let sp_count = saved_list.len().clamp(1, 4);
-        let sp_w = (dw - 32.0 - 4.0 * sp_count as f32) / (sp_count as f32 + 1.0);
-        for (i, name) in saved_list.iter().take(sp_count).enumerate() {
-            let rx = dx + 16.0 + i as f32 * (sp_w + 4.0);
-            let active = settings.active_profile.eq_ignore_ascii_case(name);
-            ui.rounded(
-                rx,
-                spy,
-                sp_w,
-                28.0,
-                10.0,
-                if active { m3_tonal } else { m3_card },
-            );
-            ui.border(
-                rx,
-                spy,
-                sp_w,
-                28.0,
-                10.0,
-                if active { accent } else { m3_border },
-            );
-            ui.centered_fit(
-                Face::Medium,
-                10.0,
-                [rx + 4.0, spy, sp_w - 8.0, 28.0],
-                if active { accent } else { muted_c },
-                &format!("Saved: {name}"),
-            );
-        }
-        let preset_vis_x = dx + 16.0 + sp_count as f32 * (sp_w + 4.0);
-        ui.rounded(preset_vis_x, spy, sp_w, 28.0, 10.0, m3_tonal);
-        ui.border(preset_vis_x, spy, sp_w, 28.0, 10.0, accent);
-        ui.centered_fit(
-            Face::SemiBold,
-            9.8,
-            [preset_vis_x + 3.0, spy, sp_w - 6.0, 28.0],
-            accent,
-            "Preset Menu Vis",
-        );
-
-        // Row 3: Movement, JoystickMoveArea, Split Crosshair, Gyro
-        ui.text(
-            Face::SemiBold,
-            10.0,
-            dx + 16.0,
-            spy + 31.0,
-            accent,
-            "MOVEMENT, JOYSTICK AREA & AIMING",
-        );
-        let ty = spy + 44.0;
-        let tw = (dw - 32.0 - 12.0) / 4.0;
-        let move_lbl = match settings.mode {
-            crate::touch::Mode::Dpad => "Move: D-Pad",
-            crate::touch::Mode::Crosshair => "Move: Stick+Cross",
-            crate::touch::Mode::Tap => "Move: Stick+Tap",
-        };
-        let area_lbl = match settings.joystick_style.move_area {
-            crate::touch::JoystickMoveArea::MidBottomLeft => "Area: Mid-Left",
-            crate::touch::JoystickMoveArea::RightSideAnywhere => "Area: Right Side",
-            crate::touch::JoystickMoveArea::AbsoluteFixed => "Area: Fixed",
-            crate::touch::JoystickMoveArea::FollowFinger => "Area: Follow",
-        };
-        for (i, (lbl, active)) in [
-            (move_lbl, true),
-            (area_lbl, true),
-            (
-                if settings.split_controls {
-                    "Split Aim: ON"
-                } else {
-                    "Split Aim: OFF"
-                },
-                settings.split_controls,
-            ),
-            (
-                if settings.gyroscope {
-                    "Gyro Aim: ON"
-                } else {
-                    "Gyro Aim: OFF"
-                },
-                settings.gyroscope,
-            ),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let rx = dx + 16.0 + i as f32 * (tw + 4.0);
-            ui.rounded(
-                rx,
-                ty,
-                tw,
-                34.0,
-                12.0,
-                if active { m3_tonal } else { m3_card },
-            );
-            ui.border(
-                rx,
-                ty,
-                tw,
-                34.0,
-                12.0,
-                if active { accent } else { m3_border },
-            );
-            ui.centered_fit(
-                Face::SemiBold,
-                10.2,
-                [rx + 4.0, ty, tw - 8.0, 34.0],
-                if active { accent } else { text_c },
+            let fg = if active { text_c } else { muted_c };
+            ui.icon(ic, tr[0] + 10.0, tr[1] + 9.0, 16.0, fg);
+            ui.text(
+                if active { Face::SemiBold } else { Face::Medium },
+                11.0,
+                tr[0] + 32.0,
+                tr[1] + 8.0,
+                fg,
                 lbl,
             );
         }
 
-        // Row 4: Sensitivity, Scale, Virtual Mouse, Left-Handed
-        ui.text(
-            Face::SemiBold,
-            10.0,
-            dx + 16.0,
-            ty + 36.0,
-            accent,
-            "SENSITIVITY, BUTTON SCALE & VIRTUAL MOUSE",
-        );
-        let sy = ty + 48.0;
-        let sw = (dw - 32.0 - 12.0) / 4.0;
-        for (i, (txt, hi)) in [
-            (format!("Sens {:.0}%", settings.sensitivity * 100.0), false),
-            (
-                format!("Scale {:.0}%", settings.button_scale * 100.0),
-                false,
-            ),
-            (
-                if self.virtual_mouse {
-                    "Mouse: ON".to_owned()
-                } else {
-                    "Mouse: OFF".to_owned()
-                },
-                self.virtual_mouse,
-            ),
-            (
-                if settings.left_handed {
-                    "Left-Hand: ON".to_owned()
-                } else {
-                    "Left-Hand: OFF".to_owned()
-                },
-                settings.left_handed,
-            ),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let rx = dx + 16.0 + i as f32 * (sw + 4.0);
-            ui.rounded(rx, sy, sw, 34.0, 12.0, if hi { m3_tonal } else { m3_card });
-            ui.border(rx, sy, sw, 34.0, 12.0, if hi { accent } else { m3_border });
-            if i < 2 {
-                ui.text(Face::SemiBold, 13.0, rx + 7.0, sy + 7.0, accent, "−");
-                ui.text(Face::SemiBold, 13.0, rx + sw - 14.0, sy + 7.0, accent, "+");
-                ui.centered_fit(
+        // Right Content Panel
+        let cx = dx + side_w + 14.0;
+        let cw = dw - side_w - 28.0;
+        let body_y = dy + 54.0;
+
+        match self.hub_tab {
+            0 => {
+                // 1. Control Mode Section
+                ui.text(Face::SemiBold, 10.0, cx, body_y, muted_c, "Control Mode");
+                let mode_y = body_y + 16.0;
+                let half_w = (cw - 8.0) * 0.5;
+                let is_mcpe = settings.control_style == ControlStyle::Mcpe;
+                for (i, (title, sub, sel)) in [
+                    ("MCPE (Default)", "Vanilla touch controls", is_mcpe),
+                    ("GoyControl", "Custom layout with more options", !is_mcpe),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let rx = cx + i as f32 * (half_w + 8.0);
+                    ui.rounded(
+                        rx,
+                        mode_y,
+                        half_w,
+                        44.0,
+                        11.0,
+                        if sel { card_sel } else { card_bg },
+                    );
+                    ui.stroke_rounded(
+                        rx,
+                        mode_y,
+                        half_w,
+                        44.0,
+                        11.0,
+                        if sel { 1.6 } else { 1.0 },
+                        if sel { accent } else { border_c },
+                    );
+                    // Radio button indicator
+                    let rad_x = rx + 10.0;
+                    let rad_y = mode_y + 15.0;
+                    ui.stroke_rounded(
+                        rad_x,
+                        rad_y,
+                        14.0,
+                        14.0,
+                        7.0,
+                        1.5,
+                        if sel { accent_hi } else { muted_c },
+                    );
+                    if sel {
+                        ui.rounded(rad_x + 3.5, rad_y + 3.5, 7.0, 7.0, 3.5, accent_hi);
+                    }
+                    ui.text(Face::SemiBold, 11.0, rx + 30.0, mode_y + 7.0, text_c, title);
+                    ui.text(
+                        Face::Regular,
+                        8.8,
+                        rx + 30.0,
+                        mode_y + 24.0,
+                        muted_c,
+                        sub,
+                    );
+                }
+
+                // 2. Dynamic System Controls Section ("MCPE Controls" or "GoyControl Controls")
+                let sec_y = mode_y + 49.0;
+                ui.text(
                     Face::SemiBold,
                     10.0,
-                    [rx + 18.0, sy, sw - 36.0, 34.0],
-                    text_c,
-                    &txt,
+                    cx,
+                    sec_y,
+                    muted_c,
+                    settings.control_style.section_title(),
                 );
-            } else {
+                let act_y = mode_y + 64.0;
+                let active_preset_lbl = format!("Preset: {}", settings.preset_name);
+                for (i, (ic, title, sub)) in [
+                    (Icon::MicrosoftGrid, "Customize Controls", "Open layout editor"),
+                    (Icon::Sliders, "Control Presets", active_preset_lbl.as_str()),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let rx = cx + i as f32 * (half_w + 8.0);
+                    ui.rounded(rx, act_y, half_w, 38.0, 10.0, card_bg);
+                    ui.border(rx, act_y, half_w, 38.0, 10.0, border_c);
+                    ui.rounded(rx + 8.0, act_y + 7.0, 24.0, 24.0, 7.0, card_sel);
+                    ui.icon(ic, rx + 13.0, act_y + 12.0, 14.0, accent_hi);
+                    ui.text(Face::SemiBold, 10.2, rx + 38.0, act_y + 5.0, text_c, title);
+                    ui.text(Face::Regular, 8.5, rx + 38.0, act_y + 20.0, muted_c, sub);
+                    ui.text(
+                        Face::SemiBold,
+                        13.0,
+                        rx + half_w - 14.0,
+                        act_y + 9.0,
+                        muted_c,
+                        "›",
+                    );
+                }
+
+                // 3. Sensitivity Slider with Percentage Pill
+                let sens_y = act_y + 44.0;
+                ui.text(Face::SemiBold, 10.0, cx, sens_y, muted_c, "Sensitivity");
+                let pct_txt = format!("{:.0}%", settings.sensitivity * 100.0);
+                let pill_w = 42.0;
+                ui.rounded(cx + cw - pill_w, sens_y - 1.0, pill_w, 17.0, 6.0, card_sel);
+                ui.border(cx + cw - pill_w, sens_y - 1.0, pill_w, 17.0, 6.0, accent);
                 ui.centered_fit(
                     Face::SemiBold,
-                    10.2,
-                    [rx + 4.0, sy, sw - 8.0, 34.0],
-                    if hi { accent } else { text_c },
-                    &txt,
+                    9.2,
+                    [cx + cw - pill_w, sens_y - 1.0, pill_w, 17.0],
+                    accent_hi,
+                    &pct_txt,
+                );
+                let sl_x = cx + 6.0;
+                let sl_w = (cw - 12.0).max(40.0);
+                let sl_y = sens_y + 22.0;
+                let frac = ((settings.sensitivity - 0.20) / 1.80).clamp(0.0, 1.0);
+                ui.rounded(sl_x, sl_y, sl_w, 6.0, 3.0, card_bg);
+                ui.rounded(sl_x, sl_y, (sl_w * frac).max(6.0), 6.0, 3.0, accent);
+                let thumb_x = sl_x + sl_w * frac;
+                ui.rounded(thumb_x - 7.0, sl_y - 4.0, 14.0, 14.0, 7.0, accent_hi);
+                ui.border(
+                    thumb_x - 7.0,
+                    sl_y - 4.0,
+                    14.0,
+                    14.0,
+                    7.0,
+                    color::hex(0xFFFFFF, 220),
+                );
+
+                // 4. Other Section (Invert Y-Axis & Split Touch (Aim & Look))
+                let other_hdr_y = sens_y + 37.0;
+                ui.text(Face::SemiBold, 10.0, cx, other_hdr_y, muted_c, "Other");
+                let r_inv = [cx, sens_y + 52.0, cw, 32.0];
+                ui.rounded(r_inv[0], r_inv[1], r_inv[2], r_inv[3], 10.0, card_bg);
+                ui.border(r_inv[0], r_inv[1], r_inv[2], r_inv[3], 10.0, border_c);
+                ui.text(
+                    Face::Medium,
+                    10.8,
+                    r_inv[0] + 12.0,
+                    r_inv[1] + 7.0,
+                    text_c,
+                    "Invert Y-Axis",
+                );
+                ui.switch(r_inv[0] + cw - 48.0, r_inv[1] + 5.0, settings.invert_y);
+
+                let r_spl = [cx, sens_y + 88.0, cw, 36.0];
+                ui.rounded(r_spl[0], r_spl[1], r_spl[2], r_spl[3], 10.0, card_bg);
+                ui.border(r_spl[0], r_spl[1], r_spl[2], r_spl[3], 10.0, border_c);
+                ui.text(
+                    Face::Medium,
+                    10.5,
+                    r_spl[0] + 12.0,
+                    r_spl[1] + 3.0,
+                    text_c,
+                    "Split Touch (Aim & Look)",
+                );
+                ui.text(
+                    Face::Regular,
+                    8.5,
+                    r_spl[0] + 12.0,
+                    r_spl[1] + 19.0,
+                    muted_c,
+                    "Separates aiming and camera look",
+                );
+                ui.switch(
+                    r_spl[0] + cw - 48.0,
+                    r_spl[1] + 7.0,
+                    settings.split_controls,
+                );
+            }
+            1 => {
+                // Tab 1: Aiming & Movement
+                ui.text(
+                    Face::SemiBold,
+                    10.0,
+                    cx,
+                    body_y,
+                    muted_c,
+                    "Aiming, Camera & Pointer",
+                );
+                let move_lbl = match settings.mode {
+                    crate::touch::Mode::Dpad => "D-Pad + Crosshair/Touch",
+                    crate::touch::Mode::Crosshair => "Joystick + Crosshair",
+                    crate::touch::Mode::Tap => "Joystick + Tap to Interact",
+                };
+                let area_lbl = settings.joystick_style.move_area.label();
+                for (i, (title, sub, toggle)) in [
+                    ("Movement & Aim Mode", move_lbl, None),
+                    ("Joystick Active Zone", area_lbl, None),
+                    (
+                        "Gyroscope Aiming",
+                        "Tilt device for fine camera aim",
+                        Some(settings.gyroscope),
+                    ),
+                    (
+                        "Virtual Mouse Cursor",
+                        "Show desktop pointer in menus & HUD",
+                        Some(self.virtual_mouse),
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let ry = body_y + 16.0 + i as f32 * 46.0;
+                    ui.rounded(cx, ry, cw, 40.0, 10.0, card_bg);
+                    ui.border(cx, ry, cw, 40.0, 10.0, border_c);
+                    ui.text(Face::SemiBold, 10.8, cx + 12.0, ry + 5.0, text_c, title);
+                    ui.text(Face::Regular, 9.0, cx + 12.0, ry + 22.0, muted_c, sub);
+                    if let Some(on) = toggle {
+                        ui.switch(cx + cw - 48.0, ry + 9.0, on);
+                    } else {
+                        ui.text(Face::SemiBold, 13.0, cx + cw - 16.0, ry + 10.0, accent_hi, "›");
+                    }
+                }
+            }
+            2 => {
+                // Tab 2: Buttons & Layout Options
+                ui.text(
+                    Face::SemiBold,
+                    10.0,
+                    cx,
+                    body_y,
+                    muted_c,
+                    "Button Sizing & Handedness",
+                );
+                let scale_y = body_y + 16.0;
+                ui.rounded(cx, scale_y, cw, 40.0, 10.0, card_bg);
+                ui.border(cx, scale_y, cw, 40.0, 10.0, border_c);
+                ui.text(
+                    Face::SemiBold,
+                    10.8,
+                    cx + 12.0,
+                    scale_y + 5.0,
+                    text_c,
+                    &format!("Global Button Scale ({:.0}%)", settings.button_scale * 100.0),
+                );
+                ui.text(
+                    Face::Regular,
+                    9.0,
+                    cx + 12.0,
+                    scale_y + 22.0,
+                    muted_c,
+                    "Tap left half (−) or right half (+) to resize",
+                );
+                ui.text(
+                    Face::SemiBold,
+                    14.0,
+                    cx + cw - 52.0,
+                    scale_y + 10.0,
+                    accent_hi,
+                    "−   +",
+                );
+
+                for (i, (title, sub, on)) in [
+                    (
+                        "Left-Handed Layout",
+                        "Mirror movement and action buttons horizontally",
+                        settings.left_handed,
+                    ),
+                    (
+                        "Toggle Sprint",
+                        "Latch sprint on tap instead of holding",
+                        settings.sprint_toggle,
+                    ),
+                    (
+                        "Inventory Walk Controls",
+                        "Keep movement controls active while inventory is open",
+                        settings.inventory_controls,
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let ry = body_y + 62.0 + i as f32 * 46.0;
+                    ui.rounded(cx, ry, cw, 40.0, 10.0, card_bg);
+                    ui.border(cx, ry, cw, 40.0, 10.0, border_c);
+                    ui.text(Face::SemiBold, 10.8, cx + 12.0, ry + 5.0, text_c, title);
+                    ui.text(Face::Regular, 9.0, cx + 12.0, ry + 22.0, muted_c, sub);
+                    ui.switch(cx + cw - 48.0, ry + 9.0, on);
+                }
+            }
+            _ => {
+                // Tab 3: Advanced & Quick Actions
+                ui.text(
+                    Face::SemiBold,
+                    10.0,
+                    cx,
+                    body_y,
+                    muted_c,
+                    "Advanced Behavior & Shortcuts",
+                );
+                for (i, (title, sub, toggle)) in [
+                    (
+                        "Haptic Feedback",
+                        "Vibrate on block break and touch interactions",
+                        Some(settings.vibrate),
+                    ),
+                    (
+                        "Auto-Jump",
+                        "Automatically jump when walking into 1-block ledges",
+                        Some(settings.auto_jump),
+                    ),
+                    (
+                        "Apply Standard Menu Visibility",
+                        "Reset in-game vs in-menu visibility flags for active system",
+                        None,
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let ry = body_y + 16.0 + i as f32 * 42.0;
+                    ui.rounded(cx, ry, cw, 38.0, 10.0, card_bg);
+                    ui.border(cx, ry, cw, 38.0, 10.0, border_c);
+                    ui.text(Face::SemiBold, 10.5, cx + 12.0, ry + 4.0, text_c, title);
+                    ui.text(Face::Regular, 8.8, cx + 12.0, ry + 20.0, muted_c, sub);
+                    if let Some(on) = toggle {
+                        ui.switch(cx + cw - 48.0, ry + 8.0, on);
+                    } else {
+                        ui.text(Face::SemiBold, 13.0, cx + cw - 16.0, ry + 9.0, accent_hi, "›");
+                    }
+                }
+                ui.text(
+                    Face::SemiBold,
+                    9.5,
+                    cx,
+                    body_y + 142.0,
+                    muted_c,
+                    "Quick Desktop Keys",
+                );
+                let ky = body_y + 156.0;
+                let kw = (cw - 20.0) / 6.0;
+                for (i, lbl) in ["F1", "F3", "F5", "Inv", "Chat", "Keys"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let rx = cx + i as f32 * (kw + 4.0);
+                    ui.rounded(rx, ky, kw, 30.0, 8.0, card_bg);
+                    ui.border(rx, ky, kw, 30.0, 8.0, border_c);
+                    ui.centered_fit(Face::SemiBold, 10.0, [rx + 2.0, ky, kw - 4.0, 30.0], text_c, lbl);
+                }
+            }
+        }
+
+        // Preset Management Sub-Modal (when self.presets_modal_open == true)
+        if self.presets_modal_open {
+            ui.fill(0.0, 0.0, w, h, rgba(5, 4, 12, 195));
+            let mdw = (w - 24.0).clamp(320.0, 520.0);
+            let mdh = (h - 18.0).clamp(248.0, 360.0);
+            let mdx = (w - mdw) * 0.5;
+            let mdy = (h - mdh) * 0.5;
+            ui.rounded(mdx, mdy, mdw, mdh, 18.0, surface_bg);
+            ui.stroke_rounded(mdx, mdy, mdw, mdh, 18.0, 1.5, accent);
+            ui.text(
+                Face::SemiBold,
+                13.0,
+                mdx + 16.0,
+                mdy + 10.0,
+                text_c,
+                &format!("{} — Control Presets", settings.control_style.label()),
+            );
+            ui.text(
+                Face::Regular,
+                9.2,
+                mdx + 16.0,
+                mdy + 27.0,
+                muted_c,
+                &format!(
+                    "Independent presets stored in controls/{}/",
+                    settings.control_style.storage_subdir()
+                ),
+            );
+            let back_r = [mdx + mdw - 78.0, mdy + 10.0, 64.0, 28.0];
+            ui.rounded(back_r[0], back_r[1], back_r[2], back_r[3], 9.0, card_bg);
+            ui.border(back_r[0], back_r[1], back_r[2], back_r[3], 9.0, border_c);
+            ui.centered_fit(Face::SemiBold, 10.5, back_r, text_c, "Back");
+
+            let list_y = mdy + 48.0;
+            let row_h = 46.0;
+            let max_rows = ((mdh - 60.0) / (row_h + 6.0)).floor().max(1.0) as usize;
+            let fallback_presets;
+            let presets_slice = if self.cached_presets_style == Some(settings.control_style)
+                && !self.cached_presets.is_empty()
+            {
+                &self.cached_presets
+            } else {
+                fallback_presets = crate::touch::Settings::list_presets(
+                    std::path::Path::new("."),
+                    settings.control_style,
+                );
+                &fallback_presets
+            };
+            for (idx, preset) in presets_slice.iter().take(max_rows).enumerate() {
+                let ry = list_y + idx as f32 * (row_h + 6.0);
+                let row_r = [mdx + 14.0, ry, mdw - 28.0, row_h];
+                let sel = settings.preset_id.eq_ignore_ascii_case(&preset.id);
+                ui.rounded(
+                    row_r[0],
+                    row_r[1],
+                    row_r[2],
+                    row_r[3],
+                    11.0,
+                    if sel { card_sel } else { card_bg },
+                );
+                ui.stroke_rounded(
+                    row_r[0],
+                    row_r[1],
+                    row_r[2],
+                    row_r[3],
+                    11.0,
+                    if sel { 1.6 } else { 1.0 },
+                    if sel { accent } else { border_c },
+                );
+                // Radio dot
+                let rx = row_r[0] + 12.0;
+                let rcy = ry + 16.0;
+                ui.stroke_rounded(
+                    rx,
+                    rcy,
+                    14.0,
+                    14.0,
+                    7.0,
+                    1.5,
+                    if sel { accent_hi } else { muted_c },
+                );
+                if sel {
+                    ui.rounded(rx + 3.5, rcy + 3.5, 7.0, 7.0, 3.5, accent_hi);
+                }
+                let title = if preset.is_default {
+                    format!("{} (Protected Default)", preset.name)
+                } else {
+                    preset.name.clone()
+                };
+                ui.text(Face::SemiBold, 11.0, row_r[0] + 34.0, ry + 6.0, text_c, &title);
+                ui.text(
+                    Face::Regular,
+                    9.0,
+                    row_r[0] + 34.0,
+                    ry + 24.0,
+                    muted_c,
+                    &preset.description,
+                );
+
+                // Pencil / Edit icon button (for user-created presets)
+                if !preset.is_default {
+                    let edit_r = [row_r[0] + row_r[2] - 104.0, ry + 8.0, 30.0, 30.0];
+                    ui.rounded(edit_r[0], edit_r[1], edit_r[2], edit_r[3], 8.0, surface_bg);
+                    ui.border(edit_r[0], edit_r[1], edit_r[2], edit_r[3], 8.0, border_c);
+                    ui.icon(Icon::Pencil, edit_r[0] + 7.0, edit_r[1] + 7.0, 16.0, accent_hi);
+                }
+
+                // Copy button (available on ALL presets including Default)
+                let copy_r = [row_r[0] + row_r[2] - 68.0, ry + 8.0, 60.0, 30.0];
+                ui.rounded(copy_r[0], copy_r[1], copy_r[2], copy_r[3], 8.0, card_sel);
+                ui.border(copy_r[0], copy_r[1], copy_r[2], copy_r[3], 8.0, accent);
+                ui.icon(Icon::Copy, copy_r[0] + 7.0, copy_r[1] + 8.0, 14.0, accent_hi);
+                ui.text(
+                    Face::SemiBold,
+                    9.8,
+                    copy_r[0] + 24.0,
+                    copy_r[1] + 7.0,
+                    text_c,
+                    "Copy",
                 );
             }
         }
 
-        // Row 5: Quick Desktop Shortcuts
-        ui.text(
-            Face::SemiBold,
-            10.0,
-            dx + 16.0,
-            sy + 36.0,
-            accent,
-            "QUICK IN-GAME DESKTOP ACTIONS",
-        );
-        let ky = sy + 48.0;
-        let kw = (dw - 32.0 - 20.0) / 6.0;
-        for (i, lbl) in [
-            "F1 HUD", "F3 Info", "F5 View", "Inv (E)", "Chat (T)", "Keyboard",
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let rx = dx + 16.0 + i as f32 * (kw + 4.0);
-            ui.rounded(rx, ky, kw, 32.0, 12.0, m3_card);
-            ui.border(rx, ky, kw, 32.0, 12.0, m3_border);
+        // Copy / Edit Preset Name & Description Dialog
+        if let Some(dlg) = &self.preset_dialog {
+            ui.fill(0.0, 0.0, w, h, rgba(4, 3, 10, 210));
+            let mdw = (w - 28.0).clamp(310.0, 480.0);
+            let mdh = (h - 16.0).clamp(242.0, 330.0);
+            let mdx = (w - mdw) * 0.5;
+            let mdy = (h - mdh) * 0.5;
+            ui.rounded(mdx, mdy, mdw, mdh, 18.0, surface_bg);
+            ui.stroke_rounded(mdx, mdy, mdw, mdh, 18.0, 1.6, accent);
+            ui.text(
+                Face::SemiBold,
+                13.0,
+                mdx + 14.0,
+                mdy + 10.0,
+                text_c,
+                if dlg.is_copy {
+                    "Copy Preset Layout — Enter Name & Description"
+                } else {
+                    "Edit Preset Name & Description"
+                },
+            );
+            let cancel_r = [mdx + mdw - 76.0, mdy + 10.0, 64.0, 26.0];
+            ui.rounded(
+                cancel_r[0],
+                cancel_r[1],
+                cancel_r[2],
+                cancel_r[3],
+                8.0,
+                card_bg,
+            );
+            ui.border(
+                cancel_r[0],
+                cancel_r[1],
+                cancel_r[2],
+                cancel_r[3],
+                8.0,
+                border_c,
+            );
+            ui.centered_fit(Face::SemiBold, 10.0, cancel_r, text_c, "Cancel");
+
+            let name_r = [mdx + 14.0, mdy + 42.0, (mdw - 36.0) * 0.45, 32.0];
+            let desc_r = [
+                mdx + 22.0 + (mdw - 36.0) * 0.45,
+                mdy + 42.0,
+                (mdw - 36.0) * 0.55,
+                32.0,
+            ];
+            for (r, lbl, val, focused) in [
+                (name_r, "Preset Name", dlg.name_input.as_str(), !dlg.editing_desc),
+                (desc_r, "Description", dlg.desc_input.as_str(), dlg.editing_desc),
+            ] {
+                ui.rounded(r[0], r[1], r[2], r[3], 8.0, card_bg);
+                ui.stroke_rounded(
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
+                    8.0,
+                    if focused { 1.6 } else { 1.0 },
+                    if focused { accent } else { border_c },
+                );
+                ui.text(Face::SemiBold, 8.0, r[0] + 8.0, r[1] + 2.0, accent_hi, lbl);
+                let shown = if focused {
+                    format!("{val}|")
+                } else {
+                    val.to_owned()
+                };
+                ui.text(Face::Medium, 9.8, r[0] + 8.0, r[1] + 14.0, text_c, &shown);
+            }
+
+            draw_mini_keyboard(&mut ui, [mdx + 14.0, mdy + 80.0, mdw - 28.0, mdh - 126.0]);
+
+            let save_r = [mdx + 14.0, mdy + mdh - 38.0, mdw - 28.0, 30.0];
+            ui.rounded(save_r[0], save_r[1], save_r[2], save_r[3], 9.0, accent);
             ui.centered_fit(
                 Face::SemiBold,
-                10.0,
-                [rx + 2.0, ky, kw - 4.0, 32.0],
+                11.0,
+                save_r,
                 text_c,
-                lbl,
+                if dlg.is_copy {
+                    "Create Independent Preset Copy"
+                } else {
+                    "Save Preset Details"
+                },
             );
         }
 
@@ -1408,16 +2103,16 @@ pub fn draw_hud_editor(
     }
 
     // Dummy hotbar removed per user request for a clean, unobstructed GoyControl canvas.
-    let _ = (gui_to_dp, muted_c);
+    let _ = (gui_to_dp, muted_c, profile_name);
 
-    // 3. Draw Built-in Controls (MCPE Style or GoyControl Joystick/Static override)
+    // 3. Draw Built-in Controls (MCPE Style or GoyControl Joystick)
     let mut selected_rect_and_title: Option<([f32; 4], String)> = None;
     for c in Control::ALL {
+        if tc.settings.control_style == ControlStyle::GoyControl && c != Control::Move {
+            continue;
+        }
         let vis = tc.visible(c);
-        if !vis
-            && (!ed.show_hidden
-                || (tc.settings.control_style == ControlStyle::GoyControl && c != Control::Move))
-        {
+        if !vis && !ed.show_hidden {
             continue;
         }
         let p = tc.placement(c);
@@ -1430,9 +2125,7 @@ pub fn draw_hud_editor(
             0.35
         };
 
-        if c == Control::Move
-            && (tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
-        {
+        if tc.settings.control_style == ControlStyle::GoyControl && c == Control::Move {
             // Draw GoyControl Customizable Joystick (Base Area + Inner Stick) identically to in-game
             let js = &tc.settings.joystick_style;
             let side = rw.min(rh);
@@ -1458,35 +2151,8 @@ pub fn draw_hud_editor(
             if js.stick_stroke > 0.1 {
                 ui.stroke_rounded(kx, ky, kside, kside, kr, js.stick_stroke, stick_stroke);
             }
-        } else if tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style {
-            // Draw Static GoyControl Button (no icons!)
-            let fill_c = color::with_alpha(p.button_color, alpha);
-            let stroke_c = color::with_alpha(p.stroke_color, alpha);
-            let shadow_c = color::with_alpha(p.shadow_color, alpha);
-            ui.goy_box(
-                rx,
-                ry,
-                rw,
-                rh,
-                p.shape,
-                p.roundness,
-                fill_c,
-                p.stroke_size,
-                p.stroke_margin,
-                p.stroke_roundness,
-                stroke_c,
-                p.shadow_size,
-                shadow_c,
-            );
-            ui.centered_fit(
-                Face::SemiBold,
-                (rh * 0.28).clamp(9.0, 14.0),
-                [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
-                text_c,
-                c.name(),
-            );
         } else {
-            // Authentic MCPE Sprite / Bevel rendering!
+            // Authentic MCPE Sprite / Bevel rendering matching in-game MCPE controls!
             let gui_bounds = [
                 rx * dp_to_gui,
                 ry * dp_to_gui,
@@ -1527,16 +2193,16 @@ pub fn draw_hud_editor(
         }
     }
 
-    // 4. Draw All Custom Buttons (GoyControl Static style or MCPE style)
-    for (i, custom) in tc.settings.custom_buttons.iter().enumerate() {
-        let p = tc.custom_placement(i);
-        let [nx, ny, nw, nh] = p.rect(tc.aspect());
-        let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
-        let is_sel = ed.selected_custom == Some(i);
-        let alpha = p.opacity.clamp(0.25, 1.0);
-        let label = custom.label();
+    // 4. Draw GoyControl Custom Buttons (only in GoyControl editor)
+    if tc.settings.control_style == ControlStyle::GoyControl {
+        for (i, custom) in tc.settings.custom_buttons.iter().enumerate() {
+            let p = tc.custom_placement(i);
+            let [nx, ny, nw, nh] = p.rect(tc.aspect());
+            let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
+            let is_sel = ed.selected_custom == Some(i);
+            let alpha = p.opacity.clamp(0.25, 1.0);
+            let label = custom.label();
 
-        if tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style {
             let fill_c = color::with_alpha(p.button_color, alpha);
             let stroke_c = color::with_alpha(p.stroke_color, alpha);
             let shadow_c = color::with_alpha(p.shadow_color, alpha);
@@ -1562,34 +2228,10 @@ pub fn draw_hud_editor(
                 text_c,
                 &label,
             );
-        } else {
-            let gui_bounds = [
-                rx * dp_to_gui,
-                ry * dp_to_gui,
-                rw * dp_to_gui,
-                rh * dp_to_gui,
-            ];
-            let mcpe_col = rgba(255, 255, 255, (alpha * 255.0) as u8);
-            crate::touch::draw_single_mcpe_control(
-                tc,
-                ui.batch,
-                ui.atlas,
-                Control::Offhand,
-                gui_bounds,
-                mcpe_col,
-                is_sel,
-            );
-            ui.centered_fit(
-                Face::SemiBold,
-                (rh * 0.28).clamp(9.0, 13.5),
-                [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
-                text_c,
-                &label,
-            );
-        }
 
-        if is_sel {
-            selected_rect_and_title = Some(([rx, ry, rw, rh], format!("Button: {label}")));
+            if is_sel {
+                selected_rect_and_title = Some(([rx, ry, rw, rh], format!("Button: {label}")));
+            }
         }
     }
 
@@ -1668,12 +2310,16 @@ pub fn draw_hud_editor(
     );
 
     if ed.pod_expanded {
-        // [Undo] [Redo] [Props (Gear)] [+ Add] [Save & Exit]
+        let fourth_item = if tc.settings.control_style == ControlStyle::GoyControl {
+            (Some(Icon::Plus), "Add", 64.0, true, false)
+        } else {
+            (Some(Icon::Reset), "Reset", 64.0, true, false)
+        };
         let items: [(Option<Icon>, &str, f32, bool, bool); 5] = [
             (Some(Icon::Undo), "", 42.0, !ed.undo_stack.is_empty(), false),
             (Some(Icon::Redo), "", 42.0, !ed.redo_stack.is_empty(), false),
             (Some(Icon::Gear), "Props", 72.0, true, ed.props_open),
-            (Some(Icon::Plus), "Add", 64.0, true, false),
+            fourth_item,
             (Some(Icon::Check), "Save", 68.0, true, true),
         ];
         let mut ix = pod_x + 50.0;
@@ -2745,11 +3391,257 @@ pub fn draw_hud_editor(
         return;
     }
 
+    // 8b. Independent Control Editor Save Workflow Dialog (Option A: Replace / Option B: Create New)
+    if ed.save_dialog_open {
+        ui.fill(0.0, 0.0, w, h, rgba(4, 5, 10, 195));
+        let dw = (w - 24.0).clamp(310.0, 520.0);
+        let dh = (h - 14.0).clamp(250.0, 360.0);
+        let dx = (w - dw) * 0.5;
+        let dy = (h - dh) * 0.5;
+        ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
+        ui.border(dx, dy, dw, dh, 18.0, accent);
+
+        ui.text(
+            Face::SemiBold,
+            13.0,
+            dx + 14.0,
+            dy + 10.0,
+            text_c,
+            &format!(
+                "Save {} Layout — {}",
+                tc.settings.control_style.label(),
+                tc.settings.preset_name
+            ),
+        );
+
+        let discard_r = [dx + dw - 166.0, dy + 8.0, 84.0, 24.0];
+        ui.rounded(
+            discard_r[0],
+            discard_r[1],
+            discard_r[2],
+            discard_r[3],
+            7.0,
+            bg_hi,
+        );
+        ui.border(
+            discard_r[0],
+            discard_r[1],
+            discard_r[2],
+            discard_r[3],
+            7.0,
+            danger_c,
+        );
+        ui.centered_fit(Face::SemiBold, 9.5, discard_r, danger_c, "Discard & Exit");
+
+        let cancel_r = [dx + dw - 76.0, dy + 8.0, 62.0, 24.0];
+        ui.rounded(
+            cancel_r[0],
+            cancel_r[1],
+            cancel_r[2],
+            cancel_r[3],
+            7.0,
+            bg_hi,
+        );
+        ui.border(
+            cancel_r[0],
+            cancel_r[1],
+            cancel_r[2],
+            cancel_r[3],
+            7.0,
+            border_c,
+        );
+        ui.centered_fit(Face::SemiBold, 9.5, cancel_r, text_c, "Cancel");
+
+        // Option A: Replace existing preset (disabled/protected when Default is active)
+        let is_def = tc.settings.is_default_preset();
+        let opt_a_r = [dx + 14.0, dy + 38.0, dw - 28.0, 44.0];
+        ui.rounded(
+            opt_a_r[0],
+            opt_a_r[1],
+            opt_a_r[2],
+            opt_a_r[3],
+            10.0,
+            if is_def {
+                rgba(24, 21, 36, 180)
+            } else {
+                accent_soft
+            },
+        );
+        ui.border(
+            opt_a_r[0],
+            opt_a_r[1],
+            opt_a_r[2],
+            opt_a_r[3],
+            10.0,
+            if is_def { border_c } else { accent },
+        );
+        ui.text(
+            Face::SemiBold,
+            10.5,
+            opt_a_r[0] + 10.0,
+            opt_a_r[1] + 6.0,
+            if is_def { muted_c } else { text_c },
+            if is_def {
+                "Option A: Replace existing preset (Protected)"
+            } else {
+                "Option A: Replace existing preset"
+            },
+        );
+        let opt_a_sub = if is_def {
+            "Default layout cannot be overwritten. Please create a new preset below.".to_owned()
+        } else {
+            format!(
+                "Update '{}' in controls/{}/",
+                tc.settings.preset_name,
+                tc.settings.control_style.storage_subdir()
+            )
+        };
+        ui.text(
+            Face::Regular,
+            9.0,
+            opt_a_r[0] + 10.0,
+            opt_a_r[1] + 23.0,
+            muted_c,
+            &opt_a_sub,
+        );
+        let rep_btn_r = [dx + dw - 118.0, dy + 46.0, 96.0, 28.0];
+        ui.rounded(
+            rep_btn_r[0],
+            rep_btn_r[1],
+            rep_btn_r[2],
+            rep_btn_r[3],
+            8.0,
+            if is_def { bg_hi } else { accent },
+        );
+        ui.centered_fit(
+            Face::SemiBold,
+            9.5,
+            rep_btn_r,
+            if is_def {
+                muted_c
+            } else {
+                color::hex(0x140E26, 255)
+            },
+            if is_def {
+                "Protected"
+            } else {
+                "Replace & Save"
+            },
+        );
+
+        // Option B: Create a new preset as...
+        ui.text(
+            Face::SemiBold,
+            9.5,
+            dx + 14.0,
+            dy + 86.0,
+            accent,
+            "OPTION B: CREATE A NEW PRESET AS...",
+        );
+        let iy = dy + 100.0;
+        let nw = (dw - 28.0 - 8.0) * 0.44;
+        let desc_w = (dw - 28.0 - 8.0) - nw;
+        let name_box = [dx + 14.0, iy, nw, 28.0];
+        let desc_box = [dx + 14.0 + nw + 8.0, iy, desc_w, 28.0];
+        let name_focus = !ed.editing_save_desc;
+        ui.rounded(
+            name_box[0],
+            name_box[1],
+            name_box[2],
+            name_box[3],
+            8.0,
+            if name_focus { accent_soft } else { bg_hi },
+        );
+        ui.border(
+            name_box[0],
+            name_box[1],
+            name_box[2],
+            name_box[3],
+            8.0,
+            if name_focus { accent } else { border_c },
+        );
+        let name_disp = if ed.save_name_input.is_empty() {
+            "Name: (tap to type)".to_owned()
+        } else {
+            format!("Name: {}|", ed.save_name_input)
+        };
+        ui.centered_fit(
+            Face::Medium,
+            9.5,
+            [name_box[0] + 6.0, name_box[1], name_box[2] - 12.0, 28.0],
+            text_c,
+            &name_disp,
+        );
+
+        ui.rounded(
+            desc_box[0],
+            desc_box[1],
+            desc_box[2],
+            desc_box[3],
+            8.0,
+            if !name_focus { accent_soft } else { bg_hi },
+        );
+        ui.border(
+            desc_box[0],
+            desc_box[1],
+            desc_box[2],
+            desc_box[3],
+            8.0,
+            if !name_focus { accent } else { border_c },
+        );
+        let desc_disp = if ed.save_desc_input.is_empty() {
+            "Desc: (tap to type)".to_owned()
+        } else {
+            format!("Desc: {}|", ed.save_desc_input)
+        };
+        ui.centered_fit(
+            Face::Medium,
+            9.5,
+            [desc_box[0] + 6.0, desc_box[1], desc_box[2] - 12.0, 28.0],
+            text_c,
+            &desc_disp,
+        );
+
+        let kb_y = iy + 33.0;
+        let kb_h = (dh - 174.0).clamp(80.0, 132.0);
+        draw_mini_keyboard(
+            &mut ui,
+            dx + 14.0,
+            kb_y,
+            dw - 28.0,
+            kb_h,
+            accent,
+            bg_hi,
+            border_c,
+            text_c,
+        );
+
+        let create_btn_r = [dx + 14.0, dy + dh - 34.0, dw - 28.0, 26.0];
+        ui.rounded(
+            create_btn_r[0],
+            create_btn_r[1],
+            create_btn_r[2],
+            create_btn_r[3],
+            8.0,
+            accent,
+        );
+        ui.centered_fit(
+            Face::SemiBold,
+            10.5,
+            create_btn_r,
+            color::hex(0x140E26, 255),
+            "Create New Preset & Save",
+        );
+
+        ui.finish();
+        return;
+    }
+
     // 9. Main Floating Control Manager Dialog (when ed.menu_open == true)
     if ed.menu_open {
         ui.fill(0.0, 0.0, w, h, rgba(4, 5, 10, 175));
         let dw = (w - 24.0).clamp(300.0, 540.0);
-        let dh = (h - 18.0).clamp(245.0, 368.0);
+        let dh = (h - 18.0).clamp(245.0, 350.0);
         let dx = (w - dw) * 0.5;
         let dy = (h - dh) * 0.5;
         ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
@@ -2758,11 +3650,15 @@ pub fn draw_hud_editor(
         ui.icon(Icon::MenuEquals, dx + 16.0, dy + 14.0, 18.0, accent);
         ui.text(
             Face::SemiBold,
-            13.5,
+            13.0,
             dx + 44.0,
             dy + 13.0,
             text_c,
-            &format!("Control Manager — Profile: {profile_name}"),
+            &format!(
+                "{} Editor — Preset: {}",
+                tc.settings.control_style.label(),
+                tc.settings.preset_name
+            ),
         );
 
         let resume_r = [dx + dw - 76.0, dy + 10.0, 62.0, 26.0];
@@ -2784,21 +3680,24 @@ pub fn draw_hud_editor(
         );
         ui.centered_fit(Face::SemiBold, 10.5, resume_r, accent, "Resume");
 
-        // Row 1: Control Engine Switcher (MCPE Style Touch Controls vs GoyControl)
+        // Row 1: Save Workflow & Reset to Default for Active System
         ui.text(
             Face::SemiBold,
             9.5,
             dx + 14.0,
             dy + 42.0,
             accent,
-            "1. SELECT CONTROL ENGINE & STYLE (BOTH FULLY EDITABLE)",
+            &format!(
+                "1. {} PRESET ACTIONS (STORAGE: controls/{}/)",
+                tc.settings.control_style.section_title().to_uppercase(),
+                tc.settings.control_style.storage_subdir()
+            ),
         );
         let ey = dy + 56.0;
         let ew = (dw - 28.0 - 8.0) * 0.5;
-        let is_mcpe = tc.settings.control_style == ControlStyle::Mcpe;
-        for (i, (title, active)) in [
-            ("MCPE Style Touch Controls", is_mcpe),
-            ("GoyControl (Custom Static)", !is_mcpe),
+        for (i, (title, primary)) in [
+            ("Save Preset (Replace / Save As...)", true),
+            ("Reset Canvas to Default Layout", false),
         ]
         .into_iter()
         .enumerate()
@@ -2810,7 +3709,7 @@ pub fn draw_hud_editor(
                 ew,
                 30.0,
                 8.0,
-                if active { accent_soft } else { bg_hi },
+                if primary { accent } else { bg_hi },
             );
             ui.border(
                 rx,
@@ -2818,45 +3717,48 @@ pub fn draw_hud_editor(
                 ew,
                 30.0,
                 8.0,
-                if active { accent } else { border_c },
+                if primary { accent } else { border_c },
             );
             ui.centered_fit(
                 Face::SemiBold,
-                10.5,
+                10.0,
                 [rx + 4.0, ey, ew - 8.0, 30.0],
-                if active { accent } else { text_c },
+                if primary {
+                    color::hex(0x140E26, 255)
+                } else {
+                    text_c
+                },
                 title,
             );
         }
 
-        // Row 2: Built-in Layout Presets
+        // Row 2: Presets belonging to this control system ONLY
         ui.text(
             Face::SemiBold,
             9.5,
             dx + 14.0,
-            ey + 34.0,
+            ey + 36.0,
             accent,
-            "2. LOAD PRESET LAYOUT",
+            &format!(
+                "2. LOAD {} PRESET",
+                tc.settings.control_style.label().to_uppercase()
+            ),
         );
-        let py = ey + 48.0;
-        let pw = (dw - 28.0 - 16.0) / 5.0;
-        for (i, (id, title)) in [
-            ("default", "MCPE Default"),
-            ("goycontrol", "GoyControl"),
-            ("pvp", "PvP Claw"),
-            ("building", "Builder"),
-            ("speedrun", "Speedrun"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        let py = ey + 50.0;
+        let presets = crate::touch::Settings::list_presets(
+            std::path::Path::new("."),
+            tc.settings.control_style,
+        );
+        let max_show = presets.len().clamp(1, 5);
+        let pw = (dw - 28.0 - 4.0 * (max_show as f32 - 1.0)) / max_show as f32;
+        for (i, meta) in presets.iter().take(max_show).enumerate() {
             let rx = dx + 14.0 + i as f32 * (pw + 4.0);
-            let active = tc.settings.active_profile.eq_ignore_ascii_case(id);
+            let active = tc.settings.preset_id.eq_ignore_ascii_case(&meta.id);
             ui.rounded(
                 rx,
                 py,
                 pw,
-                26.0,
+                28.0,
                 7.0,
                 if active { accent_soft } else { bg_hi },
             );
@@ -2864,16 +3766,16 @@ pub fn draw_hud_editor(
                 rx,
                 py,
                 pw,
-                26.0,
+                28.0,
                 7.0,
                 if active { accent } else { border_c },
             );
             ui.centered_fit(
                 Face::SemiBold,
                 9.5,
-                [rx + 2.0, py, pw - 4.0, 26.0],
+                [rx + 3.0, py, pw - 6.0, 28.0],
                 if active { accent } else { text_c },
-                title,
+                &meta.name,
             );
         }
 
@@ -2882,11 +3784,11 @@ pub fn draw_hud_editor(
             Face::SemiBold,
             9.5,
             dx + 14.0,
-            py + 32.0,
+            py + 36.0,
             accent,
             "3. MOVEMENT, JOYSTICK AREA & GRID SNAP",
         );
-        let gy = py + 46.0;
+        let gy = py + 50.0;
         let gw = (dw - 28.0 - 12.0) / 4.0;
         let move_lbl = match tc.settings.mode {
             crate::touch::Mode::Dpad => "Move: D-Pad",
@@ -2923,122 +3825,14 @@ pub fn draw_hud_editor(
         .enumerate()
         {
             let rx = dx + 14.0 + i as f32 * (gw + 4.0);
-            ui.rounded(rx, gy, gw, 26.0, 7.0, if on { accent_soft } else { bg_hi });
-            ui.border(rx, gy, gw, 26.0, 7.0, if on { accent } else { border_c });
+            ui.rounded(rx, gy, gw, 28.0, 7.0, if on { accent_soft } else { bg_hi });
+            ui.border(rx, gy, gw, 28.0, 7.0, if on { accent } else { border_c });
             ui.centered_fit(
                 Face::Medium,
                 9.5,
-                [rx + 3.0, gy, gw - 6.0, 26.0],
+                [rx + 3.0, gy, gw - 6.0, 28.0],
                 if on { accent } else { text_c },
                 lbl,
-            );
-        }
-
-        // Row 4: Named Save Profile + Set Default Always + Add Button + Reset
-        ui.text(
-            Face::SemiBold,
-            9.5,
-            dx + 14.0,
-            gy + 30.0,
-            accent,
-            "4. SAVE AS NAMED PROFILE & LOAD SAVED CONTROLS",
-        );
-        let sy = gy + 43.0;
-        let sw = (dw - 28.0 - 16.0) / 5.0;
-        let save_name = if ed.save_name_input.trim().is_empty() {
-            tc.settings.active_profile.as_str()
-        } else {
-            ed.save_name_input.as_str()
-        };
-        let is_default_always = tc
-            .settings
-            .default_profile
-            .eq_ignore_ascii_case(&tc.settings.active_profile);
-        let name_lbl = format!("Name: {save_name}");
-        for (i, (lbl, primary)) in [
-            (name_lbl.as_str(), false),
-            ("Save Profile", true),
-            (
-                if is_default_always {
-                    "★ Default"
-                } else {
-                    "Set Default"
-                },
-                is_default_always,
-            ),
-            ("+ Add Button", false),
-            ("Reset Layout", false),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let rx = dx + 14.0 + i as f32 * (sw + 4.0);
-            ui.rounded(
-                rx,
-                sy,
-                sw,
-                28.0,
-                8.0,
-                if i == 1 {
-                    accent
-                } else if primary || i == 0 {
-                    accent_soft
-                } else {
-                    bg_hi
-                },
-            );
-            ui.border(
-                rx,
-                sy,
-                sw,
-                28.0,
-                8.0,
-                if i == 1 || primary || i == 0 {
-                    accent
-                } else {
-                    border_c
-                },
-            );
-            let fg = if i == 1 {
-                color::hex(0x140E26, 255)
-            } else if primary || i == 0 {
-                accent
-            } else {
-                text_c
-            };
-            ui.centered_fit(Face::SemiBold, 9.5, [rx + 3.0, sy, sw - 6.0, 28.0], fg, lbl);
-        }
-
-        // Row 5: Saved Control Profiles Loader Bar (Tap any saved layout to load immediately)
-        let saved_y = sy + 33.0;
-        let saved_list = crate::touch::Settings::list_profiles(std::path::Path::new("."));
-        let max_show = saved_list.len().clamp(1, 5);
-        let sp_w = (dw - 28.0 - 4.0 * (max_show as f32 - 1.0)) / max_show as f32;
-        for (i, prof) in saved_list.iter().take(max_show).enumerate() {
-            let rx = dx + 14.0 + i as f32 * (sp_w + 4.0);
-            let active = tc.settings.active_profile.eq_ignore_ascii_case(prof);
-            ui.rounded(
-                rx,
-                saved_y,
-                sp_w,
-                24.0,
-                7.0,
-                if active { accent_soft } else { bg_hi },
-            );
-            ui.border(
-                rx,
-                saved_y,
-                sp_w,
-                24.0,
-                7.0,
-                if active { accent } else { border_c },
-            );
-            ui.centered_fit(
-                Face::Medium,
-                9.2,
-                [rx + 3.0, saved_y, sp_w - 6.0, 24.0],
-                if active { accent } else { muted_c },
-                &format!("Load: {prof}"),
             );
         }
     }
@@ -3047,7 +3841,7 @@ pub fn draw_hud_editor(
 }
 
 /// Handles touch input for the MCPE + GoyControl Editor (`draw_hud_editor`).
-/// Returns `true` when the user taps `Save` in the floating pod to exit the editor.
+/// Returns `true` when the user completes saving or discarding to exit the editor.
 pub fn touch_hud_editor(
     tc: &mut crate::touch::TouchControls,
     b: &mut HudBatch,
@@ -3198,6 +3992,97 @@ pub fn touch_hud_editor(
                         }
                     }
                 }
+            }
+            return false;
+        }
+
+        // 1b. If Save Dialog is open (Option A: Replace existing / Option B: Create new preset as...)
+        if ed.save_dialog_open {
+            let dw = (w - 24.0).clamp(310.0, 520.0);
+            let dh = (h - 14.0).clamp(250.0, 360.0);
+            let dx = (w - dw) * 0.5;
+            let dy = (h - dh) * 0.5;
+
+            // Cancel button -> back to editor
+            if inside([dx + dw - 76.0, dy + 8.0, 62.0, 24.0]) || !inside([dx, dy, dw, dh]) {
+                ed.save_dialog_open = false;
+                tc.clicked = true;
+                return false;
+            }
+            // Discard & Exit -> reload saved preset from disk and exit editor
+            if inside([dx + dw - 166.0, dy + 8.0, 84.0, 24.0]) {
+                let cur_style = tc.settings.control_style;
+                let cur_id = tc.settings.preset_id.clone();
+                tc.settings
+                    .select_preset(std::path::Path::new("."), cur_style, &cur_id);
+                tc.clicked = true;
+                return true;
+            }
+
+            // Option A: Replace existing preset
+            let is_def = tc.settings.is_default_preset();
+            if inside([dx + 14.0, dy + 38.0, dw - 28.0, 44.0]) {
+                if is_def {
+                    ed.status_msg = Some(
+                        "Default preset is protected and cannot be replaced. Create a new preset below."
+                            .into(),
+                    );
+                    tc.clicked = true;
+                    return false;
+                }
+                let _ = tc.settings.save_replace_preset(std::path::Path::new("."));
+                let _ = tc.settings.save();
+                tc.clicked = true;
+                return true;
+            }
+
+            // Option B: Focus Name vs Description input
+            let iy = dy + 100.0;
+            let nw = (dw - 28.0 - 8.0) * 0.44;
+            let desc_w = (dw - 28.0 - 8.0) - nw;
+            if inside([dx + 14.0, iy, nw, 28.0]) {
+                ed.editing_save_desc = false;
+                tc.clicked = true;
+                return false;
+            }
+            if inside([dx + 14.0 + nw + 8.0, iy, desc_w, 28.0]) {
+                ed.editing_save_desc = true;
+                tc.clicked = true;
+                return false;
+            }
+
+            // Option B: On-screen keyboard typing
+            let kb_y = iy + 33.0;
+            let kb_h = (dh - 174.0).clamp(80.0, 132.0);
+            let target_buf = if ed.editing_save_desc {
+                &mut ed.save_desc_input
+            } else {
+                &mut ed.save_name_input
+            };
+            let max_len = if ed.editing_save_desc { 56 } else { 28 };
+            if hit_mini_keyboard(p, dx + 14.0, kb_y, dw - 28.0, kb_h, target_buf, max_len) {
+                tc.clicked = true;
+                return false;
+            }
+
+            // Option B: Create New Preset & Save
+            if inside([dx + 14.0, dy + dh - 34.0, dw - 28.0, 26.0]) {
+                let name = if ed.save_name_input.trim().is_empty() {
+                    format!("{} Custom", tc.settings.preset_name)
+                } else {
+                    ed.save_name_input.trim().to_owned()
+                };
+                let desc = if ed.save_desc_input.trim().is_empty() {
+                    format!("Custom {} layout", tc.settings.control_style.label())
+                } else {
+                    ed.save_desc_input.trim().to_owned()
+                };
+                let _ = tc
+                    .settings
+                    .save_new_preset(std::path::Path::new("."), &name, &desc);
+                let _ = tc.settings.save();
+                tc.clicked = true;
+                return true;
             }
             return false;
         }
@@ -3760,20 +4645,22 @@ pub fn touch_hud_editor(
                     for slot in 0..3 {
                         let ex = dx + 14.0 + slot as f32 * (ew + 4.0);
                         if inside([ex, body_y, ew, 42.0]) {
-                            if ed.selected_custom.is_none() {
-                                // Convert or create a custom button if user taps an event slot on a built-in button
+                            if ed.selected_custom.is_none()
+                                && tc.settings.control_style == ControlStyle::GoyControl
+                            {
                                 push_undo_snapshot(&mut ed, &tc.settings);
                                 let idx = tc.settings.custom_buttons.len();
                                 let mut nb = CustomButton::new("key.mouse.left".into(), idx);
                                 nb.custom_label = "BTN".into();
                                 for m in 0..3 {
-                                    nb.layouts[m].use_goy_style =
-                                        tc.settings.control_style == ControlStyle::GoyControl;
+                                    nb.layouts[m].use_goy_style = true;
                                 }
                                 tc.settings.custom_buttons.push(nb);
                                 ed.selected_custom = Some(idx);
                             }
-                            ed.picker_step = PickerStep::AskInputType { event_slot: slot };
+                            if ed.selected_custom.is_some() {
+                                ed.picker_step = PickerStep::AskInputType { event_slot: slot };
+                            }
                             tc.clicked = true;
                             return false;
                         }
@@ -3844,7 +4731,7 @@ pub fn touch_hud_editor(
         // 4. If Main Control Manager Dialog is open:
         if ed.menu_open {
             let dw = (w - 24.0).clamp(300.0, 540.0);
-            let dh = (h - 18.0).clamp(245.0, 368.0);
+            let dh = (h - 18.0).clamp(245.0, 350.0);
             let dx = (w - dw) * 0.5;
             let dy = (h - dh) * 0.5;
             if inside([dx + dw - 76.0, dy + 10.0, 62.0, 26.0]) || !inside([dx, dy, dw, dh]) {
@@ -3854,45 +4741,76 @@ pub fn touch_hud_editor(
             }
             let ey = dy + 56.0;
             let ew = (dw - 28.0 - 8.0) * 0.5;
+            // Button 1: Open Save Preset Dialog
             if inside([dx + 14.0, ey, ew, 30.0]) {
-                push_undo_snapshot(&mut ed, &tc.settings);
-                tc.settings.set_control_style(ControlStyle::Mcpe);
-                let _ = tc.settings.save();
-                ed.status_msg = Some("Switched to MCPE Style Touch Controls.".into());
+                ed.menu_open = false;
+                ed.save_dialog_open = true;
+                ed.editing_save_desc = false;
+                ed.save_name_input = if tc.settings.is_default_preset() {
+                    format!("{} Custom", tc.settings.preset_name)
+                } else {
+                    tc.settings.preset_name.clone()
+                };
+                ed.save_desc_input = tc.settings.preset_description.clone();
                 tc.clicked = true;
                 return false;
             }
+            // Button 2: Reset Canvas to Default Layout of active system (without overwriting Default on disk)
             if inside([dx + 14.0 + ew + 8.0, ey, ew, 30.0]) {
                 push_undo_snapshot(&mut ed, &tc.settings);
-                tc.settings.set_control_style(ControlStyle::GoyControl);
-                let _ = tc.settings.save();
-                ed.status_msg = Some("Switched to GoyControl (Custom Static Style).".into());
+                let cur_style = tc.settings.control_style;
+                let cur_id = tc.settings.preset_id.clone();
+                let cur_name = tc.settings.preset_name.clone();
+                let cur_desc = tc.settings.preset_description.clone();
+                let active_mcpe = tc.settings.active_mcpe_preset.clone();
+                let active_goy = tc.settings.active_goy_preset.clone();
+                let fresh = crate::touch::Settings::default_for_style(cur_style);
+                tc.settings.layouts = fresh.layouts;
+                tc.settings.custom_buttons = fresh.custom_buttons;
+                tc.settings.button_visibility = fresh.button_visibility;
+                tc.settings.joystick_style = fresh.joystick_style;
+                tc.settings.preset_id = cur_id;
+                tc.settings.preset_name = cur_name;
+                tc.settings.preset_description = cur_desc;
+                tc.settings.active_mcpe_preset = active_mcpe;
+                tc.settings.active_goy_preset = active_goy;
+                ed.status_msg = Some(format!(
+                    "Reset editor canvas to {} Default layout.",
+                    cur_style.label()
+                ));
                 tc.clicked = true;
                 return false;
             }
 
-            let py = ey + 48.0;
-            let pw = (dw - 28.0 - 16.0) / 5.0;
-            for (i, id_name) in ["default", "goycontrol", "pvp", "building", "speedrun"]
-                .into_iter()
-                .enumerate()
-            {
+            let py = ey + 50.0;
+            let presets = crate::touch::Settings::list_presets(
+                std::path::Path::new("."),
+                tc.settings.control_style,
+            );
+            let max_show = presets.len().clamp(1, 5);
+            let pw = (dw - 28.0 - 4.0 * (max_show as f32 - 1.0)) / max_show as f32;
+            for (i, meta) in presets.iter().take(max_show).enumerate() {
                 let rx = dx + 14.0 + i as f32 * (pw + 4.0);
-                if inside([rx, py, pw, 26.0]) {
+                if inside([rx, py, pw, 28.0]) {
                     push_undo_snapshot(&mut ed, &tc.settings);
-                    tc.settings.apply_preset(id_name);
-                    let _ = tc.settings.save();
-                    ed.status_msg = Some(format!("Loaded preset '{id_name}'."));
+                    tc.settings.select_preset(
+                        std::path::Path::new("."),
+                        tc.settings.control_style,
+                        &meta.id,
+                    );
+                    ed.save_name_input = tc.settings.preset_name.clone();
+                    ed.save_desc_input = tc.settings.preset_description.clone();
+                    ed.status_msg = Some(format!("Loaded preset '{}'.", meta.name));
                     tc.clicked = true;
                     return false;
                 }
             }
 
-            let gy = py + 46.0;
+            let gy = py + 50.0;
             let gw = (dw - 28.0 - 12.0) / 4.0;
             for i in 0..4 {
                 let rx = dx + 14.0 + i as f32 * (gw + 4.0);
-                if inside([rx, gy, gw, 26.0]) {
+                if inside([rx, gy, gw, 28.0]) {
                     push_undo_snapshot(&mut ed, &tc.settings);
                     match i {
                         0 => {
@@ -3910,108 +4828,6 @@ pub fn touch_hud_editor(
                         _ => ed.show_hidden = !ed.show_hidden,
                     }
                     let _ = tc.settings.save();
-                    tc.clicked = true;
-                    return false;
-                }
-            }
-
-            let sy = gy + 43.0;
-            let sw = (dw - 28.0 - 16.0) / 5.0;
-            for i in 0..5 {
-                let rx = dx + 14.0 + i as f32 * (sw + 4.0);
-                if inside([rx, sy, sw, 28.0]) {
-                    match i {
-                        0 => {
-                            let names = [
-                                "goy-main",
-                                "pvp-claw",
-                                "bedwars",
-                                "survival",
-                                "builder-pro",
-                                "speedrun-x",
-                                "custom-1",
-                                "custom-2",
-                            ];
-                            let cur = names
-                                .iter()
-                                .position(|n| *n == ed.save_name_input)
-                                .map(|idx| (idx + 1) % names.len())
-                                .unwrap_or(0);
-                            ed.save_name_input = names[cur].to_owned();
-                            ed.status_msg = Some(format!(
-                                "Selected profile name '{}'. Tap 'Save Profile' to save.",
-                                ed.save_name_input
-                            ));
-                        }
-                        1 => {
-                            let target_name = if ed.save_name_input.trim().is_empty() {
-                                tc.settings.active_profile.clone()
-                            } else {
-                                crate::touch::Settings::sanitize_profile_name(&ed.save_name_input)
-                            };
-                            tc.settings.active_profile = target_name.clone();
-                            let _ = tc
-                                .settings
-                                .save_profile(std::path::Path::new("."), &target_name);
-                            let _ = tc.settings.save();
-                            ed.status_msg = Some(format!(
-                                "Saved controls as '{target_name}' in controlmap/{target_name}.json."
-                            ));
-                        }
-                        2 => {
-                            tc.settings.default_profile = tc.settings.active_profile.clone();
-                            let _ = tc.settings.save();
-                            ed.status_msg = Some(format!(
-                                "Set '{}' as Default Always ★",
-                                tc.settings.active_profile
-                            ));
-                        }
-                        3 => {
-                            push_undo_snapshot(&mut ed, &tc.settings);
-                            let idx = tc.settings.custom_buttons.len();
-                            let mut nb = CustomButton::new("key.mouse.left".into(), idx);
-                            nb.custom_label = format!("BTN {}", idx + 1);
-                            for m in 0..3 {
-                                nb.layouts[m].use_goy_style =
-                                    tc.settings.control_style == ControlStyle::GoyControl;
-                            }
-                            tc.settings.custom_buttons.push(nb);
-                            ed.selected_custom = Some(idx);
-                            ed.selected = None;
-                            ed.menu_open = false;
-                            ed.props_open = true;
-                            let _ = tc.settings.save();
-                        }
-                        _ => {
-                            push_undo_snapshot(&mut ed, &tc.settings);
-                            let cur_style = tc.settings.control_style;
-                            if cur_style == ControlStyle::GoyControl {
-                                tc.settings.apply_preset("goycontrol");
-                            } else {
-                                tc.settings.apply_preset("default");
-                            }
-                            let _ = tc.settings.save();
-                            ed.status_msg = Some("Reset layout to default.".into());
-                        }
-                    }
-                    tc.clicked = true;
-                    return false;
-                }
-            }
-
-            // Row 5: Saved Control Profiles Loader Bar
-            let saved_y = sy + 33.0;
-            let saved_list = crate::touch::Settings::list_profiles(std::path::Path::new("."));
-            let max_show = saved_list.len().clamp(1, 5);
-            let sp_w = (dw - 28.0 - 4.0 * (max_show as f32 - 1.0)) / max_show as f32;
-            for (i, prof) in saved_list.iter().take(max_show).enumerate() {
-                let rx = dx + 14.0 + i as f32 * (sp_w + 4.0);
-                if inside([rx, saved_y, sp_w, 24.0]) {
-                    push_undo_snapshot(&mut ed, &tc.settings);
-                    tc.settings =
-                        crate::touch::Settings::load_profile(std::path::Path::new("."), prof);
-                    ed.save_name_input = tc.settings.active_profile.clone();
-                    ed.status_msg = Some(format!("Loaded saved profile '{prof}'."));
                     tc.clicked = true;
                     return false;
                 }
@@ -4065,27 +4881,42 @@ pub fn touch_hud_editor(
                             ed.menu_open = false;
                         }
                         3 => {
-                            // + Add Button
-                            push_undo_snapshot(&mut ed, &tc.settings);
-                            let idx = tc.settings.custom_buttons.len();
-                            let mut nb = CustomButton::new("key.mouse.left".into(), idx);
-                            nb.custom_label = format!("BTN {}", idx + 1);
-                            // Default style matches active engine, and user can switch it in Style Manager
-                            for m in 0..3 {
-                                nb.layouts[m].use_goy_style =
-                                    tc.settings.control_style == ControlStyle::GoyControl;
+                            if tc.settings.control_style == ControlStyle::GoyControl {
+                                // + Add Button (GoyControl)
+                                push_undo_snapshot(&mut ed, &tc.settings);
+                                let idx = tc.settings.custom_buttons.len();
+                                let mut nb = CustomButton::new("key.mouse.left".into(), idx);
+                                nb.custom_label = format!("BTN {}", idx + 1);
+                                for m in 0..3 {
+                                    nb.layouts[m].use_goy_style = true;
+                                }
+                                tc.settings.custom_buttons.push(nb);
+                                ed.selected_custom = Some(idx);
+                                ed.selected = None;
+                                ed.props_open = true;
+                                let _ = tc.settings.save();
+                            } else {
+                                // Reset MCPE layout to Default on canvas
+                                push_undo_snapshot(&mut ed, &tc.settings);
+                                let fresh = crate::touch::Settings::default_mcpe();
+                                tc.settings.layouts = fresh.layouts;
+                                tc.settings.button_visibility = fresh.button_visibility;
+                                ed.status_msg =
+                                    Some("Reset MCPE controls to Default positions.".into());
                             }
-                            tc.settings.custom_buttons.push(nb);
-                            ed.selected_custom = Some(idx);
-                            ed.selected = None;
-                            ed.props_open = true;
-                            let _ = tc.settings.save();
                         }
                         _ => {
-                            // Save & Exit
-                            let _ = tc.settings.save();
-                            tc.clicked = true;
-                            return true;
+                            // Open Save Dialog (Option A: Replace / Option B: Create New Preset)
+                            ed.save_dialog_open = true;
+                            ed.menu_open = false;
+                            ed.props_open = false;
+                            ed.editing_save_desc = false;
+                            ed.save_name_input = if tc.settings.is_default_preset() {
+                                format!("{} Custom", tc.settings.preset_name)
+                            } else {
+                                tc.settings.preset_name.clone()
+                            };
+                            ed.save_desc_input = tc.settings.preset_description.clone();
                         }
                     }
                     tc.clicked = true;
@@ -4137,32 +4968,33 @@ pub fn touch_hud_editor(
             }
         }
 
-        // 7. Hit-test Custom Buttons & Built-in Controls for Selection + Move Drag
-        for i in (0..tc.settings.custom_buttons.len()).rev() {
-            let pl = tc.custom_placement(i);
-            let r = pl.rect(aspect);
-            if crate::touch::layout::contains(r, point) {
-                push_undo_snapshot(&mut ed, &tc.settings);
-                ed.selected_custom = Some(i);
-                ed.selected = None;
-                ed.active_drag = Some((
-                    id,
-                    EditorDragKind::Move {
-                        offset: [point[0] - pl.center[0], point[1] - pl.center[1]],
-                    },
-                ));
-                tc.clicked = true;
-                return false;
+        // 7. Hit-test Custom Buttons (GoyControl only) & Built-in Controls for Selection + Move Drag
+        if tc.settings.control_style == ControlStyle::GoyControl {
+            for i in (0..tc.settings.custom_buttons.len()).rev() {
+                let pl = tc.custom_placement(i);
+                let r = pl.rect(aspect);
+                if crate::touch::layout::contains(r, point) {
+                    push_undo_snapshot(&mut ed, &tc.settings);
+                    ed.selected_custom = Some(i);
+                    ed.selected = None;
+                    ed.active_drag = Some((
+                        id,
+                        EditorDragKind::Move {
+                            offset: [point[0] - pl.center[0], point[1] - pl.center[1]],
+                        },
+                    ));
+                    tc.clicked = true;
+                    return false;
+                }
             }
         }
 
         for &c in Control::ALL.iter().rev() {
+            if tc.settings.control_style == ControlStyle::GoyControl && c != Control::Move {
+                continue;
+            }
             let vis = tc.visible(c);
-            if !vis
-                && (!ed.show_hidden
-                    || (tc.settings.control_style == ControlStyle::GoyControl
-                        && c != Control::Move))
-            {
+            if !vis && !ed.show_hidden {
                 continue;
             }
             let pl = tc.placement(c);
