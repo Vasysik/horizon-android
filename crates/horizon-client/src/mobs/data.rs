@@ -48,13 +48,10 @@ pub struct MobData {
     pub animations: HashMap<String, Animation>,
     /// Replaced when the resource packs change (the rest of `MobData` never is).
     pub villager_hats: std::sync::RwLock<super::villager_hats::VillagerHats>,
-<<<<<<< HEAD
     /// Equipment textures that are custom armour (`custom_armor`), replaced with the packs too.
     pub armor_atlases: std::sync::RwLock<HashMap<String, crate::custom_armor::ArmorAtlas>>,
     /// Every namespace's equipment assets (`equipment`), replaced with the packs too.
     pub equipment: std::sync::RwLock<crate::equipment::Layers>,
-||||||| f8988d5a7
-=======
     /// The packs' custom entity models (OptiFine CEM); replaced when the resource packs change.
     pub cem: std::sync::RwLock<std::sync::Arc<super::cem::CemModels>>,
     /// The packs' random entity textures, replaced with them too.
@@ -63,7 +60,6 @@ pub struct MobData {
     pub emissive: std::sync::RwLock<std::sync::Arc<horizon_optifine::emissive::Emissive>>,
     /// ETF's blinking textures, replaced with the packs too.
     pub blinks: std::sync::RwLock<horizon_optifine::blink::Blinks>,
->>>>>>> 31f83499b
     /// Biome tags (spawns_warm_variant_farm_animals, is_ocean...) by tag id.
     pub biome_tags: HashMap<String, std::collections::HashSet<String>>,
     /// Entity type tags (`data/*/tags/entity_type`).
@@ -100,11 +96,8 @@ impl MobData {
             crate::items::load_tags(root, "entity_type", &horizon_world::loot::PackOverlay::NONE)
                 .unwrap_or_default();
         data.villager_hats = std::sync::RwLock::new(super::villager_hats::VillagerHats::load(root));
-<<<<<<< HEAD
         data.armor_atlases = std::sync::RwLock::new(crate::custom_armor::load(root));
         data.equipment = std::sync::RwLock::new(crate::equipment::load(root));
-||||||| f8988d5a7
-=======
         let random = horizon_optifine::random_textures::RandomTextures::scan(root);
         let blinks = horizon_optifine::blink::Blinks::scan(root, &random);
         let mut emissive = horizon_optifine::emissive::Emissive::scan(root, &random);
@@ -112,7 +105,6 @@ impl MobData {
         data.emissive = std::sync::RwLock::new(std::sync::Arc::new(emissive));
         data.blinks = std::sync::RwLock::new(blinks);
         data.random_textures = std::sync::RwLock::new(random);
->>>>>>> 31f83499b
         data
     }
     /// Only the keyframe animation definitions of `mob-data.json`.
@@ -174,16 +166,12 @@ impl MobData {
             heightmaps,
             animations,
             villager_hats: Default::default(),
-<<<<<<< HEAD
             armor_atlases: Default::default(),
             equipment: Default::default(),
-||||||| f8988d5a7
-=======
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
             blinks: Default::default(),
->>>>>>> 31f83499b
             biome_tags: HashMap::new(),
             entity_tags: HashMap::new(),
             pois: Default::default(),
@@ -241,16 +229,12 @@ impl MobData {
             heightmaps: HashMap::new(),
             animations: HashMap::new(),
             villager_hats: Default::default(),
-<<<<<<< HEAD
             armor_atlases: Default::default(),
             equipment: Default::default(),
-||||||| f8988d5a7
-=======
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
             blinks: Default::default(),
->>>>>>> 31f83499b
             biome_tags: HashMap::new(),
             entity_tags: HashMap::new(),
             pois: Default::default(),

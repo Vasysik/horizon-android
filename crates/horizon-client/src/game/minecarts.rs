@@ -2230,13 +2230,12 @@ impl Game<'_> {
         let Ok(models) = self.pack.render.model_catalog.collect_seeded(state, seed) else {
             return;
         };
-<<<<<<< HEAD
-        for (_, model) in &models {
-            self.baked_model_vertices(model, m, light, diffuse, out);
-        }
+        let models = models.into_iter().map(|(_, model)| model);
+        self.baked_model_vertices(models, m, light, diffuse, tint, out);
     }
-    /// One baked model's faces, as [`Self::block_model_vertices`] draws each of a state's.
-    pub(super) fn baked_model_vertices(
+    /// One baked model's faces at one light, untinted: what the Create parts' draws
+    /// (game/kinetics.rs) use.
+    pub(super) fn baked_model_lit(
         &self,
         model: &horizon_client::models::catalog::BakedModel,
         m: glam::Mat4,
@@ -2244,108 +2243,7 @@ impl Game<'_> {
         diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
-        // `PoseStack.Pose.transformNormal`'s matrix, once for every face.
-        let normals = glam::Mat3::from_mat4(m).inverse().transpose();
-        for face in &model.faces {
-            let Some(s) = self
-                .pack
-                .layer_names
-                .get(&face.layer)
-                .and_then(|n| self.gui.atlas.sprites.get(n))
-            else {
-                continue;
-            };
-            let n = (normals * horizon_client::item_render::direction_vector(face.quad.facing))
-                .normalize_or_zero();
-            let color = if diffuse {
-                u32::MAX
-            } else {
-                // The terrain's shade of the face as it points now, so a turning part's faces
-                // darken and lighten as they go round: 1 up, 0.5 down, 0.8 north and south, 0.6
-                // east and west, blended between (a face that does not turn keeps its own).
-                let s = n.x * n.x * 0.6
-                    + n.y * n.y * if n.y > 0.0 { 1.0 } else { 0.5 }
-                    + n.z * n.z * 0.8;
-                let shade = ((s * 255.0 + 0.001) as u32).min(255);
-                0xFF00_0000 | shade << 16 | shade << 8 | shade
-            };
-            let normal = if diffuse {
-                let n = n.to_array().map(|v| (v.clamp(-1.0, 1.0) * 127.0) as i8);
-                [n[0], n[1], n[2], 127]
-            } else {
-                [0; 4]
-            };
-            let light = if diffuse {
-                let emission = u32::from(face.quad.light_emission) * 16;
-                (light & 0xFF) | (light >> 8 & 0xFF).max(emission) << 8
-            } else {
-                light
-            };
-            for k in 0..4 {
-                let p = face.quad.positions[k];
-                let uv = face.quad.uv[k];
-                out.push(Vertex {
-                    normal,
-                    pos: m.transform_point3(glam::Vec3::from_array(p)).to_array(),
-                    uv: [s.u0 + uv[0] * (s.u1 - s.u0), s.v0 + uv[1] * (s.v1 - s.v0)],
-                    layer: 0,
-                    color,
-                    light,
-                    glint_uv: [0.0, 0.0],
-                });
-||||||| f8988d5a7
-        for (_, model) in &models {
-            for face in &model.faces {
-                let Some(s) = self
-                    .pack
-                    .layer_names
-                    .get(&face.layer)
-                    .and_then(|n| self.gui.atlas.sprites.get(n))
-                else {
-                    continue;
-                };
-                use horizon_assets::model::Direction as D;
-                let shade: u32 = match face.quad.facing {
-                    D::Up => 255,
-                    D::Down => 127,
-                    D::North | D::South => 204,
-                    D::West | D::East => 153,
-                };
-                let color = if diffuse {
-                    u32::MAX
-                } else {
-                    0xFF00_0000 | shade << 16 | shade << 8 | shade
-                };
-                let normal = if diffuse {
-                    use horizon_client::item_render::{direction_vector, transform_normal};
-                    let n = transform_normal(m, direction_vector(face.quad.facing));
-                    let n = n.to_array().map(|v| (v.clamp(-1.0, 1.0) * 127.0) as i8);
-                    [n[0], n[1], n[2], 127]
-                } else {
-                    [0; 4]
-                };
-                let light = if diffuse {
-                    let emission = u32::from(face.quad.light_emission) * 16;
-                    (light & 0xFF) | (light >> 8 & 0xFF).max(emission) << 8
-                } else {
-                    light
-                };
-                for k in 0..4 {
-                    let p = face.quad.positions[k];
-                    let uv = face.quad.uv[k];
-                    out.push(Vertex {
-                        normal,
-                        pos: m.transform_point3(glam::Vec3::from_array(p)).to_array(),
-                        uv: [s.u0 + uv[0] * (s.u1 - s.u0), s.v0 + uv[1] * (s.v1 - s.v0)],
-                        layer: 0,
-                        color,
-                        light,
-                        glint_uv: [0.0, 0.0],
-                    });
-                }
-=======
-        let models = models.into_iter().map(|(_, model)| model);
-        self.baked_model_vertices(models, m, light, diffuse, tint, out);
+        self.baked_model_vertices([model], m, |_| light, diffuse, |_| None, out);
     }
     /// `tinted_block_model_vertices` for baked models given as they are (a
     /// state's, or a standalone model).
@@ -2369,16 +2267,17 @@ impl Game<'_> {
                 else {
                     continue;
                 };
-                use horizon_assets::model::Direction as D;
-                let shade: u32 = match face.quad.facing {
-                    D::Up => 255,
-                    D::Down => 127,
-                    D::North | D::South => 204,
-                    D::West | D::East => 153,
-                };
+                let n = normals.face(face.quad.facing);
                 let mut color = if diffuse {
                     u32::MAX
                 } else {
+                    // The terrain's shade of the face as it points now, so a turning part's faces
+                    // darken and lighten as they go round: 1 up, 0.5 down, 0.8 north and south,
+                    // 0.6 east and west, blended between (a face that does not turn keeps its own).
+                    let s = n.x * n.x * 0.6
+                        + n.y * n.y * if n.y > 0.0 { 1.0 } else { 0.5 }
+                        + n.z * n.z * 0.8;
+                    let shade = ((s * 255.0 + 0.001) as u32).min(255);
                     0xFF00_0000 | shade << 16 | shade << 8 | shade
                 };
                 if let Some(t) = tint(face.quad.tint_index) {
@@ -2388,7 +2287,6 @@ impl Game<'_> {
                     );
                 }
                 let normal = if diffuse {
-                    let n = normals.face(face.quad.facing);
                     let n = n.to_array().map(|v| (v.clamp(-1.0, 1.0) * 127.0) as i8);
                     [n[0], n[1], n[2], 127]
                 } else {
@@ -2414,7 +2312,6 @@ impl Game<'_> {
                         glint_uv: [0.0, 0.0],
                     });
                 }
->>>>>>> 31f83499b
             }
         }
     }

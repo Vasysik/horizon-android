@@ -1303,11 +1303,8 @@ impl Game<'_> {
                 .get_or_init(|| Arc::new(horizon_client::save::SaveTables::new(&self.pack.assets)))
                 .clone(),
         );
-<<<<<<< HEAD
         // Content mods' machines: their block entities go to the players too.
         encoder.mark_machines(self.res.kinetics().entity_states().map(|s| s.0));
-||||||| f8988d5a7
-=======
         encoder.mod_update_tag = Some(|pos, entity| {
             let mut tag = None;
             Game::native_block_entity_update_tag(pos, entity, &mut tag);
@@ -1315,7 +1312,6 @@ impl Game<'_> {
         });
         let far = (net.lod_distance > 0)
             .then(|| horizon_client::lod_net::Service::new(net.lod_distance, biome_names.clone()));
->>>>>>> 31f83499b
         let lan = Lan::start_with(sync.clone(), net)?;
         let mut hub = Hub::new(lan, sync, encoder, config);
         hub.sync_attachments = !crate::mod_api::mods().is_empty();

@@ -138,68 +138,6 @@ fn main() -> Result<(), Error> {
         })
         .flat_map(|region| (0..HEIGHT / 16).map(move |sy| (region.clone(), sy)))
         .collect();
-<<<<<<< HEAD
-    let mut best = Duration::MAX;
-    let (mut vertices, mut checksum) = (0, 0);
-    for _ in 0..rounds.max(1) {
-        let mut mesher = Mesher {
-            nether_shading: false,
-            pack_shades_faces: false,
-            zoom: BiomeZoom::new(obfuscate_seed(seed)),
-            blend_radius: 2,
-            smooth_lighting: true,
-            cutout_leaves: true,
-            assets: &context.assets,
-            render: &context.render,
-            tables: &context.tables,
-            biomes: &context.biomes,
-            visibility: context.tables.visibility.clone(),
-        };
-        vertices = 0;
-        let mut hash = DefaultHasher::new();
-        let mut spent = Duration::ZERO;
-        for (region, sy) in &regions {
-            let started = thread_cpu().ok_or("no thread CPU clock here")?;
-            let mesh = mesher.mesh(&borrow(region), *sy);
-            spent += thread_cpu().ok_or("no thread CPU clock here")? - started;
-            vertices += mesh.solid.len() + mesh.translucent.len();
-            bytemuck::cast_slice::<_, u8>(&mesh.solid).hash(&mut hash);
-            bytemuck::cast_slice::<_, u8>(&mesh.translucent).hash(&mut hash);
-        }
-        checksum = hash.finish();
-        best = best.min(spent);
-    }
-||||||| f8988d5a7
-    let mut best = Duration::MAX;
-    let (mut vertices, mut checksum) = (0, 0);
-    for _ in 0..rounds.max(1) {
-        let mut mesher = Mesher {
-            nether_shading: false,
-            zoom: BiomeZoom::new(obfuscate_seed(seed)),
-            blend_radius: 2,
-            smooth_lighting: true,
-            cutout_leaves: true,
-            assets: &context.assets,
-            render: &context.render,
-            tables: &context.tables,
-            biomes: &context.biomes,
-            visibility: context.tables.visibility.clone(),
-        };
-        vertices = 0;
-        let mut hash = DefaultHasher::new();
-        let mut spent = Duration::ZERO;
-        for (region, sy) in &regions {
-            let started = thread_cpu().ok_or("no thread CPU clock here")?;
-            let mesh = mesher.mesh(&borrow(region), *sy);
-            spent += thread_cpu().ok_or("no thread CPU clock here")? - started;
-            vertices += mesh.solid.len() + mesh.translucent.len();
-            bytemuck::cast_slice::<_, u8>(&mesh.solid).hash(&mut hash);
-            bytemuck::cast_slice::<_, u8>(&mesh.translucent).hash(&mut hash);
-        }
-        checksum = hash.finish();
-        best = best.min(spent);
-    }
-=======
     let one = mesh_rounds(&context, seed, &regions, rounds)?;
     let mut sorted = one.per_section.clone();
     sorted.sort_unstable();
@@ -217,7 +155,6 @@ fn main() -> Result<(), Error> {
         .collect();
     let filled_total: Duration = filled.iter().sum();
     let bytes = one.vertices * std::mem::size_of::<TerrainVertex>();
->>>>>>> 31f83499b
     println!(
         "meshed {} sections ({} with geometry, {} vertices, {:.1} MB of vertices, checksum {:016x}) in {:.1} ms of CPU ({:.1} us per section)",
         regions.len(),

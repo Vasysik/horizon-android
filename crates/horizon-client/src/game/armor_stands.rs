@@ -4,14 +4,10 @@
 //! the default pose, the hit wobble and humanoid armor layers.
 use super::{Game, InteractTarget};
 use horizon_client::{
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
     custom_armor::{ArmorAtlas, layer_look},
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
     Result,
     cit::{Hand, Kind, Rule},
     cit_armor,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     entities::ArmorStand,
     items::ItemStack,
     mesher::Vertex,
@@ -216,41 +212,21 @@ impl Game<'_> {
             })
         }))
     }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
     /// The layers of the armour `worn` (each piece's equipment asset, and its stack when known,
-    /// for its dye colour and trim), head to feet.
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-    /// The layers of the armour items `worn` (with their stacks when known,
-    /// for trims), head to feet.
-=======
-    /// The layers of the armour items `worn` (with their stacks when known,
-    /// for trims and CIT armour rules), head to feet.
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+    /// for its dye colour, trim and CIT armour rules), head to feet.
     fn armor_layers(
         &self,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         worn: [Option<(Option<String>, Option<&ItemStack>)>; 4],
-    ) -> Vec<(&Part, [f32; 4], u32, u32)> {
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        worn: [Option<(&str, Option<&ItemStack>)>; 4],
-    ) -> Vec<(&Part, [f32; 4], u32, u32)> {
-=======
-        worn: [Option<(&str, Option<&ItemStack>)>; 4],
     ) -> Vec<(&Part, [f32; 4], u32, u32, bool)> {
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         let assets = &self.armor_stand_assets;
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         // The shaders' GameTime: the part of the day gone.
         let day = self.world.game_time.rem_euclid(24000) as f32 / 24000.0;
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
         let emissive = self
             .res
             .mob_data()
             .emissive
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         let mut out = Vec::new();
         for (item, layer) in worn
             .into_iter()
@@ -293,24 +269,12 @@ impl Game<'_> {
                 let Some(uv) = self.armor_layer_rect(cit, &asset, kind, texture) else {
                     continue;
                 };
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
                 let (uv, color) = layer_look(
                     assets.atlases.get(texture),
                     layer_rgb(*undyed, stack),
-                    [r.u0, r.v0, r.u1, r.v1],
+                    uv,
                     day,
                 );
-                out.push((part, uv, color, if i == 0 { overlay } else { 0 }));
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-                let color = layer_color(*undyed, stack);
-                out.push((
-                    part,
-                    [r.u0, r.v0, r.u1, r.v1],
-                    color,
-                    if i == 0 { overlay } else { 0 },
-                ));
-=======
-                let color = layer_color(*undyed, stack);
                 out.push((part, uv, color, if i == 0 { overlay } else { 0 }, false));
                 // The layer's OptiFine emissive overlay, full bright without the glint.
                 if let Some(g) = emissive
@@ -319,7 +283,6 @@ impl Game<'_> {
                 {
                     out.push((part, [g.u0, g.v0, g.u1, g.v1], color, 0, true));
                 }
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             }
             if let Some(r) = stack
                 .and_then(|s| assets.trim_texture(&asset, kind, s))
@@ -1126,19 +1089,11 @@ impl Game<'_> {
                 );
             }
         }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        self.armor_stand_items(a, model, base, &posed, packed, out);
-        let day = self.world.game_time.rem_euclid(24000) as f32 / 24000.0;
-        // HumanoidArmorLayer: head, chest, legs, feet.
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        self.armor_stand_items(a, model, base, &posed, packed, out);
-        // HumanoidArmorLayer: head, chest, legs, feet.
-=======
         self.armor_stand_items(a, model, base, &posed, packed, skin.as_deref_mut(), out);
+        let day = self.world.game_time.rem_euclid(24000) as f32 / 24000.0;
         // HumanoidArmorLayer: head, chest, legs, feet. One pose map for every layer
         // (`reset` keeps its capacity).
         let mut layer_poses = Poses::default();
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         for (slot, layer) in [
             (5usize, "helmet"),
             (4, "chestplate"),
@@ -1186,18 +1141,10 @@ impl Game<'_> {
                 let Some(uv) = self.armor_layer_rect(cit, &asset, kind, texture) else {
                     continue;
                 };
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
                 let rgb = layer_rgb(*undyed, Some(stack));
                 let (uv, color) = layer_look(assets.atlases.get(texture.as_str()), rgb, uv, day);
-                horizon_client::mobs::render::draw(
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-                let color = layer_color(*undyed, Some(stack));
-                horizon_client::mobs::render::draw(
-=======
-                let color = layer_color(*undyed, Some(stack));
                 put(
                     &mut skin,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
                     part,
                     base,
                     &layer_poses,

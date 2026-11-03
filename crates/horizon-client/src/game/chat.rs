@@ -836,15 +836,6 @@ impl Game<'_> {
             return;
         }
         let focused = self.screen == Screen::Chat;
-<<<<<<< HEAD
-        // A mod may hide or change it.
-        let Some(text) = self.mods_chat(text) else {
-            return;
-        };
-||||||| f8988d5a7
-        let heard = self.mods.running().then(|| text.plain());
-=======
->>>>>>> 31f83499b
         self.ui.chat.add(
             &self.gui.atlas,
             text,
@@ -874,32 +865,10 @@ impl Game<'_> {
     }
     /// A key (and the text it typed) while the chat screen is open.
     pub(super) fn chat_key_code(&mut self, key: KeyCode, typed_text: Option<&str>) {
-<<<<<<< HEAD
-        // InputQuirks.EDIT_SHORTCUT_KEY_MODIFIER: Cmd on macOS, Ctrl elsewhere. The keys the
-        // player holds, not the sprint and sneak keys a toggle holds for them (Toggle Sprint
-        // holding Ctrl turned every letter into a shortcut, and the chat took no text).
-        let (left, right) = if cfg!(target_os = "macos") {
-            (KeyCode::SuperLeft, KeyCode::SuperRight)
-        } else {
-            (KeyCode::ControlLeft, KeyCode::ControlRight)
-        };
-        let ctrl = self.physical_keys.contains(&left) || self.physical_keys.contains(&right);
-||||||| f8988d5a7
-        // InputQuirks.EDIT_SHORTCUT_KEY_MODIFIER: Cmd on macOS, Ctrl elsewhere.
-        let (left, right) = if cfg!(target_os = "macos") {
-            (KeyCode::SuperLeft, KeyCode::SuperRight)
-        } else {
-            (KeyCode::ControlLeft, KeyCode::ControlRight)
-        };
-        let ctrl = self.keys.contains(&left) || self.keys.contains(&right);
-        let shift =
-            self.keys.contains(&KeyCode::ShiftLeft) || self.keys.contains(&KeyCode::ShiftRight);
-=======
         // The live modifiers, not `self.keys`: every ModifiersChanged runs
         // sync_toggle, which drops ShiftLeft and ControlLeft from `self.keys`
         // while a screen is open.
         let ctrl = self.has_control_down_with_quirk();
->>>>>>> 31f83499b
         let shift = self.has_shift_down();
         match key {
             // ChatScreen.keyPressed: the chat scrolls a page.
@@ -1020,24 +989,9 @@ impl Game<'_> {
         if message.is_empty() || !self.chat_abilities().allows(&message) {
             return;
         }
-<<<<<<< HEAD
-        self.ui.chat.add_recent(message);
-        // ClientSendMessageEvents: a mod may cancel or change it.
-        let Some(message) = self.mods_chat_sending(message) else {
-            return;
-        };
-        let message = message.as_str();
-        // On a server (single player's own included) the server runs it, but for a mod's command
-        // the server does not have (as Fabric's client commands).
-||||||| f8988d5a7
-        self.ui.chat.add_recent(message);
-        // On a server (single player's own included) the server runs it,
-        // unless a client mod owns the command.
-=======
         self.ui.chat.add_recent(&message);
         // On a server (single player's own included) the server runs it,
         // unless a client mod owns the command.
->>>>>>> 31f83499b
         if self.remote.is_some() {
             if let Some(command) = message.trim().strip_prefix('/')
                 && self.remote_mod_command(command)
@@ -1058,21 +1012,6 @@ impl Game<'_> {
                 &[self.player_display_name(), Text::literal(message.as_str())],
             );
             let focused = self.screen == Screen::Chat;
-<<<<<<< HEAD
-            if let Some(line) = self.mods_chat(line) {
-                self.ui.chat.add(
-                    &self.gui.atlas,
-                    line,
-                    None,
-                    ChatSource::Player,
-                    self.ticks,
-                    focused,
-                );
-            }
-            self.lan_host_chat(message);
-            self.mod_player_chat(super::server_mods::Who::Local, message);
-||||||| f8988d5a7
-            let heard = self.mods.running().then(|| line.plain());
             self.ui.chat.add(
                 &self.gui.atlas,
                 line,
@@ -1081,21 +1020,6 @@ impl Game<'_> {
                 self.ticks,
                 focused,
             );
-            if let Some(line) = heard {
-                self.mods_chat(&line);
-            }
-            self.lan_host_chat(message);
-            self.mod_player_chat(super::server_mods::Who::Local, message);
-=======
-            self.ui.chat.add(
-                &self.gui.atlas,
-                line,
-                None,
-                ChatSource::Player,
-                self.ticks,
-                focused,
-            );
->>>>>>> 31f83499b
         }
     }
     pub(super) fn chat_scroll(&mut self, amount: f32) {
@@ -1178,17 +1102,10 @@ impl Game<'_> {
             // Screen.defaultHandleGameClickEvent: the dialog opens over the
             // screen, and closes back to it; a custom action goes back to the server.
             Some(ClickEvent::ShowDialog(dialog)) => self.show_dialog_ref(&dialog),
-<<<<<<< HEAD
-            Some(ClickEvent::Custom { id, payload }) => {
-                if let Some(r) = &self.remote {
-                    r.session.send_custom_click(&id, payload);
-||||||| f8988d5a7
-=======
             // Screen.defaultHandleGameClickEvent: custom actions retain chat.
             Some(ClickEvent::Custom { id, payload }) => {
                 if let Some(remote) = &self.remote {
                     remote.session.send_custom_click(&id, payload);
->>>>>>> 31f83499b
                 }
             }
             // Screen.defaultHandleClickEvent: a page link means nothing in chat.

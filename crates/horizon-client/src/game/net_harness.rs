@@ -151,14 +151,10 @@ impl Game<'_> {
                 "position": position,
                 "chunks": chunks,
                 "chat": chat,
-<<<<<<< HEAD
                 "inventory": inventory,
-||||||| f8988d5a7
-=======
                 "signed": signed,
                 "prompts": prompts,
                 "chat_box": chat_box,
->>>>>>> 31f83499b
                 "error": error,
             })
             .to_string(),

@@ -622,26 +622,16 @@ impl Mob {
                 ..Default::default()
             }),
         };
-<<<<<<< HEAD
         use super::ai::parts;
+        // Entity.collide: the world border's walls stop the mob too.
+        let border = w.border.map(|b| (b, [self.position.x, self.position.z]));
         let bounds = self.bounds();
         let on_ground = self.on_ground;
         let moved = parts::time(6, || {
             scene
-                .resolve(bounds, wanted, step, on_ground)
+                .resolve_in_border(bounds, wanted, step, on_ground, border)
                 .unwrap_or(Vec3::ZERO)
         });
-||||||| f8988d5a7
-        let moved = scene
-            .resolve(self.bounds(), wanted, step, self.on_ground)
-            .unwrap_or(Vec3::ZERO);
-=======
-        // Entity.collide: the world border's walls stop the mob too.
-        let border = w.border.map(|b| (b, [self.position.x, self.position.z]));
-        let moved = scene
-            .resolve_in_border(self.bounds(), wanted, step, self.on_ground, border)
-            .unwrap_or(Vec3::ZERO);
->>>>>>> 31f83499b
         let length = moved.x * moved.x + moved.y * moved.y + moved.z * moved.z;
         let wanted_length = wanted.x * wanted.x + wanted.y * wanted.y + wanted.z * wanted.z;
         if length > 1.0e-7 || wanted_length - length < 1.0e-7 {
@@ -701,24 +691,12 @@ impl Mob {
             );
         }
         // Entity.checkSupportingBlock
-<<<<<<< HEAD
         self.supporting = parts::time(8, || self.supporting_block(w, moved));
         parts::time(9, || self.movement_emission(w, moved, events));
-        // Entity.applyEffectsFromBlocks: bubble columns push the mob.
-        if crate::motion::bubble_column_push(
-||||||| f8988d5a7
-        self.supporting = self.supporting_block(w, moved);
-        self.movement_emission(w, moved, events);
-        // Entity.applyEffectsFromBlocks: bubble columns push the mob.
-        if crate::motion::bubble_column_push(
-=======
-        self.supporting = self.supporting_block(w, moved);
-        self.movement_emission(w, moved, events);
         // Entity.applyEffectsFromBlocks: bubble columns push the mob, and the
         // server shows the surface of one it is at the top of.
         let mut tops = Vec::new();
         if crate::motion::bubble_column_push_over(
->>>>>>> 31f83499b
             w.world,
             w.registry,
             w.facts,

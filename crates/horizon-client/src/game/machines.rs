@@ -992,7 +992,6 @@ impl Game<'_> {
         self.with_entity_container(id, |g, target| g.eject_into(pos, hopper, target, face))
             .unwrap_or(false)
     }
-<<<<<<< HEAD
     /// One item into the crushing wheel controller at `front` (game/kinetic_machines.rs: the
     /// air between two Create crushing wheels, whose inventory takes items from a hopper), when
     /// one is there.
@@ -1031,8 +1030,7 @@ impl Game<'_> {
             };
         }
         Some(false)
-||||||| f8988d5a7
-=======
+    }
     /// Where a container is in the world for the mods: its block, or the block a chest
     /// boat or minecart is in (its view sits under a placeholder key).
     fn container_world_pos(&self, view: &View) -> [i32; 3] {
@@ -1075,7 +1073,6 @@ impl Game<'_> {
             &mut cancel,
         );
         cancel
->>>>>>> 31f83499b
     }
     /// The rest of `HopperBlockEntity.ejectItems`: one item into `target`.
     fn eject_into(&mut self, pos: Pos, hopper: &View, target: &View, face: Direction) -> bool {

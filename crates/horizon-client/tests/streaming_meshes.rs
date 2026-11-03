@@ -216,13 +216,8 @@ fn relit_columns_keep_every_mesh_current() {
         });
         let mut mesher = Mesher {
             nether_shading: false,
-<<<<<<< HEAD
-            pack_shades_faces: false,
-||||||| f8988d5a7
-=======
             shader_pack_lighting: false,
             separate_ao: false,
->>>>>>> 31f83499b
             zoom: BiomeZoom::new(0),
             blend_radius: 2,
             smooth_lighting: true,

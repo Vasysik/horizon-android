@@ -889,13 +889,7 @@ fn configure(
     send: &Sender<Event>,
     cookies: &Cookies,
     resources: &Path,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-) -> Result<Result<Dynamic, String>, String> {
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-) -> Result<Dynamic, String> {
-=======
 ) -> Result<Dynamic, Reason> {
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     let mut registries = Dynamic::default();
     let mut content_verified = false;
     let reply = |p: cfg::Serverbound| -> Result<(), Reason> {
@@ -984,21 +978,9 @@ fn configure(
                     host: p.host,
                     port: p.port,
                 });
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-                return Ok(Err(tr(lang, "disconnect.transfer")));
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-                return Err(tr(lang, "disconnect.transfer"));
-=======
                 return Err(Reason::keyed("disconnect.transfer", lang));
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-            cfg::Clientbound::Disconnect(d) => return Ok(Err(plain(&d.reason, lang))),
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-            cfg::Clientbound::Disconnect(d) => return Err(plain(&d.reason, lang)),
-=======
             cfg::Clientbound::Disconnect(d) => return Err(Reason::tag(&d.reason, lang)),
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             cfg::Clientbound::FinishConfiguration(_) => {
                 registries.custom_components = content_verified;
                 let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
@@ -1006,7 +988,7 @@ fn configure(
                 w.send(&cfg::Serverbound::FinishConfiguration(Empty).encode())
                     .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
                 configuring.store(false, Ordering::Relaxed);
-                return Ok(Ok(registries));
+                return Ok(registries);
             }
             _ => {}
         }

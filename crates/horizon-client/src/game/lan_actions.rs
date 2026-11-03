@@ -2252,26 +2252,12 @@ impl Game<'_> {
             // ServerGamePacketListenerImpl.handleSetCreativeModeSlot: an inventory menu slot (1 to
             // 45) set, no more than the item stacks to.
             S::SetCreativeModeSlot(p) => {
-<<<<<<< HEAD
-                if !host.hub.guests[gi].creative() {
-||||||| f8988d5a7
-                let g = &mut host.hub.guests[gi];
-                if !g.creative() || !(0..46).contains(&p.slot) {
-=======
                 // Slot 0 is the crafting result: not a slot to set.
                 let g = &mut host.hub.guests[gi];
                 if !g.creative() || !(1..46).contains(&p.slot) {
->>>>>>> 31f83499b
                     return;
                 }
                 let item = self.item_from_network(host, &p.item);
-<<<<<<< HEAD
-                let fits = item.as_ref().is_none_or(|s| {
-                    s.count <= self.res.items().get(&s.item).map_or(64, |i| i.max_stack)
-                });
-                if !(1..=45).contains(&p.slot) || !fits {
-||||||| f8988d5a7
-=======
                 if item
                     .as_ref()
                     .is_some_and(|s| !self.creative_stack_valid(host, gi, s))
@@ -2282,7 +2268,6 @@ impl Game<'_> {
                     // The creative client already holds the stack it sent: treat that as
                     // what it was told, so the next broadcast sends the real slot back.
                     host.hub.guests[gi].menu_sent[p.slot as usize] = item;
->>>>>>> 31f83499b
                     return;
                 }
                 let slot = p.slot as usize;

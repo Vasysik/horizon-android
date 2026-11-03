@@ -672,26 +672,6 @@ impl Game<'_> {
             &self.player_armor_layers(),
             out,
         );
-<<<<<<< HEAD
-        self.own_elytra_geometry(m, camera, alpha as f32, packed, out);
-        self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
-        self.held_item_geometry(m, camera, alpha, packed, true, out);
-        // LivingEntity.isCurrentlyGlowing: the Glowing effect. A server's client is
-        // in its team by its profile name.
-||||||| f8988d5a7
-        self.player_elytra_geometry(
-            m,
-            self.armor[1].as_ref().map(|s| &*s.item),
-            camera,
-            alpha as f32,
-            packed,
-            out,
-        );
-        self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
-        self.held_item_geometry(m, camera, alpha, packed, true, out);
-        // LivingEntity.isCurrentlyGlowing: the Glowing effect. A server's client is
-        // in its team by its profile name.
-=======
         // AvatarRenderer.shouldRenderLayers: a spectator draws no layers.
         if horizon_client::mobs::render::layers_shown(m) {
             let chest = self.armor[1].as_ref().map(|s| &*s.item);
@@ -722,7 +702,6 @@ impl Game<'_> {
             self.mod_mob_layer_geometry(m, Some(who), alpha as f32, camera, packed, out);
         }
         // LivingEntity.isCurrentlyGlowing: the Glowing effect.
->>>>>>> 31f83499b
         if self.potions.effects.get("glowing").is_some() {
             let color = super::glowing::team_color(self.own_team());
             // LivingEntityRenderer.getRenderType: an invisible glowing body
@@ -858,53 +837,24 @@ impl Game<'_> {
                 camera,
                 &lookup,
                 240 | 240 << 8,
-                self.res.mob_data(),
-                &self.player_armor_layers(),
+                data,
+                &if in_world {
+                    self.player_armor_layers()
+                } else {
+                    Vec::new()
+                },
                 &mut verts,
             );
         });
-        let chest = self.armor[1].as_ref().map(|s| &*s.item);
+        let chest = self.armor[1]
+            .as_ref()
+            .filter(|_| in_world)
+            .map(|s| &*s.item);
         if !self.own_invisible() {
             self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         }
         self.player_ears_geometry(
             &m,
-<<<<<<< HEAD
-            1.0,
-            camera,
-            &lookup,
-            240 | 240 << 8,
-            data,
-            &if in_world {
-                self.player_armor_layers()
-            } else {
-                Vec::new()
-            },
-            &mut verts,
-        );
-        if in_world {
-            self.own_elytra_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
-            self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
-        }
-||||||| f8988d5a7
-            1.0,
-            camera,
-            &lookup,
-            240 | 240 << 8,
-            self.res.mob_data(),
-            &self.player_armor_layers(),
-            &mut verts,
-        );
-        self.player_elytra_geometry(
-            &m,
-            self.armor[1].as_ref().map(|s| &*s.item),
-            camera,
-            1.0,
-            240 | 240 << 8,
-            &mut verts,
-        );
-        self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
-=======
             &self.own_profile_name(),
             camera,
             1.0,
@@ -922,9 +872,10 @@ impl Game<'_> {
         self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         let wings = wings_start..verts.len();
         self.shoulder_parrots_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
-        self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, None, &mut verts);
+        if in_world {
+            self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, None, &mut verts);
+        }
         self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
->>>>>>> 31f83499b
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
         // then the translation and Rz(pi) * Rx(y_angle * 20 degrees).
@@ -972,41 +923,6 @@ impl Game<'_> {
         light: u32,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
-<<<<<<< HEAD
-        let asset = chest
-            .and_then(|item| self.res.items().get(item))
-            .and_then(|i| i.equip_asset.clone());
-        self.elytra_geometry(m, asset, camera, partial, light, out);
-    }
-    /// `WingsLayer` for the window's own player: its chest stack's equipment asset (a server's
-    /// custom armour's own `equippable`).
-    fn own_elytra_geometry(
-        &self,
-        m: &Mob,
-        camera: glam::DVec3,
-        partial: f32,
-        light: u32,
-        out: &mut Vec<horizon_client::mesher::Vertex>,
-    ) {
-        let asset = self.armor[1].as_ref().and_then(|s| self.worn_asset(s));
-        self.elytra_geometry(m, asset, camera, partial, light, out);
-    }
-    fn elytra_geometry(
-        &self,
-        m: &Mob,
-        asset: Option<String>,
-        camera: glam::DVec3,
-        partial: f32,
-        light: u32,
-        out: &mut Vec<horizon_client::mesher::Vertex>,
-    ) {
-        let Some(asset) = asset else {
-||||||| f8988d5a7
-        let Some(asset) = chest
-            .and_then(|item| self.res.items().get(item))
-            .and_then(|i| i.equip_asset.as_ref())
-        else {
-=======
         let stack = m.extra.armor[1]
             .as_ref()
             .filter(|s| chest == Some(&*s.item));
@@ -1055,26 +971,23 @@ impl Game<'_> {
         overlay: u32,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
-        let Some(asset) = chest
-            .and_then(|item| self.items().get(item))
-            .and_then(|i| i.equip_asset.as_ref())
-        else {
->>>>>>> 31f83499b
+        // The worn stack's own equipment asset (a server's custom armour's `equippable`), else
+        // the item's.
+        let asset = stack.and_then(|s| self.worn_asset(s)).or_else(|| {
+            chest
+                .and_then(|item| self.items().get(item))
+                .and_then(|i| i.equip_asset.clone())
+        });
+        let Some(asset) = asset else {
             return;
         };
         let assets = &self.armor_stand_assets;
-<<<<<<< HEAD
-        let Some((texture, _)) = assets.equipment.get(&asset).and_then(|k| k.get("wings")) else {
-||||||| f8988d5a7
-        let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
-=======
         let Some((texture, _)) = assets
-            .equipment
-            .get(asset)
+            .equipment_layers
+            .get(&asset)
             .and_then(|k| k.get("wings"))
             .and_then(|layers| layers.first())
         else {
->>>>>>> 31f83499b
             return;
         };
         let sprites = &self.gui.atlas.sprites;

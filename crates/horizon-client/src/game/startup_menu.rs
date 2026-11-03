@@ -684,8 +684,6 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
-                // No mod runs before a world's game starts.
-                Event::ModConfig(_) => {}
                 Event::DataPacks(ids) => {
                     let resources = self.vanilla_root.clone();
                     if let Some(title) = &mut self.menu.title {
@@ -712,24 +710,6 @@ impl Loading {
                         horizon_client::shader_pack_list::scan(&Game::shader_packs_dir());
                 }
                 Event::ShaderPack => self.save_menu_settings(),
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-                Event::OpenShaderOptions => {
-                    self.settings.shader_options = super::shader_packs::read_shader_options(
-                        &self.settings.horizon.shader_pack,
-                        &self.settings.language,
-                        &horizon_shaders::Macros::standard(),
-                    );
-                }
-                Event::ShaderOptions => {
-                    if let Some(options) = self.settings.shader_options.take() {
-                        super::shader_packs::write_shader_options(&options);
-                    }
-                }
-                Event::NativePackOptions(i) => {
-                    if let Some(pack) = self.settings.shader_packs.get(i) {
-                        pack.save_values(&Game::shader_packs_dir());
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
                 Event::OpenCustomButtons => {
                     self.settings.custom_buttons = super::touch::saved_custom_buttons();
                 }
@@ -750,13 +730,18 @@ impl Loading {
                             &name,
                             &profile,
                             &self.settings.language,
+                            &horizon_shaders::Macros::standard(),
                         );
                     }
                 }
                 Event::ShaderOptions => {
                     if let Some(options) = self.settings.shader_options.take() {
                         super::shader_packs::write_shader_options(&options);
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+                    }
+                }
+                Event::NativePackOptions(i) => {
+                    if let Some(pack) = self.settings.shader_packs.get(i) {
+                        pack.save_values(&Game::shader_packs_dir());
                     }
                 }
                 Event::OpenShaderPackFolder => {
@@ -784,8 +769,7 @@ impl Loading {
                     &mut self.menu.narrator_toast,
                 ),
                 // Mods' settings pages open only in a running game.
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-                Event::ModSettings(_) | Event::NativeSettings(_) | Event::NativeButton(..) => {}
+                Event::NativeSettings(_) | Event::NativeButton(..) => {}
                 // Options.createSoundSliderOptionInstance: the preview plays without a level,
                 // once the menu's sound output is up.
                 Event::Volume(source, volume) => {
@@ -793,26 +777,13 @@ impl Loading {
                         audio.preview(source, volume);
                     }
                 }
-                // The startup menu runs before the game opens a control socket.
-                Event::CopyAgentDetails => {}
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-                Event::NativeSettings(_) | Event::NativeButton(..) => {}
-                // The startup menu runs before the game opens a control socket,
-                // and before its sound engine (no clicks, no volume previews).
-                Event::ButtonClick | Event::CopyAgentDetails | Event::Volume(..) => {}
-=======
-                Event::NativeSettings(_) | Event::NativeButton(..) => {}
-                // The startup menu runs before the game opens a control socket,
-                // and before its sound engine (no clicks, no volume previews,
-                // and no music tracks to list or play).
-                Event::ButtonClick
-                | Event::CopyAgentDetails
+                // The startup menu runs before the game opens a control socket, and has no music
+                // tracks to list or play.
+                Event::CopyAgentDetails
                 | Event::ToggleRecording
                 | Event::ExportRepro
                 | Event::ListMusicTracks
-                | Event::PlayMusicTrack(..)
-                | Event::Volume(..) => {}
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+                | Event::PlayMusicTrack(..) => {}
             }
         }
     }

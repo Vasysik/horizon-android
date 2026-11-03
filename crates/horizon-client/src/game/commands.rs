@@ -1256,51 +1256,6 @@ impl Game<'_> {
     pub(super) fn stack_display_name(&self, s: &ItemStack) -> Text {
         let item = &*s.item;
         let empty = item == "minecraft:air" || s.count == 0;
-<<<<<<< HEAD
-        let custom = s.custom_name();
-        // Component.empty().append(getHoverName()), italic for a custom name.
-        let mut name = Text::empty().append(self.stack_hover_name(s));
-        if custom.is_some() {
-            name = name.italic();
-        }
-        let wrapped = Text::translate("chat.square_brackets", &[name]);
-        if empty {
-            return wrapped;
-        }
-        let mut rarity = self.item_rarity(item);
-        if !s.enchantments().is_empty() {
-            rarity = match rarity.as_str() {
-                "rare" => "epic".into(),
-                "epic" => rarity,
-                _ => "rare".into(),
-            };
-        }
-        let color = match rarity.as_str() {
-            "uncommon" => text::YELLOW,
-            "rare" => text::AQUA,
-            "epic" => text::LIGHT_PURPLE,
-            _ => text::WHITE,
-        };
-        // HoverEvent.ShowItem: the count only when it is not one.
-        let mut shown = serde_json::json!({"action": "show_item", "id": item});
-        if s.count != 1 {
-            shown["count"] = s.count.into();
-        }
-        wrapped
-            .with_color(color)
-            .with_component_fields(vec![("hover_event".into(), shown)])
-    }
-    /// `ItemStack.getHoverName`: the custom name, a written book's title, a potion's effect name,
-    /// else the item's translated name.
-    pub(super) fn stack_hover_name(&self, s: &ItemStack) -> Text {
-        let item = &*s.item;
-        if let Some(c) = s.custom_name() {
-            Text::literal(c)
-||||||| f8988d5a7
-        let custom = s.custom_name();
-        let hover = if let Some(c) = custom {
-            Text::literal(c)
-=======
         let custom = s.data().and_then(|data| data.custom_name.as_ref());
         let hover = if let Some(c) = custom {
             horizon_client::component::name_text(c)
@@ -1309,7 +1264,6 @@ impl Game<'_> {
             // item's own name (`Item.getName`), so a datapack's or a server's
             // renaming shows here as it does on the tooltip's first line.
             horizon_client::component::name_text(name)
->>>>>>> 31f83499b
         } else if let Some(title) = s
             .data()
             .and_then(|d| d.written.as_ref())

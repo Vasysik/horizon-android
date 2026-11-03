@@ -9,14 +9,10 @@
 //! path ends in `.json`, the game listens on a random localhost TCP port and
 //! writes `{"transport":"tcp","port":N,"token":"..."}` to the path, readable
 //! only by its user; a client's first line must then be `auth TOKEN`.
-<<<<<<< HEAD
 //! `HORIZON_CONTROL_PORT` fixes the port, for a forward to another machine
 //! (`adb forward` to a phone): a client there writes the same file with
 //! `"remote": true` and gets screenshots back in the reply (`screenshot -`).
-||||||| f8988d5a7
-=======
 use crate::block_entity_render::StaticCacheFrameStats;
->>>>>>> 31f83499b
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},

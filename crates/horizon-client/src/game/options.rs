@@ -434,22 +434,16 @@ impl Game<'_> {
                     self.reload_packs();
                 }
                 Event::OpenPackFolder => self.open_game_folder(&super::packs::packs_dir()),
-                Event::OpenModFolder => self.open_game_folder(
-                    &Self::options_path().with_file_name(horizon_client::mod_list::DIR),
-                ),
-                // Over the Mods page, which shows again when the mod closes it.
-                Event::ModConfig(i) => {
-                    if let Some(screen) = self
-                        .settings
-                        .mods
-                        .installed
-                        .get(i)
-                        .and_then(|m| m.config.clone())
-                    {
-                        self.open_mod_screen(screen);
+                Event::OpenModFolder => {
+                    self.open_game_folder(&Self::game_dir().join(horizon_client::mod_list::DIR))
+                }
+                Event::DataPacks(ids) => {
+                    let resources = self.vanilla_root();
+                    if let Some(title) = &mut self.title {
+                        title.offer_data_packs(&resources, ids);
                     }
                 }
-<<<<<<< HEAD
+                Event::OpenDataPackFolder(dir) => self.open_game_folder(&dir),
                 // The editor works over the world, or over the title before one: the menus
                 // close for it.
                 Event::TouchLayout => {
@@ -457,27 +451,6 @@ impl Game<'_> {
                     self.screen = Screen::Playing;
                     self.dragging = false;
                     self.open_touch_editor();
-||||||| f8988d5a7
-                Event::OpenModFolder => {
-                    let dir = Self::options_path().with_file_name(horizon_client::mod_list::DIR);
-                    let _ = std::fs::create_dir_all(&dir);
-                    super::packs::open_folder(&dir);
-=======
-                Event::DataPacks(ids) => {
-                    let resources = self.vanilla_root();
-                    if let Some(title) = &mut self.title {
-                        title.offer_data_packs(&resources, ids);
-                    }
-                }
-                Event::OpenDataPackFolder(dir) => {
-                    let _ = std::fs::create_dir_all(&dir);
-                    super::packs::open_folder(&dir);
-                }
-                Event::OpenModFolder => {
-                    let dir = Self::game_dir().join(horizon_client::mod_list::DIR);
-                    let _ = std::fs::create_dir_all(&dir);
-                    super::packs::open_folder(&dir);
->>>>>>> 31f83499b
                 }
                 Event::ListShaderPacks => {
                     self.settings.shader_packs =
@@ -485,7 +458,6 @@ impl Game<'_> {
                 }
                 // Saved; the next frame's `shader_pack_inputs` loads the pick.
                 Event::ShaderPack => self.settings.save(&Self::options_path()),
-<<<<<<< HEAD
                 Event::OpenCustomButtons => self.open_custom_buttons(),
                 Event::CustomButtons => self.save_custom_buttons(),
                 Event::CustomImage(id, pixels) => {
@@ -497,8 +469,12 @@ impl Game<'_> {
                 Event::ImportButtonImage(id) => self.pick_button_image(id),
                 Event::OpenShaderOptions => self.open_shader_options(),
                 Event::ShaderOptions => self.save_shader_options(),
+                Event::NativePackOptions(i) => {
+                    if let Some(pack) = self.settings.shader_packs.get(i) {
+                        pack.save_values(&Self::shader_packs_dir());
+                    }
+                }
                 Event::OpenShaderPackFolder => self.open_game_folder(&Self::shader_packs_dir()),
-                Event::ModSettings(i) => self.open_mod_ui(i, true),
                 Event::NativeButton(i, b) => {
                     // Android: the Native mods row's button opens its card (native_builds.rs).
                     #[cfg(target_os = "android")]
@@ -508,33 +484,8 @@ impl Game<'_> {
                     if !card {
                         self.native_settings_event(i, b);
                     }
-||||||| f8988d5a7
-                Event::OpenShaderPackFolder => {
-                    let dir = Self::shader_packs_dir();
-                    let _ = std::fs::create_dir_all(&dir);
-                    super::packs::open_folder(&dir);
-=======
-                Event::OpenShaderOptions => self.open_shader_options(),
-                Event::ShaderOptions => self.save_shader_options(),
-                Event::NativePackOptions(i) => {
-                    if let Some(pack) = self.settings.shader_packs.get(i) {
-                        pack.save_values(&Self::shader_packs_dir());
-                    }
                 }
-                Event::OpenShaderPackFolder => {
-                    let dir = Self::shader_packs_dir();
-                    let _ = std::fs::create_dir_all(&dir);
-                    super::packs::open_folder(&dir);
->>>>>>> 31f83499b
-                }
-<<<<<<< HEAD
-||||||| f8988d5a7
-                Event::ModSettings(i) => self.open_mod_screen(i, true),
-                Event::NativeButton(i, b) => self.native_settings_event(i, b),
-=======
                 Event::NativeSettings(i) => self.native_settings_refresh(i),
-                Event::NativeButton(i, b) => self.native_settings_event(i, b),
->>>>>>> 31f83499b
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
                 Event::Narrator => self.narrator_status_changed(),
             }
@@ -594,17 +545,13 @@ impl Game<'_> {
     }
     /// Settings that Horizon applies beyond render distance, volume and GUI scale.
     pub(super) fn apply_ui_settings(&mut self) {
-<<<<<<< HEAD
         let scale = self.world_scale();
-||||||| f8988d5a7
-=======
         if horizon_client_render::mipmap::set_dither_cutouts(
             self.settings.horizon.dither_cutout_mips,
         ) {
             self.reload_packs();
         }
         self.apply_fullscreen();
->>>>>>> 31f83499b
         let s = &self.settings;
         if let Some(r) = self.renderer.as_mut() {
             r.gamma = s.gamma;
@@ -614,25 +561,14 @@ impl Game<'_> {
             r.animated_textures = s.horizon.animated_textures;
             r.screenshot_quality = s.horizon.screenshot_quality;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
-<<<<<<< HEAD
-            r.set_world_post(scale, s.horizon.fxaa);
-||||||| f8988d5a7
-            r.set_world_post(s.horizon.resolution_scale as f32 / 100.0, s.horizon.fxaa);
-=======
             r.set_texture_filtering(
                 s.file.int("textureFiltering"),
                 s.file.int("maxAnisotropyBit"),
             );
-            r.set_world_post(
-                s.horizon.resolution_scale as f32 / 100.0,
-                s.horizon.fxaa,
-                s.horizon.taa,
-                s.horizon.upscaling.ratio(),
-            );
+            r.set_world_post(scale, s.horizon.fxaa, s.horizon.taa, s.horizon.upscaling.ratio());
             r.set_frame_generation(
                 s.horizon.frame_generation != horizon_client::graphics::FrameGeneration::Off,
             );
->>>>>>> 31f83499b
             r.set_hdr(
                 s.horizon.hdr,
                 s.horizon.paper_white_nits() as f32,

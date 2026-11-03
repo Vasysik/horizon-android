@@ -540,7 +540,6 @@ pub(super) struct Remote {
     /// (`GameType.updatePlayerAbilities`).
     pub(super) abilities: Option<play::PlayerAbilities>,
     loaded_sent: bool,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
     /// Ticks the player has waited for the chunk under it (logged when long: the player
     /// cannot move meanwhile).
     waiting_ticks: u32,
@@ -551,12 +550,9 @@ pub(super) struct Remote {
     /// movement speed, jump strength, gravity, step height... kept for a LocalPlayer made
     /// after the packet came, and across respawns.
     player_attributes: Vec<play::AttributeSnapshot>,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
     /// The dimension of the client level the mods heard made
     /// (`native_client_level_load`), to be told dropped once.
     heard_level: Option<String>,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
     /// `ClientPacketListener.levelLoadTracker`: the loading screen after a login
     /// or respawn, until the player's section is shown.
     pub(super) level_load: horizon_client::level_loading::LevelLoadTracker,
@@ -993,24 +989,14 @@ impl Game<'_> {
                 horizon_client::net::shown_address(address),
             );
         }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         // A signed-in account always plays under its own name on servers (an online-mode one
         // takes no other); single player's own server, the name its world opened with
         // (integrated.rs: a name chosen in Skin Customization goes first).
-        let auth = horizon_client::auth::current();
+        let auth = self.auth();
         let name = match (&auth, &local) {
             (Some(a), None) => a.name.as_str(),
             _ => name,
         };
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        // A signed-in account always plays under its own name.
-        let auth = horizon_client::auth::current();
-        let name = auth.as_ref().map_or(name, |a| a.name.as_str());
-=======
-        // A signed-in account always plays under its own name.
-        let auth = self.auth();
-        let name = auth.as_ref().map_or(name, |a| a.name.as_str());
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         let user = auth.as_ref().map_or_else(
             || {
                 (
@@ -1193,14 +1179,10 @@ impl Game<'_> {
             carried: None,
             abilities: None,
             loaded_sent: false,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
             waiting_ticks: 0,
             setbacks: 0,
             player_attributes: Vec::new(),
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
             heard_level: None,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             level_load: horizon_client::level_loading::LevelLoadTracker::new(0),
             sent_info: info,
             predictions: Default::default(),
@@ -1805,11 +1787,6 @@ impl Game<'_> {
         if !self.ui.chat.shows(source) {
             return false;
         }
-        // ClientReceiveMessageEvents: a mod may hide or change it. (`Chat::add_message` logs
-        // the line once.)
-        let Some(content) = self.mods_chat(content) else {
-            return false;
-        };
         let plain = content.plain();
         let focused = self.screen == Screen::Chat;
         if source == horizon_client::chat::ChatSource::Player {
@@ -2318,22 +2295,16 @@ impl Game<'_> {
                     self.flush_chat_queue();
                     self.send_chat_acknowledgement();
                     self.close_dialogs();
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
                     // The level goes, and a new listener starts from nothing when the
-                    // configuration ends.
-                    self.clear_remote_world();
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
-                    // The server configuring us now (a proxy's next one)
+                    // configuration ends; the server configuring us now (a proxy's next one)
                     // offers its own far terrain, or none.
+                    self.clear_remote_world();
                     if let Some(remote) = &mut self.remote {
                         remote.far_terrain = None;
                     }
-                    self.clear_lod();
                     if let Some(remote) = &self.remote {
                         remote.session.reset_far_terrain();
                     }
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
                     self.player = None;
                     self.screen = Screen::Playing;
                     self.capture(false);
@@ -6379,15 +6350,11 @@ impl Game<'_> {
 
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         // Last tick's hits and uses held back for its move (Free Direction): first in this one,
         // before its move, as a hit one tick later would be (an anticheat's Post check wants no
         // hit after the move of its tick).
         self.send_held_back();
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
         self.repro_tick();
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         // Hud.tick ends with ChatComponent.tick.
         self.ui.chat.tick(&self.gui.atlas, self.ticks);
         self.tick_sign_editor();
@@ -6395,17 +6362,9 @@ impl Game<'_> {
         self.tick_enchanting_book();
         // Leaving a slot clears its bundle's selection here and on the server.
         self.tick_bundle_hover();
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         // Options.broadcastOptions: a changed render distance, Chat, skin or Main Hand
         // option is sent again.
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        // Options.broadcastOptions: a changed render distance or Chat option
-        // is sent again.
-=======
-        // Options.broadcastOptions: a changed render distance or Chat option
-        // is sent again.
         self.tick_ram_limit();
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         let info = self
             .settings
             .client_information(client_view_distance(self.render_distance_in_use()));
@@ -6575,11 +6534,6 @@ impl Game<'_> {
             (keys.forward, keys.backward, keys.left, keys.right) = (true, false, false, false);
             keys.analog = None;
         }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        if let Some(r) = self.remote.as_mut() {
-            r.steer_yaw = steer;
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
         let [mut strafe, mut forward] = keys.direction();
         let original = [strafe, forward];
         self.native_movement_input(&mut forward, &mut strafe, &mut keys.jump, &mut keys.shift);
@@ -6593,7 +6547,9 @@ impl Game<'_> {
                 keys.right = strafe < 0.0;
             }
             keys.analog = Some([strafe, forward]);
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+        }
+        if let Some(r) = self.remote.as_mut() {
+            r.steer_yaw = steer;
         }
         let input = u8::from(keys.forward)
             | u8::from(keys.backward) << 1
@@ -6820,20 +6776,11 @@ impl Game<'_> {
                 data: 0,
             }));
         }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        // LocalPlayer.tick sends the input after aiStep, where an auto-jump pressed jump
-        // (input.makeJump): a server's anticheat refuses a jump its input never showed.
-        let auto_jumped = self.player.as_ref().is_some_and(|p| p.was_auto_jump);
-        self.remote_send_state(if auto_jumped { input | 1 << 4 } else { input });
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        self.remote_send_state(input);
-=======
         // LocalPlayer.sendChanges sends `input.keyPresses`, which an auto-jump's `makeJump` set to
         // jump for this tick: the server's prediction plays the jump from it. Sent as held, the jump
         // was the client's alone, and the server saw a jump its keys didn't allow.
         let auto_jumped = self.player.as_ref().is_some_and(|p| p.was_auto_jump);
         self.remote_send_state(input | u8::from(auto_jumped) << 4);
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         Ok(())
     }
     /// The local player's share of every touching entity's
@@ -9344,6 +9291,17 @@ impl Game<'_> {
         // A tick that clicks, attacks or uses acts with the slot its number
         // keys select (`ensureHasSentCarriedItem` before the packets).
         let acts = input.has_clicks() || attack || use_item;
+        // handleKeybinds: keySwapOffhand.consumeClick, before attacking and using (an
+        // anticheat's Post check wants it before the tick's move, not whenever the key went down).
+        let swaps = self
+            .remote
+            .as_mut()
+            .map_or(0, |r| std::mem::take(&mut r.swap_presses));
+        if !self.spectator() {
+            for _ in 0..swaps {
+                self.remote_swap_hands();
+            }
+        }
         input.tick(&mut RemoteInputWorld(self, acts), attack, use_item);
         self.remote_queued_keys();
         if let Some(r) = self.remote.as_mut() {
@@ -9367,28 +9325,9 @@ impl Game<'_> {
                 slot: self.selected as i16,
             }));
         }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        // handleKeybinds: keySwapOffhand.consumeClick, before attacking and using (an
-        // anticheat's Post check wants it before the tick's move, not whenever the key went down).
-        let swaps = self
-            .remote
-            .as_mut()
-            .map_or(0, |r| std::mem::take(&mut r.swap_presses));
-        if !self.spectator() {
-            for _ in 0..swaps {
-                self.remote_swap_hands();
-            }
-        }
-        let (attack, use_item) = (self.left, self.right);
-        input.tick(&mut RemoteInputWorld(self), attack, use_item);
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        let (attack, use_item) = (self.left, self.right);
-        input.tick(&mut RemoteInputWorld(self), attack, use_item);
-=======
     }
 
     fn remote_queued_keys(&mut self) {
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         // handleKeybinds' keybind polls: the queued presses act now, in tick
         // order, so no packet goes out between CLIENT_TICK_END and a pong.
         let pending = self

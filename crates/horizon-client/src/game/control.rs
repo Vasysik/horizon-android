@@ -375,14 +375,10 @@ impl Game<'_> {
                 .chain(super::events::HELP)
                 .chain(super::saves_control::HELP)
                 .chain(super::pad::HELP)
-<<<<<<< HEAD
                 .chain(super::perf::HELP)
                 .chain(super::touch::HELP)
-||||||| f8988d5a7
-=======
                 .chain(super::input_trace::HELP)
                 .chain(super::repro::HELP)
->>>>>>> 31f83499b
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
             "section-draws" => {
@@ -545,23 +541,6 @@ impl Game<'_> {
                 }
                 // Native mods see the key as the keyboard hook does.
                 let action = arg(2)?;
-<<<<<<< HEAD
-                // The mods' keybinds see the key too, as from the keyboard (mods_window_event):
-                // its release anywhere.
-                let playing = self.screen == Screen::Playing && self.title.is_none();
-                if (playing || action == "up")
-                    && let Some(name) = horizon_client::keybinds::key_name(physical)
-                {
-                    let name = name.to_owned();
-                    self.mods_key(&name, action != "up");
-                    if action == "tap" {
-                        self.mods_key(&name, false);
-                    }
-                }
-                self.mod_key(physical, action != "up", action == "repeat");
-||||||| f8988d5a7
-                self.mod_key(physical, action != "up", action == "repeat");
-=======
                 // ScreenEvent.KeyPressed.Pre: the open screen hears of the
                 // press before it acts on it, as the window's key event hands
                 // it over. A cancelled press goes no further — not to the
@@ -573,7 +552,6 @@ impl Game<'_> {
                     }
                     return ok();
                 }
->>>>>>> 31f83499b
                 self.native_key_event(physical, action != "up", action == "repeat");
                 if action == "tap" {
                     self.native_key_event(physical, false, false);
@@ -843,7 +821,6 @@ impl Game<'_> {
                 }
                 arg(1)?;
                 // The rest of the line: a path may hold spaces.
-<<<<<<< HEAD
                 let path = line
                     .trim_start()
                     .strip_prefix("screenshot")
@@ -858,18 +835,11 @@ impl Game<'_> {
                     path.into()
                 };
                 self.inline_screenshot = inline.then(|| path.clone());
-                renderer.screenshot = Some(path);
-||||||| f8988d5a7
-                let path = line.trim_start().strip_prefix("screenshot").unwrap_or("");
-                renderer.screenshot = Some(path.trim().into());
-=======
-                let path = line.trim_start().strip_prefix("screenshot").unwrap_or("");
                 renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
-                    path: path.trim().into(),
+                    path,
                     size: None,
                     scaled: false,
                 });
->>>>>>> 31f83499b
                 self.pending_screenshot = Some(reply.clone());
                 Ok(None)
             }
@@ -897,87 +867,6 @@ impl Game<'_> {
                     return ok();
                 }
                 self.require_world()?;
-<<<<<<< HEAD
-                if self.book.is_some() {
-                    self.book_type(text);
-                    return ok();
-                }
-                if self.sign_edit.is_some() {
-                    self.sign_input(None, Some(text));
-                    return ok();
-                }
-                match self.screen {
-                    Screen::Chat => self.chat_type(text),
-                    Screen::CommandBlock => self.command_block_type(text),
-                    Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
-                    // The port, or the game rules' search and number boxes.
-                    Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
-                    Screen::WorldOptions => self.world_options_text(Some(text)),
-                    Screen::Inventory if self.mod_browser_typing() => {
-                        self.mod_browser_text((text != "\\b").then_some(text), text == "\\b")
-                    }
-                    Screen::Inventory if self.recipe_search_focused() => {
-                        self.recipe_text(Some(text), false)
-                    }
-                    // The anvil's rename box; `\b` erases a character.
-                    Screen::Inventory if self.station_typing() && text == "\\b" => {
-                        self.station_text(None, true)
-                    }
-                    Screen::Inventory if self.station_typing() => {
-                        self.station_text(Some(text), false)
-                    }
-                    Screen::Creative if self.creative_screen.tab().search => {
-                        // As typed: replaces a selected query, keeps the length limit.
-                        self.creative_search_edit(Some(text))
-                    }
-                    _ => {
-                        return Err(
-                            "type needs the chat screen (key t tap), a sign or book, the language search, the creative search, the anvil or World Options".into(),
-                        );
-                    }
-                }
-||||||| f8988d5a7
-                if self.book.is_some() {
-                    self.book_type(text);
-                    return ok();
-                }
-                if self.sign_edit.is_some() {
-                    self.sign_input(None, Some(text));
-                    return ok();
-                }
-                match self.screen {
-                    Screen::Chat => self.chat_type(text),
-                    Screen::CommandBlock => self.command_block_type(text),
-                    Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
-                    // The port, or the game rules' search and number boxes.
-                    Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
-                    Screen::WorldOptions => self.world_options_text(Some(text)),
-                    Screen::Inventory if self.mod_browser_typing() => {
-                        self.mod_browser_text((text != "\\b").then_some(text), text == "\\b")
-                    }
-                    Screen::Inventory if self.recipe_search_focused() => {
-                        self.recipe_text(Some(text), false)
-                    }
-                    // The anvil's rename box.
-                    Screen::Inventory
-                        if self
-                            .station
-                            .as_ref()
-                            .is_some_and(|s| s.kind == super::stations::Kind::Anvil) =>
-                    {
-                        self.station_text(Some(text), false)
-                    }
-                    Screen::Creative if self.creative_screen.tab().search => {
-                        // As typed: replaces a selected query, keeps the length limit.
-                        self.creative_search_edit(Some(text))
-                    }
-                    _ => {
-                        return Err(
-                            "type needs the chat screen (key t tap), a sign or book, the language search, the creative search, the anvil or World Options".into(),
-                        );
-                    }
-                }
-=======
                 // Typed keys: the open screen's narration hears them.
                 self.narration.keyboard_action();
                 // ScreenEvent.CharacterTyped.Pre: the open screen hears of
@@ -994,7 +883,6 @@ impl Game<'_> {
                     typed
                 };
                 self.type_into_screen(&typed)?;
->>>>>>> 31f83499b
                 ok()
             }
             "options" => {
@@ -1217,28 +1105,20 @@ impl Game<'_> {
     }
 
     pub(super) fn control_key_down(&mut self, key: KeyCode) -> Result<()> {
-        // Over everything, the server pack prompt and a mod's screen take Escape as they take
-        // the keyboard's (the back key, the touch close button and the control socket come
-        // this way, not as window events).
-        if key == KeyCode::Escape {
-            if self.server_packs.prompting() {
-                return self.answer_pack_prompt(false);
-            }
-            if self.mods.screen.is_some() {
-                self.close_mod_screen();
-                return Ok(());
-            }
+        // Over everything, the server pack prompt takes Escape as it takes the keyboard's (the
+        // back key, the touch close button and the control socket come this way, not as window
+        // events).
+        if key == KeyCode::Escape && self.server_packs.prompting() {
+            return self.answer_pack_prompt(false);
         }
         self.physical_keys.insert(key);
-<<<<<<< HEAD
+        // The window's shortcuts come before any screen, here too.
+        if self.screenshot_shortcut(key, false) {
+            return Ok(());
+        }
         // The sign editor takes its keys (Escape and the back key close it, sending the text).
         if self.sign_edit.is_some() {
             self.sign_input(Some(key), None);
-||||||| f8988d5a7
-=======
-        // The window's shortcuts come before any screen, here too.
-        if self.screenshot_shortcut(key, false) {
->>>>>>> 31f83499b
             return Ok(());
         }
         if self.screen == Screen::Chat {

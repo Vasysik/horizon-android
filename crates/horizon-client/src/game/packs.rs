@@ -194,21 +194,7 @@ impl Game<'_> {
         // until those resources exist, then apply the latest selection once.
         // A reload already under its overlay finishes first (vanilla's
         // `pendingReload`, which `runTick` starts once the overlay is gone).
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        if reload_waits(
-            self.rest_loader.is_some()
-                || self.world_loader.is_some()
-                || self.integrated_starting.is_some(),
-            self.pack_reload.is_some(),
-        ) {
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        if reload_waits(
-            self.rest_loader.is_some() || self.world_loader.is_some(),
-            self.pack_reload.is_some(),
-        ) {
-=======
         if reload_waits(self.rest_loader.is_some(), self.pack_reload.is_some()) {
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             self.pending_pack_reload = true;
             return;
         }
@@ -315,18 +301,13 @@ impl Game<'_> {
             gui,
             pack,
             textures,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-            sounds,
-            armor,
-            villager_hats,
-            waypoint_styles,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
             cem,
             block_entity_shapes,
             sounds,
             ui_metadata,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+            armor,
+            villager_hats,
+            waypoint_styles,
             language,
         } = staged;
         // Keep the working GPU resources, and hand its window surface over.
@@ -406,18 +387,7 @@ impl Game<'_> {
             .mob_data()
             .villager_hats
             .write()
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
             .unwrap_or_else(std::sync::PoisonError::into_inner) = villager_hats;
-        horizon_client::ui::load_metadata(&root);
-        lang::set(language);
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            horizon_client::mobs::villager_hats::VillagerHats::load(&root);
-        horizon_client::ui::load_metadata(&root);
-        lang::set(lang::Language::load(&[&root], &lang::code()));
-=======
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            horizon_client::mobs::villager_hats::VillagerHats::load(&root);
         *self
             .res
             .mob_data()
@@ -458,7 +428,6 @@ impl Game<'_> {
         } else {
             lang::Language::load(&[&root], &code)
         });
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         self.refresh_remote_language();
         self.audio.reload_with(&root, sounds);
         self.clear_lod();
@@ -560,38 +529,27 @@ pub(super) fn stage_pack(
         context.light.clone(),
     )?;
     let textures = prepare_renderer_textures(&pack);
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-    let sounds = horizon_client::sound_events::SoundRegistry::load(&root);
-    let armor = super::armor_stands::ArmorStandAssets::load(&root, None);
-    let villager_hats = horizon_client::mobs::villager_hats::VillagerHats::load(&root);
-    let waypoint_styles = horizon_client::locator_bar::WaypointStyles::load(&root);
-    let language = lang::Language::load(&[&root], &lang::code());
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
     let cem = Arc::new(horizon_client::mobs::cem::CemModels::load(
         &root,
         res.mob_types(),
     ));
     let block_entity_shapes = res.block_entity_render().shapes_for(&root);
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+    let armor = super::armor_stands::ArmorStandAssets::load(&root, None);
+    let villager_hats = horizon_client::mobs::villager_hats::VillagerHats::load(&root);
+    let waypoint_styles = horizon_client::locator_bar::WaypointStyles::load(&root);
     progress.set(3);
     Ok(StagedPack {
         root,
         gui,
         pack,
         textures,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-        sounds,
-        armor,
-        villager_hats,
-        waypoint_styles,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
         cem,
         block_entity_shapes,
         sounds,
         ui_metadata,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+        armor,
+        villager_hats,
+        waypoint_styles,
         language,
     })
 }
@@ -603,13 +561,6 @@ pub(super) struct StagedPack {
     pub gui: UiResources,
     pub pack: PackResources,
     pub textures: PreparedTextures,
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-    pub sounds: horizon_client::sound_events::SoundRegistry,
-    pub armor: super::armor_stands::ArmorStandAssets,
-    pub villager_hats: horizon_client::mobs::villager_hats::VillagerHats,
-    pub waypoint_styles: horizon_client::locator_bar::WaypointStyles,
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
     /// The packs' custom entity models (OptiFine CEM).
     pub cem: Arc<horizon_client::mobs::cem::CemModels>,
     /// The block entities' models, the packs' custom entity models over vanilla's.
@@ -617,7 +568,9 @@ pub(super) struct StagedPack {
     /// The root's sound events, GUI sprite metadata and current language.
     pub sounds: horizon_client::sound_events::SoundRegistry,
     pub ui_metadata: horizon_client::ui::UiMetadata,
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+    pub armor: super::armor_stands::ArmorStandAssets,
+    pub villager_hats: horizon_client::mobs::villager_hats::VillagerHats,
+    pub waypoint_styles: horizon_client::locator_bar::WaypointStyles,
     pub language: lang::Language,
 }
 

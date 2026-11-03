@@ -86,31 +86,10 @@ where
             {
                 shapes.push(Collider::Shape(border));
             }
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-            let mut scan = BlockCollisionScan::new(
-                world,
-                request.context,
-                bounds,
-                false,
-                request.candidate_budget,
-            )?;
+            let mut scan =
+                BlockCollisionScan::new(world, request.context, bounds, false, candidate_budget)?;
             while let Some(hit) = scan.next_collider() {
                 shapes.push(hit?.1);
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-            for hit in BlockCollisionScan::new(
-                world,
-                request.context,
-                bounds,
-                false,
-                request.candidate_budget,
-            )? {
-                shapes.push(hit?.shape);
-=======
-            for hit in
-                BlockCollisionScan::new(world, request.context, bounds, false, candidate_budget)?
-            {
-                shapes.push(hit?.shape);
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
             }
             Ok(shapes)
         },

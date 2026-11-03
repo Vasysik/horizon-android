@@ -2034,7 +2034,6 @@ fn render_visible(
             }
         }
     }
-<<<<<<< HEAD
     let armor_atlases = data
         .armor_atlases
         .read()
@@ -2043,8 +2042,12 @@ fn render_visible(
         .equipment
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-||||||| f8988d5a7
-=======
+    for layer in &mut all_layers {
+        if let Some(kind) = layer.texture.strip_prefix(OWN_EQUIPMENT) {
+            let kind = kind.to_owned();
+            own_equipment(m, layer, &kind, &equipment);
+        }
+    }
     // The GPU path takes the whole mob or none of it, so its draws keep their
     // order: only plain draws of models it can pose (no custom models,
     // translucent body or energy swirl, which the CPU path changes after
@@ -2128,22 +2131,8 @@ fn render_visible(
         let light = if *glows { FULL_BRIGHT } else { light };
         draw(part, base, &poses, *uv, *color, light, *layer_overlay, out);
     }
->>>>>>> 31f83499b
     // One Poses refilled for every layer (armour draws up to seven): it keeps
     // its maps' capacity.
-<<<<<<< HEAD
-    let mut layer_poses = Poses::default();
-    for mut layer in all_layers {
-        if let Some(kind) = layer.texture.strip_prefix(OWN_EQUIPMENT) {
-            let kind = kind.to_owned();
-            own_equipment(m, &mut layer, &kind, &equipment);
-        }
-        let Some(part) = m.kind.layer(&layer.model).cloned() else {
-||||||| f8988d5a7
-    let mut layer_poses = Poses::default();
-    for layer in all_layers {
-        let Some(part) = m.kind.layer(&layer.model).cloned() else {
-=======
     let mut layer_poses = Poses::pooled();
     let body_keys = [&*model_key, cem_key];
     for (i, layer) in all_layers.iter().enumerate() {
@@ -2162,33 +2151,20 @@ fn render_visible(
                 None => continue,
             },
         };
-        let Some((drawn, uv)) = sprite(texture).or_else(|| Some((texture, atlas(texture)?))) else {
->>>>>>> 31f83499b
-            continue;
-        };
-<<<<<<< HEAD
-        let Some(mut uv) = atlas(&layer.texture) else {
+        let Some((drawn, mut uv)) = sprite(texture).or_else(|| Some((texture, atlas(texture)?))) else {
             continue;
         };
         // A pack's custom armour in the leather texture (`custom_armor`), picked by the dye
         // colour the layer carries; its animation runs on the mob's age.
+        let mut color = layer.color;
         if armor_slot(&layer.model).is_some()
-            && let Some(custom) = armor_atlases.get(&layer.texture)
+            && let Some(armor) = armor_atlases.get(&layer.texture)
         {
             let c = layer.color;
             let rgb = (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF;
             let day = (m.age as f32 + alpha).rem_euclid(24000.0) / 24000.0;
-            (uv, layer.color) = crate::custom_armor::layer_look(Some(custom), Some(rgb), uv, day);
+            (uv, color) = crate::custom_armor::layer_look(Some(armor), Some(rgb), uv, day);
         }
-        layer_poses.reset(&part);
-        anim::setup(m, &s, &mut layer_poses, &data.animations);
-||||||| f8988d5a7
-        let Some(uv) = atlas(&layer.texture) else {
-            continue;
-        };
-        layer_poses.reset(&part);
-        anim::setup(m, &s, &mut layer_poses, &data.animations);
-=======
         if custom.is_none() && custom_body.is_none() && std::sync::Arc::ptr_eq(&part, &model) {
             // A layer over the body's own model (a villager's type, profession
             // and level, a spider's eyes): `setupAnim` gives the body's poses.
@@ -2200,7 +2176,6 @@ fn render_visible(
                 animation.run(m, &s, &mut layer_poses);
             }
         }
->>>>>>> 31f83499b
         if matches!(m.species(), Species::Villager | Species::ZombieVillager)
             && let Some((folder, variant)) = layer
                 .texture
@@ -2234,7 +2209,7 @@ fn render_visible(
             &layer_poses,
             uv,
             layer.scroll,
-            layer.color,
+            color,
             light,
             overlay,
             out,
@@ -2247,7 +2222,7 @@ fn render_visible(
                 &layer_poses,
                 glow,
                 layer.scroll,
-                layer.color,
+                color,
                 FULL_BRIGHT,
                 0,
                 out,
@@ -2941,16 +2916,12 @@ mod tests {
             biome_tags: Default::default(),
             entity_tags: Default::default(),
             villager_hats: Default::default(),
-<<<<<<< HEAD
             armor_atlases: Default::default(),
             equipment: Default::default(),
-||||||| f8988d5a7
-=======
             cem: Default::default(),
             random_textures: Default::default(),
             emissive: Default::default(),
             blinks: Default::default(),
->>>>>>> 31f83499b
             pois: Default::default(),
             species_placements: Default::default(),
         };
@@ -3102,13 +3073,9 @@ mod tests {
             emissive: Default::default(),
             blinks: Default::default(),
             pois: Default::default(),
-<<<<<<< HEAD
             armor_atlases: Default::default(),
             equipment: Default::default(),
-||||||| f8988d5a7
-=======
             species_placements: Default::default(),
->>>>>>> 31f83499b
         };
         for left in [false, true] {
             let t = held_item_transform(&mob, 0.5, glam::DVec3::ZERO, &data, left).unwrap();

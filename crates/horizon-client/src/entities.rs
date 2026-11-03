@@ -89,12 +89,8 @@ fn slime_at(world: &World, facts: &BlockFacts, x: i32, y: i32, z: i32) -> bool {
 }
 
 mod fluids;
-<<<<<<< HEAD
 pub use fluids::flow_vector;
-||||||| f8988d5a7
-=======
 pub use fluids::update_entity_fluids;
->>>>>>> 31f83499b
 
 #[derive(Clone, Debug)]
 pub struct ItemEntity {

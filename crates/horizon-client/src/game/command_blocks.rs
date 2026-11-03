@@ -803,15 +803,8 @@ impl Game<'_> {
         shortcut: Option<horizon_client::clipboard::EditShortcut>,
         text: Option<&str>,
     ) {
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
         // The keys the player holds, not those Toggle Sprint and Toggle Sneak hold.
-        let ctrl = self.has_control_down();
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-        let ctrl = self.keys.contains(&KeyCode::ControlLeft);
-        let shift = self.keys.contains(&KeyCode::ShiftLeft);
-=======
         let ctrl = self.has_control_down_with_quirk();
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         let shift = self.has_shift_down();
         // Windows' AltGr is Ctrl+Alt, and its characters still type.
         let types_text = self.types_text();
@@ -873,6 +866,10 @@ impl Game<'_> {
         if let Some(s) = self.command_block_screen.as_mut() {
             s.command.set_text(&m, &c, text, cursor, anchor);
         }
+    }
+    /// The command box, for the on-screen keyboard's editor (game/touch/text_mirror.rs).
+    pub(super) fn command_box(&mut self) -> Option<&mut EditBox> {
+        self.command_block_screen.as_mut().map(|s| &mut s.command)
     }
     /// Characters typed into the command box (`StringUtil.isAllowedChatCharacter`).
     pub(super) fn command_block_type(&mut self, typed: &str) {

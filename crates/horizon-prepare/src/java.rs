@@ -14,7 +14,6 @@ pub struct Jdk {
 
 const TIMEOUT: Duration = Duration::from_secs(3600);
 
-<<<<<<< HEAD
 /// A Java runtime the program running the preparer supplies (Starling on Android, where no Java
 /// is installed and programs run only from the app's own library folder): its `java` and
 /// `javac`, tried before any other, and the environment every Java command gets.
@@ -30,8 +29,7 @@ static SUPPLIED: std::sync::OnceLock<Supplied> = std::sync::OnceLock::new();
 pub fn supply(runtime: Supplied) -> bool {
     SUPPLIED.set(runtime).is_ok()
 }
-||||||| f8988d5a7
-=======
+
 /// Options for every JVM preparing starts (the exporters, the data generator, javac with `-J`).
 /// They are short batch jobs that run side by side: the C2 compiler's background work costs
 /// more CPU than it wins back, and the serial collector keeps their heaps small. Measured on the
@@ -39,7 +37,6 @@ pub fn supply(runtime: Supplied) -> bool {
 /// output; the serial collector was as fast as the parallel one and its JVMs together took
 /// 1.25 GB instead of 2 GB.
 pub(crate) const BATCH_OPTIONS: [&str; 2] = ["-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC"];
->>>>>>> 31f83499b
 
 /// Exporters and JDK probes write to pipes or log files: on Windows they open no terminal.
 pub(crate) fn command(program: impl AsRef<OsStr>) -> Command {

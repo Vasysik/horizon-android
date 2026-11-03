@@ -128,13 +128,8 @@ fn scene(
         std::array::from_fn(|z| std::array::from_fn(|x| Some(&chunks[z * 3 + x])));
     let mut mesher = Mesher {
         nether_shading: row["nether"].as_bool().unwrap_or(false),
-<<<<<<< HEAD
-        pack_shades_faces: false,
-||||||| f8988d5a7
-=======
         shader_pack_lighting: false,
         separate_ao: false,
->>>>>>> 31f83499b
         assets,
         render,
         tables,

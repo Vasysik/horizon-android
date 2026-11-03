@@ -27,18 +27,10 @@ pub(super) const HELP: &[&str] = &[
 /// The controllers and the state the game last acted on.
 #[derive(Default)]
 pub(super) struct Pads {
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-    /// The real controllers and the DualSense's output, or Android's controllers.
-    #[cfg(any(feature = "controllers", target_os = "android"))]
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-    /// The real controllers and the DualSense's output.
-    #[cfg(feature = "controllers")]
-=======
     /// Splitscreen: this player's pad, read by `PadRouter` for every game, instead of the pads.
     pub(super) feed: Option<PadState>,
-    /// The real controllers and the DualSense's output.
-    #[cfg(feature = "controllers")]
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
+    /// The real controllers and the DualSense's output, or Android's controllers.
+    #[cfg(any(feature = "controllers", target_os = "android"))]
     devices: hardware::Devices,
     /// The virtual pad of `horizon-ctl pad`.
     injected: PadState,
@@ -205,56 +197,28 @@ impl Game<'_> {
         // Off leaves the controllers out; the touch controls play through the pad all the same.
         let enabled = self.settings.controller.enabled;
         let hardware = if enabled {
-            let hardware = self.pad.read();
+            let hardware = match self.pad.feed {
+                Some(state) => state,
+                None => self.pad.read(),
+            };
+            // A person's pad, for `input-log` and the repro recording; the virtual
+            // pad is an agent's `pad` line and is recorded as that.
+            let hardware_edges = self.pad.hardware_edges(hardware);
+            for (button, down) in hardware_edges {
+                self.note_input(
+                    super::input_trace::InputOrigin::User,
+                    super::input_trace::TraceKind::Pad {
+                        button: button.name().to_owned(),
+                        action: if down { "down" } else { "up" }.to_owned(),
+                    },
+                );
+            }
             self.ui.options.pad_style = self.settings.controller.glyphs.resolve(self.pad.style);
             hardware
         } else {
             self.pad_output_off();
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
             PadState::default()
         };
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-            if self.pad.state != PadState::default() {
-                self.pad.state = PadState::default();
-                for (button, down) in self.pad.edges.release_all() {
-                    self.pad_edge(event_loop, button, down);
-                }
-            }
-            // The keyboard's menu focus follows its widget all the same.
-            self.pad_menu_frame(event_loop);
-            return;
-        }
-        let hardware = self.pad.read();
-        self.ui.options.pad_style = self.settings.controller.glyphs.resolve(self.pad.style);
-=======
-            if self.pad.state != PadState::default() {
-                self.pad.state = PadState::default();
-                for (button, down) in self.pad.edges.release_all() {
-                    self.pad_edge(event_loop, button, down);
-                }
-            }
-            // The keyboard's menu focus follows its widget all the same.
-            self.pad_menu_frame(event_loop);
-            return;
-        }
-        let hardware = match self.pad.feed {
-            Some(state) => state,
-            None => self.pad.read(),
-        };
-        // A person's pad, for `input-log` and the repro recording; the virtual
-        // pad is an agent's `pad` line and is recorded as that.
-        let hardware_edges = self.pad.hardware_edges(hardware);
-        for (button, down) in hardware_edges {
-            self.note_input(
-                super::input_trace::InputOrigin::User,
-                super::input_trace::TraceKind::Pad {
-                    button: button.name().to_owned(),
-                    action: if down { "down" } else { "up" }.to_owned(),
-                },
-            );
-        }
-        self.ui.options.pad_style = self.settings.controller.glyphs.resolve(self.pad.style);
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         let state = hardware.merge(&self.pad.injected);
         self.pad.virtual_input = self.pad.injected != PadState::default();
         for button in std::mem::take(&mut self.pad.taps) {

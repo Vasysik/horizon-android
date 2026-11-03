@@ -354,28 +354,17 @@ impl Game<'_> {
         creative: bool,
         create: Option<&WorldOptions>,
     ) -> Result<()> {
-<<<<<<< HEAD
         // Signed in, a name chosen in Skin Customization goes before the account's: worlds take
         // it, servers keep the account's (remote.rs `join_server`).
-        let player = match horizon_client::auth::current() {
+        let auth = horizon_client::auth::current();
+        let player = match &auth {
             Some(account) => std::env::current_dir()
                 .ok()
                 .and_then(|dir| horizon_client::offline_name::chosen(&dir))
                 .unwrap_or_else(|| account.name.clone()),
             None => self.options.player_name(),
         };
-||||||| f8988d5a7
-        let auth = horizon_client::auth::current();
-        let player = auth
-            .as_ref()
-            .map_or_else(|| self.options.player_name(), |a| a.name.clone());
-=======
-        let auth = horizon_client::auth::current();
-        let player = auth
-            .as_ref()
-            .map_or_else(|| self.options.player_name(), |a| a.name.clone());
         let new_world = create.is_some();
->>>>>>> 31f83499b
         let launch = Launch {
             folder: folder.to_owned(),
             name: name.map(str::to_owned),

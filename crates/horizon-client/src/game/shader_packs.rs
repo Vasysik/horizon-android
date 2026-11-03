@@ -5,27 +5,16 @@
 //! dimension or the choice changes (spec 1.2).
 
 use horizon_client::camera::CameraFluid;
-<<<<<<< HEAD
-use horizon_client::gfx::pack_uniforms::PackInputs;
+use horizon_client::gfx::pack_uniforms::{PackInputs, PlayerStatus};
 use horizon_client::graphics::{AUTO_PROFILE, light_shader_pack};
 use horizon_client::shader_options::ShaderOptions;
-||||||| f8988d5a7
-use horizon_client::gfx::pack_uniforms::PackInputs;
-=======
-use horizon_client::gfx::pack_uniforms::{PackInputs, PlayerStatus};
-use horizon_client::shader_options::ShaderOptions;
 use horizon_client::text::Text;
->>>>>>> 31f83499b
 use horizon_shaders::{BlockIds, Macros, Pack, Properties, dimension_folder, load_post};
 
 use super::{Dim, Game};
 use horizon_client::gfx::pack_draw::EntitySpan;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-<<<<<<< HEAD
-||||||| f8988d5a7
-use std::collections::HashMap;
-=======
 
 /// The values the player chose for pack `name`'s options (`shaderpacks/<name>.txt`).
 fn chosen_shader_options(name: &str) -> BTreeMap<String, String> {
@@ -35,9 +24,11 @@ fn chosen_shader_options(name: &str) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
-/// Pack `name`'s options, screens and names in `language`, with the values the player chose.
+/// Pack `name`'s options, screens and names in `language`, with the values the player chose. An
+/// option's default is what `profile` runs it at, so the page shows what runs.
 pub(super) fn read_shader_options(
     name: &str,
+    profile: &str,
     language: &str,
     macros: &Macros,
 ) -> Option<ShaderOptions> {
@@ -48,13 +39,19 @@ pub(super) fn read_shader_options(
             return None;
         }
     };
-    let options = horizon_shaders::options(&pack);
+    let mut options = horizon_shaders::options(&pack);
     let lang = horizon_shaders::Lang::load(&pack, language);
     let chosen = chosen_shader_options(name);
     let pack = pack.with_chosen(chosen.clone());
     let text = pack.read_text("shaders.properties").unwrap_or_default();
     let properties = Properties::parse(&text, &horizon_shaders::with_options(&pack, macros));
     let screens = horizon_shaders::Screens::parse(&properties, &options);
+    let running = picked_values(&properties, name, profile, &BTreeMap::new());
+    for option in options.values_mut() {
+        if let Some(value) = running.declared(&option.name, &option.default) {
+            option.default = value;
+        }
+    }
     Some(ShaderOptions::new(
         name.to_owned(),
         options,
@@ -131,7 +128,6 @@ pub(super) fn picks_native_pack(settings: &horizon_client::settings::Settings) -
     !picked.is_empty()
         && horizon_shader_api::package::is_pack(&Game::shader_packs_dir().join(picked))
 }
->>>>>>> 31f83499b
 
 /// The ids a pack gives entities and block entities (4.1, 5.3), for the spans of the entity
 /// geometry.
@@ -149,10 +145,12 @@ pub(super) struct PackIds {
     missing_item: i32,
     /// `oldHandLight` (3.2): the first held item and light are those of the brighter hand.
     old_hand_light: bool,
-<<<<<<< HEAD
-    /// `oldLighting`: the pack wants the game's face shades in the vertex colours. Without it
-    /// (Iris' default) it shades the faces itself, and twice is near black on those from the sun.
+    /// `vignette`: `false` hides the game's vignette over the pack's image.
+    vignette: bool,
+    /// `oldLighting`: `true` keeps the game's face shading in the block colours.
     old_lighting: bool,
+    /// `separateAo`: `true` passes AO factor in vertex alpha and keeps pure tint in RGB.
+    pub(super) separate_ao: bool,
 }
 
 /// A pack the renderer is making on its own thread (`Renderer::start_shader_pack`): its ids,
@@ -194,65 +192,6 @@ impl AutoProfile {
                 shadow_distance: 64.0,
             },
         }
-    }
-}
-
-/// The values the player chose for pack `name`'s options (`shaderpacks/<name>.txt`).
-fn chosen_shader_options(name: &str) -> BTreeMap<String, String> {
-    let file = Game::shader_packs_dir().join(horizon_shaders::chosen_file(name));
-    std::fs::read_to_string(file)
-        .map(|text| horizon_shaders::parse_chosen(&text))
-        .unwrap_or_default()
-}
-
-/// Pack `name`'s options, screens and names in `language`, with the values the player chose. An
-/// option's default is what `profile` runs it at, so the page shows what runs.
-pub(super) fn read_shader_options(
-    name: &str,
-    profile: &str,
-    language: &str,
-) -> Option<ShaderOptions> {
-    let pack = match Pack::open(&Game::shader_packs_dir().join(name)) {
-        Ok(pack) => pack,
-        Err(e) => {
-            log::warn!("shader pack {name}: {e}");
-            return None;
-        }
-    };
-    let mut options = horizon_shaders::options(&pack);
-    let lang = horizon_shaders::Lang::load(&pack, language);
-    let text = pack.read_text("shaders.properties").unwrap_or_default();
-    let macros = horizon_shaders::with_options(&pack, &Macros::standard());
-    let properties = Properties::parse(&text, &macros);
-    let screens = horizon_shaders::Screens::parse(&properties, &options);
-    let running = picked_values(&properties, name, profile, &BTreeMap::new());
-    for option in options.values_mut() {
-        if let Some(value) = running.declared(&option.name, &option.default) {
-            option.default = value;
-        }
-    }
-    Some(ShaderOptions::new(
-        name.to_owned(),
-        options,
-        screens,
-        lang,
-        chosen_shader_options(name),
-    ))
-}
-
-/// Saves the values chosen on the Shader Options page; none chosen removes the file.
-pub(super) fn write_shader_options(options: &ShaderOptions) {
-    let file = Game::shader_packs_dir().join(horizon_shaders::chosen_file(&options.pack));
-    let saved = if options.chosen.is_empty() {
-        std::fs::remove_file(&file).or_else(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => Ok(()),
-            _ => Err(e),
-        })
-    } else {
-        std::fs::write(&file, horizon_shaders::chosen_text(&options.chosen))
-    };
-    if let Err(e) = saved {
-        log::warn!("shader pack {}: {}: {e}", options.pack, file.display());
     }
 }
 
@@ -299,37 +238,11 @@ fn picked_values(
         log::info!("shader pack {name}: option values {values:?}");
     }
     values
-||||||| f8988d5a7
-=======
-    /// `vignette`: `false` hides the game's vignette over the pack's image.
-    vignette: bool,
-    /// `oldLighting`: `true` keeps the game's face shading in the block colours.
-    old_lighting: bool,
-    /// `separateAo`: `true` passes AO factor in vertex alpha and keeps pure tint in RGB.
-    pub(super) separate_ao: bool,
->>>>>>> 31f83499b
 }
 
 impl Game<'_> {
     /// Loads the pack for the current dimension when it changed, and returns this frame's
     /// inputs to the pack's uniforms.
-<<<<<<< HEAD
-    pub(super) fn shader_pack_inputs(&mut self, camera: glam::DVec3, partial: f32) -> PackInputs {
-        // A new choice, once the options close (each load takes seconds): what ran for the old
-        // one goes, of either kind.
-        let choice = self.settings.horizon.shader_choice();
-        if choice != self.shader_choice && self.screen != super::Screen::Options {
-            self.shader_choice = choice;
-            self.native_shaders = Default::default();
-||||||| f8988d5a7
-    pub(super) fn shader_pack_inputs(&mut self, camera: glam::DVec3, partial: f32) -> PackInputs {
-        static DEV_PACK: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-        let dev = DEV_PACK.get_or_init(|| std::env::var("HORIZON_SHADER_PACK").ok());
-        let picked = dev.as_deref().unwrap_or(&self.settings.horizon.shader_pack);
-        if self.native_shaders.picked != picked {
-            // Another pack, or none: drop what ran.
-            self.native_shaders = super::native_shaders::NativeShaders::picking(picked);
-=======
     pub(super) fn shader_pack_inputs(
         &mut self,
         camera: glam::DVec3,
@@ -348,36 +261,31 @@ impl Game<'_> {
             self.streaming.separate_ao = separate_ao;
             self.all_sections_changed();
         }
-        let picked = picked_pack(&self.settings).to_owned();
-        if self.native_shaders.picked != picked {
-            // Another pack, or none: drop what ran.
-            self.native_shaders = super::native_shaders::NativeShaders::picking(&picked);
+        // A new choice, once the options close (each load takes seconds): what ran for the old
+        // one goes, of either kind.
+        let choice = self
+            .settings
+            .horizon
+            .shader_choice()
+            .filter(|(name, _)| !active_pack(name, &self.settings.mods).is_empty());
+        if choice != self.shader_choice && self.screen != super::Screen::Options {
+            self.shader_choice = choice;
+            let picked = self.shader_choice.as_ref().map_or("", |(name, _)| name.as_str());
+            self.native_shaders = super::native_shaders::NativeShaders::picking(picked);
             self.set_translucent_layers(Vec::new());
->>>>>>> 31f83499b
             self.pack_ids = None;
             self.pack_making = None;
             let scale = self.world_scale();
-            let antialias = self.settings.horizon.fxaa;
+            let horizon = &self.settings.horizon;
+            let (antialias, taa, upscale) = (horizon.fxaa, horizon.taa, horizon.upscaling.ratio());
             if let Some(renderer) = &mut self.renderer {
                 renderer.drop_shader_packs();
-                renderer.set_world_post(scale, antialias);
+                renderer.set_world_post(scale, antialias, taa, upscale);
             }
         }
-        // The world draws with the pack once its ids are here; the sections follow.
-        let shades_faces = self.pack_ids.as_ref().is_some_and(|p| !p.old_lighting);
-        if self.streaming.pack_shades_faces != shades_faces {
-            self.streaming.pack_shades_faces = shades_faces;
-            self.all_sections_changed();
-        }
-<<<<<<< HEAD
         let Some((name, profile)) = self.shader_choice.clone() else {
             return PackInputs::default();
         };
-||||||| f8988d5a7
-        let name = picked.to_owned();
-=======
-        let name = picked;
->>>>>>> 31f83499b
         let dimension = match self.dim {
             Dim::Overworld => 0,
             Dim::Nether => -1,
@@ -392,173 +300,13 @@ impl Game<'_> {
         {
             let name = name.as_str();
             let started = std::time::Instant::now();
-<<<<<<< HEAD
             self.pack_ids = None;
             self.pack_making = None;
-            match Pack::open(&path) {
-                Ok(mut pack) => {
-                    let macros = Macros::standard();
-                    let text = pack.read_text("shaders.properties").unwrap_or_default();
-                    let properties = Properties::parse(&text, &macros);
-                    let chosen = chosen_shader_options(name);
-                    let values = picked_values(&properties, name, &profile, &chosen);
-                    if !values.is_empty() {
-                        pack.set_values(values);
-                    }
-                    for note in &properties.notes {
-                        log::warn!(
-                            "shader pack {name}: shaders.properties:{}: {}",
-                            note.line,
-                            note.message
-                        );
-                    }
-                    let folder = dimension_folder(&pack, dimension);
-                    // On a phone whatever the profile: it pays for itself even on a pack's
-                    // highest settings, and the player picks a profile for how it looks.
-                    renderer.set_pack_prepass(
-                        (cfg!(target_os = "android") || profile == AUTO_PROFILE)
-                            && !light_shader_pack(name),
-                    );
-                    let inputs = renderer.pack_inputs();
-                    let biomes: Vec<String> = self
-                        .res
-                        .biomes()
-                        .list
-                        .iter()
-                        .map(|b| b.name.clone())
-                        .collect();
-                    let text = pack.read_text("block.properties").unwrap_or_default();
-                    let ids = BlockIds::parse(&Properties::parse(&text, &macros));
-                    for note in &ids.notes {
-                        log::warn!("shader pack {name}: block.properties: {note}");
-                    }
-                    let text = pack.read_text("entity.properties");
-                    let entities = BlockIds::parse_kind(
-                        &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                        "entity",
-                    );
-                    let text = pack.read_text("item.properties");
-                    let items = BlockIds::parse_kind(
-                        &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                        "item",
-                    );
-                    let pack_ids = PackIds {
-                        items: items.plain(),
-                        missing_item: if text.is_some() { -1 } else { 0 },
-                        // OQ-21: on unless the pack turns it off.
-                        old_hand_light: properties
-                            .get("oldHandLight")
-                            .is_none_or(|v| v.trim() != "false"),
-                        old_lighting: properties
-                            .get("oldLighting")
-                            .is_some_and(|v| v.trim() == "true"),
-                        entities: entities.plain(),
-                        missing_entity: if text.is_some() { 65535 } else { 0 },
-                        missing_block: if ids.is_empty() { 0 } else { 65535 },
-                        blocks: ids.clone(),
-                        block_states: RefCell::default(),
-                    };
-                    let started_ids = std::time::Instant::now();
-                    let table = block_id_table(&self.pack, &ids);
-                    log::info!(
-                        "shader pack {name}: mc_Entity for {} of {} block sprites in {} ms",
-                        table.chunks(2).filter(|p| p[0] != -1).count(),
-                        table.len() / 2,
-                        started_ids.elapsed().as_millis()
-                    );
-                    // The programs are translated and built on the renderer's thread for packs;
-                    // the world draws without the pack until they are.
-                    let program_folder = folder.clone();
-                    renderer.start_shader_pack(
-                        dimension,
-                        move || {
-                            let mut post =
-                                load_post(&pack, &program_folder, &properties, &macros, &inputs);
-                            let names: Vec<&str> = biomes.iter().map(String::as_str).collect();
-                            post.custom.set_biomes(&names);
-                            post
-                        },
-                        table,
-                    );
-                    self.pack_making = Some(Making {
-                        ids: pack_ids,
-                        folder,
-                        started,
-                    });
-||||||| f8988d5a7
-            match Pack::open(&path) {
-                Ok(pack) => {
-                    let macros = Macros::standard();
-                    let text = pack.read_text("shaders.properties").unwrap_or_default();
-                    let properties = Properties::parse(&text, &macros);
-                    for note in &properties.notes {
-                        log::warn!(
-                            "shader pack {name}: shaders.properties:{}: {}",
-                            note.line,
-                            note.message
-                        );
-                    }
-                    let folder = dimension_folder(&pack, dimension);
-                    let inputs = renderer.pack_inputs();
-                    let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
-                    let biomes = self.res.biomes();
-                    let names: Vec<&str> = biomes.list.iter().map(|b| b.name.as_str()).collect();
-                    post.custom.set_biomes(&names);
-                    let text = pack.read_text("block.properties").unwrap_or_default();
-                    let ids = BlockIds::parse(&Properties::parse(&text, &macros));
-                    for note in &ids.notes {
-                        log::warn!("shader pack {name}: block.properties: {note}");
-                    }
-                    let text = pack.read_text("entity.properties");
-                    let entities = BlockIds::parse_kind(
-                        &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                        "entity",
-                    );
-                    let text = pack.read_text("item.properties");
-                    let items = BlockIds::parse_kind(
-                        &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                        "item",
-                    );
-                    self.pack_ids = Some(PackIds {
-                        items: items.plain(),
-                        missing_item: if text.is_some() { -1 } else { 0 },
-                        // OQ-21: on unless the pack turns it off.
-                        old_hand_light: properties
-                            .get("oldHandLight")
-                            .is_none_or(|v| v.trim() != "false"),
-                        entities: entities.plain(),
-                        missing_entity: if text.is_some() { 65535 } else { 0 },
-                        missing_block: if ids.is_empty() { 0 } else { 65535 },
-                        blocks: ids.clone(),
-                        block_states: RefCell::default(),
-                    });
-                    let started_ids = std::time::Instant::now();
-                    let table = block_id_table(&self.pack, &ids);
-                    log::info!(
-                        "shader pack {name}: mc_Entity for {} of {} block sprites in {} ms",
-                        table.chunks(2).filter(|p| p[0] != -1).count(),
-                        table.len() / 2,
-                        started_ids.elapsed().as_millis()
-                    );
-                    if let Some((programs, notes)) =
-                        renderer.set_shader_pack(dimension, Some(post), &table)
-                    {
-                        for note in notes {
-                            log::warn!("shader pack {name}: {note}");
-                        }
-                        log::info!(
-                            "shader pack {name}: folder `{folder}`, {} programs ({}) in {} ms",
-                            programs.len(),
-                            programs.join(" "),
-                            started.elapsed().as_millis()
-                        );
-                    }
-=======
             // A pack is not the game's own code: one that makes the shader compiler (or our
             // translation of it) panic is turned off instead of crashing every world load (#3525).
             let loaded = horizon_client::crash::contain(|| {
                 match Pack::open(&path).map(|p| p.with_chosen(chosen_shader_options(name))) {
-                    Ok(pack) => {
+                    Ok(mut pack) => {
                         let mut macros = Macros::standard();
                         renderer.define_pack_macros(&mut macros);
                         // Its conditionals test the pack's options too.
@@ -574,26 +322,29 @@ impl Game<'_> {
                                 note.message
                             );
                         }
+                        let chosen = chosen_shader_options(name);
+                        let values = picked_values(&properties, name, &profile, &chosen);
+                        if !values.is_empty() {
+                            pack.set_values(values);
+                        }
                         let separate_ao = properties
                             .get("separateAo")
                             .is_some_and(|v| v.trim() == "true");
                         renderer.set_separate_ao(separate_ao);
                         let folder = dimension_folder(&pack, dimension);
+                        // On a phone whatever the profile: it pays for itself even on a pack's
+                        // highest settings, and the player picks a profile for how it looks.
+                        renderer.set_pack_prepass(
+                            (cfg!(target_os = "android") || profile == AUTO_PROFILE)
+                                && !light_shader_pack(name),
+                        );
                         let inputs = renderer.pack_inputs();
-                        let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
-                        // Textures that name one of the game's: from the resource packs over
-                        // the game's own resources.
+                        let biomes: Vec<String> = world_biomes!(self)
+                            .list
+                            .iter()
+                            .map(|b| b.name.clone())
+                            .collect();
                         let resources = self.options.resources.clone();
-                        let read = |namespace: &str, path: &str| {
-                            std::fs::read(resources.join("assets").join(namespace).join(path)).ok()
-                        };
-                        for note in horizon_shaders::resolve_resources(&mut post.textures, &read) {
-                            log::warn!("shader pack {name}: {note}");
-                        }
-                        let biomes = world_biomes!(self);
-                        let names: Vec<&str> =
-                            biomes.list.iter().map(|b| b.name.as_str()).collect();
-                        post.custom.set_biomes(&names);
                         let text = pack.read_text("block.properties").unwrap_or_default();
                         let ids = BlockIds::parse(&Properties::parse(&text, &macros));
                         for note in &ids.notes {
@@ -609,7 +360,7 @@ impl Game<'_> {
                             &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
                             "item",
                         );
-                        self.pack_ids = Some(PackIds {
+                        let pack_ids = PackIds {
                             items: items.plain(),
                             missing_item: if text.is_some() { -1 } else { 0 },
                             // OQ-21: on unless the pack turns it off.
@@ -630,7 +381,7 @@ impl Game<'_> {
                             missing_block: if ids.is_empty() { 0 } else { 65535 },
                             blocks: ids.clone(),
                             block_states: RefCell::default(),
-                        });
+                        };
                         let started_ids = std::time::Instant::now();
                         let table = terrain_table(
                             &block_id_table(&self.pack, &ids),
@@ -642,43 +393,53 @@ impl Game<'_> {
                             table.len() / 3,
                             started_ids.elapsed().as_millis()
                         );
-                        if let Some((programs, notes)) =
-                            renderer.set_shader_pack(dimension, Some(post), &table)
-                        {
-                            for note in notes {
-                                log::warn!("shader pack {name}: {note}");
-                            }
-                            log::info!(
-                                "shader pack {name}: folder `{folder}`, {} programs ({}) in {} ms",
-                                programs.len(),
-                                programs.join(" "),
-                                started.elapsed().as_millis()
-                            );
-                        }
+                        // The programs are translated and built on the renderer's thread for
+                        // packs; the world draws without the pack until they are.
+                        let program_folder = folder.clone();
+                        let pack_name = name.to_owned();
+                        renderer.start_shader_pack(
+                            dimension,
+                            move || {
+                                let mut post = load_post(
+                                    &pack,
+                                    &program_folder,
+                                    &properties,
+                                    &macros,
+                                    &inputs,
+                                );
+                                // Textures that name one of the game's: from the resource packs
+                                // over the game's own resources.
+                                let read = |namespace: &str, path: &str| {
+                                    std::fs::read(
+                                        resources.join("assets").join(namespace).join(path),
+                                    )
+                                    .ok()
+                                };
+                                for note in
+                                    horizon_shaders::resolve_resources(&mut post.textures, &read)
+                                {
+                                    log::warn!("shader pack {pack_name}: {note}");
+                                }
+                                let names: Vec<&str> = biomes.iter().map(String::as_str).collect();
+                                post.custom.set_biomes(&names);
+                                post
+                            },
+                            table,
+                        );
+                        self.pack_making = Some(Making {
+                            ids: pack_ids,
+                            folder,
+                            started,
+                        });
                     }
                     Err(e) => {
-                        self.pack_ids = None;
                         log::warn!("shader pack {name}: {e}");
                         renderer.set_shader_pack(dimension, None, &[]);
                     }
->>>>>>> 31f83499b
                 }
-<<<<<<< HEAD
-                Err(e) => {
-                    log::warn!("shader pack {name}: {e}");
-                    renderer.set_shader_pack(dimension, None, &[]);
-                }
-||||||| f8988d5a7
-                Err(e) => {
-                    self.pack_ids = None;
-                    log::warn!("shader pack {name}: {e}");
-                    renderer.set_shader_pack(dimension, None, &[]);
-                }
-=======
             });
             if let Err(panic) = loaded {
                 self.shader_pack_failed(name, dimension, &panic);
->>>>>>> 31f83499b
             }
         }
         if let Some(made) = self.renderer.as_mut().and_then(|r| r.poll_shader_pack())
@@ -699,7 +460,7 @@ impl Game<'_> {
                     );
                     self.pack_ids = Some(making.ids);
                 }
-                Err(e) => log::warn!("shader pack {name}: {e}"),
+                Err(e) => self.shader_pack_failed(&name, dimension, &e),
             }
         }
         let lerp = |(old, new): (f32, f32)| old + (new - old) * partial;
@@ -738,58 +499,6 @@ impl Game<'_> {
             rainfall: info.map_or(0.0, |b| b.downfall),
             held_items,
             held_light,
-<<<<<<< HEAD
-            player_flags: self.player.as_ref().map_or([false; 5], |p| {
-                [
-                    p.fire_ticks > 0,
-                    p.health.hurt.cooldown > 0,
-                    self.potions.effects.get("invisibility").is_some(),
-                    p.shift_key_down,
-                    p.sprinting,
-                ]
-            }),
-        }
-    }
-
-    /// The world's resolution, of the screen's: the player's, and no more than Auto's while it
-    /// runs a pack that isn't a light one.
-    pub(super) fn world_scale(&self) -> f32 {
-        let chosen = self.settings.horizon.resolution_scale as f32 / 100.0;
-        match &self.shader_choice {
-            Some((name, profile))
-                if profile == AUTO_PROFILE
-                    && !light_shader_pack(name)
-                    && !horizon_shader_api::package::is_pack(
-                        &Self::shader_packs_dir().join(name),
-                    ) =>
-            {
-                chosen.min(horizon_client::graphics::auto_shader_scale())
-            }
-            _ => chosen,
-        }
-    }
-
-    /// The Shader Options page opened: the picked pack's options, screens and names.
-    pub(super) fn open_shader_options(&mut self) {
-        let Some((name, profile)) = self.settings.horizon.shader_choice() else {
-            return;
-        };
-        self.settings.shader_options =
-            read_shader_options(&name, &profile, &self.settings.language);
-    }
-
-    /// The Shader Options page closed with changes: they are saved, and the pack loads again.
-    pub(super) fn save_shader_options(&mut self) {
-        let Some(options) = self.settings.shader_options.take() else {
-            return;
-        };
-        write_shader_options(&options);
-        self.pack_ids = None;
-        self.pack_making = None;
-        if let Some(renderer) = &mut self.renderer {
-            renderer.drop_shader_packs();
-||||||| f8988d5a7
-=======
             right_handed: !self.settings.main_hand_left,
             on_ground: self.player.as_ref().is_some_and(|p| p.ground.on_ground),
             min_y: self.world.shape.min_y,
@@ -813,7 +522,6 @@ impl Game<'_> {
             status,
             end_flash,
             end_flash_direction,
->>>>>>> 31f83499b
         }
     }
 
@@ -848,14 +556,35 @@ impl Game<'_> {
         }
     }
 
+    /// The world's resolution, of the screen's: the player's, and no more than Auto's while it
+    /// runs a pack that isn't a light one.
+    pub(super) fn world_scale(&self) -> f32 {
+        let chosen = self.settings.horizon.resolution_scale as f32 / 100.0;
+        match &self.shader_choice {
+            Some((name, profile))
+                if profile == AUTO_PROFILE
+                    && !light_shader_pack(name)
+                    && !horizon_shader_api::package::is_pack(
+                        &Self::shader_packs_dir().join(name),
+                    ) =>
+            {
+                chosen.min(horizon_client::graphics::auto_shader_scale())
+            }
+            _ => chosen,
+        }
+    }
+
     /// The Shader Options page opened: the picked pack's options, screens and names.
     pub(super) fn open_shader_options(&mut self) {
+        let Some((name, profile)) = self.settings.horizon.shader_choice() else {
+            return;
+        };
         let mut macros = Macros::standard();
         if let Some(renderer) = &self.renderer {
             renderer.define_pack_macros(&mut macros);
         }
-        let name = &self.settings.horizon.shader_pack;
-        self.settings.shader_options = read_shader_options(name, &self.settings.language, &macros);
+        self.settings.shader_options =
+            read_shader_options(&name, &profile, &self.settings.language, &macros);
     }
 
     /// The Shader Options page closed with changes: they are saved, and the pack loads again.
@@ -865,6 +594,7 @@ impl Game<'_> {
         };
         write_shader_options(&options);
         self.pack_ids = None;
+        self.pack_making = None;
         if let Some(renderer) = &mut self.renderer {
             renderer.drop_shader_packs();
         }
@@ -875,6 +605,7 @@ impl Game<'_> {
     fn shader_pack_failed(&mut self, name: &str, dimension: i32, error: &str) {
         log::error!("shader pack {name}: turned off: {error}");
         self.pack_ids = None;
+        self.pack_making = None;
         if let Some(renderer) = &mut self.renderer {
             // Marks this dimension as loaded, without a pack, so it is not tried again.
             renderer.set_shader_pack(dimension, None, &[]);
