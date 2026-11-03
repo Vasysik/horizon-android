@@ -273,39 +273,23 @@ impl Launcher {
             Kind::ControlProfile => {
                 let game_home = c.game_home(&self.home);
                 let touch = horizon_client::touch::Settings::load_from(&game_home.join("horizon-touch.json"));
-                let mut profiles = Vec::new();
-                for (id, _, _) in horizon_client::touch::Settings::PRESETS {
-                    profiles.push((*id).to_owned());
-                }
-                for saved in horizon_client::touch::Settings::list_profiles(&game_home) {
-                    if !profiles.iter().any(|p| p.eq_ignore_ascii_case(&saved)) {
-                        profiles.push(saved);
-                    }
-                }
-                let choices = profiles
+                let style = touch.control_style;
+                let presets = horizon_client::touch::Settings::list_presets(&game_home, style);
+                let choices = presets
                     .into_iter()
                     .enumerate()
-                    .map(|(idx, name)| {
-                        let active = touch.active_profile.eq_ignore_ascii_case(&name);
-                        let is_def = touch.default_profile.eq_ignore_ascii_case(&name);
-                        let preset_info = horizon_client::touch::Settings::PRESETS
-                            .iter()
-                            .find(|(id, _, _)| id.eq_ignore_ascii_case(&name));
-                        let (mut title, sub) = if let Some((_, title, desc)) = preset_info {
-                            ((*title).to_owned(), (*desc).to_owned())
-                        } else {
-                            (
-                                format!("Custom Layout: {name}"),
-                                if active {
-                                    "Currently active custom HUD layout".into()
-                                } else {
-                                    "Saved custom layout in controlmap/".into()
-                                },
-                            )
-                        };
-                        if is_def {
-                            title.push_str(" ★");
+                    .map(|(idx, meta)| {
+                        let active = touch.preset_id.eq_ignore_ascii_case(&meta.id);
+                        let mut title = meta.name.clone();
+                        if meta.is_default {
+                            title.push_str("  [Protected Default]");
                         }
+                        let sub = format!(
+                            "{}  •  controls/{}/{}.json",
+                            meta.description,
+                            style.storage_subdir(),
+                            meta.id
+                        );
                         (
                             title,
                             sub,
@@ -315,8 +299,20 @@ impl Launcher {
                     })
                     .collect();
                 (
-                    "MCPE & GoyControl Profiles",
-                    "Switch between MCPE Style Touch Controls, GoyControl Custom Static Style, or saved JSON profiles.",
+                    match style {
+                        horizon_client::touch::ControlStyle::Mcpe => "MCPE Control Presets",
+                        horizon_client::touch::ControlStyle::GoyControl => {
+                            "GoyControl Control Presets"
+                        }
+                    },
+                    match style {
+                        horizon_client::touch::ControlStyle::Mcpe => {
+                            "Independent MCPE presets stored in controls/mcpe/. Default is protected."
+                        }
+                        horizon_client::touch::ControlStyle::GoyControl => {
+                            "Independent GoyControl presets stored in controls/goycontrol/. Default is protected."
+                        }
+                    },
                     choices,
                 )
             }

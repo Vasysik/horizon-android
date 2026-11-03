@@ -136,6 +136,9 @@ pub enum Icon {
     Undo,
     Redo,
     Plus,
+    Crosshair,
+    Pencil,
+    Copy,
 }
 
 struct Fonts {
@@ -166,8 +169,8 @@ impl Fonts {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Key {
     Glyph(Face, u16, u16),
-    /// A quarter disc (`false`) or a 1px quarter ring of this radius in pixels.
-    Corner(u16, bool),
+    /// A quarter disc (`0`) or a quarter ring of `(radius_px, thickness_px)`.
+    Corner(u16, u16),
     /// A supersampled vector icon at this pixel size.
     Vector(Icon, u16),
 }
@@ -398,7 +401,7 @@ fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
             chev_top || chev_bot || underscore
         }
         Icon::MicrosoftGrid => {
-            // 2x2 four-pane window grid matching Settings -> Account.
+            // 2x2 four-pane window grid matching Settings -> Account / Buttons.
             let in_x = (0.18..=0.46).contains(&u) || (0.54..=0.82).contains(&u);
             let in_y = (0.18..=0.46).contains(&v) || (0.54..=0.82).contains(&v);
             in_x && in_y
@@ -456,6 +459,32 @@ fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
             let h_bar = seg_dist(u, v, 0.22, 0.50, 0.78, 0.50) <= 0.068;
             let v_bar = seg_dist(u, v, 0.50, 0.22, 0.50, 0.78) <= 0.068;
             h_bar || v_bar
+        }
+        Icon::Crosshair => {
+            let (dx, dy) = (u - 0.50, v - 0.50);
+            let d = (dx * dx + dy * dy).sqrt();
+            let outer_ring = (0.23..=0.30).contains(&d);
+            let center_dot = d <= 0.065;
+            let h_tick = (v - 0.50).abs() <= 0.042 && (0.12..=0.37).contains(&u.min(1.0 - u));
+            let v_tick = (u - 0.50).abs() <= 0.042 && (0.12..=0.37).contains(&v.min(1.0 - v));
+            outer_ring || center_dot || h_tick || v_tick
+        }
+        Icon::Pencil => {
+            let shaft = seg_dist(u, v, 0.30, 0.70, 0.75, 0.25) <= 0.082;
+            let tip = seg_dist(u, v, 0.19, 0.81, 0.28, 0.72) <= 0.048;
+            let gap = seg_dist(u, v, 0.62, 0.38, 0.65, 0.35) <= 0.095;
+            (shaft && !gap) || tip
+        }
+        Icon::Copy => {
+            let front_outer = (0.32..=0.82).contains(&u) && (0.32..=0.84).contains(&v);
+            let front_inner = (0.39..=0.75).contains(&u) && (0.39..=0.77).contains(&v);
+            let front = front_outer && !front_inner;
+            let back_outer = (0.18..=0.68).contains(&u)
+                && (0.16..=0.68).contains(&v)
+                && !((0.28..=0.86).contains(&u) && (0.28..=0.88).contains(&v));
+            let back_inner = (0.25..=0.61).contains(&u) && (0.23..=0.61).contains(&v);
+            let back = back_outer && !back_inner;
+            front || back
         }
     }
 }
@@ -551,14 +580,25 @@ impl Cache {
         }
         made
     }
-    fn corner(&mut self, atlas: &HudAtlas, r: u16, ring: bool) -> Option<Rect> {
-        let key = Key::Corner(r, ring);
+    fn corner(&mut self, atlas: &HudAtlas, r: u16, thickness: u16) -> Option<Rect> {
+        // Cap rasterized corner resolution to 56px so large circles (e.g. joysticks)
+        // never overflow the 1024x512 UI text atlas shelf.
+        let capped_r = r.clamp(1, 56);
+        let scaled_t = if thickness == 0 {
+            0
+        } else {
+            ((u32::from(thickness) * u32::from(capped_r))
+                .div_ceil(u32::from(r.max(1)))
+                .max(1)) as u16
+        };
+        let key = Key::Corner(capped_r, scaled_t);
         if let Some(c) = self.entries.get(&key) {
             return c.rect;
         }
         // The top-left quadrant of a circle centred at (r, r), 4x4 supersampled.
-        let n = u32::from(r);
-        let rf = f32::from(r);
+        let n = u32::from(capped_r);
+        let rf = f32::from(capped_r);
+        let tf = f32::from(scaled_t);
         let mut alpha = vec![0.0; (n * n) as usize];
         for y in 0..n {
             for x in 0..n {
@@ -568,7 +608,7 @@ impl Cache {
                         let px = x as f32 + (sx as f32 + 0.5) / 4.0;
                         let py = y as f32 + (sy as f32 + 0.5) / 4.0;
                         let d = ((px - rf).powi(2) + (py - rf).powi(2)).sqrt();
-                        if d <= rf && (!ring || d >= rf - 1.0) {
+                        if d <= rf && (scaled_t == 0 || d >= (rf - tf).max(0.0)) {
                             hits += 1;
                         }
                     }
@@ -877,12 +917,21 @@ impl<'a> Ui<'a> {
         };
         self.emit_clipped_uv(x, y, x + r, y + r, u0, v0, u1, v1, color);
     }
-    fn corners(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, r: f32, ring: bool, color: u32) {
+    fn corners(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        r: f32,
+        thickness: u16,
+        color: u32,
+    ) {
         if r < 1.0 {
             return;
         }
         let atlas = self.atlas;
-        if let Some(rect) = with_cache(atlas, |c| c.corner(atlas, r as u16, ring)) {
+        if let Some(rect) = with_cache(atlas, |c| c.corner(atlas, r as u16, thickness)) {
             self.corner_quad(rect, x0, y0, r, (false, false), color);
             self.corner_quad(rect, x1 - r, y0, r, (true, false), color);
             self.corner_quad(rect, x1 - r, y1 - r, r, (true, true), color);
@@ -912,7 +961,7 @@ impl<'a> Ui<'a> {
         self.raw_fill(x0 + r, y0, x1 - r, y1, color);
         self.raw_fill(x0, y0 + r, x0 + r, y1 - r, color);
         self.raw_fill(x1 - r, y0 + r, x1, y1 - r, color);
-        self.corners(x0, y0, x1, y1, r, false, color);
+        self.corners(x0, y0, x1, y1, r, 0, color);
     }
     /// A 1px rounded border.
     pub fn border(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, color: u32) {
@@ -934,7 +983,7 @@ impl<'a> Ui<'a> {
         self.raw_fill(x0 + r, y1 - 1.0, x1 - r, y1, color);
         self.raw_fill(x0, y0 + r, x0 + 1.0, y1 - r, color);
         self.raw_fill(x1 - 1.0, y0 + r, x1, y1 - r, color);
-        self.corners(x0, y0, x1, y1, r, true, color);
+        self.corners(x0, y0, x1, y1, r, 1, color);
     }
 
     /// Draw a supersampled vector icon in `size x size` dp.
@@ -1401,7 +1450,7 @@ impl<'a> Ui<'a> {
         );
     }
 
-    /// Multi-pixel rounded border in dp (`stroke_w` dp thick).
+    /// Multi-pixel rounded border in dp (`stroke_w` dp thick) rendered in a single pass.
     pub fn stroke_rounded(
         &mut self,
         x: f32,
@@ -1415,23 +1464,54 @@ impl<'a> Ui<'a> {
         if color >> 24 == 0 || stroke_w <= 0.0 || w <= 0.0 || h <= 0.0 {
             return;
         }
-        let steps = (stroke_w * self.density).round().clamp(1.0, 14.0) as i32;
-        let step_dp = 1.0 / self.density.max(0.5);
-        for i in 0..steps {
-            let inset = i as f32 * step_dp;
-            let rw = w - inset * 2.0;
-            let rh = h - inset * 2.0;
-            if rw <= 1.0 || rh <= 1.0 {
-                break;
-            }
-            self.border(
-                x + inset,
-                y + inset,
-                rw,
-                rh,
-                (radius - inset).max(0.0),
+        let (x0, y0, x1, y1) = (
+            self.px_x(x),
+            self.px_y(y),
+            self.px_x(x + w),
+            self.px_y(y + h),
+        );
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let t = (stroke_w * self.density).round().clamp(1.0, 24.0);
+        let r = (radius * self.density)
+            .round()
+            .min(((x1 - x0) / 2.0).floor())
+            .min(((y1 - y0) / 2.0).floor())
+            .max(0.0);
+        if r < 1.0 {
+            self.raw_fill(x0, y0, x1, (y0 + t).min(y1), color);
+            self.raw_fill(x0, (y1 - t).max(y0), x1, y1, color);
+            self.raw_fill(
+                x0,
+                (y0 + t).min(y1),
+                (x0 + t).min(x1),
+                (y1 - t).max(y0),
                 color,
             );
+            self.raw_fill(
+                (x1 - t).max(x0),
+                (y0 + t).min(y1),
+                x1,
+                (y1 - t).max(y0),
+                color,
+            );
+            return;
+        }
+        self.raw_fill(x0 + r, y0, x1 - r, (y0 + t).min(y1), color);
+        self.raw_fill(x0 + r, (y1 - t).max(y0), x1 - r, y1, color);
+        self.raw_fill(x0, y0 + r, (x0 + t).min(x1), y1 - r, color);
+        self.raw_fill((x1 - t).max(x0), y0 + r, x1, y1 - r, color);
+        if t < r {
+            let atlas = self.atlas;
+            if let Some(rect) = with_cache(atlas, |c| c.corner(atlas, r as u16, t as u16)) {
+                self.corner_quad(rect, x0, y0, r, (false, false), color);
+                self.corner_quad(rect, x1 - r, y0, r, (true, false), color);
+                self.corner_quad(rect, x1 - r, y1 - r, r, (true, true), color);
+                self.corner_quad(rect, x0, y1 - r, r, (false, true), color);
+            }
+        } else {
+            self.corners(x0, y0, x1, y1, r, 0, color);
         }
     }
 

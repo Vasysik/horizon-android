@@ -317,7 +317,7 @@ impl TouchControls {
             }
             self.clicked = true;
             let third_key = btn.third_key.clone();
-            if placement.toggleable {
+            if placement.toggleable && key != "mouse.virtual.toggle" {
                 let now_on = !self.latched_custom.remove(&key);
                 if now_on {
                     self.latched_custom.insert(key.clone());

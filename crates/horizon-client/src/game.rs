@@ -14947,7 +14947,7 @@ impl Game<'_> {
         }
         #[cfg(target_os = "android")]
         if self.pad.touch.editor.is_some() {
-            let profile_name = self.pad.touch.settings.active_profile.clone();
+            let profile_name = self.pad.touch.settings.preset_name.clone();
             horizon_client::touch_ui::draw_hud_editor(
                 &self.pad.touch,
                 &mut hud,
@@ -14959,7 +14959,13 @@ impl Game<'_> {
             let in_menu = self.pad_in_menu();
             self.pad.touch.in_menu = in_menu;
             self.pad.touch.goy_rendered_by_ui = true;
-            if self.player.is_some() || self.settings.keypad.enabled {
+            if (self.player.is_some() || self.settings.keypad.enabled)
+                && (!in_menu
+                    || self.android_inventory_controls()
+                    || self.pad.touch.settings.layouts[self.pad.touch.settings.mode.index()]
+                        .iter()
+                        .any(|p| p.visible_in_menu))
+            {
                 self.pad.touch.context_use =
                     self.pad.touch.settings.contextual_interact && self.touch_context_use();
                 self.pad.touch.vertical_movement = self.player.as_ref().is_some_and(|p| p.flying);
@@ -14983,6 +14989,8 @@ impl Game<'_> {
         #[cfg(target_os = "android")]
         {
             if self.pad.touch.editor.is_none() {
+                self.pad.touch_ui.goy_mode = self.pad.touch.settings.control_style
+                    == horizon_client::touch::ControlStyle::GoyControl;
                 self.pad
                     .touch_ui
                     .draw(&mut hud, &self.gui.atlas, self.pad_in_menu());
@@ -14991,6 +14999,13 @@ impl Game<'_> {
                     &self.gui.atlas,
                     &self.pad.touch.settings,
                 );
+                if self.pad.touch_ui.virtual_mouse && !self.pad.touch_ui.floating_menu {
+                    horizon_client::touch_ui::draw_pointer(
+                        &mut hud,
+                        &self.gui.atlas,
+                        self.cursor,
+                    );
+                }
             }
         }
         self.flush_ime(&mut hud);
@@ -16406,7 +16421,7 @@ impl Game<'_> {
                     self.pad.touch.projectile_crosshair = self.touch_projectile_crosshair();
                     self.pad.touch.hold_uses_item = self.touch_item_held_use();
                 }
-                let delta = self.pad.touch.update(
+                let raw_delta = self.pad.touch.update(
                     touch.id,
                     [
                         touch.location.x as f32 / size.width.max(1) as f32,
@@ -16418,8 +16433,23 @@ impl Game<'_> {
                 if self.pad.touch.has_pending_key_events() {
                     self.android_custom_events();
                 }
+                if self.pad.touch_ui.virtual_mouse
+                    && (raw_delta[0] != 0.0 || raw_delta[1] != 0.0)
+                    && let Some(b) = self.gui_scale()
+                {
+                    let vm_sens = self
+                        .pad
+                        .touch
+                        .settings
+                        .virtual_mouse_sensitivity
+                        .clamp(0.25, 4.0);
+                    self.cursor = (
+                        (self.cursor.0 + raw_delta[0] * b.width * vm_sens).clamp(0.0, b.width),
+                        (self.cursor.1 + raw_delta[1] * b.height * vm_sens).clamp(0.0, b.height),
+                    );
+                }
                 let delta = horizon_client::touch::camera_delta_with_mouse(
-                    delta,
+                    raw_delta,
                     size.width,
                     size.height,
                     &self.pad.touch.settings,
@@ -16459,7 +16489,7 @@ impl Game<'_> {
                 }
             } else {
                 if !self.android_inventory_controls() {
-                    self.pad.touch.clear();
+                    self.pad.touch.clear_world_gesture();
                 }
                 if !matches!(self.screen, Screen::Inventory | Screen::Creative) {
                     self.android_menu_touch(touch, event_loop, id);
@@ -20579,18 +20609,27 @@ fn loading_app(
     Ok(App::Loading(Box::new(loading)))
 }
 
-/// GoyControl is the factory touch layout: a first launch writes it once, so
-/// the on-screen buttons exist before the first frame.
+/// MCPE is the default factory touch control system on a fresh installation,
+/// and both `controls/mcpe/` and `controls/goycontrol/` protected Default
+/// layouts are initialized before the first frame.
 #[cfg(target_os = "android")]
 fn ensure_factory_touch_layout() {
+    let home = std::path::Path::new(".");
+    horizon_client::touch::Settings::ensure_system_storage(
+        home,
+        horizon_client::touch::ControlStyle::Mcpe,
+    );
+    horizon_client::touch::Settings::ensure_system_storage(
+        home,
+        horizon_client::touch::ControlStyle::GoyControl,
+    );
     let path = std::path::Path::new("horizon-touch.json");
     if path.exists() {
         return;
     }
-    let mut settings = horizon_client::touch::Settings::default();
-    settings.set_control_style(horizon_client::touch::ControlStyle::GoyControl);
+    let settings = horizon_client::touch::Settings::default_mcpe();
     if let Err(error) = settings.save_to(path) {
-        log::warn!("Cannot write the factory touch layout: {error}");
+        log::warn!("Cannot write the factory MCPE touch layout: {error}");
     }
 }
 

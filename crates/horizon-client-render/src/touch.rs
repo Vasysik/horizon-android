@@ -12,7 +12,7 @@ pub use custom::CustomButton;
 pub use editor::{Editor, EditorDragKind, PickerStep};
 pub mod layout;
 pub use layout::{
-    Control, ControlStyle, JoystickMoveArea, JoystickStyle, Mode, Placement, Settings,
+    Control, ControlStyle, JoystickMoveArea, JoystickStyle, Mode, Placement, PresetMeta, Settings,
 };
 /// Entity-placement items retain short-tap placement, like building blocks.
 pub fn item_places_entity_on_tap(item: &str) -> bool {
@@ -103,7 +103,7 @@ pub fn camera_delta_with_mouse(
         1.0
     };
     let ix = if invert_x { -1.0 } else { 1.0 };
-    let iy = if invert_y { -1.0 } else { 1.0 };
+    let iy = if invert_y ^ s.invert_y { -1.0 } else { 1.0 };
     [
         base[0] * mouse_scale * zoom * ix,
         base[1] * mouse_scale * zoom * iy,
@@ -252,7 +252,12 @@ impl TouchControls {
     }
     pub fn control_at(&self, point: [f32; 2]) -> Option<Control> {
         Control::ALL.into_iter().rev().find(|c| {
-            if !self.visible(*c) {
+            let vis = if self.editor.is_some() || self.inventory_mode {
+                self.visible(*c)
+            } else {
+                self.visible_for_state(*c, self.in_menu)
+            };
+            if !vis {
                 return false;
             }
             if *c == Control::Move && self.dynamic_joystick() && self.editor.is_none() {
@@ -301,7 +306,7 @@ impl TouchControls {
         if !self.visible(c) {
             return false;
         }
-        if self.editor.is_some() {
+        if self.editor.is_some() || self.inventory_mode {
             return true;
         }
         let p = self.placement(c);
@@ -729,7 +734,12 @@ impl TouchControls {
                 .fingers
                 .values()
                 .any(|(r, _)| matches!(r, Role::Move(_)));
-            if control.is_none() && !has_move {
+            if control.is_none()
+                && !has_move
+                && self.settings.control_style == ControlStyle::GoyControl
+                && self.visible(Control::Move)
+                && !self.dynamic_joystick()
+            {
                 match self.settings.joystick_style.move_area {
                     JoystickMoveArea::MidBottomLeft if point[0] < 0.45 && point[1] > 0.35 => {
                         control = Some(Control::Move);
@@ -1122,6 +1132,10 @@ fn text_button(
 
 /// Reuse Chat's complete 18x18 border, including its bottommost pixel row.
 fn menu_frame(b: &mut HudBatch, a: &HudAtlas, [x, y, w, h]: [f32; 4], color: u32) {
+    if !a.sprites.contains_key("gui/bedrock/gui") {
+        draw_mcpe_bevel_button(b, a, [x, y, w, h], color);
+        return;
+    }
     let border = (w / 18.0 * 2.0).min(h / 2.0);
     let xs = [200.0, 202.0, 216.0, 218.0];
     let ys = [82.0, 84.0, 96.0, 100.0];
@@ -1268,13 +1282,6 @@ pub fn draw_single_mcpe_control(
                     color,
                 );
             }
-            fitted_sprite(
-                b,
-                a,
-                "controls/jump_dpad",
-                [cx + cell, cy + cell, cell, cell],
-                color,
-            );
         } else {
             sprite(b, a, "ui/joystick_frame", [cx, cy, size, size], color);
             sprite(
@@ -1303,6 +1310,11 @@ pub fn draw_single_mcpe_control(
         Control::Sprint => "ui/sprint",
         Control::Attack => "ui/attack",
         Control::Use => "ui/interact",
+        Control::Jump if tc.swimming => "controls/waterascend",
+        Control::Sneak if tc.swimming => "controls/waterdescend",
+        Control::Jump if tc.vertical_movement => "controls/flyingascend",
+        Control::Sneak if tc.vertical_movement => "controls/flyingdescend",
+        Control::Sneak if tc.mounted => "controls/dismount",
         Control::Jump if tc.settings.mode == Mode::Dpad => "controls/jump_dpad",
         Control::Sneak if tc.settings.mode == Mode::Dpad => "controls/sneak_dpad",
         Control::Jump => "ui/jump",
@@ -1327,6 +1339,14 @@ pub fn draw_single_mcpe_control(
         Control::Perspective if a.sprites.contains_key("gui/bedrock/gui") => {
             region(b, a, "gui", [236.0, 46.0, 18.0, 18.0], bounds, color)
         }
+        Control::Offhand | Control::Shield => {
+            let label = if control == Control::Offhand {
+                "Swap"
+            } else {
+                "Shield"
+            };
+            text_button(b, a, bounds, label, pressed, color, false);
+        }
         Control::Inventory if a.sprites.contains_key("gui/bedrock/ui/joystick_knob") => {
             sprite(b, a, "ui/joystick_knob", bounds, color);
             fitted_sprite(
@@ -1337,7 +1357,7 @@ pub fn draw_single_mcpe_control(
                 color,
             );
         }
-        Control::Pause | Control::Settings if a.sprites.contains_key("gui/bedrock/gui") => {
+        Control::Pause | Control::Settings => {
             menu_frame(b, a, bounds, color);
             fitted_sprite(
                 b,
@@ -1347,7 +1367,13 @@ pub fn draw_single_mcpe_control(
                 color,
             );
         }
-        _ => fitted_sprite(b, a, name, bounds, color),
+        _ => fitted_sprite(
+            b,
+            a,
+            &format!("{name}{}", if pressed { "_pressed" } else { "" }),
+            bounds,
+            color,
+        ),
     }
 }
 
