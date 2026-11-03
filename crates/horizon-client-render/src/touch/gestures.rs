@@ -165,15 +165,17 @@ impl Runtime {
         if let Some((index, bindings)) = matured {
             self.activate(Owner::Finger(id, 2), index, 2, &bindings);
         }
-        if let Some(p) = self.presses.remove(&id) {
-            if !p.held && !p.double && !p.dragged {
-                self.last_tap.insert(p.index, now);
-                if !p.bindings.immediate_single {
-                    if p.bindings.double.is_empty() {
-                        self.pulse(p.index, &p.bindings.single);
-                    } else {
-                        self.pending.insert(p.index, (now, p.bindings));
-                    }
+        if let Some(p) = self.presses.remove(&id)
+            && !p.held
+            && !p.double
+            && !p.dragged
+        {
+            self.last_tap.insert(p.index, now);
+            if !p.bindings.immediate_single {
+                if p.bindings.double.is_empty() {
+                    self.pulse(p.index, &p.bindings.single);
+                } else {
+                    self.pending.insert(p.index, (now, p.bindings));
                 }
             }
         }

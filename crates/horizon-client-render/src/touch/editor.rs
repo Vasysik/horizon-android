@@ -192,9 +192,9 @@ impl TouchControls {
                 e.apply_all = !e.apply_all;
             } else if layout::contains([0.32, 0.68, 0.36, 0.07], p)
                 && e.selected.is_some()
-                && e.option.is_some()
+                && let Some(option) = e.option
             {
-                e.drag = Some((id, Drag::Slider(e.option.unwrap())));
+                e.drag = Some((id, Drag::Slider(option)));
             } else if layout::contains([0.32, 0.79, 0.11, 0.07], p) && e.selected.is_some() {
                 e.option = Some(1);
             } else if layout::contains([0.445, 0.79, 0.11, 0.07], p) && e.selected.is_some() {

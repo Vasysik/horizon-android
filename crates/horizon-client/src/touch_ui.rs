@@ -444,6 +444,19 @@ fn button(b: &mut HudBatch, a: &HudAtlas, label: &str, x: f32, y: f32, w: f32) {
 mod tests {
     use super::*;
     #[test]
+    fn modifier_toggle_and_finger_hold_release_independently() {
+        let mut ui = TouchUi::default();
+        assert!(ui.toggle_key(KeyCode::ShiftLeft));
+        assert!(!ui.key_down(1, KeyCode::ShiftLeft));
+        assert!(ui.toggle_key(KeyCode::ShiftLeft));
+        assert!(ui.key_held(KeyCode::ShiftLeft));
+        assert_eq!(ui.key_up(1), Some(KeyCode::ShiftLeft));
+        assert!(!ui.key_held(KeyCode::ShiftLeft));
+        assert!(ui.toggle_key(KeyCode::ControlLeft));
+        assert_eq!(ui.release_keys(), [KeyCode::ControlLeft]);
+        assert!(!ui.key_held(KeyCode::ControlLeft));
+    }
+    #[test]
     fn explicit_mouse_drag_does_not_generate_an_extra_tap_or_hold_click() {
         let mut ui = TouchUi::default();
         ui.relative_touch(
