@@ -349,80 +349,6 @@ impl Game<'_> {
     }
 }
 
-<<<<<<< C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\o
-/// Horizon's capability `recipes` of WebAssembly mods: the same tables in the
-/// runtime's types (Starling's own capability `recipes` is mod_recipe_catalog.rs).
-#[cfg(feature = "mods")]
-impl Game<'_> {
-    /// Capability `recipes`'s tables and known displays for this tick's
-    /// snapshot; nothing while no running mod reads them.
-    pub(super) fn mod_recipes(&mut self) -> (Option<Arc<horizon_mods::Recipes>>, Arc<[i32]>) {
-        if !self.mods.mods.wants_recipes() || self.res.rest.get().is_none() {
-            return (None, Arc::from([]));
-        }
-        if self.mods.horizon_recipes.is_none() {
-            self.mods.horizon_recipes = self.made_recipes().map(|t| Arc::new(wasm::recipes(&t)));
-        }
-        (self.mods.horizon_recipes.clone(), self.known_displays())
-    }
-}
-
-/// The native tables as the WebAssembly runtime's.
-#[cfg(feature = "mods")]
-mod wasm {
-    use super::{Recipe, RecipeItem, RecipeKind, RecipeStack, Recipes};
-    use horizon_mods as m;
-
-    fn kind(k: RecipeKind) -> m::HorizonRecipeKind {
-        match k {
-            RecipeKind::CraftingShaped => m::HorizonRecipeKind::CraftingShaped,
-            RecipeKind::CraftingShapeless => m::HorizonRecipeKind::CraftingShapeless,
-            RecipeKind::Smelting => m::HorizonRecipeKind::Smelting,
-            RecipeKind::Blasting => m::HorizonRecipeKind::Blasting,
-            RecipeKind::Smoking => m::HorizonRecipeKind::Smoking,
-            RecipeKind::Campfire => m::HorizonRecipeKind::Campfire,
-            RecipeKind::Stonecutting => m::HorizonRecipeKind::Stonecutting,
-            RecipeKind::Smithing => m::HorizonRecipeKind::Smithing,
-            RecipeKind::Brewing => m::HorizonRecipeKind::Brewing,
-        }
-    }
-    fn stacks(list: &[RecipeStack]) -> Vec<m::RecipeStack> {
-        list.iter()
-            .map(|s| m::RecipeStack {
-                item: s.item,
-                count: s.count,
-                components: s.components.clone(),
-            })
-            .collect()
-    }
-    fn recipe(r: &Recipe) -> m::HorizonRecipe {
-        m::HorizonRecipe {
-            id: r.id.clone(),
-            kind: kind(r.kind),
-            category: r.category.clone(),
-            group: r.group.clone(),
-            width: r.width,
-            height: r.height,
-            slots: r.slots.iter().map(|s| stacks(s)).collect(),
-            results: stacks(&r.results),
-            cooking_time: r.cooking_time,
-            experience: r.experience,
-            book_id: r.book_id,
-        }
-    }
-    fn item(i: &RecipeItem) -> m::RecipeItem {
-        m::RecipeItem {
-            id: i.id.clone(),
-            name: i.name.clone(),
-            tags: i.tags.clone(),
-        }
-    }
-    pub(super) fn recipes(t: &Recipes) -> m::Recipes {
-        m::Recipes {
-            items: t.items.iter().map(item).collect(),
-            recipes: t.recipes.iter().map(recipe).collect(),
-||||||| C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\b
-=======
 impl Game<'_> {
     /// The server's recipes a client was sent, over its own; None on a
     /// server and until a server sends any.
@@ -523,7 +449,6 @@ impl Game<'_> {
                 self.recipes_received_now();
             }
             Err(e) => log::warn!("Horizon: the server's recipes were not taken: {e}"),
->>>>>>> C:\Users\Joaol\AppData\Local\Temp\tmphbb6d9jz\t
         }
     }
 }

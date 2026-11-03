@@ -48,15 +48,6 @@ pub fn check_path(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// One of mod `id`'s own GUI sprites, `assets/<id>/textures/gui/sprites/<path>.png`: the files a
-/// mod without capability registries may ship, the icons of its buttons.
-pub fn gui_sprite(name: &str, id: &str) -> bool {
-    name.strip_prefix("assets/")
-        .and_then(|n| n.strip_prefix(id))
-        .and_then(|n| n.strip_prefix("/textures/gui/sprites/"))
-        .is_some_and(|n| n.ends_with(".png") && !n.is_empty())
-}
-
 /// A vanilla identifier, `minecraft:path`.
 /// `Identifier.isValidNamespace` and `isValidPath` on an id with both parts
 /// given: `[a-z0-9_.-]`, and `/` in the path too.
@@ -95,7 +86,8 @@ pub struct BlockProperties {
     pub map_color: Option<u8>,
     /// A vanilla block whose sounds this block uses.
     pub sounds: Option<String>,
-<<<<<<< HEAD
+    /// Which states tick randomly, whatever the template does (`isRandomlyTicking`).
+    pub random_ticks: Option<RandomTicks>,
     /// `MODEL` (the terrain draws its model), `INVISIBLE`, or `ENTITYBLOCK_ANIMATED` (the game
     /// draws it: a kinetic part's turning model).
     pub render_shape: Option<String>,
@@ -105,6 +97,7 @@ pub struct BlockProperties {
     /// `axis`), as Create's shapers are made. Its outline, collision and support are these
     /// boxes, and it hides none of its neighbours' faces nor their light.
     pub shape: Option<Vec<[f32; 6]>>,
+}
 }
 
 /// The render shapes a block may declare.
@@ -289,10 +282,6 @@ pub enum Machine {
     /// chute it leads into (its state's `facing`: down, or a diagonal one's way), or dropped
     /// below (Create's chute).
     Chute,
-||||||| f8988d5a7
-=======
-    /// Which states tick randomly, whatever the template does (`isRandomlyTicking`).
-    pub random_ticks: Option<RandomTicks>,
 }
 
 /// Which of a block's states get random ticks (`BlockBehaviour.isRandomlyTicking(state)`), so a
@@ -403,7 +392,6 @@ fn state_name(s: &str) -> bool {
     !s.is_empty()
         && s.bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
->>>>>>> 31f83499b
 }
 
 #[derive(Debug, Deserialize)]
@@ -429,20 +417,13 @@ struct BlockFile {
     #[serde(default = "yes")]
     item: bool,
     #[serde(default)]
-<<<<<<< HEAD
+    components: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
     kinetic: Option<Kinetic>,
     #[serde(default)]
     machine: Option<Machine>,
     #[serde(default)]
-    states: Option<std::collections::BTreeMap<String, Vec<String>>>,
-    #[serde(default)]
-    fuel: Option<u32>,
-    #[serde(default)]
     models: Vec<String>,
-||||||| f8988d5a7
-=======
-    components: BTreeMap<String, serde_json::Value>,
->>>>>>> 31f83499b
 }
 fn yes() -> bool {
     true
@@ -467,24 +448,6 @@ pub struct Block {
     pub default_state: BTreeMap<String, String>,
     /// Also add a block item with the same id.
     pub item: bool,
-<<<<<<< HEAD
-    /// Its part in a kinetic network, if any.
-    pub kinetic: Option<Kinetic>,
-    /// The machine it is, if it keeps items of its own.
-    pub machine: Option<Machine>,
-    /// Starling: properties of its own, when no vanilla block has its (Create's belt, funnels,
-    /// saw): each property's values, in its states' order, the first the default's. Its states
-    /// take the template's behaviour and facts, each from the template's state sharing most of
-    /// its properties.
-    pub states: Option<std::collections::BTreeMap<String, Vec<String>>>,
-    /// How long its item burns in a furnace, in ticks (0: not at all, whatever its template's
-    /// does).
-    pub fuel: Option<u32>,
-    /// Starling: models (`<ns>:block/<path>`) the game draws for it besides its own, in the
-    /// order its machine names them (a blaze burner's blaze, its rods and its flame).
-    pub models: Vec<String>,
-||||||| f8988d5a7
-=======
     /// Its item's component patch, as an [`Item`]'s.
     pub components: BTreeMap<String, serde_json::Value>,
     /// A connecting block (template `minecraft:chorus_plant`, a `PipeBlock`
@@ -503,6 +466,13 @@ pub struct Block {
     /// template is the matching wall sign and which has no item. The
     /// template's when unset.
     pub wall_block: Option<String>,
+    /// Its part in a kinetic network, if any.
+    pub kinetic: Option<Kinetic>,
+    /// The machine it is, if it keeps items of its own.
+    pub machine: Option<Machine>,
+    /// Starling: models (`<ns>:block/<path>`) the game draws for it besides its own, in the
+    /// order its machine names them (a blaze burner's blaze, its rods and its flame).
+    pub models: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -523,11 +493,7 @@ pub struct CreativeTab {
     pub title: String,
     pub icon: String,
     pub items: Vec<String>,
->>>>>>> 31f83499b
 }
-
-/// The most states a block may declare of its own.
-pub const MAX_OWN_STATES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -544,14 +510,9 @@ struct ItemFile {
     template: String,
     max_stack_size: Option<u8>,
     rarity: Option<Rarity>,
-<<<<<<< HEAD
-    fuel: Option<u32>,
-||||||| f8988d5a7
-=======
     #[serde(default)]
     components: BTreeMap<String, serde_json::Value>,
     crafting_remainder: Option<String>,
->>>>>>> 31f83499b
 }
 
 /// An item the mod adds: a vanilla template item's components under a new
@@ -564,17 +525,11 @@ pub struct Item {
     pub template: String,
     pub max_stack_size: Option<u8>,
     pub rarity: Option<Rarity>,
-<<<<<<< HEAD
-    /// How long it burns in a furnace, in ticks (0: not at all, whatever its template does).
-    pub fuel: Option<u32>,
-||||||| f8988d5a7
-=======
     /// A 26.3 data component patch over the template's: `!minecraft:<type>` removes one.
     pub components: BTreeMap<String, serde_json::Value>,
     /// What it leaves in the crafting grid (`Item.Properties.craftRemainder`):
     /// a vanilla item or one of the mod's own.
     pub crafting_remainder: Option<String>,
->>>>>>> 31f83499b
 }
 
 /// `MobEffectCategory`.
@@ -719,6 +674,7 @@ fn reader<'a>(
         own: match source {
             Source::Dir(root) => OwnFiles::Dir(root),
             Source::Zip(path) => OwnFiles::Zip(Box::new(open_zip(path)?)),
+            Source::Code => OwnFiles::Dir(Path::new("")),
         },
         fetched: fetched.as_ref().map(|(dir, names)| (dir.as_path(), names)),
     })
@@ -785,21 +741,6 @@ pub fn clash(a: (&str, &[String]), b: (&str, &[String])) -> Option<String> {
 impl Content {
     /// The content of the mod at `path` (a `.hmod` or a mod folder).
     pub fn read(path: &Path, manifest: &Manifest) -> Result<Content, String> {
-<<<<<<< HEAD
-        Self::read_with(path, manifest, None)
-    }
-
-    /// [`Content::read`], with the assets its manifest fetches when they are unpacked in
-    /// `fetched` ([`crate::fetch::dir`]): a file the mod has of its own is its own.
-    pub fn read_with(
-        path: &Path,
-        manifest: &Manifest,
-        fetched: Option<&Path>,
-    ) -> Result<Content, String> {
-        let (source, mut sized) = if path.is_dir() {
-||||||| f8988d5a7
-        let (source, sized) = if path.is_dir() {
-=======
         Self::read_declaring(path, manifest, &[])
     }
     /// [`Content::read`] for a mod whose native code also declares items (`native_items`):
@@ -810,8 +751,27 @@ impl Content {
         manifest: &Manifest,
         declared: &[String],
     ) -> Result<Content, String> {
-        let (source, sized) = if path.is_dir() {
->>>>>>> 31f83499b
+        Self::read_all(path, manifest, declared, None)
+    }
+
+    /// [`Content::read_declaring`], with the assets its manifest fetches when they are unpacked
+    /// in `fetched` ([`crate::fetch::dir`]): a file the mod has of its own is its own.
+    pub fn read_with(
+        path: &Path,
+        manifest: &Manifest,
+        declared: &[String],
+        fetched: Option<&Path>,
+    ) -> Result<Content, String> {
+        Self::read_all(path, manifest, declared, fetched)
+    }
+
+    fn read_all(
+        path: &Path,
+        manifest: &Manifest,
+        declared: &[String],
+        fetched: Option<&Path>,
+    ) -> Result<Content, String> {
+        let (source, mut sized) = if path.is_dir() {
             let mut out = Vec::new();
             for top in ["assets", "data"] {
                 walk(path, &path.join(top), &mut out)?;
@@ -884,6 +844,7 @@ impl Content {
     pub fn declared(namespace: &str) -> Content {
         Content {
             source: Source::Code,
+            fetched: None,
             files: Vec::new(),
             blocks: Vec::new(),
             items: Vec::new(),
@@ -991,32 +952,15 @@ impl Content {
     /// A reader of its content files. A packaged mod's archive is opened
     /// once for all of them (opening it reads its whole index).
     pub fn reader(&self) -> Result<FileReader<'_>, String> {
-<<<<<<< HEAD
         reader(&self.source, &self.fetched)
-||||||| f8988d5a7
-        Ok(match &self.source {
-            Source::Dir(root) => FileReader::Dir(root),
-            Source::Zip(path) => FileReader::Zip(Box::new(open_zip(path)?)),
-        })
-=======
-        Ok(match &self.source {
-            Source::Dir(root) => FileReader::Dir(root),
-            Source::Zip(path) => FileReader::Zip(Box::new(open_zip(path)?)),
-            Source::Code => FileReader::Dir(Path::new("")),
-        })
->>>>>>> 31f83499b
     }
 
     /// Where content may go, and the declarations.
     fn check(&mut self, manifest: &Manifest, declared: &[String]) -> Result<(), String> {
         let id = manifest.id.as_str();
-        // Its own GUI sprites (its buttons' icons) any mod may have; the rest is content.
-        if let Some(name) = self.files.iter().find(|f| !gui_sprite(f, id))
-            && !manifest.capabilities.contains(&Capability::Registries)
-        {
+        if !self.files.is_empty() && !manifest.capabilities.contains(&Capability::Registries) {
             return Err(format!(
-                "{name}: a mod without capability registries in {MANIFEST} has its own GUI \
-                 sprites only (assets/{id}/textures/gui/sprites/*.png)"
+                "has assets/ or data/ but not capability registries in {MANIFEST}"
             ));
         }
         let mut blocks = Vec::new();
@@ -1086,18 +1030,7 @@ impl Content {
         let mut reader = reader(&self.source, &self.fetched)?;
         for (block, name) in blocks {
             let file: BlockFile =
-<<<<<<< HEAD
                 serde_json::from_slice(&reader.read(&name)?).map_err(|e| format!("{name}: {e}"))?;
-            check_block(&file).map_err(|e| format!("{name}: {e}"))?;
-            if file.item {
-                ids.insert(block.clone());
-||||||| f8988d5a7
-                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
-            check_block(&file).map_err(|e| format!("{name}: {e}"))?;
-            if file.item {
-                ids.insert(block.clone());
-=======
-                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
             if file
                 .connects_to
                 .as_ref()
@@ -1106,7 +1039,6 @@ impl Content {
                 return Err(format!(
                     "{name}: connects_to is a block tag, #namespace:path"
                 ));
->>>>>>> 31f83499b
             }
             let block = Block {
                 id: block,
@@ -1117,16 +1049,6 @@ impl Content {
                 state_properties: file.state_properties,
                 default_state: file.default_state,
                 item: file.item,
-<<<<<<< HEAD
-                kinetic: file.kinetic,
-                machine: file.machine,
-                states: file.states,
-                fuel: file.fuel,
-                models: file.models,
-            });
-||||||| f8988d5a7
-            });
-=======
                 components: file.components,
                 connects_to: file
                     .connects_to
@@ -1134,61 +1056,27 @@ impl Content {
                 thickness: file.thickness,
                 wood_type: file.wood_type,
                 wall_block: file.wall_block,
+                kinetic: file.kinetic,
+                machine: file.machine,
+                models: file.models,
             };
             check_block(&block).map_err(|e| format!("{name}: {e}"))?;
             if block.item {
                 ids.insert(block.id.clone());
             }
             self.blocks.push(block);
->>>>>>> 31f83499b
         }
         // After every block, so a wall form may be declared in a later file.
         check_sign_walls(&self.blocks.iter().collect::<Vec<_>>())?;
         let mut remainders = Vec::new();
         for (item, name) in items {
             let file: ItemFile =
-<<<<<<< HEAD
                 serde_json::from_slice(&reader.read(&name)?).map_err(|e| format!("{name}: {e}"))?;
-            if !vanilla_id(&file.template) {
-                return Err(format!(
-                    "{name}: template {:?} is not a vanilla item (minecraft:...)",
-                    file.template
-                ));
-            }
-            if file.max_stack_size.is_some_and(|n| !(1..=99).contains(&n)) {
-                return Err(format!("{name}: max_stack_size is 1 to 99"));
-            }
-            if !ids.insert(item.clone()) {
-                return Err(format!("{name}: {item} is also a block's item"));
-            }
-            self.items.push(Item {
-||||||| f8988d5a7
-                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
-            if !vanilla_id(&file.template) {
-                return Err(format!(
-                    "{name}: template {:?} is not a vanilla item (minecraft:...)",
-                    file.template
-                ));
-            }
-            if file.max_stack_size.is_some_and(|n| !(1..=99).contains(&n)) {
-                return Err(format!("{name}: max_stack_size is 1 to 99"));
-            }
-            if !ids.insert(item.clone()) {
-                return Err(format!("{name}: {item} is also a block's item"));
-            }
-            self.items.push(Item {
-=======
-                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
             let item = Item {
->>>>>>> 31f83499b
                 id: item,
                 template: file.template,
                 max_stack_size: file.max_stack_size,
                 rarity: file.rarity,
-<<<<<<< HEAD
-                fuel: file.fuel,
-||||||| f8988d5a7
-=======
                 components: file.components,
                 crafting_remainder: file.crafting_remainder,
             };
@@ -1203,7 +1091,7 @@ impl Content {
         }
         for (effect, name) in effects {
             let file: MobEffect =
-                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
+                serde_json::from_slice(&reader.read(&name)?).map_err(|e| format!("{name}: {e}"))?;
             if file.color > 0xFF_FFFF {
                 return Err(format!("{name}: color is RGB, 0 to 16777215 (0xFFFFFF)"));
             }
@@ -1224,7 +1112,7 @@ impl Content {
         }
         for (tab, name) in tabs {
             let file: CreativeTabFile =
-                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
+                serde_json::from_slice(&reader.read(&name)?).map_err(|e| format!("{name}: {e}"))?;
             let id_like = |s: &str| {
                 s.split_once(':')
                     .is_some_and(|(n, p)| !n.is_empty() && !p.is_empty())
@@ -1239,12 +1127,11 @@ impl Content {
                 title: file.title,
                 icon: file.icon,
                 items: file.items,
->>>>>>> 31f83499b
             });
         }
         for (kind, name) in types {
             let file: EntityType =
-                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
+                serde_json::from_slice(&reader.read(&name)?).map_err(|e| format!("{name}: {e}"))?;
             if !ENTITY_TEMPLATES.contains(&file.template.as_str()) {
                 return Err(format!(
                     "{name}: template {:?} is not one of {ENTITY_TEMPLATES:?}",
@@ -1271,7 +1158,7 @@ impl Content {
         }
         for (menu, name) in menus {
             let file: MenuType =
-                serde_json::from_slice(&self.file(&name)?).map_err(|e| format!("{name}: {e}"))?;
+                serde_json::from_slice(&reader.read(&name)?).map_err(|e| format!("{name}: {e}"))?;
             if !(1..=MAX_MENU_SLOTS).contains(&file.slots) || file.data_slots > MAX_MENU_SLOTS {
                 return Err(format!(
                     "{name}: slots is 1 to {MAX_MENU_SLOTS}, data_slots 0 to {MAX_MENU_SLOTS}"
@@ -1345,34 +1232,6 @@ fn check_block(file: &Block) -> Result<(), String> {
             file.template
         ));
     }
-<<<<<<< HEAD
-    if let Some(states) = &file.states {
-        let plain = |s: &str| {
-            (1..=32).contains(&s.len())
-                && s.bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-        };
-        let mut count = 1usize;
-        for (name, values) in states {
-            if !plain(name) {
-                return Err(format!("state property {name:?} is not [a-z0-9_]{{1,32}}"));
-            }
-            if values.is_empty() || values.iter().any(|v| !plain(v)) {
-                return Err(format!(
-                    "state property {name}: its values are one or more of [a-z0-9_]{{1,32}}"
-                ));
-            }
-            let unique: BTreeSet<&String> = values.iter().collect();
-            if unique.len() != values.len() {
-                return Err(format!("state property {name} lists a value twice"));
-            }
-            count = count.saturating_mul(values.len());
-        }
-        if states.is_empty() || states.len() > 16 || count > MAX_OWN_STATES {
-            return Err(format!(
-                "states: 1 to 16 properties, at most {MAX_OWN_STATES} states in all"
-||||||| f8988d5a7
-=======
     for shapes in file.shapes.iter().chain(file.collision_shapes.iter()) {
         shapes.check()?;
     }
@@ -1402,7 +1261,6 @@ fn check_block(file: &Block) -> Result<(), String> {
         if !state_name(key) {
             return Err(format!(
                 "default_state key {key:?} is lower case letters, digits and underscores"
->>>>>>> 31f83499b
             ));
         }
     }
@@ -1442,7 +1300,6 @@ fn check_block(file: &Block) -> Result<(), String> {
     if p.sounds.as_deref().is_some_and(|s| !vanilla_id(s)) {
         return Err("sounds names a vanilla block (minecraft:...)".into());
     }
-<<<<<<< HEAD
     if p.render_shape
         .as_deref()
         .is_some_and(|s| !RENDER_SHAPES.contains(&s))
@@ -1460,6 +1317,9 @@ fn check_block(file: &Block) -> Result<(), String> {
                     from its least corner to its greatest"
                 .into(),
         );
+    }
+    if p.shape.is_some() && file.shapes.is_some() {
+        return Err("properties.shape and shapes both give the outline, so a block has one".into());
     }
     if let Some(k) = &file.kinetic {
         if !k.rpm.is_finite() || k.rpm.abs() > 256.0 {
@@ -1481,8 +1341,8 @@ fn check_block(file: &Block) -> Result<(), String> {
             .is_some_and(|f| !DIRECTIONS.contains(&f))
         {
             return Err("kinetic extra_facing is down, up, north, south, west or east".into());
-||||||| f8988d5a7
-=======
+        }
+    }
     if !file.item && !file.components.is_empty() {
         return Err("item is false, so the block has no item to take components".into());
     }
@@ -1586,7 +1446,6 @@ fn check_sign_walls(blocks: &[&Block]) -> Result<(), String> {
             return Err(format!(
                 "{id}: wall_block {wall} is already paired with {other}"
             ));
->>>>>>> 31f83499b
         }
     }
     Ok(())
@@ -1810,20 +1669,14 @@ capabilities = ["registries"]
                     ..BlockProperties::default()
                 },
                 item: true,
-<<<<<<< HEAD
-                kinetic: None,
-                machine: None,
-                states: None,
-                fuel: None,
-                models: Vec::new(),
-||||||| f8988d5a7
-=======
                 components: BTreeMap::new(),
                 connects_to: None,
                 thickness: None,
                 wood_type: None,
                 wall_block: None,
->>>>>>> 31f83499b
+                kinetic: None,
+                machine: None,
+                models: Vec::new(),
             }]
         );
         assert_eq!(content.items[0].id, "ruby:ruby");
@@ -2128,58 +1981,44 @@ capabilities = ["registries"]
 
     #[test]
     fn a_kinetic_block_names_its_part_its_models_and_a_render_shape() {
-        let file: BlockFile = serde_json::from_str(
+        let block = |json: &str| {
+            let files: &[(&str, &[u8])] =
+                &[("data/ruby/horizon/block/part.json", json.as_bytes())];
+            hmod("kinetic", MANIFEST_TEXT, files)
+        };
+        let content = block(
             r#"{"template":"minecraft:iron_chain",
                 "properties":{"render_shape":"ENTITYBLOCK_ANIMATED"},
                 "kinetic":{"part":"large_cogwheel","spins":true}}"#,
         )
         .unwrap();
-        assert!(check_block(&file).is_ok());
-        let kinetic = file.kinetic.unwrap();
+        let kinetic = content.blocks[0].kinetic.clone().unwrap();
         assert_eq!(kinetic.part, KineticPart::LargeCogwheel);
         assert!(kinetic.spins && kinetic.half.is_none() && kinetic.rpm == 0.0);
-        let refused =
-            |json: &str| check_block(&serde_json::from_str::<BlockFile>(json).unwrap()).is_err();
-        assert!(refused(
-            r#"{"template":"minecraft:iron_chain","properties":{"render_shape":"SPIN"}}"#
-        ));
-        assert!(refused(
-            r#"{"template":"minecraft:iron_chain","kinetic":{"part":"motor","rpm":300}}"#
-        ));
-        assert!(refused(
-            r#"{"template":"minecraft:oak_log","kinetic":{"part":"gearbox","half":"shaft_half"}}"#
-        ));
-        assert!(refused(
-            r#"{"template":"minecraft:lightning_rod","kinetic":{"part":"crank","extra_facing":"in"}}"#
-        ));
+        assert!(block(r#"{"template":"minecraft:iron_chain","properties":{"render_shape":"SPIN"}}"#).is_err());
+        assert!(block(r#"{"template":"minecraft:iron_chain","kinetic":{"part":"motor","rpm":300}}"#).is_err());
+        assert!(block(r#"{"template":"minecraft:oak_log","kinetic":{"part":"gearbox","half":"shaft_half"}}"#).is_err());
+        assert!(block(r#"{"template":"minecraft:lightning_rod","kinetic":{"part":"crank","extra_facing":"in"}}"#).is_err());
         // A shape of its own: boxes in sixteenths, a block out at most, least corner first.
-        let shaped: BlockFile = serde_json::from_str(
+        let shaped = block(
             r#"{"template":"minecraft:oak_log","properties":{"shape":[[0,6,0,16,10,16],[-8,0,6,24,16,10]]}}"#,
         )
         .unwrap();
-        assert!(check_block(&shaped).is_ok());
-        assert!(refused(
-            r#"{"template":"minecraft:oak_log","properties":{"shape":[[0,0,0,16,40,16]]}}"#
-        ));
-        assert!(refused(
-            r#"{"template":"minecraft:oak_log","properties":{"shape":[[8,0,0,4,16,16]]}}"#
-        ));
-        assert!(refused(
-            r#"{"template":"minecraft:oak_log","properties":{"shape":[]}}"#
-        ));
-        let crank: BlockFile = serde_json::from_str(
+        assert_eq!(shaped.blocks[0].properties.shape.as_ref().map(Vec::len), Some(2));
+        assert!(block(r#"{"template":"minecraft:oak_log","properties":{"shape":[[0,0,0,16,40,16]]}}"#).is_err());
+        assert!(block(r#"{"template":"minecraft:oak_log","properties":{"shape":[[8,0,0,4,16,16]]}}"#).is_err());
+        assert!(block(r#"{"template":"minecraft:oak_log","properties":{"shape":[]}}"#).is_err());
+        let crank = block(
             r#"{"template":"minecraft:lightning_rod","kinetic":{"part":"crank",
                 "extra":"create:block/hand_crank/handle","extra_facing":"north"}}"#,
         )
         .unwrap();
-        assert!(check_block(&crank).is_ok());
         assert_eq!(
-            crank.kinetic.unwrap().extra_facing.as_deref(),
+            crank.blocks[0].kinetic.as_ref().unwrap().extra_facing.as_deref(),
             Some("north")
         );
         // A part the game does not know is not read at all.
-        let unknown = r#"{"template":"minecraft:iron_chain","kinetic":{"part":"flywheel"}}"#;
-        assert!(serde_json::from_str::<BlockFile>(unknown).is_err());
+        assert!(block(r#"{"template":"minecraft:iron_chain","kinetic":{"part":"flywheel"}}"#).is_err());
     }
 
     #[test]
@@ -2582,7 +2421,7 @@ capabilities = ["registries"]
     }
 
     #[test]
-    fn content_needs_the_registries_capability_but_gui_sprites() {
+    fn content_needs_the_registries_capability() {
         let code_only = MANIFEST_TEXT
             .replace("api = \"0.2\"", "api = \"0.1\"")
             .replace("capabilities = [\"registries\"]", "capabilities = []");
@@ -2603,32 +2442,7 @@ capabilities = ["registries"]
         .unwrap();
         let package = Package::read(&path).unwrap();
         let e = Content::read(&path, &package.manifest).err().unwrap();
-        assert!(e.contains("without capability registries"), "{e}");
-        // Its own GUI sprites (its buttons' icons) a mod has without it; another namespace's not.
-        let sprites: &[(&str, &[u8])] = &[("assets/ruby/textures/gui/sprites/sort.png", b"png")];
-        std::fs::write(
-            &path,
-            Package::write_files(&code_only, Some(b"\0asm"), sprites).unwrap(),
-        )
-        .unwrap();
-        let content = Content::read(&path, &package.manifest).unwrap();
-        assert_eq!(content.files, ["assets/ruby/textures/gui/sprites/sort.png"]);
-        let theirs: &[(&str, &[u8])] = &[("assets/opal/textures/gui/sprites/sort.png", b"png")];
-        std::fs::write(
-            &path,
-            Package::write_files(&code_only, Some(b"\0asm"), theirs).unwrap(),
-        )
-        .unwrap();
-        assert!(Content::read(&path, &package.manifest).is_err());
-        assert!(gui_sprite(
-            "assets/ruby/textures/gui/sprites/a/b.png",
-            "ruby"
-        ));
-        assert!(!gui_sprite(
-            "assets/ruby/textures/gui/sprites/a.json",
-            "ruby"
-        ));
-        assert!(!gui_sprite("assets/ruby/textures/block/a.png", "ruby"));
+        assert!(e.contains("not capability registries"), "{e}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

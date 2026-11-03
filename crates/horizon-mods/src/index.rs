@@ -568,13 +568,6 @@ pub fn inspect(kind: &Kind, path: &Path) -> Result<Facts, String> {
             Ok(facts)
         }
         Kind::Mod => {
-<<<<<<< HEAD
-            let Package {
-                manifest: m, wasm, ..
-            } = Package::read(path)?;
-||||||| f8988d5a7
-            let Package { manifest: m, wasm } = Package::read(path)?;
-=======
             if native::holds(path) {
                 return Err(format!(
                     "it has native code ({}): it is a native-mod",
@@ -582,7 +575,6 @@ pub fn inspect(kind: &Kind, path: &Path) -> Result<Facts, String> {
                 ));
             }
             let Package { manifest: m, wasm } = Package::read(path)?;
->>>>>>> 31f83499b
             crate::Content::read(path, &m)?;
             let api_level = match wasm {
                 Some(wasm) => {

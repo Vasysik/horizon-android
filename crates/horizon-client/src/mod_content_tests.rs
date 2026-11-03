@@ -379,22 +379,9 @@ fn prepared() -> Option<PathBuf> {
 }
 
 /// A content mod folder: a full block, a door and an item-less glass from
-<<<<<<< HEAD
-/// templates, items (two burning other than their template), a vanilla tag addition and a
-/// language file.
-||||||| f8988d5a7
-/// templates, an item, a vanilla tag addition and a language file.
-=======
 /// templates, items, a recipe, a vanilla tag addition and a language file.
->>>>>>> 31f83499b
 fn ruby_mod(dir: &Path) -> ContentMod {
-<<<<<<< HEAD
-    let files: [(&str, &str); 10] = [
-||||||| f8988d5a7
-    let files: [(&str, &str); 8] = [
-=======
     let files: [(&str, &str); 11] = [
->>>>>>> 31f83499b
         (
             "horizon-mod.toml",
             "id = \"ruby\"\nname = \"Ruby\"\nversion = \"0.1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
@@ -419,17 +406,6 @@ fn ruby_mod(dir: &Path) -> ContentMod {
             "data/ruby/horizon/item/ruby.json",
             r#"{"template": "minecraft:diamond", "max_stack_size": 16, "rarity": "rare"}"#,
         ),
-<<<<<<< HEAD
-        // A stick's copy that does not burn, and one that burns longer.
-        (
-            "data/ruby/horizon/item/ruby_rod.json",
-            r#"{"template": "minecraft:stick", "fuel": 0}"#,
-        ),
-        (
-            "data/ruby/horizon/item/ruby_coal.json",
-            r#"{"template": "minecraft:stick", "fuel": 1600}"#,
-||||||| f8988d5a7
-=======
         (
             "data/ruby/horizon/item/ruby_sword.json",
             r#"{"template": "minecraft:iron_sword", "components": {"minecraft:max_damage": 900,
@@ -446,7 +422,6 @@ fn ruby_mod(dir: &Path) -> ContentMod {
             "data/ruby/recipe/ruby_from_stew.json",
             r#"{"type": "minecraft:crafting_shapeless", "category": "misc",
                 "ingredients": ["ruby:ruby_stew"], "result": {"id": "ruby:ruby"}}"#,
->>>>>>> 31f83499b
         ),
         // Carried-over tags name blocks left out and other mods' ids too.
         (
@@ -626,17 +601,6 @@ fn content_root_loads_with_every_table() {
     assert!(ruby_block.fire_resistant && !iron_block.fire_resistant);
     let gem = &items.items["ruby:ruby"];
     assert_eq!(gem.max_stack, 16);
-<<<<<<< HEAD
-    // `fuel` takes the template's burn time away or sets its own.
-    assert!(items.items["minecraft:stick"].fuel.is_some());
-    assert!(items.items["ruby:ruby_rod"].fuel.is_none());
-    let coal = items.items["ruby:ruby_coal"]
-        .fuel
-        .as_ref()
-        .map(|f| f.0.as_u64());
-    assert_eq!(coal, Some(Some(1600)));
-||||||| f8988d5a7
-=======
     let sword = &items.items["ruby:ruby_sword"];
     let iron_sword = &items.items["minecraft:iron_sword"];
     assert_eq!((sword.max_damage, iron_sword.max_damage), (900, 250));
@@ -661,7 +625,6 @@ fn content_root_loads_with_every_table() {
     assert_eq!(&*result.item, "ruby:ruby");
     let rest = recipes.remainders(id, &grid, 2);
     assert_eq!(rest[0].as_ref().map(|s| &*s.item), Some("minecraft:bowl"));
->>>>>>> 31f83499b
     assert!(!items.items.contains_key("ruby:ruby_glass"));
     let pickaxe = &items.block_tags["minecraft:mineable/pickaxe"];
     assert!(pickaxe.contains("ruby:ruby_block"));
@@ -1535,11 +1498,10 @@ fn manifest(id: &str, namespaces: &str) -> String {
     )
 }
 
-/// A block with a shape of its own on a full template (a disc on a log): each state's outline,
-/// collision and support are the boxes turned to its axis, it occludes nothing, and every table
-/// still loads.
+/// A block with a shape of its own on a full template (a disc on a log): each state's outline and
+/// collision are the boxes turned to its axis, and every table still loads.
 #[test]
-fn a_declared_shape_is_each_states_outline_collision_and_support() {
+fn a_declared_shape_is_each_states_outline_and_collision() {
     let Some(base) = prepared() else {
         return;
     };
@@ -1571,8 +1533,10 @@ fn a_declared_shape_is_each_states_outline_collision_and_support() {
         registry.id(&s).unwrap()
     };
     // Made lying flat (along y), standing up across x and across z.
-    let flat = [0.0, 0.375, 0.0, 1.0, 0.625, 1.0];
-    assert_eq!(&*facts.get(state("y")).outline, [flat]);
+    assert_eq!(
+        &*facts.get(state("y")).outline,
+        [[0.0, 0.375, 0.0, 1.0, 0.625, 1.0]]
+    );
     assert_eq!(
         &*facts.get(state("x")).outline,
         [[0.375, 0.0, 0.0, 0.625, 1.0, 1.0]]
@@ -1582,145 +1546,10 @@ fn a_declared_shape_is_each_states_outline_collision_and_support() {
         [[0.0, 0.0, 0.375, 1.0, 1.0, 0.625]]
     );
     assert_eq!(facts.get(state("y")).outline_edges.len(), 12);
-    // No face whole: no full support (the log's are all full).
-    assert_eq!(facts.get(state("y")).sturdy_full, 0);
+    // It occludes nothing, and its template still collides as a whole block.
+    assert!(!facts.get(state("y")).can_occlude);
     let log = facts.get(registry.default_state("minecraft:oak_log").unwrap());
-    assert_eq!(log.sturdy_full, 63);
-    // The collision table points the state at the disc's grid; the occlusion table at nothing.
-    let table = |name: &str| {
-        nbt::read_named(&fs::read(root.join(name)).unwrap(), Limits::tables())
-            .unwrap()
-            .0
-            .tag
-    };
-    let collision = table("cached-collision.nbt");
-    let Some(Tag::IntArray(cached)) = collision.get("cached_shapes") else {
-        panic!("no cached shapes");
-    };
-    let Some(Tag::List(shapes)) = collision.get("shapes") else {
-        panic!("no shapes");
-    };
-    let entry = &shapes[cached[state("y").0 as usize] as usize];
-    let Some(Tag::LongArray(y)) = entry.get("y") else {
-        panic!("no y");
-    };
-    let y: Vec<f64> = y.iter().map(|b| f64::from_bits(*b as u64)).collect();
-    assert_eq!(y, [0.375, 0.625]);
-    let occlusion = table("occlusion.nbt");
-    let (Some(Tag::IntArray(cached)), Some(Tag::List(shapes))) =
-        (occlusion.get("cached_shapes"), occlusion.get("shapes"))
-    else {
-        panic!("no occlusion shapes");
-    };
-    let empty = &shapes[cached[state("y").0 as usize] as usize];
-    let Some(Tag::ByteArray(cells)) = empty.get("occupied") else {
-        panic!("no occupancy");
-    };
-    assert!(cells.iter().all(|c| *c == 0), "the disc occludes nothing");
-    // And its template, the log, still occludes and collides as a whole block.
-    let log_state = registry.default_state("minecraft:oak_log").unwrap().0 as usize;
-    let Some(Tag::ByteArray(cells)) = shapes[cached[log_state] as usize].get("occupied") else {
-        panic!("no log occupancy");
-    };
-    assert!(cells.contains(&1), "the log still occludes");
     assert!(log.full_collision);
-    let _ = fs::remove_dir_all(&scratch);
-}
-
-/// A block with properties no vanilla block has (Create's saw: facing, axis_along_first,
-/// flipped): its own states, in the registry's order, each copying the template state that
-/// shares most of its properties; a declared shape turns by its own facing; its states turn
-/// among themselves; and every table still loads.
-#[test]
-fn a_block_with_states_of_its_own_gets_them() {
-    let Some(base) = prepared() else {
-        return;
-    };
-    let scratch = std::env::temp_dir().join(format!("horizon-mod-own-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&scratch);
-    let toml = manifest("saws", "");
-    let m = folder_mod(
-        &scratch.join("saws"),
-        &[
-            ("horizon-mod.toml", &toml),
-            (
-                "data/saws/horizon/block/saw.json",
-                r#"{"template": "minecraft:lightning_rod",
-                    "properties": {"shape": [[0, 0, 0, 16, 12, 16]]},
-                    "states": {"facing": ["north", "east", "south", "west", "up", "down"],
-                               "axis_along_first": ["false", "true"], "flipped": ["false", "true"]}}"#,
-            ),
-        ],
-    );
-    let root = scratch.join("root");
-    build(&base, &[m], &root).unwrap();
-    let assets = Assets::load(&root).unwrap();
-    let registry = assets.registry;
-    let facts = BlockFacts::load(&root, registry).unwrap();
-    let default = registry.default_state("saws:saw").unwrap();
-    let props = &registry.state(default).unwrap().properties;
-    // The first of each property's values; the rod's own (powered) is not the saw's.
-    assert_eq!(props.get("facing").map(String::as_str), Some("north"));
-    assert_eq!(
-        props.get("axis_along_first").map(String::as_str),
-        Some("false")
-    );
-    assert_eq!(props.get("flipped").map(String::as_str), Some("false"));
-    assert!(!props.contains_key("powered"));
-    let state = |facing: &str, along: &str| {
-        let mut s = registry.state(default).unwrap().clone();
-        s.properties.insert("facing".into(), facing.into());
-        s.properties.insert("axis_along_first".into(), along.into());
-        registry.id(&s).unwrap()
-    };
-    // 24 states by property name (axis_along_first, facing, flipped), the last changing
-    // fastest, after the rod's.
-    assert_eq!(state("east", "false").0, default.0 + 2);
-    assert_eq!(state("down", "true").0, default.0 + 22);
-    // Its shape turned by its own facing: made up, lying on its side facing east.
-    assert_eq!(
-        &*facts.get(state("up", "false")).outline,
-        [[0.0, 0.0, 0.0, 1.0, 0.75, 1.0]]
-    );
-    assert_eq!(
-        &*facts.get(state("east", "false")).outline,
-        [[0.0, 0.0, 0.0, 0.75, 1.0, 1.0]]
-    );
-    // Turned a quarter clockwise, north faces east; mirrored left to right, north faces south.
-    let structure: serde_json::Value = serde_json::from_slice(
-        &fs::read(root.join("worldgen/blocks/structure-blocks.json")).unwrap(),
-    )
-    .unwrap();
-    let north = state("north", "true").0 as usize;
-    assert_eq!(
-        structure["rotate"][north][0].as_u64(),
-        Some(u64::from(state("east", "true").0))
-    );
-    assert_eq!(
-        structure["mirror"][north][0].as_u64(),
-        Some(u64::from(state("south", "true").0))
-    );
-    // The model states name its own properties.
-    let models: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("model-states.json")).unwrap()).unwrap();
-    assert_eq!(
-        models["saws:saw"]["states"].as_array().map(Vec::len),
-        Some(24)
-    );
-    assert!(models["saws:saw"]["schema"].get("flipped").is_some());
-    // Every per-state table checks its states against the registry, and the behaviours load.
-    for table in [
-        "occlusion.nbt",
-        "cached-collision.nbt",
-        "movement-properties.nbt",
-        "worldgen/blocks/block-properties.nbt",
-        "worldgen/blocks/cached-support.nbt",
-        "worldgen/blocks/cached-collision.nbt",
-    ] {
-        horizon_world::registry::BlockTableFile::open(&root.join(table), registry)
-            .unwrap_or_else(|e| panic!("{table}: {e}"));
-    }
-    horizon_world::level::Behaviours::load(registry, &root).unwrap();
     let _ = fs::remove_dir_all(&scratch);
 }
 

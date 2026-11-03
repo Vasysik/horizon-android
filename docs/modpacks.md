@@ -174,9 +174,7 @@ derivative work. These rules are part of the pipeline, not advice to users:
    Modrinth's CDN, checks it and unpacks the folders as `carry` does (the same skipped paths, the
    `items/` definitions) into `cache/mod-assets/`; the mod's content reads them as its own, its
    own files winning. The jar's code never runs and the jar is deleted. Without them (no network)
-   the mod loads untextured and its row on the Mods page says why. `starling-mod pack-port`
-   makes such a `.hmod` from a carried folder and the jar, and refuses when a carried file under
-   the taken folders would not come back the same from the jar.
+   the mod loads untextured and its row on the Mods page says why.
 5. **Contacting authors or publishing any port is Ludovic's call.** Agents ask first.
 
 This is engineering policy, not legal advice. Before anything is published, Ludovic decides,
@@ -271,26 +269,18 @@ the content root is rejected. Leave the map out to keep the template default.
 
 Most decoration and resource blocks are vanilla classes with other numbers: Macaw's doors are
 `DoorBlock`s, XTones are full cubes, ore sets are `DropExperienceBlock`s. So templates cover the
-<<<<<<< HEAD
-data tier without code.
+data tier without code. Templates also give mod blocks every behaviour Horizon already
+implements and the harnesses already check. Items work the same way (`"template":
+"minecraft:diamond"`, overriding `max_stack_size`, `rarity`, `crafting_remainder` and any
+data component in `components`; a block's item takes `components` too).
 
 A block shaped unlike its template declares its own shape (Starling): `"properties": {"shape":
 [[0, 6, 0, 16, 10, 16], [5, 0, 5, 11, 16, 11]]}`, boxes in sixteenths as model elements are
 (-16 to 32: a block out at most), made for a state facing up (or along y) and turned to each
-state's `facing`, else its `axis`, as Create's shapers are. Its outline, collision and support
-are those boxes, and it hides none of its neighbours' faces nor their light (a cogwheel on a
+state's `facing`, else its `axis`, as Create's shapers are. Its outline and collision are
+those boxes, and it hides none of its neighbours' faces nor their light (a cogwheel on a
 chain's template, a crushing wheel that is a whole block but lets its neighbours show).
 
-A block whose properties no vanilla block has declares its own (Starling): `"states": {"facing":
-["north", "east", "south", "west", "up", "down"], "flipped": ["false", "true"]}`, each
-property's values in order, the first the default's (Create's saw, funnels, belts, pipes, and
-the 101 blocks of Create the carry left out). Its states come in the registry's order
-(properties by name, the last changing fastest), each copying the rows of the template state
-that shares most of its properties; the template's own properties are best declared too, since
-its behaviour reads them. The properties its template does not place are placed as Create
-places its blocks: an `axis` by the face clicked, a `facing` with up and down by the look, one
-of four by the player's facing (`own-states.json` in the root; game/own_states.rs). Its states
-turn and mirror among themselves by their `facing` or `axis`.
 
 A block that keeps items of its own declares the **machine** it is, `"machine": "depot" |
 "basin" | "belt" | "burner" | "funnel" | "chute"` (Starling, `machines.json` in the root): its block entity
@@ -345,21 +335,7 @@ its facing's axis, a windmill one (its id says so) being a source by its sails; 
 small cogwheel about y, joined below or, `ceiling`, above; its `models` its parts) moves items
 between the points marked with it in hand before it is placed (game/bearings.rs, arms.rs).
 The build gathers
-the parts in the root's `kinetic.json`. Templates also give mod blocks every behaviour Horizon
-already implements and the harnesses already check. Items work the same way (`"template":
-"minecraft:diamond"`, overriding `max_stack_size`, `rarity` and so on); `fuel` (an item's, or a
-block's for its item) is how long it burns in a furnace, in ticks, 0 for not at all, where the
-template's would be wrong (a plain item copied from a stick burns as a stick otherwise).
-||||||| f8988d5a7
-data tier without code. Templates also give mod blocks every behaviour Horizon already
-implements and the harnesses already check. Items work the same way (`"template":
-"minecraft:diamond"`, overriding `max_stack_size`, `rarity` and so on).
-=======
-data tier without code. Templates also give mod blocks every behaviour Horizon already
-implements and the harnesses already check. Items work the same way (`"template":
-"minecraft:diamond"`, overriding `max_stack_size`, `rarity`, `crafting_remainder` and any
-data component in `components`; a block's item takes `components` too).
->>>>>>> 31f83499b
+the parts in the root's `kinetic.json`.
 
 How the game loads them, without touching vanilla's path:
 
