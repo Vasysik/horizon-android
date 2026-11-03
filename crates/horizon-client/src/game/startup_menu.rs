@@ -1417,12 +1417,11 @@ impl Loading {
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
                     InGameMenuAction::ToggleVirtualMouse => {
-                        self.menu.touch.virtual_mouse = !self.menu.touch.virtual_mouse;
-                        if self.menu.touch.virtual_mouse
-                            && ((self.menu.cursor.0 <= 2.0 && self.menu.cursor.1 <= 2.0)
-                                || self.menu.cursor.0 >= b.width
-                                || self.menu.cursor.1 >= b.height)
-                        {
+                        // The switch turns the pointer off for good; while it is on
+                        // the pointer follows the mouse lock and comes back centred.
+                        self.menu.touch.pointer_off = !self.menu.touch.pointer_off;
+                        self.menu.touch.virtual_mouse = !self.menu.touch.pointer_off;
+                        if !self.menu.touch.pointer_off {
                             self.menu.cursor = (b.width * 0.5, b.height * 0.5);
                         }
                     }
