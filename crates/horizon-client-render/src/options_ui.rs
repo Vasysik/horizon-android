@@ -3637,8 +3637,10 @@ impl OptionsUi {
             let properties = horizon_shaders::Properties::parse(&text, &macros);
             // Only the profiles that set a switch or a number: some packs list labels or
             // single choices (a tonemap) under `profile.` and those pick nothing to run.
-            let ranked =
-                horizon_shaders::Values::profiles_by_cost(&properties, &horizon_shaders::options(&pack));
+            let ranked = horizon_shaders::Values::profiles_by_cost(
+                &properties,
+                &horizon_shaders::options(&pack),
+            );
             self.shader_profiles.extend(
                 properties
                     .entries
