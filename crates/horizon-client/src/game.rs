@@ -79,6 +79,8 @@ mod books;
 mod bossbars;
 mod breezes;
 mod brush;
+#[cfg(target_os = "android")]
+mod build_mining;
 mod bundles;
 mod campfire;
 mod campfire_douse;

@@ -61,7 +61,7 @@ chown "$uid:$gid" "$home" "$home/.cache" "$home/job"
 umount "$keep"
 
 cd /tmp
-exec setpriv --reuid="$uid" --regid="$gid" --init-groups --no-new-privs \
+exec setpriv --reuid="$uid" --regid="$gid" --clear-groups --no-new-privs \
   --bounding-set=-all --inh-caps=-all \
   env -i HOME="$home" USER="$(id -nu "$uid")" PATH=/usr/bin:/bin CARGO_NET_OFFLINE=true PROFILE=fast \
   bash -c '"'"'. "$HOME/.profile"; . "$HOME/.cargo/env"

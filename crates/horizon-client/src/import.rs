@@ -192,7 +192,7 @@ pub fn install(path: &Path, name: &str, places: &Places) -> Result<Installed, St
         }
         Kind::NativeMod => {
             let bundle = horizon_mods::index::native::Bundle::read(path)
-                .map_err(|e| format!("{name} is not a native mod: {e}"))?;
+                .map_err(|e| format!("{name} can't be added: {e}"))?;
             let id = bundle.manifest.id;
             let dir = places.game.join("horizon-native-mods");
             fs::create_dir_all(&dir).map_err(fail)?;

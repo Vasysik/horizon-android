@@ -135,7 +135,7 @@ impl super::Game<'_> {
                 .say("Minecraft resources imported: restart the game to use them".into()),
             Some(Kind::ResourcePack) => self.refresh_pack_lists(),
             // The Mods page lists it at once; a mod with code runs as soon as it is turned on.
-            Some(Kind::Mod) => self.start_mods(),
+            Some(Kind::Mod | Kind::NativeMod) => self.start_mods(),
             // A skin is worn at once (Skin Customization's Choose a File...).
             Some(Kind::Skin) => {
                 if let Some(path) = self.imports.skin.take()

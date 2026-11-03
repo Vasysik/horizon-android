@@ -84,6 +84,9 @@ pub(super) struct NativeBuilds {
     /// The activity's notice was shown this run.
     noticed: Cell<bool>,
     fishing: super::setup::fishing::Fishing,
+    mining: super::build_mining::BuildMining,
+    /// Under a build: digging, not fishing.
+    digging: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -95,6 +98,8 @@ enum Act {
     Retry,
     Close,
     Compile,
+    /// Under a build: from the water to the rock and back.
+    Switch,
 }
 
 fn dir() -> PathBuf {
@@ -509,7 +514,19 @@ impl Game<'_> {
             return true;
         }
         if row.problem.as_deref() == Some(horizon_client::mod_list::NOT_BUILT) {
-            self.native_builds.stage = Some(Stage::Warn(row.id.clone()));
+            let id = row.id.clone();
+            let card = &mut self.native_builds;
+            // One under way (its card hidden) comes back; its warning was read.
+            let compiling = card
+                .shared
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .compiling;
+            card.stage = Some(if compiling {
+                Stage::Compiling
+            } else {
+                Stage::Warn(id)
+            });
             return true;
         }
         false
@@ -539,7 +556,14 @@ impl Game<'_> {
     pub(super) fn poll_native_builds(&mut self) {
         if self.native_builds.stage == Some(Stage::Compiling) {
             self.native_builds.fishing.update(Instant::now());
-            for sound in self.native_builds.fishing.take_sounds() {
+            let [w, h] = self.touch_size();
+            let d = density(w as f32, h as f32);
+            self.native_builds
+                .mining
+                .prepare(w as f32 / d, h as f32 / d);
+            let mut sounds = self.native_builds.fishing.take_sounds();
+            sounds.extend(self.native_builds.mining.take_sounds());
+            for sound in sounds {
                 self.audio
                     .play_samples(sound.samples(), super::setup::fishing::RATE, 0.3);
             }
@@ -599,10 +623,16 @@ impl Game<'_> {
             (builds, shared.done, shared.total)
         };
         let label = |name: &str| {
-            builds
-                .iter()
-                .find(|b| b.name == name)
-                .map_or_else(|| name.to_owned(), |b| mods_label(&b.mods))
+            builds.iter().find(|b| b.name == name).map_or_else(
+                || {
+                    if name.starts_with(COMPILED) {
+                        "your native mods".to_owned()
+                    } else {
+                        name.to_owned()
+                    }
+                },
+                |b| mods_label(&b.mods),
+            )
         };
         let current = chosen();
         let now = running();
@@ -651,7 +681,11 @@ impl Game<'_> {
             Stage::Chosen(name) => {
                 acts.push(("Restart now".into(), Act::Restart));
                 (
-                    format!("{} is ready", label(name)),
+                    if name.starts_with(COMPILED) {
+                        "Your native mods are ready".to_owned()
+                    } else {
+                        format!("{} is ready", label(name))
+                    },
                     "It plays from the next start. If it closes before it shows, Starling starts \
                      without it the time after."
                         .into(),
@@ -769,11 +803,15 @@ impl Game<'_> {
             .status
             .clone();
         let now = Instant::now();
-        let fishing = &self.native_builds.fishing;
+        let card = &self.native_builds;
         let mut ui = Ui::new(&self.gui.atlas, batch, (-1.0, -1.0));
         let (w, h) = (ui.w, ui.h);
-        fishing.draw_water(&mut ui, w, h, now);
-        fishing.draw(&mut ui, w, h, h - 58.0, now);
+        if card.digging {
+            card.mining.draw(&mut ui, w, h, now);
+        } else {
+            card.fishing.draw_water(&mut ui, w, h, now);
+            card.fishing.draw(&mut ui, w, h, h - 58.0, now);
+        }
         let (pad, bar_h, hide_w) = (16.0, 44.0, 84.0);
         ui.rounded(pad, pad, w - 2.0 * pad, bar_h, 12.0, color::BG);
         ui.text(
@@ -794,8 +832,18 @@ impl Game<'_> {
             color::TEXT,
             "Hide",
         );
+        let other = [rect[0] - hide_w - 8.0, rect[1], hide_w, rect[3]];
+        ui.rounded(other[0], other[1], other[2], other[3], 8.0, color::RAISED);
+        ui.text_centered(
+            Face::Semibold,
+            13.0,
+            other[0] + other[2] / 2.0,
+            other[1] + (other[3] - 13.0) / 2.0 - 2.0,
+            color::TEXT,
+            if card.digging { "Fish" } else { "Mine" },
+        );
         ui.finish();
-        *self.native_builds.buttons.borrow_mut() = vec![(rect, Act::Close)];
+        *self.native_builds.buttons.borrow_mut() = vec![(rect, Act::Close), (other, Act::Switch)];
     }
 
     /// While the card shows it takes every touch; a lifted finger on a button acts. Under a build
@@ -812,10 +860,18 @@ impl Game<'_> {
                 at[0] >= r[0] && at[0] <= r[0] + r[2] && at[1] >= r[1] && at[1] <= r[1] + r[3]
             });
             let now = Instant::now();
+            let digging = self.native_builds.digging;
             match touch.phase {
+                TouchPhase::Started if !on_button && digging => {
+                    self.native_builds
+                        .mining
+                        .press(at, w as f32 / d, h as f32 / d);
+                }
                 TouchPhase::Started if !on_button => self.native_builds.fishing.press(now, at),
                 TouchPhase::Ended | TouchPhase::Cancelled => {
-                    self.native_builds.fishing.release(now);
+                    if !digging {
+                        self.native_builds.fishing.release(now);
+                    }
                     if on_button {
                         self.native_builds_press(at);
                     }
@@ -885,6 +941,7 @@ impl Game<'_> {
             Act::Restart => crate::android::restart_app(),
             Act::Retry => self.open_native_builds(),
             Act::Close => self.native_builds.stage = None,
+            Act::Switch => self.native_builds.digging = !self.native_builds.digging,
             Act::Compile => {
                 let card = &mut self.native_builds;
                 card.stage = Some(Stage::Compiling);
