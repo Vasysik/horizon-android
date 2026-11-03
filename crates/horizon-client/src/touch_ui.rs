@@ -1580,7 +1580,7 @@ impl TouchUi {
                     text_c,
                     "Invert Y-Axis",
                 );
-                ui.switch(r_inv[0] + cw - 48.0, r_inv[1] + 5.0, settings.invert_y);
+                ui.m3_switch(r_inv[0] + cw - 48.0, r_inv[1] + 5.0, settings.invert_y);
 
                 let r_spl = [cx, sens_y + 88.0, cw, 36.0];
                 ui.rounded(r_spl[0], r_spl[1], r_spl[2], r_spl[3], 10.0, card_bg);
@@ -1601,7 +1601,7 @@ impl TouchUi {
                     muted_c,
                     "Separates aiming and camera look",
                 );
-                ui.switch(
+                ui.m3_switch(
                     r_spl[0] + cw - 48.0,
                     r_spl[1] + 7.0,
                     settings.split_controls,
@@ -1646,7 +1646,7 @@ impl TouchUi {
                     ui.text(Face::SemiBold, 10.8, cx + 12.0, ry + 5.0, text_c, title);
                     ui.text(Face::Regular, 9.0, cx + 12.0, ry + 22.0, muted_c, sub);
                     if let Some(on) = toggle {
-                        ui.switch(cx + cw - 48.0, ry + 9.0, on);
+                        ui.m3_switch(cx + cw - 48.0, ry + 9.0, on);
                     } else {
                         ui.text(Face::SemiBold, 13.0, cx + cw - 16.0, ry + 10.0, accent_hi, "›");
                     }
@@ -1715,7 +1715,7 @@ impl TouchUi {
                     ui.border(cx, ry, cw, 40.0, 10.0, border_c);
                     ui.text(Face::SemiBold, 10.8, cx + 12.0, ry + 5.0, text_c, title);
                     ui.text(Face::Regular, 9.0, cx + 12.0, ry + 22.0, muted_c, sub);
-                    ui.switch(cx + cw - 48.0, ry + 9.0, on);
+                    ui.m3_switch(cx + cw - 48.0, ry + 9.0, on);
                 }
             }
             _ => {

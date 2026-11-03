@@ -466,6 +466,8 @@ pub struct Settings {
     pub dynamic_area_y: f32,
     #[serde(default)]
     pub auto_jump: bool,
+    #[serde(default)]
+    pub vibrate: bool,
     #[serde(deserialize_with = "deserialize_visibility")]
     pub button_visibility: [u8; 14],
     pub horizontal_margin: f32,
@@ -593,6 +595,7 @@ impl Default for Settings {
             dynamic_area_x: 0.25,
             dynamic_area_y: 1.0,
             auto_jump: false,
+            vibrate: true,
             button_visibility: [0; 14],
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
