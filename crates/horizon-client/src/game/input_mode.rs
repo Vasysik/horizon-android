@@ -5,11 +5,11 @@
 use super::Game;
 use horizon_client::input_mode::InputMode;
 #[cfg(target_os = "android")]
+use super::{event_loop::EventLoopCtl, input_trace::InputOrigin};
+#[cfg(target_os = "android")]
 use winit::{
-    application::ApplicationHandler,
     dpi::PhysicalPosition,
     event::{DeviceId, ElementState, MouseScrollDelta, TouchPhase, WindowEvent},
-    event_loop::ActiveEventLoop,
 };
 
 impl Game<'_> {
@@ -21,7 +21,6 @@ impl Game<'_> {
         if mode == self.input_mode {
             return;
         }
-        let touch = self.has_touch();
         if self.input_mode == InputMode::Touch {
             self.touch_release_all();
         }
@@ -29,10 +28,6 @@ impl Game<'_> {
             self.pad.in_use = false;
         }
         self.input_mode = mode;
-        // Mods read whether the player plays by touch (`mobile.has-touch`).
-        if touch != self.has_touch() {
-            self.refresh_mod_snapshot();
-        }
     }
 
     /// The touch controls, the chat's bar and the on-screen keyboard show.
@@ -44,7 +39,7 @@ impl Game<'_> {
     /// a physical keyboard's keys, and the mouse's events since the last iteration, as window
     /// events (its captured motion turns the view as a computer's raw motion does).
     #[cfg(target_os = "android")]
-    pub(super) fn android_input_frame(&mut self, event_loop: &ActiveEventLoop) {
+    pub(super) fn android_input_frame(&mut self, event_loop: &dyn EventLoopCtl) {
         if crate::pointer_capture_lost() && self.captured {
             self.capture(false);
         }
@@ -85,7 +80,7 @@ impl Game<'_> {
                     continue;
                 }
             };
-            self.window_event(event_loop, id, event);
+            self.handle_window_event(event_loop, id, event, InputOrigin::User);
         }
     }
 }

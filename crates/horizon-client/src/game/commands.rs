@@ -1300,7 +1300,38 @@ impl Game<'_> {
                 format!("block.{namespace}.{path}")
             };
             Text::translate(&key, &[])
+        };
+        // Component.empty().append(getHoverName()), italic for a custom name.
+        let mut name = Text::empty().append(hover);
+        if custom.is_some() {
+            name = name.italic();
         }
+        let wrapped = Text::translate("chat.square_brackets", &[name]);
+        if empty {
+            return wrapped;
+        }
+        let mut rarity = self.item_rarity(item);
+        if !s.enchantments().is_empty() {
+            rarity = match rarity.as_str() {
+                "rare" => "epic".into(),
+                "epic" => rarity,
+                _ => "rare".into(),
+            };
+        }
+        let color = match rarity.as_str() {
+            "uncommon" => text::YELLOW,
+            "rare" => text::AQUA,
+            "epic" => text::LIGHT_PURPLE,
+            _ => text::WHITE,
+        };
+        // HoverEvent.ShowItem: the count only when it is not one.
+        let mut shown = serde_json::json!({"action": "show_item", "id": item});
+        if s.count != 1 {
+            shown["count"] = s.count.into();
+        }
+        wrapped
+            .with_color(color)
+            .with_component_fields(vec![("hover_event".into(), shown)])
     }
     pub(super) fn item_rarity(&self, item: &str) -> String {
         static RARITY: std::sync::OnceLock<std::collections::HashMap<String, String>> =

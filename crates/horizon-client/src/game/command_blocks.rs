@@ -867,10 +867,6 @@ impl Game<'_> {
             s.command.set_text(&m, &c, text, cursor, anchor);
         }
     }
-    /// The command box, for the on-screen keyboard's editor (game/touch/text_mirror.rs).
-    pub(super) fn command_box(&mut self) -> Option<&mut EditBox> {
-        self.command_block_screen.as_mut().map(|s| &mut s.command)
-    }
     /// Characters typed into the command box (`StringUtil.isAllowedChatCharacter`).
     pub(super) fn command_block_type(&mut self, typed: &str) {
         let allowed: String = typed

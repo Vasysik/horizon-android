@@ -96,8 +96,6 @@ fn running_cell() -> &'static Mutex<BTreeSet<String>> {
     RUNNING.get_or_init(Default::default)
 }
 pub(super) fn set_running(ids: BTreeSet<String>) {
-    // Create New World's mods screen starts from them.
-    horizon_client::title::set_running_world_mods(ids.clone());
     *running_cell()
         .lock()
         .unwrap_or_else(PoisonError::into_inner) = ids;

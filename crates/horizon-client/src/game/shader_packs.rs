@@ -270,8 +270,7 @@ impl Game<'_> {
             .filter(|(name, _)| !active_pack(name, &self.settings.mods).is_empty());
         if choice != self.shader_choice && self.screen != super::Screen::Options {
             self.shader_choice = choice;
-            let picked = self.shader_choice.as_ref().map_or("", |(name, _)| name.as_str());
-            self.native_shaders = super::native_shaders::NativeShaders::picking(picked);
+            self.native_shaders = Default::default();
             self.set_translucent_layers(Vec::new());
             self.pack_ids = None;
             self.pack_making = None;

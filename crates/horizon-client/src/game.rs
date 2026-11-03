@@ -11983,6 +11983,7 @@ impl Game<'_> {
                         .get_or_insert_with(|| Title::new(saves, &self.options.resources));
                     title.mode = horizon_client::title::Mode::Error {
                         message,
+                        alert: None,
                         return_to: Box::new(horizon_client::title::Mode::Main),
                     };
                     return Ok(());
@@ -12029,6 +12030,7 @@ impl Game<'_> {
                     .get_or_insert_with(|| Title::new(saves, &self.options.resources));
                 title.mode = horizon_client::title::Mode::Error {
                     message,
+                    alert: None,
                     return_to: Box::new(horizon_client::title::Mode::Main),
                 };
                 return Ok(());
@@ -14155,9 +14157,7 @@ impl Game<'_> {
         self.pending_uploads.clear();
         let context = self.worker_context();
         self.streaming.reload_resources(&mut self.world, context);
-        self.native_shaders = native_shaders::NativeShaders::picking(&std::mem::take(
-            &mut self.native_shaders.picked,
-        ));
+        self.native_shaders = Default::default();
         self.apply_ui_settings();
         log::info!("Horizon: graphics device recovered; rebuilding world meshes");
         Ok(())
@@ -20362,7 +20362,7 @@ fn load_world_rest(
     progress.set(8);
     let _tail = startup::step("rest.tail");
     // Content mods' kinetic blocks (none without them): their networks (game/kinetics.rs).
-    let kinetics = horizon_client::kinetics::KineticTable::load(root, registry_owner.registry)
+    let kinetics = horizon_client::kinetics::KineticTable::load(root, registry)
         .unwrap_or_else(|e| {
             log::warn!("Horizon: kinetic parts not loaded: {e}");
             Default::default()
@@ -20377,7 +20377,7 @@ fn load_world_rest(
             .filter_map(|(_, r)| {
                 use horizon_client::crafting::Recipe as R;
                 let set = |i: &horizon_client::crafting::Ingredient| {
-                    i.0.iter().map(|s| Arc::from(s.as_str())).collect()
+                    i.items.iter().map(|s| Arc::from(s.as_str())).collect()
                 };
                 let (shapeless, ingredients, result) = match r {
                     R::Shapeless {

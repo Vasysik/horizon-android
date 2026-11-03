@@ -1591,7 +1591,7 @@ impl Game<'_> {
                                 u32::MAX,
                             ));
                         }
-                        tooltip = Some(lines.lines);
+                        tooltip = Some(lines);
                     }
                 }
                 Call::Stratum => {}

@@ -9,7 +9,8 @@
 //! finger on a slot's frame or just past it still means that slot. A finger dragged across the
 //! player turns it round. A finger that moves from a slot (nothing picked) scrolls or drags as the
 //! pointer does elsewhere.
-use super::super::{Game, Screen};
+use super::super::{Game, Screen, event_loop::EventLoopCtl};
+use super::super::input_trace::InputOrigin;
 use horizon_client::{
     creative::Creative,
     hud::{HudBatch, rgba},
@@ -17,10 +18,8 @@ use horizon_client::{
 };
 use std::time::{Duration, Instant};
 use winit::{
-    application::ApplicationHandler,
     dpi::PhysicalPosition,
     event::{DeviceId, ElementState, MouseButton, Touch, TouchPhase, WindowEvent},
-    event_loop::ActiveEventLoop,
     keyboard::KeyCode,
     window::WindowId,
 };
@@ -84,13 +83,11 @@ struct Picked {
 }
 
 impl Game<'_> {
-    /// The screens whose slots the fingers work as Bedrock's: not under a mod's screen, which
-    /// takes the fingers (EMI's recipes over the inventory).
+    /// The screens whose slots the fingers work as Bedrock's.
     fn slot_touch_screen(&self) -> bool {
         matches!(self.screen, Screen::Inventory | Screen::Creative)
             && self.title.is_none()
             && self.carried.is_none()
-            && self.mods.screen.is_none()
             && self.has_touch()
     }
 
@@ -170,7 +167,7 @@ impl Game<'_> {
     /// leaves it alone).
     pub(in crate::game) fn slot_touch_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         id: WindowId,
         t: &Touch,
     ) -> bool {
@@ -270,7 +267,7 @@ impl Game<'_> {
                 let mut events = self.touch.pointer.event(&start, slop, now);
                 events.extend(self.touch.pointer.event(t, slop, now));
                 for mouse in events {
-                    self.window_event(event_loop, id, mouse);
+                    self.handle_window_event(event_loop, id, mouse, InputOrigin::User);
                 }
                 true
             }
@@ -299,7 +296,7 @@ impl Game<'_> {
     }
 
     /// Once a frame: a finger resting on a stack picks half of it.
-    pub(in crate::game) fn slot_touch_frame(&mut self, event_loop: &ActiveEventLoop, id: WindowId) {
+    pub(in crate::game) fn slot_touch_frame(&mut self, event_loop: &dyn EventLoopCtl, id: WindowId) {
         if !self.slot_touch_screen() {
             self.touch.slots = SlotTouch::default();
             return;
@@ -324,7 +321,7 @@ impl Game<'_> {
     /// A tap at `at`: on a slot (`Some`) or outside the window.
     fn touch_slot_tap(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         id: WindowId,
         device: DeviceId,
         slot: Option<usize>,
@@ -395,7 +392,7 @@ impl Game<'_> {
     /// keeps going back where the pick was. Across one slot it is a tap there.
     fn touch_spread_end(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         id: WindowId,
         device: DeviceId,
         slots: Vec<usize>,
@@ -412,13 +409,14 @@ impl Game<'_> {
                 self.touch_grab(event_loop, id, device, p);
                 for (i, &slot) in slots.iter().enumerate() {
                     let position = self.touch_slot_center(slot);
-                    self.window_event(
+                    self.handle_window_event(
                         event_loop,
                         id,
                         WindowEvent::CursorMoved {
                             device_id: device,
                             position,
                         },
+                        InputOrigin::User,
                     );
                     if i == 0 {
                         self.touch_mouse_button(event_loop, id, device, ElementState::Pressed);
@@ -448,12 +446,12 @@ impl Game<'_> {
 
     fn touch_mouse_button(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         id: WindowId,
         device: DeviceId,
         state: ElementState,
     ) {
-        self.window_event(
+        self.handle_window_event(
             event_loop,
             id,
             WindowEvent::MouseInput {
@@ -461,6 +459,7 @@ impl Game<'_> {
                 state,
                 button: MouseButton::Left,
             },
+            InputOrigin::User,
         );
     }
 
@@ -512,7 +511,7 @@ impl Game<'_> {
     /// stack of a creative tab's item (Shift-click on it).
     fn touch_grab(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         id: WindowId,
         device: DeviceId,
         p: Picked,
@@ -532,7 +531,7 @@ impl Game<'_> {
     /// Picks a stack (drawn by `draw_slot_pick`).
     fn touch_pick(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         id: WindowId,
         device: DeviceId,
         slot: usize,
@@ -547,21 +546,22 @@ impl Game<'_> {
     }
 
     /// Lets go of the pick.
-    fn touch_unpick(&mut self, event_loop: &ActiveEventLoop, id: WindowId, device: DeviceId) {
+    fn touch_unpick(&mut self, event_loop: &dyn EventLoopCtl, id: WindowId, device: DeviceId) {
         self.touch.slots.picked = None;
         self.touch_unhover(event_loop, id, device);
     }
 
     /// The cursor out of the window: no slot shows hovered, no tooltip follows the finger.
-    fn touch_unhover(&mut self, event_loop: &ActiveEventLoop, id: WindowId, device: DeviceId) {
+    fn touch_unhover(&mut self, event_loop: &dyn EventLoopCtl, id: WindowId, device: DeviceId) {
         let away = PhysicalPosition::new(-1000.0, -1000.0);
-        self.window_event(
+        self.handle_window_event(
             event_loop,
             id,
             WindowEvent::CursorMoved {
                 device_id: device,
                 position: away,
             },
+            InputOrigin::User,
         );
     }
 
@@ -583,7 +583,7 @@ impl Game<'_> {
 
     fn touch_slot_click(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         id: WindowId,
         device: DeviceId,
         slot: usize,
@@ -597,7 +597,7 @@ impl Game<'_> {
     /// A mouse click at a window position, Shift held for it when asked.
     fn touch_click_at(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         id: WindowId,
         device: DeviceId,
         at: PhysicalPosition<f64>,
@@ -605,16 +605,17 @@ impl Game<'_> {
         shift: bool,
     ) {
         let held = shift && self.physical_keys.insert(KeyCode::ShiftLeft);
-        self.window_event(
+        self.handle_window_event(
             event_loop,
             id,
             WindowEvent::CursorMoved {
                 device_id: device,
                 position: at,
             },
+            InputOrigin::User,
         );
         for state in [ElementState::Pressed, ElementState::Released] {
-            self.window_event(
+            self.handle_window_event(
                 event_loop,
                 id,
                 WindowEvent::MouseInput {
@@ -622,6 +623,7 @@ impl Game<'_> {
                     state,
                     button,
                 },
+                InputOrigin::User,
             );
         }
         if held {
@@ -749,16 +751,10 @@ impl Game<'_> {
         const GAP: f32 = 8.0;
         let (room_right, room_left) = (batch.width - right - GAP - 4.0, left - GAP - 4.0);
         let room = room_right.max(room_left);
-        let tooltip = self.stack_tooltip(&stack);
-        let tooltip = crate::game::stations::StackTooltip {
-            lines: self.wrap_tooltip(tooltip.lines, room),
-            grids: tooltip.grids,
-        };
-        let width = tooltip
-            .lines
+        let lines = self.wrap_tooltip(self.stack_tooltip(&stack), room);
+        let width = lines
             .iter()
             .map(|(t, _)| self.gui.atlas.font.width_text(t))
-            .chain(tooltip.grids.iter().map(|g| g.width()))
             .fold(0.0, f32::max);
         let (tx, ty) = if width <= room_right {
             (right + GAP, y + 4.0)
@@ -769,7 +765,7 @@ impl Game<'_> {
             ((x + 8.0 - width / 2.0).max(4.0), bottom + GAP)
         };
         // draw_tooltip puts the box 12 right of and 12 above the point it is given.
-        self.draw_tooltip(batch, &tooltip, tx - 12.0, ty + 12.0);
+        self.draw_tooltip_lines(batch, &lines, tx - 12.0, ty + 12.0);
     }
 
     /// Tooltip lines wrapped to `width` GUI pixels (left whole when that is too narrow to read).

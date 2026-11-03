@@ -97,7 +97,6 @@ impl Game<'_> {
         if !std::mem::replace(&mut self.saved_for_background, true)
             && self.title.is_none()
             && self.pending_save.is_none()
-            && self.world_loader.is_none()
             && self.integrated_starting.is_none()
             && self.pending_entry.is_none()
         {

@@ -9333,8 +9333,6 @@ impl Game<'_> {
                 id: m.id,
                 title: m.title,
                 description: m.description,
-                summary: String::new(),
-                config: None,
                 problem: None,
                 dev: false,
                 native: Some(page),

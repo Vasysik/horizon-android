@@ -949,7 +949,7 @@ impl Game<'_> {
     pub(super) fn chat_set_text(&mut self, text: &str, cursor: usize, anchor: usize) {
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
-            dispatcher: chat_tree(&self.remote, &self.mods),
+            dispatcher: chat_tree(&self.remote),
             registries: &self.ui.registries,
         };
         if let Some(screen) = self.ui.chat_screen.as_mut() {
@@ -960,7 +960,7 @@ impl Game<'_> {
     pub(super) fn chat_paste(&mut self) {
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
-            dispatcher: chat_tree(&self.remote, &self.mods),
+            dispatcher: chat_tree(&self.remote),
             registries: &self.ui.registries,
         };
         if let Some(screen) = self.ui.chat_screen.as_mut() {
@@ -993,8 +993,8 @@ impl Game<'_> {
         // On a server (single player's own included) the server runs it,
         // unless a client mod owns the command.
         if self.remote.is_some() {
-            if let Some(command) = message.trim().strip_prefix('/')
-                && self.remote_mod_command(command)
+            if let Some(command) = message.strip_prefix('/')
+                && self.client_mod_command(command)
             {
                 return;
             }

@@ -8,7 +8,8 @@
 mod slots;
 mod text_mirror;
 
-use super::{Game, Screen};
+use super::{Game, Screen, event_loop::EventLoopCtl};
+use super::input_trace::InputOrigin;
 use horizon_client::debug_keys::KeyAction;
 use horizon_client::gamepad::ServerStick;
 use horizon_client::input_mode::InputMode;
@@ -25,9 +26,7 @@ use horizon_client::{
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use winit::{
-    application::ApplicationHandler,
     event::{ElementState, KeyEvent, TouchPhase, WindowEvent},
-    event_loop::ActiveEventLoop,
     keyboard::{Key, KeyCode, NamedKey},
     window::WindowId,
 };
@@ -130,8 +129,8 @@ pub(super) struct Touch {
     chat_key: Option<(usize, Instant)>,
     /// The finger on the chat bar: its moves and lift are the bar's.
     chat_finger: Option<u64>,
-    /// Fingers on the mods' buttons: (finger, mod id, button id).
-    mod_keys: Vec<(u64, String, String)>,
+    /// Fingers on the extra buttons: (finger, group, button id).
+    extra_keys: Vec<(u64, String, String)>,
     /// The player's own buttons held now, by their name in the layout.
     custom_down: Vec<String>,
     /// The custom button a picture was asked for: the next one the inbox gets is its.
@@ -461,7 +460,6 @@ impl Game<'_> {
         self.sign_edit.is_some()
             || self.book.is_some()
             || self.command_block_screen.is_some()
-            || self.mods.screen.is_some()
             || self.server_packs.prompting()
             || self.dialog_open()
     }
@@ -653,18 +651,14 @@ impl Game<'_> {
     /// A touch event; true when it was taken (the caller passes the rest on).
     pub(super) fn touch_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
         id: WindowId,
         event: &WindowEvent,
     ) -> bool {
         let WindowEvent::Touch(t) = event else {
             return false;
         };
-        if !self.touch.seen {
-            self.touch.seen = true;
-            // Mods read the touch screen from this first finger on (`mobile.has-touch`).
-            self.refresh_mod_snapshot();
-        }
+        self.touch.seen = true;
         // The touch controls come back with a touch after a keyboard, a mouse or a controller.
         self.input_used(InputMode::Touch);
         self.last_input = Instant::now();
@@ -698,17 +692,17 @@ impl Game<'_> {
             }
             return true;
         }
-        // The mods' buttons: held while a finger is on them.
+        // The extra buttons: held while a finger is on them.
         if t.phase == TouchPhase::Started
-            && let Some((id, bind)) = self.mod_button_at(p)
+            && let Some((id, bind)) = self.extra_button_at(p)
         {
-            self.touch.mod_keys.push((t.id, id.clone(), bind.clone()));
+            self.touch.extra_keys.push((t.id, id.clone(), bind.clone()));
             self.extra_button(&id, &bind, true);
             return true;
         }
-        if let Some(i) = self.touch.mod_keys.iter().position(|(f, ..)| *f == t.id) {
+        if let Some(i) = self.touch.extra_keys.iter().position(|(f, ..)| *f == t.id) {
             if matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
-                let (_, id, bind) = self.touch.mod_keys.remove(i);
+                let (_, id, bind) = self.touch.extra_keys.remove(i);
                 self.extra_button(&id, &bind, false);
             }
             return true;
@@ -753,7 +747,7 @@ impl Game<'_> {
                 .pointer
                 .set_gui_scale(gui_scale, self.settings.mouse_wheel_sensitivity);
             for mouse in self.touch.pointer.event(t, slop, Instant::now()) {
-                self.window_event(event_loop, id, mouse);
+                self.handle_window_event(event_loop, id, mouse, InputOrigin::User);
             }
             // A tap on the text field brings up the on-screen keyboard, a tap beside it puts the
             // keyboard away (the chat keeps it).
@@ -796,7 +790,7 @@ impl Game<'_> {
     }
 
     /// Once per loop iteration, before the pads are read.
-    pub(super) fn touch_frame(&mut self, event_loop: &ActiveEventLoop) {
+    pub(super) fn touch_frame(&mut self, event_loop: &dyn EventLoopCtl) {
         let now = Instant::now();
         if self.touch.config.is_none() {
             let text = Self::touch_layout_path()
@@ -824,7 +818,7 @@ impl Game<'_> {
         }
         if let Some(id) = self.window.as_ref().map(|w| w.id()) {
             for mouse in self.touch.pointer.frame_events(now) {
-                self.window_event(event_loop, id, mouse);
+                self.handle_window_event(event_loop, id, mouse, InputOrigin::User);
             }
             self.slot_touch_frame(event_loop, id);
         }
@@ -899,10 +893,7 @@ impl Game<'_> {
     /// The text field shown now, by name: the chat, a sign, a book, a command block, the anvil's
     /// name, the creative and recipe searches, the title's forms, the options' searches.
     fn text_context(&mut self) -> Option<&'static str> {
-        if self.mods.screen.is_some() {
-            // A mod's screen is over everything: its text field, when it asked for the keyboard.
-            self.mods.keyboard.then_some("mod")
-        } else if self.screen == Screen::Chat {
+        if self.screen == Screen::Chat {
             Some("chat")
         } else if self.sign_edit.is_some() {
             Some("sign")
@@ -977,14 +968,6 @@ impl Game<'_> {
         // The title screen's player turns under the finger whichever way it moves.
         if self.on_title_player((x, y)) {
             return true;
-        }
-        // A mod's screen: where it said a finger drags (`mobile.drag-areas`).
-        if self.mods.screen.is_some() {
-            return self
-                .mods
-                .drag_areas
-                .iter()
-                .any(|a| x >= a[0] && x < a[0] + a[2] && y >= a[1] && y < a[1] + a[3]);
         }
         if self.screen == Screen::Creative {
             let (ox, oy) = Self::creative_origin(&batch);
@@ -1276,7 +1259,7 @@ impl Game<'_> {
                 let on =
                     self.touch.controls.held(*button) || (*button == Button::Sneak && sneaking);
                 let face = self.control_face(*button);
-                // A pack's button is drawn whole; a mod's look is a plate with its icon or label.
+                // A pack's button is drawn whole, else it is a plate with its label.
                 if let Some((skin, lit)) = &face.skin {
                     let sprite = lit.as_ref().filter(|_| on).unwrap_or(skin);
                     icon(&mut ui, sprite, *c, *r, 1.0, *a);
@@ -1284,10 +1267,7 @@ impl Game<'_> {
                 }
                 let fill = if on { pressed(*a) } else { plate(*a) };
                 plate_of(&mut ui, face.shape, *c, *r, fill);
-                match &face.icon {
-                    Some(sprite) => icon(&mut ui, sprite, *c, *r, 0.55, *a),
-                    None => label(&mut ui, *c, *r, &face.label, ink(*a)),
-                }
+                label(&mut ui, *c, *r, &face.label, ink(*a));
             }
             // F3 held: its combinations, for another finger or the F3 finger sliding onto one.
             if self.touch.controls.held(Button::Debug) {
@@ -1319,7 +1299,7 @@ impl Game<'_> {
                     );
                 }
             }
-            // The mods' buttons, lit while held.
+            // The player's own buttons, lit while held.
             for (i, c, r, a, shape) in &layout.extra {
                 let extra = self.touch.config.as_ref().and_then(|c| c.extra.get(*i));
                 let (Some(extra), true) = (extra.map(|e| e.key.clone()), *a > 0.0) else {
@@ -1328,8 +1308,7 @@ impl Game<'_> {
                 let Some(face) = face_of(&extra) else {
                     continue;
                 };
-                let on =
-                    self.mods.keys_down.contains(&extra) || self.touch.custom_down.contains(&extra);
+                let on = self.touch.custom_down.contains(&extra);
                 if let Some((skin, lit)) = &face.skin {
                     // One image for both: dimmed while held.
                     let held = if on && skin == lit { *a * 0.6 } else { *a };
@@ -1365,9 +1344,9 @@ impl Game<'_> {
         self.touch.keyboard = false;
     }
 
-    /// The mod's button under window pixel `p` while playing (not in the layout editor): mod id,
-    /// button id.
-    fn mod_button_at(&self, p: [f32; 2]) -> Option<(String, String)> {
+    /// The extra button under window pixel `p` while playing (not in the layout editor): its
+    /// group, button id.
+    fn extra_button_at(&self, p: [f32; 2]) -> Option<(String, String)> {
         if !self.touch_playing() || self.touch.editor.is_some() {
             return None;
         }
@@ -1471,7 +1450,7 @@ impl Game<'_> {
     pub(super) fn touch_input_command(
         &mut self,
         words: &[&str],
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn EventLoopCtl,
     ) -> Result<Option<Value>> {
         if words.first() != Some(&"touch") {
             return Ok(None);
@@ -1512,7 +1491,7 @@ impl Game<'_> {
                 force: None,
                 id: finger,
             };
-            self.window_event(event_loop, id, WindowEvent::Touch(touch));
+            self.handle_window_event(event_loop, id, WindowEvent::Touch(touch), InputOrigin::User);
         }
         Ok(Some(json!({ "ok": true, "screen": self.screen_label() })))
     }
@@ -1551,12 +1530,11 @@ impl Game<'_> {
         })))
     }
 
-    /// A finger landed on or lifted from one of the layout's extra buttons: a mod's keybind, or
-    /// one of the player's own.
+    /// A finger landed on or lifted from one of the layout's extra buttons: one of the player's
+    /// own.
     fn extra_button(&mut self, id: &str, bind: &str, pressed: bool) {
         use horizon_client::settings::CustomAction;
         if id != touch::CUSTOM_BUTTONS {
-            self.mod_bind(id, bind, pressed);
             return;
         }
         let held = format!("{id}:{bind}");

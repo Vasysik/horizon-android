@@ -237,16 +237,7 @@ impl Game<'_> {
         };
         match field.id.0 {
             "chat" => self.chat_set_text(text, cursor, anchor),
-            "command" => {
-                if let Some(b) = self.command_box() {
-                    b.set_value("");
-                }
-                self.command_block_type(text);
-                if let Some(b) = self.command_box() {
-                    b.set_cursor(anchor, false);
-                    b.set_cursor(cursor, true);
-                }
-            }
+            "command" => self.command_block_set_text(text, cursor, anchor),
             _ => {
                 // A field that types at its end: back to where the two texts part, then the
                 // rest typed.
@@ -305,11 +296,7 @@ impl Game<'_> {
             Some("book") => self.book_input(Some(key), None),
             Some("command") => match key {
                 KeyCode::Enter | KeyCode::NumpadEnter => self.command_block_done(),
-                _ => {
-                    if let Some(b) = self.command_box() {
-                        b.key(key, false, false);
-                    }
-                }
+                _ => self.command_block_key_code(key, None, None),
             },
             Some("anvil") if key == KeyCode::Backspace => self.station_text(None, true),
             Some("creative") if key == KeyCode::Backspace => self.creative_search_backspace(false),

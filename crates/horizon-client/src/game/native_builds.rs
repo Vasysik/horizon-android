@@ -240,11 +240,8 @@ impl Game<'_> {
             description: "This game with native mods compiled in, built by GitHub: choose a \
                           build, or play without."
                 .into(),
-            summary: String::new(),
-            config: None,
             problem: None,
             dev: false,
-            has_settings: false,
             native: Some(horizon_client::mod_list::NativePage {
                 keys: Vec::new(),
                 buttons: vec!["Choose a build...".into()],

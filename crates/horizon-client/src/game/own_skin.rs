@@ -222,14 +222,14 @@ impl Game<'_> {
     /// the file Skin Customization chose, else, playing offline, the one the name worlds open
     /// with has on Ely.by. None for the default skin.
     pub(super) fn worn_skin(&mut self) -> Option<(String, bool)> {
-        match self.worn() {
+        match self.own_worn() {
             Worn::Skin(skin, slim) => Some((skin, slim)),
             Worn::Default | Worn::Waiting => None,
         }
     }
 
     /// `worn_skin`, telling a skin still to come from the default one.
-    fn worn(&mut self) -> Worn {
+    fn own_worn(&mut self) -> Worn {
         use horizon_client::skins::{Download, Kind};
         if let Some((skin, slim)) = self.own_skin_sprite() {
             return Worn::Skin(skin, slim);
@@ -403,7 +403,7 @@ impl Game<'_> {
         // The skin and the name every frame (both kept, cheap to ask): a skin waiting for its
         // atlas slot or its download shows the first frame it has one, and the default one only
         // when it takes long (the first time a name is asked of Ely.by).
-        let worn = self.worn();
+        let worn = self.own_worn();
         let since = *self.own_skin.title_since.get_or_insert_with(Instant::now);
         if matches!(worn, Worn::Waiting) && since.elapsed() < SKIN_WAIT {
             return;

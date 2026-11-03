@@ -6916,8 +6916,6 @@ mod tests {
                 id: id.into(),
                 title: id.into(),
                 description: "May show HUD panels.".into(),
-                summary: String::new(),
-                config: None,
                 problem: id.is_empty().then(|| "Invalid package".into()),
                 dev,
                 native: None,

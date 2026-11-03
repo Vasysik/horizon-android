@@ -599,9 +599,6 @@ pub(super) struct Remote {
     pub chat: Vec<(String, Instant)>,
     /// Lines received since joining, for the control socket's events.
     pub chat_received: u64,
-    /// The server's command tree (ClientboundCommandsPacket), for the WebAssembly mods'
-    /// commands (`merge_remote_tree`).
-    pub commands: Option<horizon_client::command::Dispatcher>,
     /// Entity.DATA_CUSTOM_NAME and DATA_CUSTOM_NAME_VISIBLE as the server set them, by entity
     /// (holograms are armor stands with a visible name).
     pub(super) names: HashMap<i32, (Option<horizon_client::text::Text>, bool)>,
@@ -808,7 +805,6 @@ impl Remote {
         self.head_lerps.clear();
         self.pending_items.clear();
         self.flash_on_set_health = false;
-        self.commands = None;
         self.names.clear();
         self.players.clear();
         self.tab_players.clear();
@@ -1204,7 +1200,6 @@ impl Game<'_> {
             game_mode: 0,
             chat: Vec::new(),
             chat_received: 0,
-            commands: None,
             names: HashMap::new(),
             chat_queue: VecDeque::new(),
             signatures: Default::default(),
@@ -2086,40 +2081,6 @@ impl Game<'_> {
         names.sort();
         Some(names)
     }
-    /// `Player.lookAt`: the view turned from the feet or eyes to the packet's point, or to its
-    /// entity's feet or eyes.
-    fn remote_look_at(&mut self, p: &play::PlayerLookAt) {
-        let Some(player) = self.player.as_ref() else {
-            return;
-        };
-        let eye = |anchor: i32, at: [f64; 3], eye_height: f64| {
-            [
-                at[0],
-                at[1] + if anchor == 1 { eye_height } else { 0.0 },
-                at[2],
-            ]
-        };
-        let me = player.position;
-        let my_eye = f64::from(player.pose.dimensions(1.0).eye_height);
-        let target = p
-            .entity
-            .and_then(|(id, anchor)| {
-                let m = self.mobs.iter().find(|m| m.id as i32 == id)?;
-                let at = [m.position.x, m.position.y, m.position.z];
-                Some(eye(anchor, at, f64::from(m.height()) * 0.85))
-            })
-            .unwrap_or(p.at);
-        let from = eye(p.from, [me.x, me.y, me.z], my_eye);
-        let (dx, dy, dz) = (
-            target[0] - from[0],
-            target[1] - from[1],
-            target[2] - from[2],
-        );
-        let horizontal = (dx * dx + dz * dz).sqrt();
-        let wrap = |d: f64| ((d + 180.0).rem_euclid(360.0) - 180.0) as f32;
-        self.pitch = wrap(-dy.atan2(horizontal).to_degrees());
-        self.yaw = wrap(dz.atan2(dx).to_degrees() - 90.0);
-    }
     /// The open menu's window id (0: the inventory).
     pub(super) fn remote_menu_id(&self) -> i32 {
         self.remote
@@ -2261,7 +2222,6 @@ impl Game<'_> {
                             "Loading terrain...",
                         );
                     }
-                    self.register_mod_channels();
                 }
                 Event::Features(features) => {
                     if let Some(remote) = &mut self.remote {
@@ -2350,8 +2310,6 @@ impl Game<'_> {
                             "Loading terrain...",
                         );
                     }
-                    self.merge_remote_tree();
-                    self.register_mod_channels();
                 }
                 // handleTransfer: "Cannot transfer to server from
                 // singleplayer" (no ServerData), so the world just closes.
@@ -4976,8 +4934,6 @@ impl Game<'_> {
             {
                 self.handle_command_suggestions(&data);
             }
-            // A WebAssembly mod's payload channels (`register_mod_channels`).
-            C::CustomPayload(p) => self.mods_payload(&p.channel, &p.data),
             C::CustomChatCompletions(p) => {
                 // ClientPacketListener.handleCustomChatCompletions.
                 if let Some(r) = self.remote.as_mut() {
@@ -5000,10 +4956,7 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     r.chat_tree = chat_tree;
                     r.chat_tree_received = true;
-                    // The WebAssembly mods' commands the server lacks join it too.
-                    r.commands = Some(tree);
                 }
-                self.merge_remote_tree();
             }
             C::Cooldown(p) => {
                 // ClientPacketListener.handleItemCooldown: the server starts
@@ -5383,8 +5336,6 @@ impl Game<'_> {
             C::SetTitleText(p) => self.titles.set_title(remote_text(&p.text)),
             C::SetSubtitleText(p) => self.titles.set_subtitle(remote_text(&p.text)),
             C::SetTitlesAnimation(p) => self.titles.set_times(p.fade_in, p.stay, p.fade_out),
-            // ClientPacketListener.handleLookAt: Player.lookAt from the feet or the eyes.
-            C::PlayerLookAt(p) => self.remote_look_at(&p),
             // ClientCommonPacketListenerImpl.handleShowDialog / handleClearDialog.
             C::ShowDialog(p) => self.show_play_dialog(&p.dialog),
             C::ClearDialog(_) => self.clear_dialog(),
@@ -5877,7 +5828,7 @@ impl Game<'_> {
     /// Whether a downloaded skin or cape is in the atlas to draw, marking it
     /// drawn; if not (new, or its slot taken), its image is queued for upload
     /// again and it is drawn from the next frame.
-    fn again_skin(&mut self, location: &str) -> bool {
+    pub(super) fn again_skin(&mut self, location: &str) -> bool {
         if self.show_skin(location) {
             return true;
         }
@@ -7682,7 +7633,7 @@ impl Game<'_> {
     /// changed is sent as SetCreativeModeSlot, while one is open and once more as it closes.
     pub(super) fn remote_creative_menu_sync(&mut self) {
         const MENU: [i16; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 45];
-        let open = self.creative && self.creative_menu_open();
+        let open = self.creative && self.screen == Screen::Creative;
         let now = self.creative_menu_slots();
         let Some(r) = self.remote.as_mut() else {
             return;
@@ -7951,7 +7902,6 @@ impl Game<'_> {
     }
     /// MultiPlayerGameMode.destroyBlock: the predicted break.
     fn predict_break(&mut self, pos: [i32; 3], state: BlockStateId, sequence: i32) {
-        self.mods_block_broken(pos, state);
         self.touch_vibrate(super::touch::BREAK_BUZZ);
         self.tutorial_destroy(state, 1.0);
         // BlockStatePredictionHandler.retainKnownServerState.
@@ -8529,7 +8479,7 @@ impl Game<'_> {
         // A content mod's machine takes the click where its server would (processing.rs): a
         // depot's top, a millstone with an empty hand. Nothing is placed against it.
         if self.machine_takes(hit.pos, hit.face, held) {
-            return (true, DryUse::default());
+            return (InteractionResult::Success, DryUse::default());
         }
         // BeehiveBlock.useItemOn: shears or a glass bottle on a full hive
         // (honey level 5) is SUCCESS, so the click ends after UseItemOn and
@@ -11048,17 +10998,9 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
         self.0.release_remote_use();
     }
     fn start_attack(&mut self) -> bool {
-        // AttackEntityCallback / AttackBlockCallback.
-        if !self.0.mods_allow_attack() {
-            return false;
-        }
         self.0.remote_start_attack()
     }
     fn start_use(&mut self) {
-        // UseBlockCallback / UseItemCallback.
-        if !self.0.mods_allow_use() {
-            return;
-        }
         self.0.remote_use();
     }
     fn pick(&mut self) {

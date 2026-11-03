@@ -367,7 +367,7 @@ impl Game<'_> {
             let start = out.len();
             if part.spins {
                 for (_, model) in &models {
-                    self.baked_model_vertices(model, at * own, light, false, out);
+                    self.baked_model_lit(model, at * own, light, false, out);
                 }
             }
             if let Some(extra) = &part.extra {
@@ -376,7 +376,7 @@ impl Game<'_> {
                     .or_else(|| models.first().map(|(v, _)| v.rotations))
                     .unwrap_or([0; 3]);
                 if let Some(model) = catalog.partial(extra, [turns[0], turns[1], 0]) {
-                    self.baked_model_vertices(model, at * own, light, false, out);
+                    self.baked_model_lit(model, at * own, light, false, out);
                 }
             }
             if let Some(half) = &part.half {
@@ -387,7 +387,7 @@ impl Game<'_> {
                     // As the shaft joined there turns: about its axis, by the end's factor.
                     let axis = face.iter().position(|c| *c != 0).unwrap_or(1);
                     let end = turn(axis, k, phase, run);
-                    self.baked_model_vertices(model, at * end, light, false, out);
+                    self.baked_model_lit(model, at * end, light, false, out);
                 }
             }
             // A belt's segment and pulley (BeltRenderer).
@@ -427,7 +427,7 @@ impl Game<'_> {
                     } else {
                         glam::Mat4::IDENTITY
                     };
-                    self.baked_model_vertices(model, at * drop * turned, light, false, out);
+                    self.baked_model_lit(model, at * drop * turned, light, false, out);
                 }
             }
             cull_back_faces(out, start);
@@ -526,7 +526,7 @@ impl Game<'_> {
         for bottom in [true, false] {
             if let Some(m) = model(which(bottom)) {
                 let from = out.len();
-                self.baked_model_vertices(m, at * local, light, false, out);
+                self.baked_model_lit(m, at * local, light, false, out);
                 if speed != 0.0 && !diagonal {
                     scroll_quads(out, from, &rects, scroll);
                 }
@@ -545,7 +545,7 @@ impl Game<'_> {
                 * glam::Mat4::from_rotation_x(90f32.to_radians())
                 * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
             if let Some(m) = model(9) {
-                self.baked_model_vertices(m, at * own * lay, light, false, out);
+                self.baked_model_lit(m, at * own * lay, light, false, out);
             }
         }
     }
@@ -669,7 +669,7 @@ impl Game<'_> {
         }
         let catalog = &self.pack.render.model_catalog;
         if let Some(model) = catalog.partial(model, [turns[0], turns[1], 0]) {
-            self.baked_model_vertices(model, at, light, false, out);
+            self.baked_model_lit(model, at, light, false, out);
         }
     }
 
@@ -714,7 +714,7 @@ impl Game<'_> {
             .first()
             .and_then(|m| catalog.partial(m, [turns[0], turns[1], 0]))
         {
-            self.baked_model_vertices(top, at * spin, light, false, out);
+            self.baked_model_lit(top, at * spin, light, false, out);
         }
         let Some(c) = contraption else {
             return;
@@ -737,7 +737,7 @@ impl Game<'_> {
                     rel[2] as f32,
                 ));
             for (_, model) in &models {
-                self.baked_model_vertices(model, place, light, false, out);
+                self.baked_model_lit(model, place, light, false, out);
             }
         }
     }
@@ -904,7 +904,7 @@ impl Game<'_> {
             |x: f32, y: f32, z: f32| glam::Mat4::from_translation(glam::Vec3::new(x, y, z));
         let mut draw = |i: usize, m: glam::Mat4| {
             if let Some(model) = catalog.partial(&part.models[i], [0, 0, 0]) {
-                self.baked_model_vertices(model, m, light, false, out);
+                self.baked_model_lit(model, m, light, false, out);
             }
         };
         let mut m = at * move_to(0.5, 0.5, 0.5);
@@ -1013,7 +1013,7 @@ impl Game<'_> {
         let start = out.len();
         let mut draw = |i: usize, m: glam::Mat4| {
             if let Some(model) = catalog.partial(&models[i], [0, 0, 0]) {
-                self.baked_model_vertices(model, m, light, false, out);
+                self.baked_model_lit(model, m, light, false, out);
             }
         };
         let up = |y: f32| glam::Mat4::from_translation(glam::Vec3::new(0.0, y, 0.0));
