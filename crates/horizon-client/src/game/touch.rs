@@ -413,6 +413,7 @@ pub(super) fn draw_editor(
         let fill = match action {
             EditorAction::Done => color::with_alpha(color::ACCENT, 0.9),
             EditorAction::Reset
+            | EditorAction::Add
             | EditorAction::Movement
             | EditorAction::Interact
             | EditorAction::Vibrate
@@ -423,6 +424,7 @@ pub(super) fn draw_editor(
         let text = match action {
             EditorAction::Done => "Done",
             EditorAction::Reset => "Reset",
+            EditorAction::Add => "Add",
             // The movement control picked (a press switches it): auto is the D-pad where the
             // stick moves as the keys.
             EditorAction::Movement => match config.dpad {
@@ -712,11 +714,18 @@ impl Game<'_> {
             let [w, h] = self.touch_size();
             let config = self.touch.config.get_or_insert_with(LayoutConfig::default);
             let editor = self.touch.editor.as_mut().unwrap();
-            if editor.event(config, w as f32, h as f32, t.id, t.phase, p)
-                == Some(EditorAction::Done)
-            {
+            let action = editor.event(config, w as f32, h as f32, t.id, t.phase, p);
+            if matches!(action, Some(EditorAction::Done | EditorAction::Add)) {
                 self.touch.editor = None;
                 self.save_touch_layout();
+            }
+            if action == Some(EditorAction::Add) {
+                self.open_options_at(
+                    self.title.is_some(),
+                    horizon_client::options_ui::Page::Controls,
+                );
+                self.open_custom_buttons();
+                self.ui.options.add_custom_button(&mut self.settings);
             }
             return true;
         }
@@ -851,6 +860,10 @@ impl Game<'_> {
             self.touch.context = context;
             self.touch.wanted =
                 matches!(context, Some("chat" | "sign" | "book" | "command" | "mod"));
+            // The finger that opened it lifts on the new screen: that is not a tap beside its field.
+            if self.touch.wanted {
+                self.touch.tap_from = None;
+            }
         }
         #[cfg(target_os = "android")]
         if self.touch.keyboard {
@@ -1673,6 +1686,12 @@ impl Game<'_> {
     }
 }
 
+/// A custom button's size until it is placed, on a window this big.
+pub(super) fn custom_button_size(w: f32, h: f32) -> f32 {
+    let scale = HudBatch::new([w as u32, h as u32]).scale;
+    WIDE_HEIGHT / 2.0 * scale / touch::unit(w, h)
+}
+
 impl Game<'_> {
     /// The atlas key of a GUI sprite: `<namespace>:my_icon` (a content mod's or a pack's,
     /// `assets/<namespace>/textures/gui/sprites/my_icon.png`) or a plain path.
@@ -1696,9 +1715,7 @@ impl Game<'_> {
             return Vec::new();
         };
         let [w, h] = self.touch_size();
-        let (w, h) = (w as f32, h as f32);
-        let scale = HudBatch::new([w as u32, h as u32]).scale;
-        let size = WIDE_HEIGHT / 2.0 * scale / touch::unit(w, h);
+        let size = custom_button_size(w as f32, h as f32);
         config
             .custom
             .iter()

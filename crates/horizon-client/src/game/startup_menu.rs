@@ -426,14 +426,23 @@ impl Loading {
     /// The touch layout editor in place of the options, on the layout as it was saved: the
     /// controls can be laid out while the game is set up, before a world.
     fn open_menu_touch_editor(&mut self) {
-        let config = std::fs::read_to_string(Self::touch_layout_path()).map_or_else(
+        let mut config = std::fs::read_to_string(Self::touch_layout_path()).map_or_else(
             |_| horizon_client::touch::LayoutConfig::default(),
             |text| horizon_client::touch::LayoutConfig::from_json(&text),
         );
+        config.offer_custom(self.menu_custom_button_size());
         self.save_menu_settings();
         self.menu.options_open = false;
         self.menu.dragging = false;
         self.menu.touch_editor = Some((Default::default(), config));
+    }
+
+    fn menu_custom_button_size(&self) -> f32 {
+        let (w, h) = self.window.as_ref().map_or((1.0, 1.0), |w| {
+            let s = w.inner_size();
+            (s.width.max(1) as f32, s.height.max(1) as f32)
+        });
+        super::touch::custom_button_size(w, h)
     }
 
     pub(super) fn menu_touch_editing(&self) -> bool {
@@ -463,16 +472,26 @@ impl Loading {
         match event {
             WindowEvent::Touch(touch) => {
                 let p = [touch.location.x as f32, touch.location.y as f32];
-                let done = self
+                use horizon_client::touch::EditorAction;
+                let custom = self.menu_custom_button_size();
+                let action = self
                     .menu
                     .touch_editor
                     .as_mut()
-                    .is_some_and(|(editor, config)| {
-                        editor.event(config, size[0], size[1], touch.id, touch.phase, p)
-                            == Some(horizon_client::touch::EditorAction::Done)
+                    .and_then(|(editor, config)| {
+                        let action =
+                            editor.event(config, size[0], size[1], touch.id, touch.phase, p);
+                        if action == Some(EditorAction::Reset) {
+                            config.offer_custom(custom);
+                        }
+                        action
                     });
-                if done {
+                if matches!(action, Some(EditorAction::Done | EditorAction::Add)) {
                     self.close_menu_touch_editor();
+                }
+                if action == Some(EditorAction::Add) {
+                    self.settings.custom_buttons = super::touch::saved_custom_buttons();
+                    self.menu.options.add_custom_button(&mut self.settings);
                 }
             }
             WindowEvent::KeyboardInput { event: key, .. }
@@ -500,7 +519,14 @@ impl Loading {
         layout.dpad = config.dpad.unwrap_or(false);
         let face = |target: horizon_client::touch::Target| match target {
             horizon_client::touch::Target::Button(b) => (b.label().to_owned(), None),
-            horizon_client::touch::Target::Extra(i) => (config.extra[i].key.clone(), None),
+            horizon_client::touch::Target::Extra(i) => {
+                let key = &config.extra[i].key;
+                let own = key
+                    .strip_prefix(horizon_client::touch::CUSTOM_BUTTONS)
+                    .and_then(|k| k.strip_prefix(':'))
+                    .and_then(|id| config.custom.iter().find(|b| b.id.to_string() == id));
+                (own.map_or_else(|| key.clone(), |b| b.label()), None)
+            }
             horizon_client::touch::Target::Stick => (String::new(), None),
         };
         // Starling's own buttons (packaging/touch), which every atlas carries.

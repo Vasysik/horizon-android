@@ -1311,9 +1311,10 @@ impl Painter {
                 (r.v0 * atlas.height as f32).round() as u32,
             );
             let mut pixels = Vec::with_capacity((r.w * r.h * 4) as usize);
+            let all = atlas.pixels();
             for y in y0..y0 + r.h {
                 let at = ((y * atlas.width + x0) * 4) as usize;
-                pixels.extend_from_slice(atlas.pixels.get(at..at + (r.w * 4) as usize)?);
+                pixels.extend_from_slice(all.get(at..at + (r.w * 4) as usize)?);
             }
             Some(own_buttons::fit(r.w, r.h, &pixels))
         });
@@ -1823,6 +1824,8 @@ pub struct OptionsUi {
     pub(crate) settings_search: ui::EditBox,
     /// What the custom button on its page sends.
     custom_send: ui::EditBox,
+    /// The custom button on its page came from the touch editor's Add, and goes back there.
+    back_to_editor: bool,
     /// The canvas of a custom button's image.
     painter: Painter,
     /// Packs: the packs found and the selection the screen opens with.
@@ -1948,6 +1951,7 @@ impl Default for OptionsUi {
             language_search: search,
             settings_search,
             custom_send,
+            back_to_editor: false,
             painter: Painter::default(),
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
@@ -5249,21 +5253,7 @@ impl OptionsUi {
                             events.push(Event::OpenCustomButtons);
                         }
                         Act::CustomAdd => {
-                            // A button's id is the slot of its image: the first one free.
-                            let free = (0..own_buttons::SLOTS)
-                                .find(|id| !s.custom_buttons.iter().any(|b| b.id == *id));
-                            let Some(id) = free else {
-                                return events;
-                            };
-                            s.custom_buttons.push(crate::settings::CustomButton {
-                                id,
-                                action: crate::settings::CustomAction::Send(String::new()),
-                                icon: None,
-                                image: false,
-                            });
-                            self.custom_send.set_value("");
-                            self.custom_send.focused = false;
-                            self.push(Page::CustomButton(id));
+                            self.custom_add(s);
                         }
                         Act::CustomEdit(id) => {
                             let line =
@@ -5806,7 +5796,37 @@ impl OptionsUi {
         if self.stack.is_empty() {
             events.push(Event::Close);
         }
+        if self.back_to_editor && matches!(page, Page::CustomButton(_)) {
+            self.back_to_editor = false;
+            events.push(Event::TouchLayout);
+        }
         events
+    }
+    /// A new custom button's page. False with every slot taken.
+    fn custom_add(&mut self, s: &mut Settings) -> bool {
+        // A button's id is the slot of its image: the first one free.
+        let free = (0..own_buttons::SLOTS).find(|id| !s.custom_buttons.iter().any(|b| b.id == *id));
+        let Some(id) = free else {
+            return false;
+        };
+        s.custom_buttons.push(crate::settings::CustomButton {
+            id,
+            action: crate::settings::CustomAction::Send(String::new()),
+            icon: None,
+            image: false,
+        });
+        self.custom_send.set_value("");
+        self.custom_send.focused = false;
+        self.push(Page::CustomButton(id));
+        true
+    }
+    /// The touch editor's Add: a new button's page, over the page of them all; done with it, the
+    /// editor again.
+    pub fn add_custom_button(&mut self, s: &mut Settings) {
+        if self.page() != Page::CustomButtons {
+            self.push(Page::CustomButtons);
+        }
+        self.back_to_editor = self.custom_add(s);
     }
     /// Whether a custom button's canvas shows: a finger on the page drags, it never scrolls.
     pub fn painting(&self) -> bool {

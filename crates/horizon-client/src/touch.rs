@@ -512,6 +512,27 @@ impl LayoutConfig {
         config
     }
 
+    /// The player's own buttons where no world offers them (the editor over the title), `size`
+    /// big, in a column until they are placed.
+    pub fn offer_custom(&mut self, size: f32) {
+        let offered: Vec<_> = self
+            .custom
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let place = Place {
+                    x: 0.5,
+                    y: 0.25 + 0.1 * (i % 5) as f32,
+                    size,
+                    show: Show::On,
+                    opacity: 1.0,
+                };
+                (format!("{CUSTOM_BUTTONS}:{}", b.id), place, Shape::Round)
+            })
+            .collect();
+        self.offer(&offered);
+    }
+
     /// The player's own buttons change: those that went take their places with them.
     pub fn set_custom(&mut self, buttons: Vec<CustomButton>) {
         self.extra.retain(|e| {
@@ -1345,6 +1366,8 @@ pub enum Chip {
 pub enum EditorAction {
     Done,
     Reset,
+    /// A custom button of the player's own, on its page in the options.
+    Add,
     /// The stick or the D-pad.
     Movement,
     /// Tap to interact or aim the crosshair ([`Interact`]).
@@ -1373,20 +1396,21 @@ pub struct LayoutEditor {
 const SIZE_STEP: f32 = 0.1;
 
 impl LayoutEditor {
-    /// Done, the movement control, the interaction mode, vibration, the gyroscope, the
-    /// three-finger tap and Reset, near the top centre, under the row of buttons the default
+    /// Done, a new button, the movement control, the interaction mode, vibration, the gyroscope,
+    /// the three-finger tap and Reset, near the top centre, under the row of buttons the default
     /// layout puts there.
-    pub fn bar(width: f32, height: f32) -> [(EditorAction, [f32; 2], f32); 7] {
+    pub fn bar(width: f32, height: f32) -> [(EditorAction, [f32; 2], f32); 8] {
         let u = unit(width, height);
         let at = |x: f32| [width / 2.0 + x * u, 2.6 * u];
         [
-            (EditorAction::Done, at(-4.02), 0.6 * u),
-            (EditorAction::Movement, at(-2.68), 0.6 * u),
-            (EditorAction::Interact, at(-1.34), 0.6 * u),
-            (EditorAction::Vibrate, at(0.0), 0.6 * u),
-            (EditorAction::Gyro, at(1.34), 0.6 * u),
-            (EditorAction::ThreeFingers, at(2.68), 0.6 * u),
-            (EditorAction::Reset, at(4.02), 0.6 * u),
+            (EditorAction::Done, at(-4.69), 0.6 * u),
+            (EditorAction::Add, at(-3.35), 0.6 * u),
+            (EditorAction::Movement, at(-2.01), 0.6 * u),
+            (EditorAction::Interact, at(-0.67), 0.6 * u),
+            (EditorAction::Vibrate, at(0.67), 0.6 * u),
+            (EditorAction::Gyro, at(2.01), 0.6 * u),
+            (EditorAction::ThreeFingers, at(3.35), 0.6 * u),
+            (EditorAction::Reset, at(4.69), 0.6 * u),
         ]
     }
 
