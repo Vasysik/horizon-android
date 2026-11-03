@@ -19,9 +19,9 @@ clippy-android, fmt, test, raw CMD). On the VM: `~/sync4`, `~/sync4-target`, `~/
 - [x] D. game.rs, title, Cargo, CI: `3bbeb3a20`
 - [x] E. Desktop builds (`cda4b7629`); Android builds, hooks in `horizon_client::android`, Dev APK (`7a5fb6925`)
 - [x] fmt
-- [ ] Client opens on the VM
-- [ ] Tests
-- [ ] Clippy desktop and Android
+- [x] Client opens on the VM (Xvfb, software Vulkan, new world, no mods or pack)
+- [x] Tests: 5495 passed, 0 failed, 104 ignored
+- [x] Clippy desktop and Android, `-D warnings`
 - [ ] Owner tests the APK; merge into android
 
 ## What fell
@@ -34,3 +34,10 @@ clippy-android, fmt, test, raw CMD). On the VM: `~/sync4`, `~/sync4-target`, `~/
   the running mods; the phone's `datapacks` folder choice.
 - Stack tooltip grids; Starling's remote item displays (upstream's `text_displays` instead).
 - Failed shader experiments `HORIZON_PACK_SKY_LAST`, `HORIZON_PACK_VRS`, `HORIZON_PACK_HALF`.
+- Item grids in tooltips (`StackTooltip`), the Config button and summary line on the Mods page.
+- Android: `learn_layout` does nothing, the splitscreen pad router is a stub.
+
+## Not checked
+Nothing ran on a phone. On the VM the client ran without mods and without a shader pack: Create,
+shader packs, touch, custom buttons, the setup download and native mods builds were not run after
+the merge.
