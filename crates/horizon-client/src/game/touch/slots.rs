@@ -99,6 +99,9 @@ impl Game<'_> {
     fn slot_touch_at(&mut self, p: PhysicalPosition<f64>) -> (Option<usize>, bool) {
         let batch = self.touch_gui_batch();
         let gui = (p.x as f32 / batch.scale, p.y as f32 / batch.scale);
+        if self.touch.slots.spread.is_none() {
+            self.bedrock_side(gui.0, batch.width);
+        }
         let slot = self
             .slot_at(&batch, gui.0, gui.1)
             .or_else(|| self.touch_slot_near(&batch, gui));
@@ -570,7 +573,8 @@ impl Game<'_> {
     }
 
     /// The middle of a slot, in window pixels.
-    fn touch_slot_center(&self, slot: usize) -> PhysicalPosition<f64> {
+    fn touch_slot_center(&mut self, slot: usize) -> PhysicalPosition<f64> {
+        self.bedrock_for_slot(slot);
         let batch = self.touch_gui_batch();
         let (ox, oy) = self.inventory_origin(&batch);
         let (sx, sy) = self.slot_position(slot);

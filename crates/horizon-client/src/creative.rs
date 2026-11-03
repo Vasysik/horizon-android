@@ -189,6 +189,18 @@ impl Creative {
         (0..36).chain(500..505)
     }
 
+    /// Bedrock Inventory: the crafting grid and its result in the room at the player's right.
+    pub fn bedrock_craft_position(slot: usize) -> Option<(f32, f32)> {
+        match slot {
+            100 => Some((129.0, 5.0)),
+            101 => Some((147.0, 5.0)),
+            102 => Some((129.0, 23.0)),
+            103 => Some((147.0, 23.0)),
+            200 => Some((173.0, 14.0)),
+            _ => None,
+        }
+    }
+
     /// CreativeModeInventoryScreen.selectTab positions its InventoryMenu wrappers.
     pub fn inventory_slot_position(slot: usize) -> Option<(f32, f32)> {
         match slot {

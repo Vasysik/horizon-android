@@ -1570,6 +1570,8 @@ enum Act {
     NativeKey(usize, usize),
     NativeButton(usize, usize),
     OpenModFolder,
+    /// The creative screen with the inventory beside it, or as the game draws it.
+    BedrockInventory,
     /// The touch layout editor (phones).
     TouchLayout,
     /// Credits & Attribution's Credits button (WinScreen without the poem).
@@ -3207,6 +3209,16 @@ impl OptionsUi {
                         310.0,
                         tr("horizon.pages.open.controller"),
                         Act::Push(Page::Controller),
+                    ),
+                    None,
+                ));
+                rows.push(Row::Buttons(
+                    button(
+                        0.0,
+                        0.0,
+                        310.0,
+                        Text::literal("Bedrock Inventory: ").append(on_off(s.bedrock_inventory)),
+                        Act::BedrockInventory,
                     ),
                     None,
                 ));
@@ -5367,6 +5379,7 @@ impl OptionsUi {
                             }
                         }
                         Act::TouchLayout => events.push(Event::TouchLayout),
+                        Act::BedrockInventory => s.bedrock_inventory = !s.bedrock_inventory,
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
                         Act::NextSkin => {
@@ -6408,6 +6421,7 @@ impl OptionsUi {
                         | Act::CanvasPlate
                         | Act::CanvasImport(_)
                         | Act::TouchLayout
+                        | Act::BedrockInventory
                         | Act::NextSkin
                         | Act::SkinModel
                         | Act::PickSkin

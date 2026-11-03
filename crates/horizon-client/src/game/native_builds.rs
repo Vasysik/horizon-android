@@ -19,12 +19,13 @@ use std::time::{Duration, Instant};
 use winit::event::{Touch, TouchPhase};
 
 /// The mod build service (packaging/android/mod_build_server.py).
-const BUILD_SERVER: &str = "http://20.230.81.80:8787";
+const BUILD_SERVER: &str = "https://191-234-193-205.sslip.io";
 /// A build's folder here starts with this, and a new one takes the place of the last.
 const COMPILED: &str = "vm-";
 /// The service's waits: between looks at the job, and how long it may go on at all.
 const POLL: Duration = Duration::from_secs(2);
 const LONGEST: Duration = Duration::from_secs(40 * 60);
+const WAKING: Duration = Duration::from_secs(5 * 60);
 /// Tries in a row that brought nothing before a look or a download gives up.
 const QUIET_TRIES: u32 = 15;
 
@@ -380,18 +381,28 @@ fn compile(version: &str, shared: &Mutex<Shared>) -> Result<String, String> {
         .build();
     say("Sending the mod to the build server...".into());
     let body = bundles_body()?;
-    let answer: serde_json::Value = agent
-        .post(&format!("{server}/v1/build?version={version}"))
-        .set("Content-Type", "application/octet-stream")
-        .send_bytes(&body)
-        .map_err(service_error)?
-        .into_json()
-        .map_err(|e| e.to_string())?;
-    let job = answer["job"].as_str().unwrap_or_default().to_owned();
+    let started = Instant::now();
+    // The machine that builds sleeps until it is asked: the gateway says so while it wakes.
+    let job = loop {
+        let answer: serde_json::Value = agent
+            .post(&format!("{server}/v1/build?version={version}"))
+            .set("Content-Type", "application/octet-stream")
+            .send_bytes(&body)
+            .map_err(service_error)?
+            .into_json()
+            .map_err(|e| e.to_string())?;
+        if answer["starting"].as_bool() != Some(true) {
+            break answer["job"].as_str().unwrap_or_default().to_owned();
+        }
+        if started.elapsed() > WAKING {
+            return Err("The build server did not wake up. Try again later.".into());
+        }
+        say("Waking the build server up: about a minute...".into());
+        std::thread::sleep(POLL * 3);
+    };
     if !plain(&job) {
         return Err("The build server gave no job.".into());
     }
-    let started = Instant::now();
     let mut quiet = 0;
     let finished = loop {
         if started.elapsed() > LONGEST {
@@ -418,6 +429,7 @@ fn compile(version: &str, shared: &Mutex<Shared>) -> Result<String, String> {
         };
         quiet = 0;
         match status["state"].as_str() {
+            Some("starting") => say("Waking the build server up: about a minute...".into()),
             Some("queued") => say(format!(
                 "In line: {} before yours",
                 status["ahead"].as_u64().unwrap_or(0)

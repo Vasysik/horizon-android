@@ -177,6 +177,8 @@ pub struct Settings {
     /// 0 off, 1 crosshair, 2 hotbar.
     pub attack_indicator: u8,
     pub inactivity_fps_limit: String,
+    /// The creative screen with the inventory and a crafting grid beside it, as Bedrock's.
+    pub bedrock_inventory: bool,
     pub prioritize_chunk_updates: u8,
     pub menu_blur: i32,
     pub invert_y: bool,
@@ -282,6 +284,7 @@ impl Default for Settings {
             improved_transparency: false,
             attack_indicator: 1,
             inactivity_fps_limit: "afk".into(),
+            bedrock_inventory: false,
             prioritize_chunk_updates: 0,
             menu_blur: 5,
             invert_y: false,
@@ -493,6 +496,7 @@ impl Settings {
             improved_transparency: f.bool("improvedTransparency"),
             attack_indicator: f.int("attackIndicator") as u8,
             inactivity_fps_limit: f.name("inactivityFpsLimit"),
+            bedrock_inventory: f.bool("bedrockInventory"),
             prioritize_chunk_updates: f.int("prioritizeChunkUpdates") as u8,
             menu_blur: f.int("menuBackgroundBlurriness"),
             invert_x: f.bool("invertXMouse"),
@@ -598,6 +602,7 @@ impl Settings {
         put_b(&mut f, "improvedTransparency", self.improved_transparency);
         put_i(&mut f, "attackIndicator", i32::from(self.attack_indicator));
         put_name(&mut f, "inactivityFpsLimit", &self.inactivity_fps_limit);
+        put_b(&mut f, "bedrockInventory", self.bedrock_inventory);
         put_i(
             &mut f,
             "prioritizeChunkUpdates",

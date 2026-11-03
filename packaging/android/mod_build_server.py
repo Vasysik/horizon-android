@@ -7,6 +7,7 @@ a time, and hands back the library. Python's standard library only.
     POST /v1/build?version=V   body: for each mod, its length (4 bytes, big-endian) and its file
     GET  /v1/job/ID            {"state": "queued" | "building" | "done" | "failed", ...}
     GET  /v1/job/ID/lib        the library (Range works)
+    GET  /v1/busy              {"busy": whether a build is under way or in line}
 
 MOD_BUILD_ROOT (default ~/modbuild) holds versions.json ({"0.1.6": "<commit>"}), base/ (a clean build
 cache), source/ (a clone), jobs/ and results/. The same mods for the same version make the same job, so
@@ -262,7 +263,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.answer(413, {"error": "That is too big to compile."})
         body = self.rfile.read(size)
         try:
-            key = submit(version, body, self.client_address[0])
+            # The gateway (mod_build_gateway.py) names the player; only it can reach this port.
+            client = self.headers.get("X-Real-IP") or self.client_address[0]
+            key = submit(version, body, client)
         except Refused as e:
             return self.answer(400, {"error": str(e)})
         self.answer(200, {"job": key})
@@ -287,6 +290,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         parts = urllib.parse.urlparse(self.path).path.strip("/").split("/")
+        if parts == ["v1", "busy"]:
+            with lock:
+                return self.answer(200, {"busy": bool(line)})
         if len(parts) < 3 or parts[:2] != ["v1", "job"] or not re.fullmatch(r"[0-9a-f]{24}", parts[2]):
             return self.answer(404, {"error": "No such thing here."})
         key = parts[2]

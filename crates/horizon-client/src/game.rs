@@ -2294,6 +2294,15 @@ fn glfw_button(button: MouseButton) -> i32 {
     }
 }
 
+/// Bedrock Inventory: how far from the middle each of its two windows goes, and the slots of the
+/// crafting grid and its result it adds to the inventory's.
+const BEDROCK_SHIFT: f32 = 100.0;
+const BEDROCK_CRAFT: [usize; 5] = [100, 101, 102, 103, 200];
+thread_local! {
+    /// Where the creative window is from the middle of the screen (`creative_origin`).
+    static CREATIVE_SHIFT: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
 fn select_creative_tab(
     creative: &mut Creative,
     clicks: &mut horizon_client::container_screen::Clicks,
@@ -2937,6 +2946,15 @@ struct Game<'a> {
     update_offer: update_offer::UpdateOffer,
     #[cfg(target_os = "android")]
     native_builds: native_builds::NativeBuilds,
+    /// Bedrock Inventory with the pointer on its inventory window: the item tab the other window
+    /// shows (the creative screen's selected tab is then the Survival Inventory, so every click
+    /// works as it does there).
+    bedrock_items: Option<usize>,
+    /// A button is down on one of its windows: the other waits for its release.
+    bedrock_held: bool,
+    /// What the creative window drawn last found under the cursor, for the tooltips over it all.
+    creative_hovered: Option<(ItemStack, bool)>,
+    creative_effect_tip: Option<[(String, u32); 2]>,
     /// A new world's folder, until its level.dat is there to keep its content mods beside
     /// (world_content.rs).
     content_record: Option<String>,
@@ -8734,7 +8752,11 @@ impl Game<'_> {
     /// 300.. are the open container's slots.
     fn slots(&self) -> Vec<usize> {
         if self.creative_inventory_open() {
-            return Creative::inventory_slots().collect();
+            let mut v: Vec<usize> = Creative::inventory_slots().collect();
+            if self.bedrock_items.is_some() {
+                v.extend(BEDROCK_CRAFT);
+            }
+            return v;
         }
         if self.creative_tab_open() {
             return Creative::tab_slots().collect();
@@ -8794,7 +8816,12 @@ impl Game<'_> {
     /// branches in the same order, so the two stay in step.
     fn slot_count(&self) -> usize {
         if self.creative_inventory_open() {
-            return Creative::inventory_slots().count();
+            let craft = if self.bedrock_items.is_some() {
+                BEDROCK_CRAFT.len()
+            } else {
+                0
+            };
+            return Creative::inventory_slots().count() + craft;
         }
         if self.creative_tab_open() {
             return Creative::tab_slots().count();
@@ -8850,7 +8877,10 @@ impl Game<'_> {
     /// InventoryMenu / CraftingMenu slot layouts.
     fn slot_position(&self, i: usize) -> (f32, f32) {
         if self.creative_inventory_open()
-            && let Some(position) = Creative::inventory_slot_position(i)
+            && let Some(position) = Creative::inventory_slot_position(i).or_else(|| {
+                self.bedrock_items
+                    .and_then(|_| Creative::bedrock_craft_position(i))
+            })
         {
             return position;
         }
@@ -9305,6 +9335,9 @@ impl Game<'_> {
         button: i32,
         input: horizon_client::menu::Input,
     ) -> bool {
+        if let Some(slot) = slot {
+            self.bedrock_for_slot(slot);
+        }
         if let Some(slot) = slot
             && slot >= Creative::DISPLAY
             && self.creative_tab_open()
@@ -14652,7 +14685,56 @@ impl Game<'_> {
         }
     }
     fn creative_origin(batch: &HudBatch) -> (f32, f32) {
-        batch.centered_origin(Creative::WIDTH, Creative::HEIGHT)
+        let (x, y) = batch.centered_origin(Creative::WIDTH, Creative::HEIGHT);
+        (x + CREATIVE_SHIFT.get(), y)
+    }
+    /// Bedrock Inventory: the window of the two the rest of the game works with, the inventory's
+    /// (`panel`) or the item tab's, for a GUI `width` wide. Too narrow for both, or with the Survival
+    /// Inventory tab chosen, there is one window, in the middle, as without it.
+    fn bedrock_show(&mut self, panel: bool, width: f32) {
+        let screen = &mut self.creative_screen;
+        let items = self.bedrock_items.unwrap_or(screen.selected);
+        let inventory = screen.tabs.iter().position(|t| t.inventory);
+        let both = self.settings.bedrock_inventory
+            && self.screen == Screen::Creative
+            && width >= BEDROCK_SHIFT * 2.0 + Creative::WIDTH
+            && screen.tabs.get(items).is_some_and(|t| !t.inventory);
+        match inventory.filter(|_| both) {
+            Some(inventory) if panel => {
+                self.bedrock_items = Some(items);
+                screen.selected = inventory;
+                CREATIVE_SHIFT.set(BEDROCK_SHIFT);
+            }
+            Some(_) => {
+                self.bedrock_items = None;
+                screen.selected = items;
+                CREATIVE_SHIFT.set(-BEDROCK_SHIFT);
+            }
+            None => {
+                self.bedrock_items = None;
+                screen.selected = items;
+                CREATIVE_SHIFT.set(0.0);
+            }
+        }
+    }
+    /// The window the GUI position `x` is over becomes the one worked with; a stack being shared
+    /// out stays in the one it started in.
+    pub(super) fn bedrock_side(&mut self, x: f32, width: f32) {
+        if self.inv_drag.is_none() {
+            self.bedrock_show(x >= width / 2.0, width);
+        }
+    }
+    /// The window that shows `slot` becomes the one worked with. The hotbar shows in both.
+    pub(super) fn bedrock_for_slot(&mut self, slot: usize) {
+        if CREATIVE_SHIFT.get() == 0.0 {
+            return;
+        }
+        let width = HudBatch::new(self.touch_size()).width;
+        if slot >= Creative::DISPLAY {
+            self.bedrock_show(false, width);
+        } else if slot >= 9 {
+            self.bedrock_show(true, width);
+        }
     }
     /// A creative tab's title: `itemGroup.*` for vanilla's; a mod tab's
     /// `itemGroup.<mod>.<name>`, else its `title` as a lang key (a mod's own
@@ -14713,6 +14795,43 @@ impl Game<'_> {
     fn draw_creative(&mut self, batch: &mut HudBatch) {
         // CreativeModeInventoryScreen: `CommonComponents.EMPTY` for a title.
         screen_info::begin_container("creative");
+        if !self.bedrock_held {
+            self.bedrock_side(self.cursor.0, batch.width);
+        }
+        if CREATIVE_SHIFT.get() == 0.0 {
+            batch.fill(
+                &self.gui.atlas,
+                0.0,
+                0.0,
+                batch.width,
+                batch.height,
+                rgba(16, 16, 16, 160),
+            );
+            self.draw_creative_window(batch, false);
+            self.draw_carried(batch);
+            self.draw_creative_tooltips(batch);
+            return;
+        }
+        // Bedrock Inventory: both windows, the one worked with last, so its tooltip is on top.
+        batch.fill(
+            &self.gui.atlas,
+            0.0,
+            0.0,
+            batch.width,
+            batch.height,
+            rgba(16, 16, 16, 160),
+        );
+        let on_panel = self.bedrock_items.is_some();
+        self.bedrock_show(!on_panel, batch.width);
+        self.draw_creative_window(batch, !on_panel);
+        self.bedrock_show(on_panel, batch.width);
+        self.draw_creative_window(batch, on_panel);
+        self.draw_carried(batch);
+        self.draw_creative_tooltips(batch);
+    }
+    /// One creative window: the item tab's or, with `panel`, Bedrock Inventory's inventory, which
+    /// has no tabs of its own.
+    fn draw_creative_window(&mut self, batch: &mut HudBatch, panel: bool) {
         let (ox, oy) = Self::creative_origin(batch);
         let selected = self.creative_screen.selected;
         // Only what is drawn of the tabs: their stacks stay where they are.
@@ -14726,17 +14845,9 @@ impl Game<'_> {
                 t.column + 1
             )
         };
-        batch.fill(
-            &self.gui.atlas,
-            0.0,
-            0.0,
-            batch.width,
-            batch.height,
-            rgba(16, 16, 16, 160),
-        );
         // Unselected tabs behind the panel, then the panel, then the selected tab.
         for (i, t) in tabs.iter().enumerate() {
-            if i != selected && self.creative_screen.on_page(t) {
+            if !panel && i != selected && self.creative_screen.on_page(t) {
                 let (tx, ty) = Creative::tab_position(t);
                 batch.sprite(&self.gui.atlas, &tab_sprite(t, false), ox + tx, oy + ty);
                 let mouse = (self.cursor.0 - ox, self.cursor.1 - oy);
@@ -14759,9 +14870,27 @@ impl Game<'_> {
             r.v1 = r.v0 + (r.v1 - r.v0) * Creative::HEIGHT / r.h as f32;
             batch.rect_uv(ox, oy, Creative::WIDTH, Creative::HEIGHT, r, u32::MAX);
         }
-        let (tx, ty) = Creative::tab_position(tab);
-        batch.sprite(&self.gui.atlas, &tab_sprite(tab, true), ox + tx, oy + ty);
-        for t in tabs.iter().filter(|t| self.creative_screen.on_page(t)) {
+        if panel {
+            // The crafting grid the window lacks, and the result's slot, as the game's windows
+            // draw a slot.
+            for slot in BEDROCK_CRAFT {
+                let Some((sx, sy)) = Creative::bedrock_craft_position(slot) else {
+                    continue;
+                };
+                let (x, y) = (ox + sx, oy + sy);
+                let atlas = &self.gui.atlas;
+                batch.fill(atlas, x - 1.0, y - 1.0, 18.0, 18.0, rgba(55, 55, 55, 255));
+                batch.fill(atlas, x, y, 17.0, 17.0, u32::MAX);
+                batch.fill(atlas, x, y, 16.0, 16.0, rgba(139, 139, 139, 255));
+            }
+        } else {
+            let (tx, ty) = Creative::tab_position(tab);
+            batch.sprite(&self.gui.atlas, &tab_sprite(tab, true), ox + tx, oy + ty);
+        }
+        for t in tabs
+            .iter()
+            .filter(|t| !panel && self.creative_screen.on_page(t))
+        {
             let (tx, ty) = Creative::tab_position(t);
             let stack = ItemStack {
                 item: Arc::from(t.icon.as_str()),
@@ -14875,9 +15004,29 @@ impl Game<'_> {
                 oy + Creative::SCROLL_Y + self.creative_screen.scroller_offset(),
             );
         }
-        let effect_tip = self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
-        self.draw_creative_pages(batch, ox, oy);
-        for t in tabs.iter().filter(|t| self.creative_screen.on_page(t)) {
+        if !panel {
+            // Past both windows, when there are two.
+            let width = if CREATIVE_SHIFT.get() == 0.0 {
+                Creative::WIDTH
+            } else {
+                Creative::WIDTH + 2.0 * BEDROCK_SHIFT
+            };
+            self.creative_effect_tip = self.draw_inventory_effects(batch, (ox, oy), width as i32);
+            self.draw_creative_pages(batch, ox, oy);
+        }
+        self.creative_hovered = hovered;
+    }
+    /// What the cursor is over in the window worked with, over everything else.
+    fn draw_creative_tooltips(&mut self, batch: &mut HudBatch) {
+        let (ox, oy) = Self::creative_origin(batch);
+        let tabs = self.creative_screen.tab_headers();
+        let inventory = self.creative_screen.tab().inventory;
+        let hovered = self.creative_hovered.take();
+        let effect_tip = self.creative_effect_tip.take();
+        for t in tabs
+            .iter()
+            .filter(|t| self.bedrock_items.is_none() && self.creative_screen.on_page(t))
+        {
             let (tx, ty) = Creative::tab_position(t);
             if self.cursor.0 >= ox + tx
                 && self.cursor.0 < ox + tx + 26.0
@@ -14892,8 +15041,7 @@ impl Game<'_> {
                 );
             }
         }
-        self.draw_carried(batch);
-        if tab.inventory {
+        if inventory {
             if Self::creative_trash_hovered(batch, self.cursor) {
                 // `CreativeModeInventoryScreen`: the destroy slot's tooltip is
                 // `inventory.binSlot`, not an English literal.
@@ -14996,11 +15144,15 @@ impl Game<'_> {
             return;
         };
         let batch = HudBatch::new(size);
+        self.bedrock_side(self.cursor.0, batch.width);
+        self.bedrock_held = true;
         let (ox, oy) = Self::creative_origin(&batch);
         let (cx, cy) = self.cursor;
+        let panel = self.bedrock_items.is_some();
         // NeoForge's page buttons, when mods add tabs.
         if let Some(step) =
             Self::creative_page_button(ox, oy, (cx, cy), self.creative_screen.pages())
+                .filter(|_| !panel)
         {
             // Page buttons are outside the inventory panel; their release must
             // not throw a carried stack, including when the button is disabled.
@@ -15015,7 +15167,7 @@ impl Game<'_> {
         }
         let tabs = self.creative_screen.tabs.clone();
         for (i, t) in tabs.iter().enumerate() {
-            if !self.creative_screen.on_page(t) {
+            if panel || !self.creative_screen.on_page(t) {
                 continue;
             }
             let (tx, ty) = Creative::tab_position(t);
@@ -17869,6 +18021,7 @@ impl Game<'_> {
                                 self.creative_screen.release();
                             }
                             self.inventory_mouse_release(button == MouseButton::Right);
+                            self.bedrock_held = false;
                         }
                         Screen::Paused
                             if pressed && button == MouseButton::Left && self.pause_menu =>
@@ -19075,6 +19228,10 @@ impl<'a> Game<'a> {
             update_offer: Default::default(),
             #[cfg(target_os = "android")]
             native_builds: Default::default(),
+            bedrock_items: None,
+            bedrock_held: false,
+            creative_hovered: None,
+            creative_effect_tip: None,
             content_record: None,
             extras: Default::default(),
             mods: Default::default(),
