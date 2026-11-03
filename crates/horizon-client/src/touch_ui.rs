@@ -76,6 +76,12 @@ pub enum InGameMenuAction {
     StepButtonScale(i32),
     TriggerKey(KeyCode),
     OpenKeyboard,
+    /// Kill the game process now (no save, no shutdown sequence).
+    ForceKill,
+    /// Open the game's log folder in the system file manager.
+    OpenLogs,
+    /// The naming field of a preset dialog was tapped: show the system keyboard.
+    EditPresetField(bool),
 }
 struct RelativeTouch {
     id: u64,
@@ -142,27 +148,62 @@ fn mouse_button_rects(w: f32, h: f32) -> [([f32; 4], bool); 2] {
 
 /// Shared outlined pointer for virtual mouse and controller menus.
 pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
+    // A desktop arrow: a black outline, white inside, and the classic notched tail.
+    // The hotspot is the top-left tip, so the drawn point is exactly the cursor.
     let (x, y) = (cursor.0, cursor.1);
-    const ROWS: [u8; 10] = [1, 2, 3, 4, 5, 6, 7, 4, 2, 1];
-    for (i, &w) in ROWS.iter().enumerate() {
+    const ARROW: [u8; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 5, 4, 3, 2];
+    // Outline first, one pixel wider than the fill on every row.
+    for (i, &w) in ARROW.iter().enumerate() {
+        let extra = if i < 8 { 1.0 } else { 0.0 };
         batch.fill(
             atlas,
             x - 1.0,
             y + i as f32,
-            f32::from(w) + 2.0,
+            f32::from(w) + 1.0 + extra,
             1.0,
-            rgba(0, 0, 0, 255),
+            rgba(0, 0, 0, 235),
         );
     }
-    batch.fill(atlas, x - 1.0, y + 10.0, 2.0, 1.0, rgba(0, 0, 0, 255));
-    for (i, &w) in ROWS.iter().enumerate().skip(1).take(8) {
+    // Tail: a short diagonal from the arrow's waist down-right.
+    for i in 0..4 {
+        batch.fill(
+            atlas,
+            x + 3.0 + i as f32,
+            y + 9.0 + i as f32,
+            2.0,
+            2.0,
+            rgba(0, 0, 0, 235),
+        );
+    }
+    for (i, &w) in ARROW.iter().enumerate().take(10) {
         batch.fill(
             atlas,
             x,
             y + i as f32,
-            f32::from(w) - 1.0,
+            f32::from(w),
             1.0,
             rgba(255, 255, 255, 255),
+        );
+    }
+    for i in 0..3 {
+        batch.fill(
+            atlas,
+            x + 4.0 + i as f32,
+            y + 10.0 + i as f32,
+            1.0,
+            1.0,
+            rgba(255, 255, 255, 255),
+        );
+    }
+    // Outline the tail's right edge so the pointer reads on light HUDs too.
+    for i in 0..4 {
+        batch.fill(
+            atlas,
+            x + 5.0 + i as f32,
+            y + 11.0 + i as f32,
+            1.0,
+            1.0,
+            rgba(0, 0, 0, 235),
         );
     }
 }
@@ -381,9 +422,6 @@ impl TouchUi {
                     }
                 }
             }
-            if menu && (3.0..23.0).contains(&p[1]) && (w - 108.0..w - 50.0).contains(&p[0]) {
-                return Some(Action::VirtualMouse);
-            }
             if menu && (3.0..23.0).contains(&p[1]) && (w - 50.0..w - 3.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::Escape));
             }
@@ -446,23 +484,6 @@ impl TouchUi {
             );
         }
         if menu && !self.goy_mode {
-            button(
-                b,
-                a,
-                if self.virtual_mouse {
-                    "Mouse ON"
-                } else {
-                    "Mouse"
-                },
-                b.width - 108.0,
-                3.0,
-                50.0,
-            );
-            if self.virtual_mouse {
-                for ([x, y, width, _], right) in mouse_button_rects(b.width, b.height) {
-                    button(b, a, if right { "RMB" } else { "LMB" }, x, y, width);
-                }
-            }
             button(b, a, "Back", b.width - 53.0, 3.0, 50.0);
         }
         if self.expanded {
@@ -676,137 +697,6 @@ const MOUSE_AND_ACTION_ITEMS: &[(&str, &str)] = &[
     ("Action: Perspective (F5)", "action:key.togglePerspective"),
     ("Action: Advancements (L)", "action:key.advancements"),
 ];
-
-const MINI_KB_ROWS: [&[&str]; 4] = [
-    &["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-"],
-    &["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
-    &["A", "S", "D", "F", "G", "H", "J", "K", "L", "Clear"],
-    &["Z", "X", "C", "V", "B", "N", "M", "Space", "Bksp"],
-];
-
-fn draw_mini_keyboard(ui: &mut crate::ui_theme::Ui<'_>, rect: [f32; 4]) {
-    use crate::ui_theme::{Face, color};
-    let [x, y, w, h] = rect;
-    let bg_key = color::hex(0x25213A, 250);
-    let bg_spec = color::hex(0x362C59, 250);
-    let border_c = color::hex(0x433B66, 255);
-    let text_c = color::hex(0xF4EFFA, 255);
-    let accent = color::hex(0x9A7BFF, 255);
-    let gap = 3.0;
-    let row_h = ((h - gap * 3.0) / 4.0).max(16.0);
-    for (r_idx, row) in MINI_KB_ROWS.iter().enumerate() {
-        let ry = y + r_idx as f32 * (row_h + gap);
-        let total_units: f32 = row
-            .iter()
-            .map(|k| match *k {
-                "Space" => 2.6,
-                "Bksp" | "Clear" => 1.7,
-                _ => 1.0,
-            })
-            .sum();
-        let unit_w = (w - gap * (row.len() as f32 - 1.0)) / total_units;
-        let mut kx = x;
-        for &key in *row {
-            let mult = match key {
-                "Space" => 2.6,
-                "Bksp" | "Clear" => 1.7,
-                _ => 1.0,
-            };
-            let kw = unit_w * mult;
-            let special = matches!(key, "Space" | "Bksp" | "Clear");
-            ui.rounded(
-                kx,
-                ry,
-                kw,
-                row_h,
-                5.0,
-                if special { bg_spec } else { bg_key },
-            );
-            ui.border(
-                kx,
-                ry,
-                kw,
-                row_h,
-                5.0,
-                if special { accent } else { border_c },
-            );
-            ui.centered_fit(
-                Face::SemiBold,
-                9.5,
-                [kx + 2.0, ry, kw - 4.0, row_h],
-                if special { accent } else { text_c },
-                key,
-            );
-            kx += kw + gap;
-        }
-    }
-}
-
-fn hit_mini_keyboard(rect: [f32; 4], p: [f32; 2], target: &mut String, max_len: usize) -> bool {
-    let [x, y, w, h] = rect;
-    if p[0] < x || p[0] > x + w || p[1] < y || p[1] > y + h {
-        return false;
-    }
-    let gap = 3.0;
-    let row_h = ((h - gap * 3.0) / 4.0).max(16.0);
-    for (r_idx, row) in MINI_KB_ROWS.iter().enumerate() {
-        let ry = y + r_idx as f32 * (row_h + gap);
-        if p[1] < ry || p[1] > ry + row_h {
-            continue;
-        }
-        let total_units: f32 = row
-            .iter()
-            .map(|k| match *k {
-                "Space" => 2.6,
-                "Bksp" | "Clear" => 1.7,
-                _ => 1.0,
-            })
-            .sum();
-        let unit_w = (w - gap * (row.len() as f32 - 1.0)) / total_units;
-        let mut kx = x;
-        for &key in *row {
-            let mult = match key {
-                "Space" => 2.6,
-                "Bksp" | "Clear" => 1.7,
-                _ => 1.0,
-            };
-            let kw = unit_w * mult;
-            if p[0] >= kx && p[0] <= kx + kw {
-                match key {
-                    "Bksp" => {
-                        target.pop();
-                    }
-                    "Clear" => {
-                        target.clear();
-                    }
-                    "Space" => {
-                        if target.len() < max_len && !target.ends_with(' ') && !target.is_empty() {
-                            target.push(' ');
-                        }
-                    }
-                    ch => {
-                        if target.len() < max_len {
-                            let use_lower = target
-                                .chars()
-                                .last()
-                                .is_some_and(|c| c.is_alphabetic());
-                            if use_lower {
-                                for lc in ch.chars().flat_map(char::to_lowercase) {
-                                    target.push(lc);
-                                }
-                            } else {
-                                target.push_str(ch);
-                            }
-                        }
-                    }
-                }
-                return true;
-            }
-            kx += kw + gap;
-        }
-    }
-    false
-}
 
 /// Renders the live GoyControl HUD (Analog Joystick + Static Buttons) in-game and in menus
 /// using the exact same `Ui::mobile` TrueType & rounded-shape pipeline as `draw_hud_editor`.
@@ -1046,23 +936,12 @@ impl TouchUi {
             if inside(name_r) {
                 dlg.editing_desc = false;
                 self.preset_dialog = Some(dlg);
-                return Some(InGameMenuAction::Close);
+                return Some(InGameMenuAction::EditPresetField(false));
             }
             if inside(desc_r) {
                 dlg.editing_desc = true;
                 self.preset_dialog = Some(dlg);
-                return Some(InGameMenuAction::Close);
-            }
-            let kb_r = [mdx + 14.0, mdy + 80.0, mdw - 28.0, mdh - 126.0];
-            let target_str = if dlg.editing_desc {
-                &mut dlg.desc_input
-            } else {
-                &mut dlg.name_input
-            };
-            let max_l = if dlg.editing_desc { 56 } else { 24 };
-            if hit_mini_keyboard(kb_r, p, target_str, max_l) {
-                self.preset_dialog = Some(dlg);
-                return Some(InGameMenuAction::Close);
+                return Some(InGameMenuAction::EditPresetField(true));
             }
             let save_r = [mdx + 14.0, mdy + mdh - 38.0, mdw - 28.0, 30.0];
             if inside(save_r) {
@@ -1209,7 +1088,6 @@ impl TouchUi {
                 let r1 = [cx, body_y + 16.0, cw, 40.0];
                 let r2 = [cx, body_y + 62.0, cw, 40.0];
                 let r3 = [cx, body_y + 108.0, cw, 40.0];
-                let r4 = [cx, body_y + 154.0, cw, 40.0];
                 if inside(r1) {
                     return Some(InGameMenuAction::CycleMovementMode);
                 }
@@ -1218,9 +1096,6 @@ impl TouchUi {
                 }
                 if inside(r3) {
                     return Some(InGameMenuAction::ToggleGyro);
-                }
-                if inside(r4) {
-                    return Some(InGameMenuAction::ToggleVirtualMouse);
                 }
             }
             2 => {
@@ -1253,7 +1128,7 @@ impl TouchUi {
                 if inside([cx, body_y + 100.0, cw, 38.0]) {
                     return Some(InGameMenuAction::PresetVisibilityAll);
                 }
-                let ky = body_y + 156.0;
+                let ky = body_y + 132.0;
                 let kw = (cw - 20.0) / 6.0;
                 let quick = [
                     KeyCode::F1,
@@ -1264,14 +1139,24 @@ impl TouchUi {
                 ];
                 for (i, key) in quick.iter().enumerate() {
                     let rx = cx + i as f32 * (kw + 4.0);
-                    if inside([rx, ky, kw, 32.0]) {
+                    if inside([rx, ky, kw, 26.0]) {
                         self.floating_menu = false;
                         return Some(InGameMenuAction::TriggerKey(*key));
                     }
                 }
-                if inside([cx + 5.0 * (kw + 4.0), ky, kw, 32.0]) {
+                if inside([cx + 5.0 * (kw + 4.0), ky, kw, 26.0]) {
                     self.floating_menu = false;
                     return Some(InGameMenuAction::OpenKeyboard);
+                }
+                let sys_y = body_y + 166.0;
+                let half = (cw - 8.0) * 0.5;
+                if inside([cx, sys_y, half, 30.0]) {
+                    self.floating_menu = false;
+                    return Some(InGameMenuAction::ForceKill);
+                }
+                if inside([cx + half + 8.0, sys_y, half, 30.0]) {
+                    self.floating_menu = false;
+                    return Some(InGameMenuAction::OpenLogs);
                 }
             }
         }
@@ -1373,13 +1258,7 @@ impl TouchUi {
             dh - 48.0,
             color::hex(0x2B2542, 255),
         );
-        ui.fill(
-            dx,
-            dy + 47.0,
-            dw,
-            1.0,
-            color::hex(0x2B2542, 255),
-        );
+        ui.fill(dx, dy + 47.0, dw, 1.0, color::hex(0x2B2542, 255));
         ui.stroke_rounded(dx, dy, dw, dh, 20.0, 1.4, border_c);
 
         // Top Header Bar (Matches reference: Purple Sliders Icon Box + Title + Subtitle + Done button)
@@ -1489,14 +1368,7 @@ impl TouchUi {
                         ui.rounded(rad_x + 3.5, rad_y + 3.5, 7.0, 7.0, 3.5, accent_hi);
                     }
                     ui.text(Face::SemiBold, 11.0, rx + 30.0, mode_y + 7.0, text_c, title);
-                    ui.text(
-                        Face::Regular,
-                        8.8,
-                        rx + 30.0,
-                        mode_y + 24.0,
-                        muted_c,
-                        sub,
-                    );
+                    ui.text(Face::Regular, 8.8, rx + 30.0, mode_y + 24.0, muted_c, sub);
                 }
 
                 // 2. Dynamic System Controls Section ("MCPE Controls" or "GoyControl Controls")
@@ -1512,8 +1384,16 @@ impl TouchUi {
                 let act_y = mode_y + 64.0;
                 let active_preset_lbl = format!("Preset: {}", settings.preset_name);
                 for (i, (ic, title, sub)) in [
-                    (Icon::MicrosoftGrid, "Customize Controls", "Open layout editor"),
-                    (Icon::Settings, "Control Presets", active_preset_lbl.as_str()),
+                    (
+                        Icon::MicrosoftGrid,
+                        "Customize Controls",
+                        "Open layout editor",
+                    ),
+                    (
+                        Icon::Settings,
+                        "Control Presets",
+                        active_preset_lbl.as_str(),
+                    ),
                 ]
                 .into_iter()
                 .enumerate()
@@ -1631,11 +1511,6 @@ impl TouchUi {
                         "Tilt device for fine camera aim",
                         Some(settings.gyroscope),
                     ),
-                    (
-                        "Virtual Mouse Cursor",
-                        "Show desktop pointer in menus & HUD",
-                        Some(self.virtual_mouse),
-                    ),
                 ]
                 .into_iter()
                 .enumerate()
@@ -1648,7 +1523,14 @@ impl TouchUi {
                     if let Some(on) = toggle {
                         ui.m3_switch(cx + cw - 48.0, ry + 9.0, on);
                     } else {
-                        ui.text(Face::SemiBold, 13.0, cx + cw - 16.0, ry + 10.0, accent_hi, "›");
+                        ui.text(
+                            Face::SemiBold,
+                            13.0,
+                            cx + cw - 16.0,
+                            ry + 10.0,
+                            accent_hi,
+                            "›",
+                        );
                     }
                 }
             }
@@ -1671,7 +1553,10 @@ impl TouchUi {
                     cx + 12.0,
                     scale_y + 5.0,
                     text_c,
-                    &format!("Global Button Scale ({:.0}%)", settings.button_scale * 100.0),
+                    &format!(
+                        "Global Button Scale ({:.0}%)",
+                        settings.button_scale * 100.0
+                    ),
                 );
                 ui.text(
                     Face::Regular,
@@ -1748,26 +1633,33 @@ impl TouchUi {
                 .into_iter()
                 .enumerate()
                 {
-                    let ry = body_y + 16.0 + i as f32 * 42.0;
-                    ui.rounded(cx, ry, cw, 38.0, 10.0, card_bg);
-                    ui.border(cx, ry, cw, 38.0, 10.0, border_c);
-                    ui.text(Face::SemiBold, 10.5, cx + 12.0, ry + 4.0, text_c, title);
-                    ui.text(Face::Regular, 8.8, cx + 12.0, ry + 20.0, muted_c, sub);
+                    let ry = body_y + 14.0 + i as f32 * 36.0;
+                    ui.rounded(cx, ry, cw, 32.0, 10.0, card_bg);
+                    ui.border(cx, ry, cw, 32.0, 10.0, border_c);
+                    ui.text(Face::SemiBold, 10.5, cx + 12.0, ry + 2.0, text_c, title);
+                    ui.text(Face::Regular, 8.8, cx + 12.0, ry + 17.0, muted_c, sub);
                     if let Some(on) = toggle {
-                        ui.m3_switch(cx + cw - 48.0, ry + 8.0, on);
+                        ui.m3_switch(cx + cw - 48.0, ry + 5.0, on);
                     } else {
-                        ui.text(Face::SemiBold, 13.0, cx + cw - 16.0, ry + 9.0, accent_hi, "›");
+                        ui.text(
+                            Face::SemiBold,
+                            13.0,
+                            cx + cw - 16.0,
+                            ry + 6.0,
+                            accent_hi,
+                            "›",
+                        );
                     }
                 }
                 ui.text(
                     Face::SemiBold,
                     9.5,
                     cx,
-                    body_y + 142.0,
+                    body_y + 122.0,
                     muted_c,
                     "Quick Desktop Keys",
                 );
-                let ky = body_y + 156.0;
+                let ky = body_y + 132.0;
                 let kw = (cw - 20.0) / 6.0;
                 for (i, lbl) in ["F1", "F3", "F5", "Inv", "Chat", "Keys"]
                     .into_iter()
@@ -1776,8 +1668,35 @@ impl TouchUi {
                     let rx = cx + i as f32 * (kw + 4.0);
                     ui.rounded(rx, ky, kw, 30.0, 8.0, card_bg);
                     ui.border(rx, ky, kw, 30.0, 8.0, border_c);
-                    ui.centered_fit(Face::SemiBold, 10.0, [rx + 2.0, ky, kw - 4.0, 30.0], text_c, lbl);
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        10.0,
+                        [rx + 2.0, ky, kw - 4.0, 26.0],
+                        text_c,
+                        lbl,
+                    );
                 }
+                // System actions: a hard stop and the log folder.
+                let sys_y = body_y + 166.0;
+                let half = (cw - 8.0) * 0.5;
+                ui.rounded(cx, sys_y, half, 30.0, 9.0, color::hex(0x3A1B24, 250));
+                ui.border(cx, sys_y, half, 30.0, 9.0, color::hex(0xD9534F, 255));
+                ui.centered_fit(
+                    Face::SemiBold,
+                    10.0,
+                    [cx, sys_y, half, 30.0],
+                    color::hex(0xFCA5A5, 255),
+                    "Force Kill",
+                );
+                ui.rounded(cx + half + 8.0, sys_y, half, 30.0, 9.0, card_bg);
+                ui.border(cx + half + 8.0, sys_y, half, 30.0, 9.0, border_c);
+                ui.centered_fit(
+                    Face::SemiBold,
+                    10.0,
+                    [cx + half + 8.0, sys_y, half, 30.0],
+                    text_c,
+                    "Logs",
+                );
             }
         }
 
@@ -1870,7 +1789,14 @@ impl TouchUi {
                 } else {
                     preset.name.clone()
                 };
-                ui.text(Face::SemiBold, 11.0, row_r[0] + 34.0, ry + 6.0, text_c, &title);
+                ui.text(
+                    Face::SemiBold,
+                    11.0,
+                    row_r[0] + 34.0,
+                    ry + 6.0,
+                    text_c,
+                    &title,
+                );
                 ui.text(
                     Face::Regular,
                     9.0,
@@ -1885,14 +1811,26 @@ impl TouchUi {
                     let edit_r = [row_r[0] + row_r[2] - 104.0, ry + 8.0, 30.0, 30.0];
                     ui.rounded(edit_r[0], edit_r[1], edit_r[2], edit_r[3], 8.0, surface_bg);
                     ui.border(edit_r[0], edit_r[1], edit_r[2], edit_r[3], 8.0, border_c);
-                    ui.icon(Icon::Pencil, edit_r[0] + 7.0, edit_r[1] + 7.0, 16.0, accent_hi);
+                    ui.icon(
+                        Icon::Pencil,
+                        edit_r[0] + 7.0,
+                        edit_r[1] + 7.0,
+                        16.0,
+                        accent_hi,
+                    );
                 }
 
                 // Copy button (available on ALL presets including Default)
                 let copy_r = [row_r[0] + row_r[2] - 68.0, ry + 8.0, 60.0, 30.0];
                 ui.rounded(copy_r[0], copy_r[1], copy_r[2], copy_r[3], 8.0, card_sel);
                 ui.border(copy_r[0], copy_r[1], copy_r[2], copy_r[3], 8.0, accent);
-                ui.icon(Icon::Copy, copy_r[0] + 7.0, copy_r[1] + 8.0, 14.0, accent_hi);
+                ui.icon(
+                    Icon::Copy,
+                    copy_r[0] + 7.0,
+                    copy_r[1] + 8.0,
+                    14.0,
+                    accent_hi,
+                );
                 ui.text(
                     Face::SemiBold,
                     9.8,
@@ -1952,8 +1890,18 @@ impl TouchUi {
                 32.0,
             ];
             for (r, lbl, val, focused) in [
-                (name_r, "Preset Name", dlg.name_input.as_str(), !dlg.editing_desc),
-                (desc_r, "Description", dlg.desc_input.as_str(), dlg.editing_desc),
+                (
+                    name_r,
+                    "Preset Name",
+                    dlg.name_input.as_str(),
+                    !dlg.editing_desc,
+                ),
+                (
+                    desc_r,
+                    "Description",
+                    dlg.desc_input.as_str(),
+                    dlg.editing_desc,
+                ),
             ] {
                 ui.rounded(r[0], r[1], r[2], r[3], 8.0, card_bg);
                 ui.stroke_rounded(
@@ -1974,7 +1922,22 @@ impl TouchUi {
                 ui.text(Face::Medium, 9.8, r[0] + 8.0, r[1] + 14.0, text_c, &shown);
             }
 
-            draw_mini_keyboard(&mut ui, [mdx + 14.0, mdy + 80.0, mdw - 28.0, mdh - 126.0]);
+            ui.text(
+                Face::Regular,
+                9.0,
+                mdx + 14.0,
+                mdy + 84.0,
+                muted_c,
+                "Tap a field to type with the Android keyboard.",
+            );
+            ui.text(
+                Face::Regular,
+                8.6,
+                mdx + 14.0,
+                mdy + 98.0,
+                muted_c,
+                "Enter closes the keyboard; then tap the button below.",
+            );
 
             let save_r = [mdx + 14.0, mdy + mdh - 38.0, mdw - 28.0, 30.0];
             ui.rounded(save_r[0], save_r[1], save_r[2], save_r[3], 9.0, accent);
@@ -3602,9 +3565,22 @@ pub fn draw_hud_editor(
             &desc_disp,
         );
 
-        let kb_y = iy + 33.0;
-        let kb_h = (dh - 174.0).clamp(80.0, 132.0);
-        draw_mini_keyboard(&mut ui, [dx + 14.0, kb_y, dw - 28.0, kb_h]);
+        ui.text(
+            Face::Regular,
+            9.0,
+            dx + 14.0,
+            iy + 36.0,
+            muted_c,
+            "Tap Name or Desc to type with the Android keyboard.",
+        );
+        ui.text(
+            Face::Regular,
+            8.6,
+            dx + 14.0,
+            iy + 50.0,
+            muted_c,
+            "Enter closes the keyboard; then tap Create New Preset.",
+        );
 
         let create_btn_r = [dx + 14.0, dy + dh - 34.0, dw - 28.0, 26.0];
         ui.rounded(
@@ -3693,14 +3669,7 @@ pub fn draw_hud_editor(
         .enumerate()
         {
             let rx = dx + 14.0 + i as f32 * (ew + 8.0);
-            ui.rounded(
-                rx,
-                ey,
-                ew,
-                30.0,
-                8.0,
-                if primary { accent } else { bg_hi },
-            );
+            ui.rounded(rx, ey, ew, 30.0, 8.0, if primary { accent } else { bg_hi });
             ui.border(
                 rx,
                 ey,
@@ -4032,25 +4001,15 @@ pub fn touch_hud_editor(
             let desc_w = (dw - 28.0 - 8.0) - nw;
             if inside([dx + 14.0, iy, nw, 28.0]) {
                 ed.editing_save_desc = false;
+                #[cfg(target_os = "android")]
+                crate::platform::show(&ed.save_name_input);
                 tc.clicked = true;
                 return false;
             }
             if inside([dx + 14.0 + nw + 8.0, iy, desc_w, 28.0]) {
                 ed.editing_save_desc = true;
-                tc.clicked = true;
-                return false;
-            }
-
-            // Option B: On-screen keyboard typing
-            let kb_y = iy + 33.0;
-            let kb_h = (dh - 174.0).clamp(80.0, 132.0);
-            let target_buf = if ed.editing_save_desc {
-                &mut ed.save_desc_input
-            } else {
-                &mut ed.save_name_input
-            };
-            let max_len = if ed.editing_save_desc { 56 } else { 28 };
-            if hit_mini_keyboard([dx + 14.0, kb_y, dw - 28.0, kb_h], p, target_buf, max_len) {
+                #[cfg(target_os = "android")]
+                crate::platform::show(&ed.save_desc_input);
                 tc.clicked = true;
                 return false;
             }

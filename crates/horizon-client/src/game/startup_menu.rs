@@ -1243,6 +1243,23 @@ impl Loading {
             {
                 match hub_act {
                     InGameMenuAction::Close => {}
+                    InGameMenuAction::ForceKill => {
+                        let _ = self.menu.controls.settings.save();
+                        std::process::exit(0);
+                    }
+                    InGameMenuAction::OpenLogs => {
+                        let _ = crate::platform::open_documents("reports");
+                    }
+                    InGameMenuAction::EditPresetField(description) => {
+                        if let Some(dlg) = self.menu.touch.preset_dialog.as_mut() {
+                            dlg.editing_desc = description;
+                            crate::platform::show(if description {
+                                &dlg.desc_input
+                            } else {
+                                &dlg.name_input
+                            });
+                        }
+                    }
                     InGameMenuAction::OpenControlEditor => {
                         self.menu.controls.open_editor();
                     }
@@ -2027,6 +2044,8 @@ impl Loading {
             let is_goy = self.menu.controls.settings.control_style
                 == horizon_client::touch::ControlStyle::GoyControl;
             self.menu.touch.goy_mode = is_goy;
+            // The title menu never locks the mouse: the touch pointer is free here.
+            self.menu.touch.virtual_mouse = true;
             if is_goy {
                 horizon_client::touch_ui::draw_goy_hud(
                     &self.menu.controls,
@@ -2035,10 +2054,9 @@ impl Loading {
                     true,
                     self.menu.touch.virtual_mouse,
                 );
-            } else if self.menu.controls.settings.layouts
-                [self.menu.controls.settings.mode.index()]
-            .iter()
-            .any(|p| p.visible_in_menu)
+            } else if self.menu.controls.settings.layouts[self.menu.controls.settings.mode.index()]
+                .iter()
+                .any(|p| p.visible_in_menu)
             {
                 self.menu.controls.draw(batch, &gui.atlas);
             }
@@ -2055,6 +2073,39 @@ impl Loading {
             .draw(self.settings.horizon.overlay, batch, &gui.atlas);
         #[cfg(target_os = "android")]
         crate::documents::draw(batch, &gui.atlas);
+    }
+
+    /// Text from the Android keyboard while the menu's preset naming dialog has
+    /// a focused field.
+    #[cfg(target_os = "android")]
+    pub(super) fn android_menu_preset_typing(&mut self, out: &horizon_client::osk::Output) -> bool {
+        use horizon_client::osk::Output;
+        let Some(dlg) = self.menu.touch.preset_dialog.as_mut() else {
+            return false;
+        };
+        match out {
+            Output::Text(text) => {
+                let (buffer, max) = if dlg.editing_desc {
+                    (&mut dlg.desc_input, 56)
+                } else {
+                    (&mut dlg.name_input, 24)
+                };
+                for c in text.chars() {
+                    if !c.is_control() && buffer.chars().count() < max {
+                        buffer.push(c);
+                    }
+                }
+            }
+            Output::Backspace => {
+                if dlg.editing_desc {
+                    dlg.desc_input.pop();
+                } else {
+                    dlg.name_input.pop();
+                }
+            }
+            Output::Enter | Output::Close => crate::platform::hide(),
+        }
+        true
     }
 
     #[cfg(target_os = "android")]

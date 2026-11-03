@@ -352,7 +352,14 @@ impl Login {
         let info_max_w = (inner_w - 94.0 - edit_btn_w - 8.0).max(90.0);
 
         let fitted_name = ui.fit_text(Face::SemiBold, 16.5, &active_name, info_max_w);
-        ui.text(Face::SemiBold, 16.5, info_x, cy + 8.0, color::TEXT, &fitted_name);
+        ui.text(
+            Face::SemiBold,
+            16.5,
+            info_x,
+            cy + 8.0,
+            color::TEXT,
+            &fitted_name,
+        );
 
         let acct_type = if self.signed_in {
             "Microsoft Xbox Live • Session Active"

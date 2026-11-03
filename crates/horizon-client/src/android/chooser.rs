@@ -253,11 +253,19 @@ impl Launcher {
                 "Launcher UI scale",
                 "Adapts the launcher to your phone's DPI. Increase or decrease if touch controls and text feel too small or too large.",
                 [
-                    (0u32, "Auto (Phone DPI)", "Automatically matches your display's DPI density"),
+                    (
+                        0u32,
+                        "Auto (Phone DPI)",
+                        "Automatically matches your display's DPI density",
+                    ),
                     (85, "85% (Compact)", "Fits more rows on screen"),
                     (100, "100% (Default DPI)", "Standard phone DPI scaling"),
                     (115, "115% (Large)", "Larger buttons, cards and text"),
-                    (130, "130% (Extra Large)", "Maximum touch comfort on high-DPI phones"),
+                    (
+                        130,
+                        "130% (Extra Large)",
+                        "Maximum touch comfort on high-DPI phones",
+                    ),
                 ]
                 .into_iter()
                 .map(|(pct, title, desc)| {
@@ -272,7 +280,9 @@ impl Launcher {
             ),
             Kind::ControlProfile => {
                 let game_home = c.game_home(&self.home);
-                let touch = horizon_client::touch::Settings::load_from(&game_home.join("horizon-touch.json"));
+                let touch = horizon_client::touch::Settings::load_from(
+                    &game_home.join("horizon-touch.json"),
+                );
                 let style = touch.control_style;
                 let presets = horizon_client::touch::Settings::list_presets(&game_home, style);
                 let choices = presets
@@ -290,12 +300,7 @@ impl Launcher {
                             style.storage_subdir(),
                             meta.id
                         );
-                        (
-                            title,
-                            sub,
-                            Action::ChooseControlProfile(idx as u32),
-                            active,
-                        )
+                        (title, sub, Action::ChooseControlProfile(idx as u32), active)
                     })
                     .collect();
                 (

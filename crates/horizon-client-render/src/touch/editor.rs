@@ -191,10 +191,8 @@ impl TouchControls {
             } else if layout::contains([0.365, 0.04, 0.14, 0.075], p) {
                 self.settings.snap_to_grid = !self.settings.snap_to_grid;
             } else if layout::contains([0.515, 0.04, 0.22, 0.075], p) {
-                let presets = Settings::list_presets(
-                    std::path::Path::new("."),
-                    self.settings.control_style,
-                );
+                let presets =
+                    Settings::list_presets(std::path::Path::new("."), self.settings.control_style);
                 if !presets.is_empty() {
                     let idx = presets
                         .iter()

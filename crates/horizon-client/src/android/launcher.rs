@@ -743,7 +743,11 @@ impl ApplicationHandler for Launcher {
             || self.drag.is_some()
             || self.login.pending()
             || self.control_editor.is_some()
-            || self.catalog.project_modal.as_ref().is_some_and(|m| m.loading)
+            || self
+                .catalog
+                .project_modal
+                .as_ref()
+                .is_some_and(|m| m.loading)
             || self.anim.is_active()
         {
             16

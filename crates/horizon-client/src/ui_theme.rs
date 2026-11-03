@@ -917,16 +917,7 @@ impl<'a> Ui<'a> {
         };
         self.emit_clipped_uv(x, y, x + r, y + r, u0, v0, u1, v1, color);
     }
-    fn corners(
-        &mut self,
-        x0: f32,
-        y0: f32,
-        x1: f32,
-        y1: f32,
-        r: f32,
-        thickness: u16,
-        color: u32,
-    ) {
+    fn corners(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, r: f32, thickness: u16, color: u32) {
         if r < 1.0 {
             return;
         }
@@ -1021,25 +1012,13 @@ impl<'a> Ui<'a> {
 
     /// Draw a 3D isometric Minecraft player head with top crown, front face (eyes, hair, skin),
     /// shaded side face, and 3D hat overlay layer.
+    /// Draw a real Minecraft head: the classic 8x8 Steve face with its top and
+    /// right side as a small 3D cube. Offline (cracked) accounts are Steve,
+    /// which is what the launcher shows until a signed-in skin is available.
     pub fn avatar_head_3d(&mut self, x: f32, y: f32, size: f32, player_name: &str) {
-        // Deterministic palette variation from player name so different accounts look distinct
-        let hash = player_name.bytes().fold(0x811C_9DC5u32, |acc, b| {
-            (acc ^ u32::from(b)).wrapping_mul(0x0100_0193)
-        });
-        let palettes: [(u32, u32, u32, u32, u32); 4] = [
-            // (hair_top, hair_front, skin_front, skin_side, eye_iris)
-            (0x4E387E, 0x3A2863, 0xE6B998, 0xC49474, 0x6A4CFF),
-            (0x2F4858, 0x223542, 0xF0C6A8, 0xCE9F80, 0x38B6FF),
-            (0x5A3A28, 0x42291B, 0xD9A482, 0xB58262, 0x45C486),
-            (0x3E2F5B, 0x2B2042, 0xEBC1A3, 0xC89C7D, 0x9A7BFF),
-        ];
-        let (hair_top_hex, hair_front_hex, skin_front_hex, skin_side_hex, iris_hex) =
-            palettes[(hash as usize) % palettes.len()];
-
-        // 1. Ambient M3 pedestal glow behind the 3D head
+        let _ = player_name;
         self.rounded(x, y, size, size, size * 0.28, color::hex(0x231E38, 255));
         self.border(x, y, size, size, size * 0.28, color::hex(0x4E4275, 255));
-        // Drop shadow under the 3D cube
         self.rounded(
             x + size * 0.18,
             y + size * 0.78,
@@ -1049,157 +1028,65 @@ impl<'a> Ui<'a> {
             color::hex(0x08060E, 175),
         );
 
-        // Cube metrics inside pedestal
-        let cx = x + size * 0.14;
-        let cy = y + size * 0.14;
-        let cw = size * 0.72;
-        let ch = size * 0.70;
+        const HAIR: u32 = 0x3B2A1B;
+        const HAIR_HI: u32 = 0x4C3624;
+        const SKIN: u32 = 0xC68E5E;
+        const SKIN_SIDE: u32 = 0x9E6B42;
+        const EYE: u32 = 0xF4F4F4;
+        const IRIS: u32 = 0x4E6E9E;
+        const NOSE: u32 = 0xA87548;
+        const MOUTH: u32 = 0x6B4A32;
+        const BEARD: u32 = 0x2E2117;
 
-        let front_x = cx + cw * 0.04;
-        let front_y = cy + ch * 0.22;
-        let front_w = cw * 0.62;
-        let front_h = ch * 0.72;
+        // The classic Steve face, one entry per skin pixel.
+        const FACE: [[u32; 8]; 8] = [
+            [HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR],
+            [HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR],
+            [HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR, HAIR],
+            [HAIR, SKIN, SKIN, SKIN, SKIN, SKIN, SKIN, HAIR],
+            [SKIN, EYE, IRIS, SKIN, SKIN, IRIS, EYE, SKIN],
+            [SKIN, SKIN, SKIN, NOSE, NOSE, SKIN, SKIN, SKIN],
+            [SKIN, MOUTH, MOUTH, MOUTH, MOUTH, MOUTH, MOUTH, SKIN],
+            [SKIN, BEARD, BEARD, BEARD, BEARD, BEARD, BEARD, SKIN],
+        ];
 
-        let side_x = front_x + front_w;
-        let side_w = cw * 0.30;
+        let pw = size * 0.088;
+        let face = pw * 8.0;
+        let cx = x + (size - face - pw * 3.2) * 0.5 + pw * 1.6;
+        let cy = y + (size - face) * 0.53;
 
-        // 2. Isometric Top Crown Face (stepped angled parallelogram strips)
-        let top_steps = 6;
-        for i in 0..top_steps {
-            let t = i as f32 / top_steps as f32;
-            let strip_x = front_x + (1.0 - t) * (side_w * 0.72);
-            let strip_y = cy + t * (front_y - cy);
-            let strip_w = front_w + t * (side_w * 0.28);
-            let strip_h = ((front_y - cy) / top_steps as f32) + 1.2;
-            self.fill(
-                strip_x,
-                strip_y,
-                strip_w,
-                strip_h,
-                color::hex(hair_top_hex, 255),
-            );
+        // Top: hair, skewed up and to the right.
+        for row in 0..8 {
+            for col in 0..8 {
+                let px = cx + col as f32 * pw + row as f32 * pw * 0.42;
+                let py = cy - row as f32 * pw * 0.48 - pw * 0.48;
+                let tone = if (row + col) % 3 == 0 { HAIR_HI } else { HAIR };
+                self.fill(px, py, pw + 0.5, pw * 0.5 + 0.5, color::hex(tone, 255));
+            }
         }
-
-        // 3. Front Face (Minecraft 8x8 pixel grid layout: skin + hair bangs + eyes + nose/mouth)
-        self.rounded(
-            front_x,
-            front_y,
-            front_w,
-            front_h,
-            2.5,
-            color::hex(skin_front_hex, 255),
-        );
-        // Top hair layer & bangs on front face
-        self.fill(
-            front_x,
-            front_y,
-            front_w,
-            front_h * 0.28,
-            color::hex(hair_front_hex, 255),
-        );
-        // Left & right temple hair pixels
-        self.fill(
-            front_x,
-            front_y + front_h * 0.26,
-            front_w * 0.16,
-            front_h * 0.18,
-            color::hex(hair_front_hex, 255),
-        );
-        self.fill(
-            front_x + front_w * 0.82,
-            front_y + front_h * 0.26,
-            front_w * 0.18,
-            front_h * 0.14,
-            color::hex(hair_front_hex, 255),
-        );
-        // 3D Hat / Helm outer layer overhang on brow
-        self.rounded(
-            front_x - 1.5,
-            front_y - 1.5,
-            front_w + 3.0,
-            front_h * 0.22,
-            2.5,
-            color::hex(hair_top_hex, 255),
-        );
-
-        // Eyes (white sclera + vibrant iris)
-        let eye_y = front_y + front_h * 0.48;
-        let eye_w = (front_w * 0.24).max(3.0);
-        let eye_h = (front_h * 0.15).max(2.5);
-        // Left eye
-        self.fill(
-            front_x + front_w * 0.13,
-            eye_y,
-            eye_w,
-            eye_h,
-            color::hex(0xFAF8FF, 255),
-        );
-        self.fill(
-            front_x + front_w * 0.25,
-            eye_y,
-            eye_w * 0.52,
-            eye_h,
-            color::hex(iris_hex, 255),
-        );
-        // Right eye
-        self.fill(
-            front_x + front_w * 0.63,
-            eye_y,
-            eye_w,
-            eye_h,
-            color::hex(0xFAF8FF, 255),
-        );
-        self.fill(
-            front_x + front_w * 0.63,
-            eye_y,
-            eye_w * 0.52,
-            eye_h,
-            color::hex(iris_hex, 255),
-        );
-        // Nose & mouth pixel bar
-        self.fill(
-            front_x + front_w * 0.38,
-            front_y + front_h * 0.68,
-            front_w * 0.24,
-            (front_h * 0.10).max(2.0),
-            color::hex(0xB88264, 255),
-        );
-        self.fill(
-            front_x + front_w * 0.32,
-            front_y + front_h * 0.80,
-            front_w * 0.36,
-            (front_h * 0.08).max(1.5),
-            color::hex(0x8C5840, 255),
-        );
-
-        // 4. Shaded Right 3D Side Face (angled upward toward back-right)
-        let side_cols = 5;
-        for i in 0..side_cols {
-            let t = i as f32 / side_cols as f32;
-            let col_x = side_x + t * side_w;
-            let col_w = (side_w / side_cols as f32) + 0.8;
-            let y_shift = (t + 0.15) * (front_y - cy) * 0.85;
-            let col_y = front_y - y_shift;
-            self.fill(col_x, col_y, col_w, front_h, color::hex(skin_side_hex, 255));
-            // Side hair wrap (top 38% of side face)
-            self.fill(
-                col_x,
-                col_y,
-                col_w,
-                front_h * 0.38,
-                color::hex(hair_front_hex, 255),
-            );
+        // Right side: hair across the top, shaded skin below.
+        for row in 0..8 {
+            for col in 0..8 {
+                let px = cx + face + row as f32 * pw * 0.42;
+                let py = cy + col as f32 * pw - row as f32 * pw * 0.48;
+                let tone = if col < 2 { HAIR } else { SKIN_SIDE };
+                self.fill(px, py, pw + 0.5, pw + 0.5, color::hex(tone, 255));
+            }
         }
-
-        // 5. Crisp 3D Isometric Ridge Highlights
-        self.fill(front_x, front_y, front_w, 1.2, color::hex(0xFFFFFF, 72));
-        self.fill(
-            side_x - 0.8,
-            front_y,
-            1.4,
-            front_h,
-            color::hex(0x120E1E, 140),
-        );
+        // Front: the real texture.
+        for (row, pixels) in FACE.iter().enumerate() {
+            for (col, tone) in pixels.iter().enumerate() {
+                self.fill(
+                    cx + col as f32 * pw,
+                    cy + row as f32 * pw,
+                    pw + 0.5,
+                    pw + 0.5,
+                    color::hex(*tone, 255),
+                );
+            }
+        }
+        // The hair's highlight runs along the top edge of the face.
+        self.fill(cx, cy, face, pw * 0.45, color::hex(HAIR_HI, 210));
     }
 
     /// Draw an authentic Material You 3 Switch (`52x28dp` pill track with sliding thumb and checkmark).

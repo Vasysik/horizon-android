@@ -131,7 +131,6 @@ pub struct PresetMeta {
     pub is_default: bool,
 }
 
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum JoystickMoveArea {
@@ -669,11 +668,7 @@ impl Settings {
             ControlStyle::Mcpe => self.active_mcpe_preset.as_str(),
             ControlStyle::GoyControl => self.active_goy_preset.as_str(),
         };
-        if id.trim().is_empty() {
-            "default"
-        } else {
-            id
-        }
+        if id.trim().is_empty() { "default" } else { id }
     }
 
     pub fn load() -> Self {
@@ -1086,12 +1081,12 @@ impl Settings {
         new_description: &str,
     ) -> std::io::Result<PresetMeta> {
         let trimmed_name = new_name.trim();
-        let display_name = if trimmed_name.is_empty() || trimmed_name.eq_ignore_ascii_case("default")
-        {
-            "Custom Copy".to_owned()
-        } else {
-            trimmed_name.chars().take(48).collect()
-        };
+        let display_name =
+            if trimmed_name.is_empty() || trimmed_name.eq_ignore_ascii_case("default") {
+                "Custom Copy".to_owned()
+            } else {
+                trimmed_name.chars().take(48).collect()
+            };
         let trimmed_desc = new_description.trim();
         let display_desc = if trimmed_desc.is_empty() {
             format!("Copied from {source_id}")
@@ -2053,4 +2048,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
-

@@ -578,7 +578,11 @@ impl Catalog {
                 .strip_prefix("horizon-mods/")
                 .unwrap_or(&e.file)
                 .to_owned();
-            if self.local.iter().any(|item| item.file == file_name || item.file == e.file) {
+            if self
+                .local
+                .iter()
+                .any(|item| item.file == file_name || item.file == e.file)
+            {
                 continue;
             }
             let mod_id = file_name
@@ -609,11 +613,7 @@ impl Catalog {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if s.is_empty() {
-            self.status.clone()
-        } else {
-            s
-        }
+        if s.is_empty() { self.status.clone() } else { s }
     }
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Relaxed)
@@ -750,7 +750,8 @@ impl Catalog {
         if self.downloading.is_some() && self.busy() {
             let frac = self.progress_fraction().clamp(0.0, 1.0);
             let total = f64::from(self.downloading_size_mib.max(1.0));
-            self.transfer.observe(total * f64::from(frac), self.is_paused());
+            self.transfer
+                .observe(total * f64::from(frac), self.is_paused());
         }
         let reply = self.worker.as_ref().and_then(|rx| match rx.try_recv() {
             Ok(v) => Some(v),
@@ -800,7 +801,9 @@ impl Catalog {
         // Collect both direct icon URLs and Horizon/bundled items that need a Modrinth name search
         // for their PFP and description.
         let mut tasks: Vec<(String, String, Option<String>, Kind)> = Vec::new();
-        if self.page == Page::Mods && self.config.mod_source == crate::shader_catalog::Origin::Horizon {
+        if self.page == Page::Mods
+            && self.config.mod_source == crate::shader_catalog::Origin::Horizon
+        {
             for (id, title, _) in horizon_client::mod_list::ANDROID_BUNDLED {
                 if !self.icons.contains_key(id) {
                     tasks.push((id.to_owned(), title.to_owned(), None, Kind::Mod));
@@ -811,7 +814,11 @@ impl Catalog {
             if self.icons.contains_key(&p.id) {
                 continue;
             }
-            let direct = p.icon.as_ref().map(|u| u.trim().to_owned()).filter(|u| !u.is_empty());
+            let direct = p
+                .icon
+                .as_ref()
+                .map(|u| u.trim().to_owned())
+                .filter(|u| !u.is_empty());
             tasks.push((p.id.clone(), p.title.clone(), direct, p.kind));
         }
         if tasks.is_empty() {
@@ -904,7 +911,9 @@ impl Catalog {
             let mut icon_url = project.icon.clone();
 
             if let Some(source) = browser::source(project.source) {
-                if let Ok(v) = source.versions(&project) && !v.is_empty() {
+                if let Ok(v) = source.versions(&project)
+                    && !v.is_empty()
+                {
                     versions = v;
                 }
                 if let Ok(d) = source.details(&project) {
@@ -926,7 +935,10 @@ impl Catalog {
 
             // For Horizon list items (or bundled mods), search Modrinth by the project's name
             // to enrich with Modrinth's full description, PFP icon, and gallery screenshots!
-            if project.source == browser::SourceId::Horizon || gallery.is_empty() || icon_url.is_none() {
+            if project.source == browser::SourceId::Horizon
+                || gallery.is_empty()
+                || icon_url.is_none()
+            {
                 if let Some(m_hit) = lookup_modrinth_by_name(&project.title, project.kind) {
                     if icon_url.is_none() {
                         icon_url = m_hit.icon.clone();
@@ -948,9 +960,13 @@ impl Catalog {
                                 if caps.is_empty() {
                                     description = body_clean;
                                 } else {
-                                    description = format!("{}
+                                    description = format!(
+                                        "{}
 
-{}", caps.join(" • "), body_clean);
+{}",
+                                        caps.join(" • "),
+                                        body_clean
+                                    );
                                 }
                             } else {
                                 description = body_clean;
@@ -1059,20 +1075,11 @@ impl Catalog {
         } else if self.page == Page::Mods
             && self.config.mod_source == crate::shader_catalog::Origin::Modrinth
         {
-            format!(
-                "{} Modrinth mods ready to port and install",
-                items.len()
-            )
+            format!("{} Modrinth mods ready to port and install", items.len())
         } else if self.page == Page::Mods {
-            format!(
-                "{} Horizon mods available to install",
-                items.len()
-            )
+            format!("{} Horizon mods available to install", items.len())
         } else {
-            format!(
-                "{} results - select Install to download",
-                items.len()
-            )
+            format!("{} results - select Install to download", items.len())
         };
         self.results = items;
     }
@@ -1170,10 +1177,7 @@ impl Catalog {
             return;
         }
         let game = self.config.game_home(home);
-        if !matches!(
-            project.kind,
-            Kind::ResourcePack | Kind::Shader | Kind::Mod
-        ) {
+        if !matches!(project.kind, Kind::ResourcePack | Kind::Shader | Kind::Mod) {
             return;
         }
         self.downloading = Some((project.source, project.id.clone()));
@@ -1439,9 +1443,8 @@ impl Catalog {
                     );
                     touch.active_profile = clean.clone();
                     let _ = touch.save_profile(&game_home, &clean);
-                    self.status = format!(
-                        "Saved controls as '{clean}' in controlmap/{clean}.json."
-                    );
+                    self.status =
+                        format!("Saved controls as '{clean}' in controlmap/{clean}.json.");
                 }
                 self.editing = None;
                 let _ = self.config.save(home);
@@ -1520,11 +1523,7 @@ fn install_modrinth_jar_fallback(
 }
 
 fn lookup_modrinth_by_name(title: &str, kind: Kind) -> Option<Project> {
-    let clean_title = title
-        .split('(')
-        .next()
-        .unwrap_or(title)
-        .trim();
+    let clean_title = title.split('(').next().unwrap_or(title).trim();
     let mut query = Query::new(clean_title, kind);
     query.everything = true;
     query.limit = 5;
@@ -1535,7 +1534,9 @@ fn lookup_modrinth_by_name(title: &str, kind: Kind) -> Option<Project> {
     };
     let lower = clean_title.to_lowercase();
     hits.iter()
-        .find(|p| p.title.to_lowercase() == lower || p.slug.to_lowercase() == lower.replace(' ', "-"))
+        .find(|p| {
+            p.title.to_lowercase() == lower || p.slug.to_lowercase() == lower.replace(' ', "-")
+        })
         .cloned()
         .or_else(|| hits.into_iter().next())
 }
@@ -1551,7 +1552,15 @@ fn clean_markdown_body(raw: &str) -> String {
             }
             continue;
         }
-        if trimmed.starts_with("![") || trimmed.starts_with("<img") || trimmed.starts_with("<a ") || trimmed.starts_with("<div") || trimmed.starts_with("</div") || trimmed.starts_with("<p align") || trimmed.starts_with("<center") || trimmed.starts_with("</center") {
+        if trimmed.starts_with("![")
+            || trimmed.starts_with("<img")
+            || trimmed.starts_with("<a ")
+            || trimmed.starts_with("<div")
+            || trimmed.starts_with("</div")
+            || trimmed.starts_with("<p align")
+            || trimmed.starts_with("<center")
+            || trimmed.starts_with("</center")
+        {
             continue;
         }
         let mut clean_line = String::with_capacity(trimmed.len());

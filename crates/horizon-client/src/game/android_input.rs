@@ -199,12 +199,6 @@ impl Game<'_> {
                 }
                 continue;
             }
-            if name == "mouse.virtual.toggle" {
-                if down {
-                    self.android_set_virtual_mouse(!self.pad.touch_ui.virtual_mouse);
-                }
-                continue;
-            }
             if name == "mouse.scroll.up" || name == "mouse.scroll.down" {
                 if down {
                     let delta = if name == "mouse.scroll.up" { 8.0 } else { 1.0 };
@@ -319,6 +313,15 @@ impl Game<'_> {
                 || self.cursor.1 >= b.height)
         {
             self.cursor = (b.width * 0.5, b.height * 0.5);
+        }
+    }
+
+    /// The pointer is not a setting: it exists exactly while the mouse is not
+    /// locked. Menus and the HUD show it; gameplay hides it and releases any
+    /// touch drag that was still holding a mouse button.
+    pub(super) fn android_sync_pointer(&mut self) {
+        if self.pad.touch_ui.virtual_mouse != !self.captured {
+            self.android_set_virtual_mouse(!self.captured);
         }
     }
 
@@ -623,6 +626,29 @@ impl Game<'_> {
                 InGameMenuAction::OpenKeyboard => {
                     self.android_show_keyboard();
                 }
+                InGameMenuAction::ForceKill => {
+                    let _ = self.pad.touch.settings.save();
+                    std::process::exit(0);
+                }
+                InGameMenuAction::OpenLogs => {
+                    // Logs are private to the app; the SAF provider shares the Reports
+                    // folder the diagnostics exporter writes into.
+                    if !crate::platform::open_documents("reports") {
+                        self.system_message(horizon_client::text::Text::literal(
+                            "Could not open Reports. Logs are in the game folder's logs/ directory.",
+                        ));
+                    }
+                }
+                InGameMenuAction::EditPresetField(description) => {
+                    if let Some(dlg) = self.pad.touch_ui.preset_dialog.as_mut() {
+                        dlg.editing_desc = description;
+                        crate::platform::show(if description {
+                            &dlg.desc_input
+                        } else {
+                            &dlg.name_input
+                        });
+                    }
+                }
             }
             return Ok(true);
         }
@@ -798,8 +824,55 @@ impl Game<'_> {
             crate::platform::show(&initial);
         }
     }
+    /// Text from the Android keyboard while a preset naming field has focus.
+    /// Both naming dialogs (the editor's save-as and the hub's copy) type here
+    /// instead of showing a keyboard inside the dialog.
+    fn android_preset_typing(&mut self, out: &Output) -> bool {
+        fn edit(buffer: &mut String, out: &Output, max: usize) {
+            match out {
+                Output::Text(text) => {
+                    for c in text.chars() {
+                        if !c.is_control() && buffer.chars().count() < max {
+                            buffer.push(c);
+                        }
+                    }
+                }
+                Output::Backspace => {
+                    buffer.pop();
+                }
+                _ => {}
+            }
+        }
+        if let Some(ed) = self.pad.touch.editor.as_mut()
+            && ed.save_dialog_open
+        {
+            if ed.editing_save_desc {
+                edit(&mut ed.save_desc_input, out, 56);
+            } else {
+                edit(&mut ed.save_name_input, out, 28);
+            }
+            if matches!(out, Output::Enter | Output::Close) {
+                crate::platform::hide();
+            }
+            return true;
+        }
+        let Some(dlg) = self.pad.touch_ui.preset_dialog.as_mut() else {
+            return self.android_menu_preset_typing(out);
+        };
+        if dlg.editing_desc {
+            edit(&mut dlg.desc_input, out, 56);
+        } else {
+            edit(&mut dlg.name_input, out, 24);
+        }
+        if matches!(out, Output::Enter | Output::Close) {
+            crate::platform::hide();
+        }
+        true
+    }
+
     pub(super) fn android_poll_keyboard(&mut self) {
         self.android_custom_events();
+        self.android_sync_pointer();
         if let Some(notice) = crate::documents::poll() {
             if notice.changed {
                 self.refresh_pack_lists();
@@ -814,6 +887,9 @@ impl Game<'_> {
             ));
         }
         for out in crate::platform::poll() {
+            if self.android_preset_typing(&out) {
+                continue;
+            }
             let next_sign_line = self.sign_edit.is_some() && matches!(out, Output::Enter);
             let done =
                 matches!(out, Output::Close) || (matches!(out, Output::Enter) && !next_sign_line);
@@ -923,6 +999,7 @@ impl Game<'_> {
         events: &dyn super::event_loop::EventLoopCtl,
         id: WindowId,
     ) {
+        self.android_sync_pointer();
         if self.pad.touch_ui.virtual_mouse {
             self.android_virtual_touch(t, events, id);
             return;

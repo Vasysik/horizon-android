@@ -58,9 +58,18 @@ impl Default for AnimState {
 }
 
 impl AnimState {
-    pub fn step(&mut self, page: Page, category: SettingsCategory, target_nav_y: f32, has_modal: bool) {
+    pub fn step(
+        &mut self,
+        page: Page,
+        category: SettingsCategory,
+        target_nav_y: f32,
+        has_modal: bool,
+    ) {
         let now = std::time::Instant::now();
-        let dt = now.duration_since(self.last_tick).as_secs_f32().clamp(0.001, 0.08);
+        let dt = now
+            .duration_since(self.last_tick)
+            .as_secs_f32()
+            .clamp(0.001, 0.08);
         self.last_tick = now;
 
         if page != self.last_page || (page == Page::Settings && category != self.last_category) {
@@ -85,7 +94,9 @@ impl AnimState {
     }
 
     pub fn is_active(&self) -> bool {
-        self.page_fade < 0.99 || self.page_slide.abs() > 0.4 || (self.modal_anim > 0.01 && self.modal_anim < 0.99)
+        self.page_fade < 0.99
+            || self.page_slide.abs() > 0.4
+            || (self.modal_anim > 0.01 && self.modal_anim < 0.99)
     }
 }
 
@@ -215,11 +226,7 @@ pub(super) fn button(
         w,
         h,
         radius,
-        if accent {
-            MY3_ACCENT
-        } else {
-            MY3_SURFACE_HIGH
-        },
+        if accent { MY3_ACCENT } else { MY3_SURFACE_HIGH },
     );
     if !accent {
         ui.border(x, y, w, h, radius, MY3_BORDER);
@@ -311,9 +318,23 @@ fn draw_setting_card(
 
     let text_max = (w - 220.0).max(90.0);
     let fitted_title = ui.fit_text(Face::SemiBold, 15.0, title, text_max);
-    ui.text(Face::SemiBold, 15.0, x + 16.0, y + 10.0, MY3_TEXT, &fitted_title);
+    ui.text(
+        Face::SemiBold,
+        15.0,
+        x + 16.0,
+        y + 10.0,
+        MY3_TEXT,
+        &fitted_title,
+    );
     let fitted_sub = ui.fit_text(Face::Regular, 12.5, subtitle, text_max);
-    ui.text(Face::Regular, 12.5, x + 16.0, y + 32.0, MY3_MUTED, &fitted_sub);
+    ui.text(
+        Face::Regular,
+        12.5,
+        x + 16.0,
+        y + 32.0,
+        MY3_MUTED,
+        &fitted_sub,
+    );
 
     match right_control {
         SettingControl::Toggle(on, action) => {
@@ -425,9 +446,20 @@ fn draw_my3_progress_view(
     );
 
     // Step indicator pill badge next to subtitle
-    let step_badge = format!("Step {} of {}", (step_index + 1).min(steps.len()), steps.len().max(1));
+    let step_badge = format!(
+        "Step {} of {}",
+        (step_index + 1).min(steps.len()),
+        steps.len().max(1)
+    );
     let badge_w = (ui.measure(Face::SemiBold, 12.0, &step_badge) + 18.0).max(76.0);
-    ui.rounded(content_x, center_y - 34.0, badge_w, 22.0, 11.0, MY3_ACCENT_SOFT);
+    ui.rounded(
+        content_x,
+        center_y - 34.0,
+        badge_w,
+        22.0,
+        11.0,
+        MY3_ACCENT_SOFT,
+    );
     ui.text(
         Face::SemiBold,
         12.0,
@@ -662,13 +694,7 @@ impl Launcher {
             let mut b = HudBatch::new([r.config.width, r.config.height]);
             tc.viewport(r.config.width, r.config.height);
             let profile_name = tc.settings.active_profile.clone();
-            horizon_client::touch_ui::draw_hud_editor(
-                tc,
-                &mut b,
-                &gui.atlas,
-                &profile_name,
-                None,
-            );
+            horizon_client::touch_ui::draw_hud_editor(tc, &mut b, &gui.atlas, &profile_name, None);
             if !r.render(&game::loading_frame(&b))? && !b.patches.is_empty() {
                 horizon_client::ui_theme::reset_atlas();
             }
@@ -778,14 +804,7 @@ impl Launcher {
 
         // ---- Left Vertical Navigation Rail + Smooth Gliding Active Pill ----
         let sidebar_w = if w < 560.0 { 136.0 } else { 184.0 };
-        ui.rounded(
-            sidebar_w,
-            56.0,
-            1.0,
-            (h - 68.0).max(10.0),
-            0.0,
-            MY3_BORDER,
-        );
+        ui.rounded(sidebar_w, 56.0, 1.0, (h - 68.0).max(10.0), 0.0, MY3_BORDER);
         let nav_start_y = 62.0;
         let nav_step = ((h - nav_start_y - 14.0) / 6.0).clamp(36.0, 48.0);
         let nav_h = (nav_step - 5.0).clamp(32.0, 41.0);
@@ -821,7 +840,13 @@ impl Launcher {
             } else {
                 color::hex(0xCFC9E2, 255)
             };
-            ui.icon(page_icon(*page), nx + 14.0, ny + (nav_h - 17.0) * 0.5, 17.0, fg);
+            ui.icon(
+                page_icon(*page),
+                nx + 14.0,
+                ny + (nav_h - 17.0) * 0.5,
+                17.0,
+                fg,
+            );
             let label = ui.fit_text(Face::Medium, 13.5, page.name(), nw - 42.0);
             ui.text(
                 Face::Medium,
@@ -831,7 +856,8 @@ impl Launcher {
                 fg,
                 &label,
             );
-            self.targets.push(([nx, ny, nw, nav_h], Action::Page(*page)));
+            self.targets
+                .push(([nx, ny, nw, nav_h], Action::Page(*page)));
         }
 
         // ---- Main Content Area (with smooth slide transition offset) ----
@@ -843,7 +869,12 @@ impl Launcher {
 
         // When any catalog item (Mod, Pack, Shader) is downloading/installing, take the entire
         // middle screen to show the MY3 downloading view with Speed, ETA, and Steps.
-        if let Some((source_id, _)) = self.catalog.downloading.as_ref().filter(|_| self.catalog.busy()) {
+        if let Some((source_id, _)) = self
+            .catalog
+            .downloading
+            .as_ref()
+            .filter(|_| self.catalog.busy())
+        {
             let frac = self.catalog.progress_fraction().clamp(0.0, 1.0);
             self.anim.progress_smooth += (frac - self.anim.progress_smooth) * 0.25;
             let smooth_frac = self.anim.progress_smooth.clamp(0.04, 1.0);
@@ -911,16 +942,15 @@ impl Launcher {
                 let overall = ((current as f32 + fraction.clamp(0.0, 1.0)) / 6.0).clamp(0.02, 1.0);
                 self.anim.progress_smooth += (overall - self.anim.progress_smooth) * 0.25;
                 let smooth_overall = self.anim.progress_smooth.clamp(0.02, 1.0);
-                let (done_mib, total_mib) = if progress.stage == InstallStage::Download
-                    && progress.total > 0
-                {
-                    (
-                        progress.done as f64 / 1_048_576.0,
-                        progress.total as f64 / 1_048_576.0,
-                    )
-                } else {
-                    (55.3 * f64::from(overall), 55.3)
-                };
+                let (done_mib, total_mib) =
+                    if progress.stage == InstallStage::Download && progress.total > 0 {
+                        (
+                            progress.done as f64 / 1_048_576.0,
+                            progress.total as f64 / 1_048_576.0,
+                        )
+                    } else {
+                        (55.3 * f64::from(overall), 55.3)
+                    };
                 let paused = self.install_paused.load(Ordering::Relaxed);
                 self.install_transfer.observe(done_mib, paused);
                 let sub_left = format!(
@@ -947,7 +977,14 @@ impl Launcher {
                     &self.install_transfer.speed_label(),
                     &self.install_transfer.eta_label(done_mib, total_mib),
                     current,
-                    &["Manifest", "Metadata", "Client JAR", "Verify", "Extract", "Ready"],
+                    &[
+                        "Manifest",
+                        "Metadata",
+                        "Client JAR",
+                        "Verify",
+                        "Extract",
+                        "Ready",
+                    ],
                     smooth_overall,
                     self.anim.shimmer_phase,
                     stage_text,
@@ -1118,18 +1155,15 @@ impl Launcher {
                 },
                 &fitted_q,
             );
-            self.targets
-                .push(([content_x, search_y, field_w, 36.0], Action::Field("search")));
+            self.targets.push((
+                [content_x, search_y, field_w, 36.0],
+                Action::Field("search"),
+            ));
 
             button(
                 &mut ui,
                 &mut self.targets,
-                [
-                    content_x + field_w + 8.0,
-                    search_y,
-                    search_btn_w,
-                    36.0,
-                ],
+                [content_x + field_w + 8.0, search_y, search_btn_w, 36.0],
                 if page == Page::Mods && self.catalog.query.trim().starts_with("https://") {
                     "Import .hmod"
                 } else {
@@ -1220,15 +1254,22 @@ impl Launcher {
             ]);
 
             let fallback_icon = page_icon(page);
-            ui.set_clip(Some([content_x - 2.0, top, content_w + 4.0, (bottom - top).max(1.0)]));
+            ui.set_clip(Some([
+                content_x - 2.0,
+                top,
+                content_w + 4.0,
+                (bottom - top).max(1.0),
+            ]));
 
             for (row, (id, title, description)) in bundled.iter().enumerate() {
                 let y = top + row as f32 * row_h - self.catalog.scroll;
                 let enabled = self.catalog.bundled_enabled.contains(*id);
                 let card_rect = [content_x, y, content_w - 118.0, 64.0];
                 let btn_rect = [content_x + content_w - 112.0, y + 13.0, 100.0, 38.0];
-                self.list_targets.push((card_rect, Action::OpenBundledProject(id)));
-                self.list_targets.push((btn_rect, Action::ToggleBundled(id)));
+                self.list_targets
+                    .push((card_rect, Action::OpenBundledProject(id)));
+                self.list_targets
+                    .push((btn_rect, Action::ToggleBundled(id)));
                 if y + 64.0 < top || y > bottom {
                     continue;
                 }
@@ -1237,16 +1278,7 @@ impl Launcher {
 
                 // Project icon: fetched Modrinth PFP if available, else MY3 vector icon badge.
                 let drawn_icon = if let Some((iw, ih, rgba)) = self.catalog.icons.get(*id) {
-                    ui.image(
-                        id,
-                        *iw,
-                        *ih,
-                        rgba,
-                        content_x + 10.0,
-                        y + 10.0,
-                        44.0,
-                        44.0,
-                    )
+                    ui.image(id, *iw, *ih, rgba, content_x + 10.0, y + 10.0, 44.0, 44.0)
                 } else {
                     false
                 };
@@ -1259,13 +1291,7 @@ impl Launcher {
                         12.0,
                         color::hex(0x27213C, 255),
                     );
-                    ui.icon(
-                        fallback_icon,
-                        content_x + 21.0,
-                        y + 21.0,
-                        22.0,
-                        MY3_ACCENT,
-                    );
+                    ui.icon(fallback_icon, content_x + 21.0, y + 21.0, 22.0, MY3_ACCENT);
                 }
 
                 // Badge chip ("Built-in • Tap for info")
@@ -1301,7 +1327,9 @@ impl Launcher {
                     MY3_ACCENT,
                     "Horizon Built-in • Tap for versions, Modrinth info & screenshots",
                 );
-                if let Some(c) = ui.clip_rect(card_rect) { self.targets.push((c, Action::OpenBundledProject(id))); }
+                if let Some(c) = ui.clip_rect(card_rect) {
+                    self.targets.push((c, Action::OpenBundledProject(id)));
+                }
                 button(
                     &mut ui,
                     &mut self.targets,
@@ -1328,21 +1356,20 @@ impl Launcher {
                 ui.border(content_x, y, content_w, 64.0, 14.0, MY3_CARD_BORDER);
 
                 // Project icon: fetched RGBA icon if ready, else MY3 vector icon badge.
-                let drawn_icon =
-                    if let Some((iw, ih, rgba)) = self.catalog.icons.get(&p.id) {
-                        ui.image(
-                            &p.id,
-                            *iw,
-                            *ih,
-                            rgba,
-                            content_x + 10.0,
-                            y + 10.0,
-                            44.0,
-                            44.0,
-                        )
-                    } else {
-                        false
-                    };
+                let drawn_icon = if let Some((iw, ih, rgba)) = self.catalog.icons.get(&p.id) {
+                    ui.image(
+                        &p.id,
+                        *iw,
+                        *ih,
+                        rgba,
+                        content_x + 10.0,
+                        y + 10.0,
+                        44.0,
+                        44.0,
+                    )
+                } else {
+                    false
+                };
                 if !drawn_icon {
                     ui.rounded(
                         content_x + 10.0,
@@ -1352,13 +1379,7 @@ impl Launcher {
                         12.0,
                         color::hex(0x27213C, 255),
                     );
-                    ui.icon(
-                        fallback_icon,
-                        content_x + 21.0,
-                        y + 21.0,
-                        22.0,
-                        MY3_ACCENT,
-                    );
+                    ui.icon(fallback_icon, content_x + 21.0, y + 21.0, 22.0, MY3_ACCENT);
                 }
 
                 let text_max = (content_w - 190.0).max(80.0);
@@ -1406,7 +1427,9 @@ impl Launcher {
                     MY3_ACCENT,
                     &fitted_meta,
                 );
-                if let Some(c) = ui.clip_rect(card_rect) { self.targets.push((c, Action::OpenProject(i))); }
+                if let Some(c) = ui.clip_rect(card_rect) {
+                    self.targets.push((c, Action::OpenProject(i)));
+                }
 
                 if let Some(state) = download {
                     ui.rounded(
@@ -1432,7 +1455,9 @@ impl Launcher {
                         MY3_TEXT,
                         &state,
                     );
-                    if let Some(c) = ui.clip_rect(btn_rect) { self.targets.push((c, Action::OpenProject(i))); }
+                    if let Some(c) = ui.clip_rect(btn_rect) {
+                        self.targets.push((c, Action::OpenProject(i)));
+                    }
                 } else {
                     button(
                         &mut ui,
@@ -1491,7 +1516,12 @@ impl Launcher {
             let maximum = (total - (bottom - top)).max(0.0);
             self.catalog.scroll = self.catalog.scroll.clamp(0.0, maximum);
             self.list_view = Some([top, bottom, maximum]);
-            ui.set_clip(Some([content_x - 2.0, top, content_w + 4.0, (bottom - top).max(1.0)]));
+            ui.set_clip(Some([
+                content_x - 2.0,
+                top,
+                content_w + 4.0,
+                (bottom - top).max(1.0),
+            ]));
             let mut offset = 0.0;
             for (section, kind) in Kind::ALL.into_iter().enumerate() {
                 let count = self.catalog.local.iter().filter(|e| e.kind == kind).count();
@@ -1561,7 +1591,14 @@ impl Launcher {
                         continue;
                     }
                     ui.rounded(content_x, y, content_w, row_height - 6.0, 14.0, MY3_CARD_BG);
-                    ui.border(content_x, y, content_w, row_height - 6.0, 14.0, MY3_CARD_BORDER);
+                    ui.border(
+                        content_x,
+                        y,
+                        content_w,
+                        row_height - 6.0,
+                        14.0,
+                        MY3_CARD_BORDER,
+                    );
                     let title = ui.fit_text(
                         Face::SemiBold,
                         15.0,
@@ -1572,7 +1609,14 @@ impl Launcher {
                             content_w - 250.0
                         },
                     );
-                    ui.text(Face::SemiBold, 15.0, content_x + 16.0, y + 8.0, MY3_TEXT, &title);
+                    ui.text(
+                        Face::SemiBold,
+                        15.0,
+                        content_x + 16.0,
+                        y + 8.0,
+                        MY3_TEXT,
+                        &title,
+                    );
                     ui.text(
                         Face::Regular,
                         12.5,
@@ -1584,24 +1628,14 @@ impl Launcher {
                     toggle(
                         &mut ui,
                         &mut self.targets,
-                        [
-                            toggle_x,
-                            y + if compact { 44.0 } else { 8.0 },
-                            108.0,
-                            38.0,
-                        ],
+                        [toggle_x, y + if compact { 44.0 } else { 8.0 }, 108.0, 38.0],
                         item.enabled,
                         Action::ToggleLocal(i),
                     );
                     button(
                         &mut ui,
                         &mut self.targets,
-                        [
-                            remove_x,
-                            y + if compact { 44.0 } else { 9.0 },
-                            94.0,
-                            36.0,
-                        ],
+                        [remove_x, y + if compact { 44.0 } else { 9.0 }, 94.0, 36.0],
                         "Remove",
                         Action::DeleteLocal(i),
                         false,
@@ -1619,20 +1653,9 @@ impl Launcher {
         if !in_progress_dialog {
             let status = self.error.as_deref().unwrap_or(&self.catalog.status);
             if !status.is_empty() && !page.is_catalog() {
-                let fitted = ui.fit_text(
-                    Face::Regular,
-                    12.5,
-                    status,
-                    (content_w - 116.0).max(60.0),
-                );
-                ui.text(
-                    Face::Regular,
-                    12.5,
-                    content_x,
-                    h - 32.0,
-                    MY3_MUTED,
-                    &fitted,
-                );
+                let fitted =
+                    ui.fit_text(Face::Regular, 12.5, status, (content_w - 116.0).max(60.0));
+                ui.text(Face::Regular, 12.5, content_x, h - 32.0, MY3_MUTED, &fitted);
             }
             if page == Page::Play
                 || (page == Page::Settings
@@ -1841,7 +1864,14 @@ impl Launcher {
 
         // Scrim backdrop
         let alpha = (185.0 * self.anim.modal_anim.clamp(0.2, 1.0)) as u8;
-        ui.rounded(0.0, 0.0, w, h, 0.0, horizon_client::hud::rgba(6, 5, 12, alpha));
+        ui.rounded(
+            0.0,
+            0.0,
+            w,
+            h,
+            0.0,
+            horizon_client::hud::rgba(6, 5, 12, alpha),
+        );
 
         let scale_in = 0.94 + 0.06 * self.anim.modal_anim.clamp(0.0, 1.0);
         let mw = ((w - 44.0).min(640.0) * scale_in).max(280.0);
@@ -1897,7 +1927,14 @@ impl Launcher {
 
         let title_max = (mw - 146.0).max(100.0);
         let fitted_title = ui.fit_text(Face::SemiBold, 18.5, &modal.project.title, title_max);
-        ui.text(Face::SemiBold, 18.5, mx + 78.0, my + 16.0, MY3_TEXT, &fitted_title);
+        ui.text(
+            Face::SemiBold,
+            18.5,
+            mx + 78.0,
+            my + 16.0,
+            MY3_TEXT,
+            &fitted_title,
+        );
 
         let mut meta_parts = vec![format!("by {}", modal.author)];
         if modal.downloads > 0 {
@@ -1911,7 +1948,14 @@ impl Launcher {
         }
         let meta_line = meta_parts.join("  •  ");
         let fitted_meta = ui.fit_text(Face::Regular, 12.5, &meta_line, title_max);
-        ui.text(Face::Regular, 12.5, mx + 78.0, my + 41.0, MY3_MUTED, &fitted_meta);
+        ui.text(
+            Face::Regular,
+            12.5,
+            mx + 78.0,
+            my + 41.0,
+            MY3_MUTED,
+            &fitted_meta,
+        );
 
         // Divider under modal header
         ui.rounded(mx + 16.0, my + 74.0, mw - 32.0, 1.0, 0.0, MY3_BORDER);
@@ -1922,21 +1966,38 @@ impl Launcher {
         let inner_x = mx + 18.0;
         let inner_w = mw - 36.0;
 
-        let desc_lines = wrap_text_lines(ui, Face::Regular, 13.0, &modal.description, inner_w - 8.0);
+        let desc_lines =
+            wrap_text_lines(ui, Face::Regular, 13.0, &modal.description, inner_w - 8.0);
         let desc_h = (desc_lines.len() as f32 * 18.5).max(24.0);
-        let gallery_h = if modal.screenshots.is_empty() { 0.0 } else { 118.0 };
+        let gallery_h = if modal.screenshots.is_empty() {
+            0.0
+        } else {
+            118.0
+        };
         let versions_h = 28.0 + (modal.versions.len().min(6) as f32) * 38.0;
         let total_content_h = 24.0 + desc_h + gallery_h + versions_h + 16.0;
         let max_scroll = (total_content_h - (body_bottom - body_top)).max(0.0);
         modal.scroll = modal.scroll.clamp(0.0, max_scroll);
         self.list_view = Some([body_top, body_bottom, max_scroll]);
 
-        ui.set_clip(Some([mx + 4.0, body_top, mw - 8.0, (body_bottom - body_top).max(1.0)]));
+        ui.set_clip(Some([
+            mx + 4.0,
+            body_top,
+            mw - 8.0,
+            (body_bottom - body_top).max(1.0),
+        ]));
         let mut cy = body_top - modal.scroll;
 
         // Section 1: About / Description
         if cy + 20.0 >= body_top && cy <= body_bottom {
-            ui.text(Face::SemiBold, 14.0, inner_x, cy, MY3_ACCENT, "About Project");
+            ui.text(
+                Face::SemiBold,
+                14.0,
+                inner_x,
+                cy,
+                MY3_ACCENT,
+                "About Project",
+            );
         }
         cy += 22.0;
         for line in &desc_lines {
@@ -1950,14 +2011,7 @@ impl Launcher {
         // Section 2: Screenshots (from Modrinth gallery)
         if !modal.screenshots.is_empty() {
             if cy + 20.0 >= body_top && cy <= body_bottom {
-                ui.text(
-                    Face::SemiBold,
-                    14.0,
-                    inner_x,
-                    cy,
-                    MY3_ACCENT,
-                    "Screenshots",
-                );
+                ui.text(Face::SemiBold, 14.0, inner_x, cy, MY3_ACCENT, "Screenshots");
             }
             cy += 22.0;
             let count = modal.screenshots.len().min(3) as f32;
@@ -1970,9 +2024,25 @@ impl Launcher {
                     ui.rounded(sx, cy, card_w, card_h, 12.0, MY3_CARD_BG);
                     ui.border(sx, cy, card_w, card_h, 12.0, MY3_CARD_BORDER);
                     let key = format!("shot:{}:{idx}", modal.project.id);
-                    let _ = ui.image(&key, *sw, *sh, rgba, sx + 3.0, cy + 3.0, card_w - 6.0, card_h - 22.0);
+                    let _ = ui.image(
+                        &key,
+                        *sw,
+                        *sh,
+                        rgba,
+                        sx + 3.0,
+                        cy + 3.0,
+                        card_w - 6.0,
+                        card_h - 22.0,
+                    );
                     let cap_fit = ui.fit_text(Face::Regular, 11.0, caption, card_w - 12.0);
-                    ui.text(Face::Regular, 11.0, sx + 6.0, cy + card_h - 17.0, MY3_MUTED, &cap_fit);
+                    ui.text(
+                        Face::Regular,
+                        11.0,
+                        sx + 6.0,
+                        cy + card_h - 17.0,
+                        MY3_MUTED,
+                        &cap_fit,
+                    );
                 }
             }
             cy += card_h + 12.0;
@@ -1993,7 +2063,8 @@ impl Launcher {
         for (v_idx, ver) in modal.versions.iter().take(6).enumerate() {
             let selected = modal.selected_version == v_idx;
             let row_rect = [inner_x, cy, inner_w, 34.0];
-            self.list_targets.push((row_rect, Action::SelectModalVersion(v_idx)));
+            self.list_targets
+                .push((row_rect, Action::SelectModalVersion(v_idx)));
             if cy + 34.0 >= body_top && cy <= body_bottom {
                 ui.rounded(
                     inner_x,
@@ -2001,7 +2072,11 @@ impl Launcher {
                     inner_w,
                     34.0,
                     10.0,
-                    if selected { MY3_ACCENT_SOFT } else { MY3_CARD_BG },
+                    if selected {
+                        MY3_ACCENT_SOFT
+                    } else {
+                        MY3_CARD_BG
+                    },
                 );
                 ui.border(
                     inner_x,
@@ -2009,7 +2084,11 @@ impl Launcher {
                     inner_w,
                     34.0,
                     10.0,
-                    if selected { MY3_ACCENT } else { MY3_CARD_BORDER },
+                    if selected {
+                        MY3_ACCENT
+                    } else {
+                        MY3_CARD_BORDER
+                    },
                 );
                 let ver_title = format!(
                     "{}v{}  •  MC {}  ({})",
@@ -2031,7 +2110,9 @@ impl Launcher {
                     if selected { MY3_TEXT } else { MY3_MUTED },
                     &fitted_v,
                 );
-                if let Some(c) = ui.clip_rect(row_rect) { self.targets.push((c, Action::SelectModalVersion(v_idx))); }
+                if let Some(c) = ui.clip_rect(row_rect) {
+                    self.targets.push((c, Action::SelectModalVersion(v_idx)));
+                }
             }
             cy += 38.0;
         }
@@ -2163,7 +2244,14 @@ impl Launcher {
                 let fitted_title = ui.fit_text(Face::SemiBold, 15.5, title, text_max);
                 let fitted_sub = ui.fit_text(Face::Regular, 12.5, subtitle, text_max);
                 let text_block_y = cy + (card_h - 40.0) * 0.5;
-                ui.text(Face::SemiBold, 15.5, text_x, text_block_y, MY3_TEXT, &fitted_title);
+                ui.text(
+                    Face::SemiBold,
+                    15.5,
+                    text_x,
+                    text_block_y,
+                    MY3_TEXT,
+                    &fitted_title,
+                );
                 ui.text(
                     Face::Regular,
                     12.5,
@@ -2276,7 +2364,12 @@ impl Launcher {
                     ),
                 ];
 
-                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
+                ui.set_clip(Some([
+                    content_x - 2.0,
+                    list_top,
+                    content_w + 4.0,
+                    (list_bottom - list_top).max(1.0),
+                ]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
                     if y + card_h < list_top || y > list_bottom {
@@ -2389,7 +2482,12 @@ impl Launcher {
                     ),
                 ];
 
-                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
+                ui.set_clip(Some([
+                    content_x - 2.0,
+                    list_top,
+                    content_w + 4.0,
+                    (list_bottom - list_top).max(1.0),
+                ]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
                     if y + card_h < list_top || y > list_bottom {
@@ -2420,8 +2518,7 @@ impl Launcher {
                 let is_mcpe = style == horizon_client::touch::ControlStyle::Mcpe;
                 let is_goy = style == horizon_client::touch::ControlStyle::GoyControl;
                 let sys_name = style.label();
-                let sys_presets =
-                    horizon_client::touch::Settings::list_presets(&game_home, style);
+                let sys_presets = horizon_client::touch::Settings::list_presets(&game_home, style);
                 let preset_label = format!(
                     "{} ({} presets) v",
                     touch_cfg.preset_name,
@@ -2492,7 +2589,11 @@ impl Launcher {
                         "Control Mode: MCPE (Default)",
                         "Vanilla Minecraft/MCPE-style touch controls (default on fresh install)",
                         SettingControl::Button(
-                            if is_mcpe { "● Active" } else { "○ Select MCPE" },
+                            if is_mcpe {
+                                "● Active"
+                            } else {
+                                "○ Select MCPE"
+                            },
                             Action::SelectControlMode(horizon_client::touch::ControlStyle::Mcpe),
                             is_mcpe,
                         ),
@@ -2501,7 +2602,11 @@ impl Launcher {
                         "Control Mode: GoyControl",
                         "Independent custom touch control system with its own layouts & editor",
                         SettingControl::Button(
-                            if is_goy { "● Active" } else { "○ Select GoyControl" },
+                            if is_goy {
+                                "● Active"
+                            } else {
+                                "○ Select GoyControl"
+                            },
                             Action::SelectControlMode(
                                 horizon_client::touch::ControlStyle::GoyControl,
                             ),
@@ -2511,7 +2616,11 @@ impl Launcher {
                     (
                         &editor_title,
                         editor_sub,
-                        SettingControl::Button("Customize Controls", Action::OpenControlEditor, true),
+                        SettingControl::Button(
+                            "Customize Controls",
+                            Action::OpenControlEditor,
+                            true,
+                        ),
                     ),
                     (
                         &preset_row_title,
@@ -2526,11 +2635,7 @@ impl Launcher {
                     (
                         &edit_meta_title,
                         edit_meta_sub,
-                        SettingControl::Button(
-                            edit_meta_btn,
-                            Action::EditActivePresetMeta,
-                            false,
-                        ),
+                        SettingControl::Button(edit_meta_btn, Action::EditActivePresetMeta, false),
                     ),
                     (
                         "Sensitivity (Touch Look Speed)",
@@ -2598,7 +2703,12 @@ impl Launcher {
                     ),
                 ];
 
-                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
+                ui.set_clip(Some([
+                    content_x - 2.0,
+                    list_top,
+                    content_w + 4.0,
+                    (list_bottom - list_top).max(1.0),
+                ]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
                     if y + card_h < list_top || y > list_bottom {
@@ -2645,7 +2755,10 @@ impl Launcher {
                     (
                         "Zero-Latency Touch Pipeline",
                         "Bypasses redundant pointer filtering for instant camera & virtual mouse response",
-                        SettingControl::Toggle(c.zero_latency_touch, Action::ToggleZeroLatencyTouch),
+                        SettingControl::Toggle(
+                            c.zero_latency_touch,
+                            Action::ToggleZeroLatencyTouch,
+                        ),
                     ),
                     (
                         "Fast Chunk Mesh Upload Boost",
@@ -2655,7 +2768,10 @@ impl Launcher {
                     (
                         "Android ADPF Performance Hints",
                         "Sends real-time CPU thermal & frame-work hints to the Android scheduler",
-                        SettingControl::Toggle(c.device.performance_hints, Action::PerformanceHints),
+                        SettingControl::Toggle(
+                            c.device.performance_hints,
+                            Action::PerformanceHints,
+                        ),
                     ),
                     (
                         "Detailed GPU Pass Profiling",
@@ -2664,7 +2780,12 @@ impl Launcher {
                     ),
                 ];
 
-                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
+                ui.set_clip(Some([
+                    content_x - 2.0,
+                    list_top,
+                    content_w + 4.0,
+                    (list_bottom - list_top).max(1.0),
+                ]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
                     if y + card_h < list_top || y > list_bottom {
@@ -2720,7 +2841,12 @@ impl Launcher {
                     ),
                 ];
 
-                ui.set_clip(Some([content_x - 2.0, list_top, content_w + 4.0, (list_bottom - list_top).max(1.0)]));
+                ui.set_clip(Some([
+                    content_x - 2.0,
+                    list_top,
+                    content_w + 4.0,
+                    (list_bottom - list_top).max(1.0),
+                ]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
                     let y = list_top + i as f32 * step_y - self.catalog.scroll;
                     if y + card_h < list_top || y > list_bottom {
@@ -2834,7 +2960,8 @@ impl Launcher {
             }
             Some(Action::OpenProject(index)) => {
                 if let Some(project) = self.catalog.results.get(index).cloned() {
-                    self.catalog.open_project_modal(&self.home, project, None, Some(index));
+                    self.catalog
+                        .open_project_modal(&self.home, project, None, Some(index));
                 }
             }
             Some(Action::OpenBundledProject(id)) => {
@@ -2857,7 +2984,8 @@ impl Launcher {
                         game_versions: vec![crate::browser::GAME.into()],
                         loaders: vec!["horizon".into()],
                     };
-                    self.catalog.open_project_modal(&self.home, project, Some(id), None);
+                    self.catalog
+                        .open_project_modal(&self.home, project, Some(id), None);
                 }
             }
             Some(Action::CloseProjectModal) => {
@@ -3533,7 +3661,11 @@ impl Launcher {
         self.catalog.refresh(&self.home);
         self.catalog.status = format!(
             "Bundled {id} {}. Applies on Play; settings are in Options > Mods.",
-            if enabled { "disabled" } else { "installed & enabled" }
+            if enabled {
+                "disabled"
+            } else {
+                "installed & enabled"
+            }
         );
         Ok(())
     }
@@ -3579,12 +3711,9 @@ impl Launcher {
         // Route all touches in the MCPE + GoyControl Editor through touch_hud_editor
         // and persist changes directly to the active profile's game_home.
         if self.control_editor.is_some() {
-            let (rw, rh) = self
-                .renderer
-                .as_ref()
-                .map_or((1920, 1080), |r| {
-                    (r.config.width.max(1), r.config.height.max(1))
-                });
+            let (rw, rh) = self.renderer.as_ref().map_or((1920, 1080), |r| {
+                (r.config.width.max(1), r.config.height.max(1))
+            });
             let game_home = self.catalog.config.game_home(&self.home);
             let prev_cwd = std::env::current_dir().ok();
             let _ = std::env::set_current_dir(&game_home);
