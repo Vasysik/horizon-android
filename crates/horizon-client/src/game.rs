@@ -14989,7 +14989,7 @@ impl Game<'_> {
         #[cfg(target_os = "android")]
         {
             // The touch pointer follows the mouse lock: free in menus, gone in play.
-            self.pad.touch_ui.virtual_mouse = !self.captured;
+            self.pad.touch_ui.virtual_mouse = !self.pad.touch_ui.pointer_off && !self.captured;
             if self.pad.touch.editor.is_none() {
                 self.pad.touch_ui.goy_mode = self.pad.touch.settings.control_style
                     == horizon_client::touch::ControlStyle::GoyControl;

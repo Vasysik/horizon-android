@@ -2045,7 +2045,7 @@ impl Loading {
                 == horizon_client::touch::ControlStyle::GoyControl;
             self.menu.touch.goy_mode = is_goy;
             // The title menu never locks the mouse: the touch pointer is free here.
-            self.menu.touch.virtual_mouse = true;
+            self.menu.touch.virtual_mouse = !self.menu.touch.pointer_off;
             if is_goy {
                 horizon_client::touch_ui::draw_goy_hud(
                     &self.menu.controls,
@@ -2073,39 +2073,6 @@ impl Loading {
             .draw(self.settings.horizon.overlay, batch, &gui.atlas);
         #[cfg(target_os = "android")]
         crate::documents::draw(batch, &gui.atlas);
-    }
-
-    /// Text from the Android keyboard while the menu's preset naming dialog has
-    /// a focused field.
-    #[cfg(target_os = "android")]
-    pub(super) fn android_menu_preset_typing(&mut self, out: &horizon_client::osk::Output) -> bool {
-        use horizon_client::osk::Output;
-        let Some(dlg) = self.menu.touch.preset_dialog.as_mut() else {
-            return false;
-        };
-        match out {
-            Output::Text(text) => {
-                let (buffer, max) = if dlg.editing_desc {
-                    (&mut dlg.desc_input, 56)
-                } else {
-                    (&mut dlg.name_input, 24)
-                };
-                for c in text.chars() {
-                    if !c.is_control() && buffer.chars().count() < max {
-                        buffer.push(c);
-                    }
-                }
-            }
-            Output::Backspace => {
-                if dlg.editing_desc {
-                    dlg.desc_input.pop();
-                } else {
-                    dlg.name_input.pop();
-                }
-            }
-            Output::Enter | Output::Close => crate::platform::hide(),
-        }
-        true
     }
 
     #[cfg(target_os = "android")]

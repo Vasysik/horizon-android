@@ -307,11 +307,8 @@ impl Game<'_> {
             return;
         }
         self.pad.touch_ui.virtual_mouse = true;
-        if let Some(b) = self.gui_scale()
-            && ((self.cursor.0 <= 2.0 && self.cursor.1 <= 2.0)
-                || self.cursor.0 >= b.width
-                || self.cursor.1 >= b.height)
-        {
+        if let Some(b) = self.gui_scale() {
+            // The pointer comes back at the middle of the screen every time.
             self.cursor = (b.width * 0.5, b.height * 0.5);
         }
     }
@@ -320,8 +317,9 @@ impl Game<'_> {
     /// locked. Menus and the HUD show it; gameplay hides it and releases any
     /// touch drag that was still holding a mouse button.
     pub(super) fn android_sync_pointer(&mut self) {
-        if self.pad.touch_ui.virtual_mouse != !self.captured {
-            self.android_set_virtual_mouse(!self.captured);
+        let want = !self.pad.touch_ui.pointer_off && !self.captured;
+        if self.pad.touch_ui.virtual_mouse != want {
+            self.android_set_virtual_mouse(want);
         }
     }
 
@@ -594,7 +592,8 @@ impl Game<'_> {
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ToggleVirtualMouse => {
-                    self.android_set_virtual_mouse(!self.pad.touch_ui.virtual_mouse);
+                    self.pad.touch_ui.pointer_off = !self.pad.touch_ui.pointer_off;
+                    self.android_sync_pointer();
                 }
                 InGameMenuAction::SetTouchSensitivity(sens) => {
                     self.pad.touch.settings.sensitivity = sens.clamp(0.10, 2.50);
@@ -714,7 +713,8 @@ impl Game<'_> {
                             self.android_menu_mouse(events, id, right, false)?;
                         }
                         self.pad.touch_ui.cancel();
-                        self.android_set_virtual_mouse(!self.pad.touch_ui.virtual_mouse);
+                        self.pad.touch_ui.pointer_off = !self.pad.touch_ui.pointer_off;
+                        self.android_sync_pointer();
                     }
                     Action::More => self.pad.touch_ui.expanded = !self.pad.touch_ui.expanded,
                     Action::Keyboard => {
@@ -857,7 +857,7 @@ impl Game<'_> {
             return true;
         }
         let Some(dlg) = self.pad.touch_ui.preset_dialog.as_mut() else {
-            return self.android_menu_preset_typing(out);
+            return false;
         };
         if dlg.editing_desc {
             edit(&mut dlg.desc_input, out, 56);

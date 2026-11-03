@@ -31,6 +31,8 @@ pub struct TouchUi {
     pub sensitivity_dragging: bool,
     pub goy_mode: bool,
     pub virtual_mouse: bool,
+    /// The player turned the pointer off; it otherwise follows the mouse lock.
+    pub pointer_off: bool,
     mouse_buttons: BTreeMap<u64, bool>,
     relative: Option<RelativeTouch>,
     relative_click: Option<bool>,
@@ -422,6 +424,9 @@ impl TouchUi {
                     }
                 }
             }
+            if menu && (3.0..23.0).contains(&p[1]) && (w - 108.0..w - 50.0).contains(&p[0]) {
+                return Some(Action::VirtualMouse);
+            }
             if menu && (3.0..23.0).contains(&p[1]) && (w - 50.0..w - 3.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::Escape));
             }
@@ -484,6 +489,18 @@ impl TouchUi {
             );
         }
         if menu && !self.goy_mode {
+            button(
+                b,
+                a,
+                if self.pointer_off {
+                    "Mouse"
+                } else {
+                    "Mouse ON"
+                },
+                b.width - 108.0,
+                3.0,
+                50.0,
+            );
             button(b, a, "Back", b.width - 53.0, 3.0, 50.0);
         }
         if self.expanded {
@@ -1088,6 +1105,7 @@ impl TouchUi {
                 let r1 = [cx, body_y + 16.0, cw, 40.0];
                 let r2 = [cx, body_y + 62.0, cw, 40.0];
                 let r3 = [cx, body_y + 108.0, cw, 40.0];
+                let r4 = [cx, body_y + 154.0, cw, 40.0];
                 if inside(r1) {
                     return Some(InGameMenuAction::CycleMovementMode);
                 }
@@ -1096,6 +1114,9 @@ impl TouchUi {
                 }
                 if inside(r3) {
                     return Some(InGameMenuAction::ToggleGyro);
+                }
+                if inside(r4) {
+                    return Some(InGameMenuAction::ToggleVirtualMouse);
                 }
             }
             2 => {
@@ -1510,6 +1531,11 @@ impl TouchUi {
                         "Gyroscope Aiming",
                         "Tilt device for fine camera aim",
                         Some(settings.gyroscope),
+                    ),
+                    (
+                        "Mouse Pointer",
+                        "Starts centred; hidden while the mouse is locked",
+                        Some(!self.pointer_off),
                     ),
                 ]
                 .into_iter()
