@@ -3850,11 +3850,20 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     }
     /// Whether a text field has the focus.
     pub fn text_focused(&mut self) -> bool {
+        // The game rules' boxes edit themselves (`focused_field` leaves them out).
+        if let Some(rules) = self.rules.get_mut() {
+            return rules.typing();
+        }
         self.focused_field().is_some()
     }
     /// Whether `(x, y)` (GUI pixels) is on the focused text field, where a tap asks for an
     /// on-screen keyboard. The server screens are forms: any of their fields counts.
     pub fn text_field_at(&mut self, (x, y): (f32, f32), size: (f32, f32)) -> bool {
+        // The game rules' screen: the tap's click moved the focus to the box under it, or
+        // to none.
+        if let Some(rules) = self.rules.get_mut() {
+            return rules.typing();
+        }
         if let Mode::Multiplayer(screen) = &mut self.mode {
             return screen.focused_text().is_some();
         }

@@ -891,7 +891,8 @@ impl Game<'_> {
     }
 
     /// The text field shown now, by name: the chat, a sign, a book, a command block, the anvil's
-    /// name, the creative and recipe searches, the title's forms, the options' searches.
+    /// name, the creative and recipe searches, the title's forms, the options' searches, the
+    /// world options' number boxes.
     fn text_context(&mut self) -> Option<&'static str> {
         if self.screen == Screen::Chat {
             Some("chat")
@@ -911,6 +912,9 @@ impl Game<'_> {
             Some("title")
         } else if self.screen == Screen::Options && self.ui.options.text_focused() {
             Some("options")
+        } else if self.screen == Screen::WorldOptions && self.world_options_typing() {
+            // The open world's game rules and the LAN port: boxes of digits.
+            Some("world")
         } else {
             None
         }
@@ -926,6 +930,8 @@ impl Game<'_> {
         match self.text_context()? {
             "title" => self.title.as_mut().map(|t| t.text_field_at(cursor, size)),
             "options" => Some(self.ui.options.text_field_at(cursor.0, cursor.1)),
+            // The tap's click focused the box under it, or none.
+            "world" => Some(self.world_options_typing()),
             context => self.text_field_rect(context).map(inside),
         }
     }
