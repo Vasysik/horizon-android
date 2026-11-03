@@ -321,6 +321,14 @@ impl Game<'_> {
         if self.pad.touch_ui.virtual_mouse != want {
             self.android_set_virtual_mouse(want);
         }
+        // A pointer that never moved yet starts at the centre of the view, not
+        // at the window corner, so it is immediately usable in menus.
+        if want
+            && self.cursor == (0.0, 0.0)
+            && let Some(b) = self.gui_scale()
+        {
+            self.cursor = (b.width * 0.5, b.height * 0.5);
+        }
     }
 
     fn android_custom_mouse(&mut self, button: MouseButton, down: bool) -> Result<()> {

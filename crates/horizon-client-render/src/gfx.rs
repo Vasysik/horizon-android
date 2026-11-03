@@ -1745,7 +1745,12 @@ impl Renderer {
                 .map(|renderer| renderer.config.present_mode)
                 .filter(|mode| caps.present_modes.contains(mode))
                 .unwrap_or_else(|| {
-                    if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                    // Android GPU drivers can stall inside a mailbox present for
+                    // seconds (seen on Mali), which ANRs the activity before the
+                    // first world frame. Present through the vsync queue there.
+                    if cfg!(not(target_os = "android"))
+                        && caps.present_modes.contains(&wgpu::PresentMode::Mailbox)
+                    {
                         wgpu::PresentMode::Mailbox
                     } else {
                         wgpu::PresentMode::Fifo

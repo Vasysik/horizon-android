@@ -135,6 +135,7 @@ pub(super) enum Action {
     ExportPerformance,
     ExportDiagnostics,
     Account,
+    AddAccount,
     SignIn,
     ElySignIn,
     MicrosoftAccount,
@@ -1114,8 +1115,14 @@ impl Launcher {
                 }
             }
         } else if page == Page::Skins {
-            self.wardrobe
-                .draw(&mut ui, &mut self.targets, self.catalog.scroll);
+            self.wardrobe.draw(
+                &mut ui,
+                &mut self.targets,
+                self.catalog.scroll,
+                content_x,
+                content_w,
+                62.0 + slide_y,
+            );
             self.list_view = Some(self.wardrobe.view);
             self.catalog.scroll = self.catalog.scroll.min(self.wardrobe.view[2]);
         } else if page.is_catalog() {
@@ -3527,10 +3534,27 @@ impl Launcher {
             Some(Action::Account) => {
                 self.catalog.editing = None;
                 crate::platform::hide();
+                self.login.refresh_status();
+                self.login.visible = true;
+                self.login.offline = false;
+                self.login.ely = false;
+                if self.login.signed_in {
+                    // Already signed in: open the selector, with the current
+                    // Microsoft/Ely.by account called out, instead of asking
+                    // the player to choose a provider again.
+                    self.login.providers = false;
+                    self.login.choosing = true;
+                    self.login.account_offset = 0;
+                } else {
+                    self.login.providers = true;
+                    self.login.choosing = false;
+                }
+            }
+            Some(Action::AddAccount) => {
+                self.login.choosing = false;
                 self.login.providers = true;
                 self.login.offline = false;
                 self.login.ely = false;
-                self.login.choosing = false;
                 self.login.visible = true;
             }
             Some(Action::OfflineAccount | Action::MicrosoftAccount) => {
@@ -3565,12 +3589,7 @@ impl Launcher {
                 self.prepared_session = None;
                 self.session_worker = None;
                 self.login.refresh_status();
-                if self.catalog.page == Page::Skins {
-                    self.wardrobe.open(
-                        &self.catalog.config.name,
-                        &self.catalog.config.microsoft_client_id,
-                    );
-                }
+                self.refresh_wardrobe_account();
             }
             Some(Action::SelectOffline) => {
                 self.catalog.config.save(&self.home)?;
@@ -3585,12 +3604,7 @@ impl Launcher {
                 self.session_worker = None;
                 self.login.choosing = false;
                 self.login.refresh_status();
-                if self.catalog.page == Page::Skins {
-                    self.wardrobe.open(
-                        &self.catalog.config.name,
-                        &self.catalog.config.microsoft_client_id,
-                    );
-                }
+                self.refresh_wardrobe_account();
             }
             Some(Action::ElySignIn) => {
                 self.login.providers = false;

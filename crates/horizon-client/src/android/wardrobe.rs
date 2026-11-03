@@ -13,6 +13,7 @@ use crate::{
 };
 use horizon_client::{
     hud::rgba,
+    skin_head::{self, HeadSkin},
     ui_theme::{Face, Ui, color},
 };
 use std::{
@@ -40,6 +41,10 @@ pub(super) struct Wardrobe {
     fingers: std::collections::BTreeMap<u64, [f32; 2]>,
     note: String,
     damaged: bool,
+    /// The account whose appearance is shown, used to key the head cache.
+    name: String,
+    /// Decoded head of the selected appearance, drawn by the launcher header.
+    head: Option<HeadSkin>,
 }
 impl Wardrobe {
     pub fn new(home: &Path) -> Self {
@@ -66,12 +71,18 @@ impl Wardrobe {
             fingers: Default::default(),
             note,
             damaged,
+            name: String::new(),
+            head: None,
         };
         value.preview();
         value
     }
     pub fn open(&mut self, offline: &str, client_id: &str) {
         let account = Accounts::load().selected().cloned();
+        let name = account
+            .as_ref()
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| offline.to_owned());
         let key = account
             .as_ref()
             .map(|a| a.key())
@@ -80,9 +91,16 @@ impl Wardrobe {
             // A previous provider's in-flight result must not delay this profile's cloud load.
             self.worker = None;
             self.fingers.clear();
-            self.key = key;
+            self.key = key.clone();
             self.provider = account.map(|a| a.provider);
             self.cache = Default::default();
+            // The last head is on disk: show it on the first frame, then let
+            // the local selection or cloud sync replace it.
+            self.head = self.read_head(&key);
+        }
+        self.name = name;
+        if let Some(head) = self.head {
+            skin_head::remember(&self.name, head);
         }
         self.reload();
         if self.provider.is_some() && self.worker.is_none() {
@@ -297,6 +315,47 @@ impl Wardrobe {
         };
         Library::load(&self.root)?.prepare_game(&self.root, &key, game, cloud)
     }
+    fn head_path(&self, key: &str) -> PathBuf {
+        let safe: String = key
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .take(96)
+            .collect();
+        self.root.join("heads").join(format!("{safe}.json"))
+    }
+
+    fn read_head(&self, key: &str) -> Option<HeadSkin> {
+        let bytes = std::fs::read(self.head_path(key)).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// Keep the header head in memory and on disk, so the next launch paints
+    /// the real face on its first frame without opening Skins first.
+    fn set_head(&mut self, head: Option<HeadSkin>) {
+        if self.head == head {
+            return;
+        }
+        self.head = head;
+        let Some(head) = head else {
+            return;
+        };
+        if !self.name.is_empty() {
+            skin_head::remember(&self.name, head);
+        }
+        if self.key.is_empty() {
+            return;
+        }
+        let path = self.head_path(&self.key);
+        if let Some(dir) = path.parent()
+            && std::fs::create_dir_all(dir).is_err()
+        {
+            return;
+        }
+        if let Ok(bytes) = serde_json::to_vec(&head) {
+            let _ = std::fs::write(path, bytes);
+        }
+    }
+
     pub fn preview(&mut self) {
         let selection = self
             .library
@@ -308,15 +367,32 @@ impl Wardrobe {
             id.as_deref()
                 .and_then(|id| Library::image(&self.root, id).ok())
         };
-        let skin = path(&selection.skin)
+        let chosen = path(&selection.skin)
             .or_else(|| self.cache.skin.clone())
             .and_then(|p| skins::read_file(&p).ok())
-            .and_then(|b| skins::read_skin(&b).ok())
+            .and_then(|b| skins::read_skin(&b).ok());
+        let skin = chosen
+            .clone()
             .or_else(|| {
                 let bytes = skins::read_file(&self.default_skin).ok()?;
                 skins::read_skin(&bytes).ok()
             })
             .unwrap_or_else(preview::mannequin);
+        // A real selection owns the head; with none, keep the cached cloud
+        // head until the cloud fetch answers, rather than flashing Steve.
+        if let Some(image) = &chosen {
+            self.set_head(skin_head::from_rgba(
+                image.width(),
+                image.height(),
+                image.as_raw(),
+            ));
+        } else if self.head.is_none() {
+            self.set_head(skin_head::from_rgba(
+                skin.width(),
+                skin.height(),
+                skin.as_raw(),
+            ));
+        }
         let cape = if selection.hide_cape {
             None
         } else {
@@ -386,51 +462,82 @@ impl Wardrobe {
         self.preview();
         true
     }
-    pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>, scroll: f32) {
-        let width = ui.w;
-        let compact = width < 700.0;
-        let top = 160.0;
-        ui.text(Face::Medium, 26.0, 32.0, top, color::TEXT, "Skins & Capes");
-        ui.text(
+    pub fn draw(
+        &mut self,
+        ui: &mut Ui,
+        targets: &mut Vec<([f32; 4], Action)>,
+        scroll: f32,
+        x: f32,
+        w: f32,
+        top: f32,
+    ) {
+        let h = ui.h;
+        let wide = w >= 600.0;
+        ui.text(Face::SemiBold, 19.0, x, top, color::TEXT, "Skins & Capes");
+        let subtitle = ui.fit_text(
             Face::Regular,
-            13.0,
-            32.0,
-            top + 36.0,
-            color::MUTED,
+            12.0,
             "Local choices change your view. Cloud buttons update your account.",
+            w,
         );
-        let preview_width = if compact {
-            (width - 64.0).min(260.0)
+        ui.text(Face::Regular, 12.0, x, top + 27.0, color::MUTED, &subtitle);
+
+        // Keep the tabs at the top of the content column, so they never sit in
+        // a second layout while the title is drawn under the navigation rail.
+        let tabs = top + 50.0;
+        let tw = (w - 8.0) * 0.5;
+        button(
+            ui,
+            targets,
+            [x, tabs, tw, 34.0],
+            "Skins",
+            Action::WardrobeKind(false),
+            !self.capes,
+        );
+        button(
+            ui,
+            targets,
+            [x + tw + 8.0, tabs, tw, 34.0],
+            "Capes",
+            Action::WardrobeKind(true),
+            self.capes,
+        );
+
+        let preview_y = tabs + 46.0;
+        let preview_w = if wide {
+            250.0_f32.min(w * 0.42)
         } else {
-            300.0
+            (w - 40.0).min(300.0)
         };
-        let preview_height = if compact {
-            (ui.h - 560.0).clamp(100.0, 190.0)
+        let preview_h = if wide {
+            (h - preview_y - 120.0).clamp(150.0, 260.0)
         } else {
-            300.0
+            (h * 0.28).clamp(120.0, 180.0)
         };
-        let px = if compact {
-            (width - preview_width) * 0.5
-        } else {
-            32.0
-        };
-        let py = top + 66.0;
-        self.rect = [px, py, preview_width, preview_height];
-        ui.rounded(px, py, preview_width, preview_height, 4.0, color::RAISED);
-        let scale = (preview_width / 160.0).min(preview_height / 200.0);
-        let ox = px + (preview_width - 160.0 * scale) * 0.5;
-        let oy = py + (preview_height - 200.0 * scale) * 0.5;
-        for ([x, y, w, h], color) in &self.bitmap {
+        let px = if wide { x } else { x + (w - preview_w) * 0.5 };
+        self.rect = [px, preview_y, preview_w, preview_h];
+        ui.rounded(px, preview_y, preview_w, preview_h, 16.0, color::RAISED);
+        let scale = (preview_w / 160.0).min(preview_h / 200.0);
+        let ox = px + (preview_w - 160.0 * scale) * 0.5;
+        let oy = preview_y + (preview_h - 200.0 * scale) * 0.5;
+        for ([bx, by, bw, bh], color) in &self.bitmap {
             ui.rounded(
-                ox + x * scale,
-                oy + y * scale,
-                w * scale,
-                h * scale,
+                ox + bx * scale,
+                oy + by * scale,
+                bw * scale,
+                bh * scale,
                 0.0,
                 *color,
             );
         }
-        let controls = py + preview_height + 6.0;
+
+        // Rotate/zoom sit on the preview instead of below it, so a short
+        // landscape screen still leaves room for the gallery list.
+        let control_y = preview_y + preview_h - 38.0;
+        let btn_w = 32.0;
+        let gap = 6.0;
+        let cluster = 4.0 * btn_w + 3.0 * gap;
+        let cx = px + (preview_w - cluster) * 0.5;
         for (i, (label, action)) in [
             ("<", Action::WardrobeRotate(-1)),
             (">", Action::WardrobeRotate(1)),
@@ -443,22 +550,24 @@ impl Wardrobe {
             button(
                 ui,
                 targets,
-                [px + i as f32 * 44.0, controls, 38.0, 30.0],
+                [cx + i as f32 * (btn_w + gap), control_y, btn_w, 28.0],
                 label,
                 action,
                 false,
             );
         }
+
         let model = self
             .library
             .selections
             .get(&self.key)
             .map(|s| s.model)
             .unwrap_or_default();
+        let model_y = preview_y + preview_h + 8.0;
         button(
             ui,
             targets,
-            [px, controls + 38.0, preview_width, 32.0],
+            [px, model_y, preview_w, 32.0],
             if model == Model::Slim {
                 "Alex / Slim"
             } else {
@@ -467,39 +576,22 @@ impl Wardrobe {
             Action::WardrobeModel,
             false,
         );
-        let lx = if compact { 32.0 } else { 370.0 };
-        let lw = if compact {
-            width - 64.0
-        } else {
-            width - lx - 32.0
-        };
-        let listtop = if compact { controls + 82.0 } else { top + 66.0 };
+
+        let lx = if wide { x + preview_w + 18.0 } else { x };
+        let lw = if wide { w - preview_w - 18.0 } else { w };
+        let listtop = if wide { preview_y } else { model_y + 42.0 };
         button(
             ui,
             targets,
-            [lx, listtop, (lw - 8.0) * 0.5, 32.0],
-            "Skins",
-            Action::WardrobeKind(false),
-            !self.capes,
-        );
-        button(
-            ui,
-            targets,
-            [lx + (lw + 8.0) * 0.5, listtop, (lw - 8.0) * 0.5, 32.0],
-            "Capes",
-            Action::WardrobeKind(true),
-            self.capes,
-        );
-        button(
-            ui,
-            targets,
-            [lx, listtop + 40.0, lw, 34.0],
+            [lx, listtop, lw, 34.0],
             "Import PNG to local gallery",
             Action::WardrobeImport,
             true,
         );
-        let mut row = listtop + 84.0 - scroll;
-        let bottom = ui.h - 80.0;
+
+        let list_start = listtop + 42.0;
+        let bottom = h - 52.0;
+        let mut row = list_start - scroll;
         let selection = self
             .library
             .selections
@@ -513,7 +605,7 @@ impl Wardrobe {
         };
         if self.capes && self.provider.is_some() {
             for (index, cape) in self.cache.snapshot.capes.iter().enumerate() {
-                if row >= listtop + 80.0 && row + 32.0 <= bottom {
+                if row >= list_start && row + 32.0 <= bottom {
                     let label = ui.fit_text(
                         Face::Medium,
                         14.0,
@@ -547,7 +639,7 @@ impl Wardrobe {
             .enumerate()
             .filter(|(_, e)| e.kind == self.kind())
         {
-            if row >= listtop + 80.0 && row + 32.0 <= bottom {
+            if row >= list_start && row + 32.0 <= bottom {
                 let label = ui.fit_text(
                     Face::Medium,
                     14.0,
@@ -574,7 +666,7 @@ impl Wardrobe {
             row += 38.0;
         }
         if self.provider.is_none() {
-            if row >= listtop + 80.0 && row + 32.0 <= bottom {
+            if row >= list_start && row + 32.0 <= bottom {
                 button(
                     ui,
                     targets,
@@ -591,13 +683,13 @@ impl Wardrobe {
                 ("Use current cloud appearance", Action::WardrobeUseCloud),
                 ("Refresh cloud profile", Action::WardrobeCloud),
             ] {
-                if row >= listtop + 80.0 && row + 32.0 <= bottom {
+                if row >= list_start && row + 32.0 <= bottom {
                     button(ui, targets, [lx, row, lw, 32.0], label, action, false);
                 }
                 row += 38.0;
             }
             if !self.capes {
-                if row >= listtop + 80.0 && row + 32.0 <= bottom {
+                if row >= list_start && row + 32.0 <= bottom {
                     button(
                         ui,
                         targets,
@@ -612,10 +704,9 @@ impl Wardrobe {
                     );
                 }
                 row += 38.0;
-            } else {
             }
         }
-        if self.capes && row >= listtop + 80.0 && row + 32.0 <= bottom {
+        if self.capes && row >= list_start && row + 32.0 <= bottom {
             button(
                 ui,
                 targets,
@@ -625,12 +716,9 @@ impl Wardrobe {
                 false,
             );
         }
-        self.view = [
-            listtop + 80.0,
-            bottom,
-            (row + scroll + 38.0 - bottom).max(0.0),
-        ];
-        let note = ui.fit_text(Face::Regular, 12.0, &self.note, width - 64.0);
-        ui.text(Face::Regular, 12.0, 32.0, ui.h - 60.0, color::MUTED, &note);
+        row += 38.0;
+        self.view = [list_start, bottom, (row + scroll + 38.0 - bottom).max(0.0)];
+        let note = ui.fit_text(Face::Regular, 11.5, &self.note, w);
+        ui.text(Face::Regular, 11.5, x, h - 36.0, color::MUTED, &note);
     }
 }

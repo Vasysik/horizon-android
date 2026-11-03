@@ -75,11 +75,12 @@ impl Launcher {
     pub(super) fn refresh_wardrobe_account(&mut self) {
         if self.catalog.page == Page::Skins {
             self.catalog.scroll = 0.0;
-            self.wardrobe.open(
-                &self.catalog.config.name,
-                &self.catalog.config.microsoft_client_id,
-            );
         }
+        // The header shows this appearance even when another page is open.
+        self.wardrobe.open(
+            &self.catalog.config.name,
+            &self.catalog.config.microsoft_client_id,
+        );
     }
 
     fn edit_text(&mut self, output: horizon_client::osk::Output) {
@@ -121,11 +122,11 @@ impl Launcher {
         }
         horizon_client::android_runtime::graphics_startup::configure(home.clone());
         if horizon_client::android_runtime::graphics_startup::recover(&home) {
-            catalog.config.renderer = crate::catalog::RendererMode::OpenGl;
+            catalog.config.renderer = crate::catalog::RendererMode::VulkanCompatibility;
             if let Err(error) = catalog.config.save(&home) {
                 log::warn!("Could not save graphics recovery choice: {error}");
             }
-            catalog.status = "Previous Vulkan startup was interrupted. Using OpenGL ES recovery; you can change Rendering mode in Settings.".into();
+            catalog.status = "Previous Vulkan startup was interrupted. Using Vulkan compatibility; you can change Rendering mode in Settings.".into();
         }
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
@@ -184,8 +185,12 @@ impl Launcher {
         } else {
             None
         };
+        // Load the selected wardrobe and its last head before the first draw:
+        // the account pill must have the real face instantly, not after a page visit.
+        let mut wardrobe = wardrobe::Wardrobe::new(&home);
+        wardrobe.open(&catalog.config.name, &catalog.config.microsoft_client_id);
         Self {
-            wardrobe: wardrobe::Wardrobe::new(&home),
+            wardrobe,
             home,
             controller_edges: Default::default(),
             controller_repeat: None,

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 /// The three 8x8 faces of a head, one `0xRRGGBB` pixel each, plus the second
 /// skin layer over the face (`0` where the skin has no hat).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HeadSkin {
     pub front: [[u32; 8]; 8],
     pub top: [[u32; 8]; 8],
@@ -24,6 +24,18 @@ static CACHE: OnceLock<Mutex<HashMap<String, Option<HeadSkin>>>> = OnceLock::new
 
 fn cache() -> &'static Mutex<HashMap<String, Option<HeadSkin>>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Put an already decoded head in the session cache, so the launcher can draw
+/// the account's real skin on its first frame instead of waiting for a lookup.
+pub fn remember(player: &str, skin: HeadSkin) {
+    let name = player.trim();
+    if name.is_empty() || name.len() > 16 || name.contains(char::is_whitespace) {
+        return;
+    }
+    if let Ok(mut map) = cache().lock() {
+        map.insert(name.to_owned(), Some(skin));
+    }
 }
 
 /// The real head for `player`: `None` while the request is in flight and for
@@ -131,7 +143,14 @@ fn pixel(w: u32, h: u32, rgba: &[u8], x: u32, y: u32) -> Option<(u32, u8)> {
     Some((rgb, rgba[i + 3]))
 }
 
-fn from_rgba(w: u32, h: u32, rgba: &[u8]) -> Option<HeadSkin> {
+/// Decode a skin PNG into its head faces. Used by the wardrobe, whose selected
+/// image is already on disk and needs no profile lookup.
+pub fn from_png(bytes: &[u8]) -> Option<HeadSkin> {
+    let (w, h, rgba) = crate::hud::decode_bytes(bytes).ok()?;
+    from_rgba(w, h, &rgba)
+}
+
+pub fn from_rgba(w: u32, h: u32, rgba: &[u8]) -> Option<HeadSkin> {
     // 64x32 is the legacy layout, which has no hat layer; modern skins are
     // 64x64. Anything smaller is not a Minecraft skin.
     if w < 64 || h < 32 || rgba.len() < (w as usize * h as usize * 4) {

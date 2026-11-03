@@ -153,7 +153,7 @@ impl Config {
             .unwrap_or_default();
         let mut config: Self = serde_json::from_value(value.clone()).unwrap_or_default();
         if cfg!(target_pointer_width = "32") && value.get("renderer").is_none() {
-            config.renderer = RendererMode::OpenGl;
+            config.renderer = RendererMode::VulkanCompatibility;
         }
         // Ignore saved app registrations while this dev build uses the fixed ID.
         config.microsoft_client_id =

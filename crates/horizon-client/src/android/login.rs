@@ -65,10 +65,23 @@ impl Login {
                 .is_some_and(|s| serde_json::from_str::<Secrets>(&s).is_ok())
         });
     }
+    fn provider_name(&self) -> &'static str {
+        self.profile
+            .as_deref()
+            .and_then(|name| self.saved_accounts.iter().find(|a| a.name == name))
+            .map(|a| match a.provider {
+                account::Provider::Ely => "Ely.by",
+                account::Provider::Microsoft => "Microsoft",
+            })
+            .unwrap_or("Microsoft")
+    }
+
     pub fn status(&self, offline_name: &str) -> String {
         match (&self.profile, self.signed_in) {
-            (Some(name), true) => format!("Signed in: {name}"),
-            (Some(name), false) => format!("Sign in required: {name}"),
+            (Some(name), true) => {
+                format!("Already signed in as {name} · {}", self.provider_name())
+            }
+            (Some(name), false) => format!("Sign-in required for {name}"),
             _ if self.pending() => "Signing in...".into(),
             _ if !offline_name.trim().is_empty() => format!("Offline: {offline_name}"),
             _ => "Offline / Sign in".into(),
@@ -290,16 +303,40 @@ impl Login {
         ui.rounded(x, y, w, h, 26.0, color::hex(0x14111F, 255));
         ui.border(x, y, w, h, 26.0, BORDER);
 
-        let (title, subtitle) = if self.providers {
-            ("Accounts", "Choose how you want to play")
+        let (title, subtitle): (&str, String) = if self.providers {
+            ("Accounts", "Choose how you want to play".into())
         } else if self.choosing {
-            ("Saved accounts", "Switch without signing in again")
+            let line = if let Some(name) = &self.profile {
+                if self.signed_in {
+                    format!("Signed in as {name} with {}", self.provider_name())
+                } else {
+                    format!("Sign in required for {name}")
+                }
+            } else {
+                "Choose an account or play offline".into()
+            };
+            ("Your accounts", line)
         } else if self.ely {
-            ("Ely.by account", "Credentials go only to authserver.ely.by")
+            (
+                "Ely.by account",
+                "Credentials go only to authserver.ely.by".into(),
+            )
         } else if self.offline {
-            ("Offline profile", "A local name for single-player and LAN")
+            (
+                "Offline profile",
+                "A local name for single-player and LAN".into(),
+            )
         } else {
-            ("Microsoft account", "Xbox and Minecraft profile")
+            let line = if let Some(name) = &self.profile {
+                if self.signed_in {
+                    format!("Already signed in as {name}")
+                } else {
+                    format!("Sign in to use {name}")
+                }
+            } else {
+                "Xbox and Minecraft profile".into()
+            };
+            ("Microsoft account", line)
         };
         if !self.providers {
             let back = [x + 16.0, y + 16.0, 38.0, 38.0];
@@ -316,7 +353,7 @@ impl Login {
         let fitted = ui.fit_text(
             Face::Regular,
             12.5,
-            subtitle,
+            &subtitle,
             (x + w - 70.0 - text_x).max(70.0),
         );
         ui.text(Face::Regular, 12.5, text_x, y + 42.0, MUTED, &fitted);
@@ -420,30 +457,41 @@ impl Login {
                     Action::SelectAccount(index),
                 );
             }
-            let third = (w - 56.0) / 3.0;
+            let nav = 36.0;
             button(
                 ui,
                 targets,
-                [x + 20.0, footer_y, third, 38.0],
-                "Prev",
+                [x + 20.0, footer_y, nav, 38.0],
+                "<",
                 Action::SavedPage(false),
                 false,
             );
             button(
                 ui,
                 targets,
-                [x + 28.0 + third, footer_y, third, 38.0],
-                "Next",
+                [x + 20.0 + nav + 6.0, footer_y, nav, 38.0],
+                ">",
                 Action::SavedPage(true),
+                false,
+            );
+            let after = x + 20.0 + 2.0 * (nav + 6.0) + 8.0;
+            let rest = x + w - 20.0 - after;
+            let add_w = (rest - 8.0) * 0.5;
+            button(
+                ui,
+                targets,
+                [after, footer_y, add_w, 38.0],
+                "Add account",
+                Action::AddAccount,
                 false,
             );
             button(
                 ui,
                 targets,
-                [x + 36.0 + third * 2.0, footer_y, third, 38.0],
+                [after + add_w + 8.0, footer_y, rest - add_w - 8.0, 38.0],
                 "Done",
                 Action::CloseLogin,
-                false,
+                true,
             );
             return;
         }

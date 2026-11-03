@@ -150,32 +150,50 @@ fn mouse_button_rects(w: f32, h: f32) -> [([f32; 4], bool); 2] {
 
 /// Shared outlined pointer for virtual mouse and controller menus.
 pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
-    // The desktop arrow: straight left edge, 45 degree right edge, classic
-    // notched tail, hotspot at the tip. Every row is a black edge plus a white
-    // span, and the tail is three runs per step, so the whole cursor is a few
-    // dozen quads and costs nothing to draw each frame. It scales with the HUD
-    // so it stays a thumb-sized target on high-DPI phones.
-    const OUTLINE: u32 = 0x000000EE;
+    // The classic Windows arrow, as a 12x16 pixel mask: black outline, white
+    // fill, straight left edge and a short notched tail. Drawing it from the
+    // mask keeps the silhouette exact instead of approximating the diagonals
+    // with overlapping runs (which produced a long, blocky tail).
+    const OUTLINE: u32 = 0x000000F2;
     const FILL: u32 = 0xFFFFFFFF;
-    let s = (batch.height / 240.0).clamp(1.0, 2.0).round();
+    const MASK: [&str; 16] = [
+        "#...........",
+        "##..........",
+        "#W#.........",
+        "#WW#........",
+        "#WWW#.......",
+        "#WWWW#......",
+        "#WWWWW#.....",
+        "#WWWWWW#....",
+        "#WWWWWWW#...",
+        "#WWWWWWWW#..",
+        "#WWWWW#####.",
+        "#WWWW#......",
+        "#WWW#.......",
+        "#WW#........",
+        "#W#.........",
+        "##..........",
+    ];
+    // Keep the arrow comfortable on a high-DPI phone without turning it into
+    // a chunky sprite: 2x on 720p, 3x on 1080p.
+    let s = (batch.height / 420.0).clamp(1.5, 3.0).round();
     let (x, y) = (cursor.0.round(), cursor.1.round());
-    for row in 0..11u32 {
-        let top = y + row as f32 * s;
-        let right = (row + 1) as f32;
-        batch.fill(atlas, x, top, s, s, OUTLINE);
-        batch.fill(atlas, x + (right - 1.0) * s, top, s, s, OUTLINE);
-        if row >= 2 {
-            batch.fill(atlas, x + s, top, (right - 2.0) * s, s, FILL);
+    for (row, line) in MASK.iter().enumerate() {
+        for (col, ch) in line.chars().enumerate() {
+            let color = match ch {
+                '#' => OUTLINE,
+                'W' => FILL,
+                _ => continue,
+            };
+            batch.fill(
+                atlas,
+                x + col as f32 * s,
+                y + row as f32 * s,
+                s + 0.05,
+                s + 0.05,
+                color,
+            );
         }
-    }
-    // Bottom edge of the head, where the tail begins.
-    batch.fill(atlas, x, y + 11.0 * s, 10.0 * s, s, OUTLINE);
-    for step in 0..8u32 {
-        let tx = x + 4.0 * s + step as f32 * 0.62 * s;
-        let ty = y + (11.0 + step as f32) * s;
-        batch.fill(atlas, tx, ty, s, s, OUTLINE);
-        batch.fill(atlas, tx + 0.62 * s, ty, s * 0.75, s, FILL);
-        batch.fill(atlas, tx + 1.62 * s, ty, s * 0.75, s, OUTLINE);
     }
 }
 impl TouchUi {

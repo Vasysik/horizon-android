@@ -1180,14 +1180,15 @@ impl<'a> Ui<'a> {
         focused: bool,
     ) {
         let accent = color::hex(0x9A7BFF, 255);
+        let radius = (h * 0.24).clamp(10.0, 14.0);
         self.rounded(
             x,
             y,
             w,
             h,
-            10.0,
+            radius,
             if focused {
-                color::hex(0x241D3D, 255)
+                color::hex(0x221C36, 255)
             } else {
                 color::hex(0x171326, 255)
             },
@@ -1197,49 +1198,52 @@ impl<'a> Ui<'a> {
             y,
             w,
             h,
-            10.0,
-            if focused { 1.8 } else { 1.0 },
+            radius,
+            if focused { 1.6 } else { 1.0 },
             if focused {
                 accent
             } else {
-                color::hex(0x3A3454, 255)
+                color::hex(0x373050, 255)
             },
         );
+        let pad = (w * 0.035).clamp(10.0, 14.0);
         self.text(
             Face::SemiBold,
-            8.2,
-            x + 10.0,
-            y + 5.0,
+            8.6,
+            x + pad,
+            y + 6.0,
             if focused {
                 accent
             } else {
-                color::hex(0x8D85AD, 255)
+                color::hex(0x9A93B5, 255)
             },
             label,
         );
         let empty = value.is_empty();
         let shown = if empty { placeholder } else { value };
+        let size = (h * 0.29).clamp(12.5, 15.0);
+        let baseline = y + h - size * 1.5 - 2.0;
         let fitted = self.fit_text(
             Face::Medium,
-            11.0,
+            size,
             shown,
-            (w - 20.0 - if focused { 3.0 } else { 0.0 }).max(8.0),
+            (w - pad * 2.0 - if focused { 3.0 } else { 0.0 }).max(8.0),
         );
         let tw = self.text(
             Face::Medium,
-            11.0,
-            x + 10.0,
-            y + h - 20.0,
+            size,
+            x + pad,
+            baseline,
             if empty {
-                color::hex(0x6E6889, 255)
+                color::hex(0x857E9F, 255)
             } else {
-                color::hex(0xF3EFFF, 255)
+                color::hex(0xF6F2FF, 255)
             },
             &fitted,
         );
         if focused {
-            let cx = (x + 10.0 + tw + 1.5).min(x + w - 7.0);
-            self.fill(cx, y + h - 20.5, 1.6, 14.0, accent);
+            let cx = (x + pad + tw + 1.5).min(x + w - pad);
+            self.fill(cx, baseline + 1.5, 1.8, size * 1.15, accent);
         }
     }
 
