@@ -372,7 +372,15 @@ impl Game<'_> {
             | Some(Push::Update(f, cursor, anchor, generation)) => {
                 let show = matches!(push, Some(Push::Show(..)));
                 let max = f.max.min(i32::MAX as usize) as i32;
-                crate::android::text_mirror(show, &f.text, *cursor, *anchor, max, f.flags, *generation);
+                crate::android::text_mirror(
+                    show,
+                    &f.text,
+                    *cursor,
+                    *anchor,
+                    max,
+                    f.flags,
+                    *generation,
+                );
             }
             Some(Push::Hide) => crate::android::hide_text_mirror(),
             None => {}

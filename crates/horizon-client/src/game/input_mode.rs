@@ -1,6 +1,6 @@
 //! What the player plays with (horizon_client::input_mode): the touch controls, the chat's bar and
 //! the on-screen keyboard show while it is the touch screen. On Android the mouse's events come
-//! here from the input hook (android_lib.rs) and go on as the window events a computer's mouse
+//! here from the input hook (android.rs) and go on as the window events a computer's mouse
 //! makes; a physical keyboard's keys and a controller (game/pad.rs) also count as the input used.
 use super::Game;
 use horizon_client::input_mode::InputMode;

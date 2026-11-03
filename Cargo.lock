@@ -1286,6 +1286,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-android"
+version = "0.1.0"
+dependencies = [
+ "horizon-client",
+ "jni 0.21.1",
+ "winit",
+]
+
+[[package]]
 name = "horizon-anticheat"
 version = "0.1.0"
 dependencies = [
@@ -1366,6 +1375,7 @@ dependencies = [
  "horizon-theme",
  "horizon-threads",
  "horizon-world",
+ "jni 0.21.1",
  "log",
  "miniz_oxide 0.8.9",
  "naga",

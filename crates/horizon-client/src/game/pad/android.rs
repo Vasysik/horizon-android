@@ -1,4 +1,4 @@
-//! Android's controllers (Starling's): the pads android_lib.rs keeps from the system's key and
+//! Android's controllers (Starling's): the pads android.rs keeps from the system's key and
 //! motion events (horizon_client::gamepad::android), their makers for the button pictures, and
 //! their motors through the activity (StarlingActivity.vibratePad). The desktop's are gilrs'
 //! (pad/hardware.rs).

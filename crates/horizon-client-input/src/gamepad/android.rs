@@ -1,6 +1,6 @@
 //! Android's controllers (Starling's): the key codes and motion axes Android gives a pad's
 //! events, as the [`PadState`] gilrs gives on desktop. horizon-android takes the events from
-//! winit before it makes touches of them (android_lib.rs) and feeds them here; the game reads
+//! winit before it makes touches of them (android.rs) and feeds them here; the game reads
 //! the active pad's state each poll (game/pad/android.rs).
 use super::{Button, PadState, length};
 

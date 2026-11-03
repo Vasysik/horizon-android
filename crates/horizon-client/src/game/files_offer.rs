@@ -1,6 +1,6 @@
 //! Android: the offer, over the title screen, to keep the game folder in shared storage (a
 //! Starling folder any file manager opens). Android's "all files" setting does the allowing, in a
-//! task of its own; once allowed, a restart moves the player's files (android_lib.rs
+//! task of its own; once allowed, a restart moves the player's files (android.rs
 //! `game_folder`). Turned down, it comes back from the folder buttons (Open Pack Folder...).
 use super::Game;
 use horizon_client::{
