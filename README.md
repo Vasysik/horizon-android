@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="horizdroid-logo.svg" alt="HorizDroid logo" width="220">
+  <img src="horizdroid-logo.jpg" alt="HorizDroid logo" width="220">
 </div>
 
 # HorizDroid
