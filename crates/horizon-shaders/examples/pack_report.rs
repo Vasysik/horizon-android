@@ -209,6 +209,13 @@ fn report(name: &str, path: &Path, opts: &Options) {
         feature_notes.len(),
         start.elapsed().as_millis()
     );
+    let ranked =
+        horizon_shaders::Values::profiles_by_cost(&shaders, &horizon_shaders::options(&pack));
+    let ranked: Vec<String> = ranked.iter().map(|(n, c)| format!("{n} {c:.1}")).collect();
+    println!(
+        "   profiles, lightest first (what Auto reads): {}",
+        ranked.join(", ")
+    );
     let mut folders: Vec<(String, Vec<i32>)> = Vec::new();
     for &d in &opts.dims {
         let f = dimension_folder(&pack, d);

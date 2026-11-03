@@ -46,7 +46,7 @@ pub(super) fn read_shader_options(
     let text = pack.read_text("shaders.properties").unwrap_or_default();
     let properties = Properties::parse(&text, &horizon_shaders::with_options(&pack, macros));
     let screens = horizon_shaders::Screens::parse(&properties, &options);
-    let running = picked_values(&properties, name, profile, &BTreeMap::new());
+    let running = picked_values(&properties, &options, name, profile, &BTreeMap::new());
     for option in options.values_mut() {
         if let Some(value) = running.declared(&option.name, &option.default) {
             option.default = value;
@@ -162,12 +162,15 @@ pub(super) struct Making {
 }
 
 /// What the Auto profile does to a pack on this device. Packs written for a PC spend most of a
-/// phone's frame on their pixels, water and shadow map, so it takes the pack's own light profile
-/// (Complementary on a Snapdragon 8 Gen 2 at distance 10: 46 ms of GPU on LOW, 28 ms on VERYLOW),
-/// limits the shadow and the resolution, and has terrain draw its depth first.
+/// phone's frame on their pixels, water and shadow map, so it takes one of the pack's own light
+/// profiles (Complementary on a Snapdragon 8 Gen 2 at distance 10: 46 ms of GPU on LOW, 28 ms on
+/// VERYLOW), limits the shadow and the resolution, and has terrain draw its depth first. Which
+/// profile is lightest is read from what the profiles set (`Values::profiles_by_cost`), not from
+/// their names, so any pack that has profiles works.
 struct AutoProfile {
-    /// The profiles to look for, the first the pack has wins (`Values::first_profile`).
-    profiles: &'static [&'static str],
+    /// Place among the pack's profiles, lightest first. A strong phone skips the very lightest
+    /// when the pack has three or more (a profile that turns everything off looks like none).
+    rank: usize,
     shadow_resolution: f64,
     shadow_distance: f64,
 }
@@ -177,17 +180,17 @@ impl AutoProfile {
         use horizon_client::system_stats::Tier;
         match Tier::here().unwrap_or(Tier::High) {
             Tier::High => Self {
-                profiles: &["verylow", "low", "potato"],
+                rank: 1,
                 shadow_resolution: 1024.0,
                 shadow_distance: 64.0,
             },
             Tier::Mid => Self {
-                profiles: &["potato", "verylow", "shadowlesslow", "low"],
+                rank: 0,
                 shadow_resolution: 1024.0,
                 shadow_distance: 64.0,
             },
             Tier::Low => Self {
-                profiles: &["potato", "verylow", "shadowlesslow", "low"],
+                rank: 0,
                 shadow_resolution: 512.0,
                 shadow_distance: 64.0,
             },
@@ -200,6 +203,7 @@ impl AutoProfile {
 /// values over it (`shadowDistance=64.0 SHADOW_QUALITY=0 !BLOOM`).
 fn picked_values(
     properties: &Properties,
+    options: &BTreeMap<String, horizon_shaders::PackOption>,
     name: &str,
     profile: &str,
     chosen: &BTreeMap<String, String>,
@@ -207,12 +211,21 @@ fn picked_values(
     let mut values = horizon_shaders::Values::default();
     if profile == AUTO_PROFILE {
         let auto = AutoProfile::here();
-        match horizon_shaders::Values::first_profile(properties, auto.profiles) {
-            Some(found) => {
-                log::info!("shader pack {name}: Auto picks profile `{found}`");
-                values = horizon_shaders::Values::profile(properties, &found).unwrap_or_default();
+        let ranked = horizon_shaders::Values::profiles_by_cost(properties, options);
+        let at = if ranked.len() > 2 { auto.rank } else { 0 };
+        match ranked.get(at) {
+            Some((found, cost)) => {
+                log::info!(
+                    "shader pack {name}: Auto picks profile `{found}` (cost {cost:.1}) of {}",
+                    ranked
+                        .iter()
+                        .map(|(n, c)| format!("{n} {c:.1}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                values = horizon_shaders::Values::profile(properties, found).unwrap_or_default();
             }
-            None => log::info!("shader pack {name}: Auto finds no light profile"),
+            None => log::info!("shader pack {name}: Auto finds no profile to start from"),
         }
         for (option, limit) in [
             ("shadowMapResolution", auto.shadow_resolution),
@@ -239,7 +252,6 @@ fn picked_values(
     }
     values
 }
-
 impl Game<'_> {
     /// Loads the pack for the current dimension when it changed, and returns this frame's
     /// inputs to the pack's uniforms.
@@ -322,7 +334,13 @@ impl Game<'_> {
                             );
                         }
                         let chosen = chosen_shader_options(name);
-                        let values = picked_values(&properties, name, &profile, &chosen);
+                        let values = picked_values(
+                            &properties,
+                            &horizon_shaders::options(&pack),
+                            name,
+                            &profile,
+                            &chosen,
+                        );
                         if !values.is_empty() {
                             pack.set_values(values);
                         }

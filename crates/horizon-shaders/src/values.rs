@@ -48,6 +48,41 @@ impl Values {
         })
     }
 
+    /// The pack's profiles, lightest first, each with its cost. A profile's cost is how far its
+    /// values take the pack's options from their defaults toward more work: a switch turned on
+    /// costs 1 and one turned off saves 1; a valued option costs its place between the lowest
+    /// and highest value it may take, relative to the default's (a bigger shadow map, more
+    /// samples). Nothing here knows a pack or a profile's name; a profile that sets none of
+    /// the pack's options has no cost to compare and is left out.
+    pub fn profiles_by_cost(
+        properties: &Properties,
+        options: &BTreeMap<String, crate::PackOption>,
+    ) -> Vec<(String, f64)> {
+        let mut out = Vec::new();
+        for entry in &properties.entries {
+            let Some(name) = entry.key.strip_prefix("profile.") else {
+                continue;
+            };
+            let Some(profile) = Self::profile(properties, name) else {
+                continue;
+            };
+            let (mut cost, mut known) = (0.0, 0);
+            for (option, value) in &profile.values {
+                let Some(o) = options.get(option) else {
+                    continue;
+                };
+                known += 1;
+                cost += option_cost(o, value);
+            }
+            if known > 0 {
+                out.push((name.to_owned(), cost));
+            }
+        }
+        out.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        out.dedup_by(|a, b| a.0 == b.0);
+        out
+    }
+
     /// `NAME=VALUE` (or OptiFine's `NAME:VALUE`), `NAME` (a switch on) and `!NAME` (off),
     /// separated by spaces or commas, as a profile lists them; later ones win.
     pub fn parse_list(&mut self, list: &str) {
@@ -197,6 +232,35 @@ fn spaced(comment: &str) -> String {
     }
 }
 
+/// What setting option `o` to `value` costs against its default, see `profiles_by_cost`.
+fn option_cost(o: &crate::PackOption, value: &str) -> f64 {
+    let on = |v: &str| f64::from(u8::from(v.trim() == "true"));
+    if o.switch {
+        return on(value) - on(&o.default);
+    }
+    let number = |v: &str| v.trim().trim_end_matches(['f', 'F']).parse::<f64>().ok();
+    let numbers: Vec<f64> = o.values.iter().filter_map(|v| number(v)).collect();
+    if numbers.len() >= 2 && numbers.len() == o.values.len() {
+        let (lo, hi) = numbers
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(l, h), &n| (l.min(n), h.max(n)));
+        if let (Some(v), Some(d)) = (number(value), number(&o.default))
+            && hi > lo
+        {
+            return (v - d) / (hi - lo);
+        }
+        return 0.0;
+    }
+    // Words (`LOW MEDIUM HIGH`): their place in the list.
+    let place = |v: &str| o.values.iter().position(|x| x.trim() == v.trim());
+    match (place(value), place(&o.default)) {
+        (Some(v), Some(d)) if o.values.len() > 1 => {
+            (v as f64 - d as f64) / (o.values.len() - 1) as f64
+        }
+        _ => 0.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +334,42 @@ mod tests {
         assert_eq!(found(&["potato", "verylow", "low"]).unwrap(), "VERY_LOW");
         assert_eq!(found(&["LOW"]).unwrap(), "low");
         assert_eq!(found(&["potato"]), None);
+    }
+
+    #[test]
+    fn profiles_are_ranked_by_what_they_ask_of_the_options() {
+        let option = |name: &str, default: &str, values: &[&str], switch: bool| {
+            (
+                name.to_owned(),
+                crate::PackOption {
+                    name: name.to_owned(),
+                    default: default.to_owned(),
+                    values: values.iter().map(|v| (*v).to_owned()).collect(),
+                    switch,
+                    tested: true,
+                },
+            )
+        };
+        let options: BTreeMap<_, _> = [
+            option("SSAO", "true", &["false", "true"], true),
+            option(
+                "shadowMapResolution",
+                "2048",
+                &["512", "1024", "2048", "4096"],
+                false,
+            ),
+            option("QUALITY", "MEDIUM", &["LOW", "MEDIUM", "HIGH"], false),
+        ]
+        .into();
+        let text = "profile.Fancy = shadowMapResolution=4096 QUALITY=HIGH\n\
+                    profile.Fast = !SSAO shadowMapResolution=512\n\
+                    profile.Mid = QUALITY=LOW\n\
+                    profile.Mystery = UNKNOWN_OPTION=3\n\
+                    profile.Custom =\n";
+        let properties = Properties::parse(text, &Macros::standard());
+        let ranked = Values::profiles_by_cost(&properties, &options);
+        let names: Vec<&str> = ranked.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(names, ["Fast", "Mid", "Fancy"]);
     }
 
     #[test]
