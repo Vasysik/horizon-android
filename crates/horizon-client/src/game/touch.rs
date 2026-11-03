@@ -116,6 +116,8 @@ pub(super) struct Touch {
     wanted: bool,
     /// The text field the keyboard was last decided for (`text_context`).
     context: Option<&'static str>,
+    /// Where the last finger landed: lifted about there, it was a tap (`keyboard_after_tap`).
+    tap_from: Option<[f32; 2]>,
     /// The keyboard has shown since it was asked for: its height falling to 0 then means the
     /// player put it away (the back key), which the game is not told otherwise.
     ime_seen: bool,
@@ -667,11 +669,10 @@ impl Game<'_> {
         if self.files_offer_touch(t) || self.update_offer_touch(t) || self.native_builds_touch(t) {
             return true;
         }
-        // A touch in the chat brings back a keyboard the back key put away.
-        if t.phase == TouchPhase::Started && self.screen == Screen::Chat {
-            self.touch.wanted = true;
-        }
         let p = [t.location.x as f32, t.location.y as f32];
+        if t.phase == TouchPhase::Started {
+            self.touch.tap_from = Some(p);
+        }
         // The chat bar: a tap is its key, and the finger stays the bar's until it lifts.
         if t.phase == TouchPhase::Started
             && let Some(i) = self.chat_bar_at(p)
@@ -732,6 +733,7 @@ impl Game<'_> {
             && !self.touch.pointer.owns(t.id)
             && self.slot_touch_event(event_loop, id, t)
         {
+            self.keyboard_after_tap(t, p);
             return true;
         }
         // The mouse finger stays the mouse until it lifts, even if the screen closed under it.
@@ -749,19 +751,7 @@ impl Game<'_> {
             for mouse in self.touch.pointer.event(t, slop, Instant::now()) {
                 self.handle_window_event(event_loop, id, mouse, InputOrigin::User);
             }
-            // A tap on the text field brings up the on-screen keyboard, a tap beside it puts the
-            // keyboard away (the chat keeps it).
-            if t.phase == TouchPhase::Ended
-                && let Some(context) = self.text_context()
-                && context != "chat"
-            {
-                self.touch.wanted = self.on_text_field().unwrap_or(true);
-                // A tap that just focused the field (the options' boxes start without the
-                // focus): the frame must not take it for a new screen's and put the keyboard away.
-                if self.touch.wanted {
-                    self.touch.context = Some(context);
-                }
-            }
+            self.keyboard_after_tap(t, p);
             return true;
         }
         self.touch.controls.three_fingers =
@@ -888,6 +878,52 @@ impl Game<'_> {
             self.touch.keyboard = keyboard;
             self.touch.ime_seen = false;
         }
+    }
+
+    /// A tap decides the keyboard wherever it landed, a slot too: on the text field it comes up,
+    /// beside it it goes away. A finger that moved (a list scrolling) leaves it as it is.
+    fn keyboard_after_tap(&mut self, t: &winit::event::Touch, p: [f32; 2]) {
+        if t.phase != TouchPhase::Ended {
+            return;
+        }
+        let Some(from) = self.touch.tap_from.take() else {
+            return;
+        };
+        let layout = self.touch_layout();
+        let slop = touch::slop(layout.width, layout.height);
+        if (p[0] - from[0]).hypot(p[1] - from[1]) >= slop {
+            return;
+        }
+        let Some(context) = self.text_context() else {
+            return;
+        };
+        let batch = HudBatch::new(self.touch_size());
+        let gui = (p[0] / batch.scale, p[1] / batch.scale);
+        let cursor = std::mem::replace(&mut self.cursor, gui);
+        let on = self.on_text_field();
+        self.cursor = cursor;
+        let wanted = match (context, on) {
+            // Its line, above the keyboard, keeps it; a tap on the rest puts it away, and with it
+            // away any tap brings it back.
+            ("chat", _) => {
+                let lift = self.keyboard_height() as f32 / batch.scale;
+                !self.touch.wanted || gui.1 + lift >= batch.height - 16.0
+            }
+            (_, Some(on)) => on,
+            // Its place isn't known: the tap that focused it opens it, then a tap goes either way.
+            (_, None) => self.touch.context != Some(context) || !self.touch.wanted,
+        };
+        self.touch.wanted = wanted;
+        // A tap that just focused the field (the options' boxes start without the focus): the frame
+        // must not take it for a new screen's and put the keyboard away.
+        if wanted {
+            self.touch.context = Some(context);
+        }
+    }
+
+    /// Whether a text field that holds the focus shows it: with fingers, while the keyboard is up.
+    pub(super) fn text_caret_shown(&self) -> bool {
+        !self.touch_shown() || self.touch.wanted
     }
 
     /// The text field shown now, by name: the chat, a sign, a book, a command block, the anvil's

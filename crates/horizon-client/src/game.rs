@@ -14931,12 +14931,13 @@ impl Game<'_> {
         }
         if tab.search {
             // CreativeModeInventoryScreen: an unbordered EditBox of 50 at (82, 6).
+            let caret = self.text_caret_shown();
             let search = &mut self.creative_screen.search;
             search.x = ox + 82.0;
             search.y = oy + 6.0;
             search.width = 80.0;
             search.bordered = false;
-            search.focused = true;
+            search.focused = caret;
             search.text_color = u32::MAX;
             search.max_length = clipboard::CREATIVE_SEARCH_CHARS;
             if horizon_client::widgets::narrating() {
