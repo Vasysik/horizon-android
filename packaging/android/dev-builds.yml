@@ -1,0 +1,148 @@
+name: Android dev APKs
+run-name: Android dev · ${{ github.sha }}
+
+on:
+  push:
+    branches: [android]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'research-lock.json'
+      - 'packaging/android/**'
+      - 'tools/**'
+      - 'mods/**'
+      - 'third_party/**'
+      - '.github/workflows/android-dev.yml'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+  workflow_dispatch:
+    inputs:
+      all_abis:
+        description: Also build ARMv7, x86 and x86_64
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+concurrency:
+  group: android-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Never expose a signing secret to pull requests or arbitrary dispatch refs.
+    if: github.ref == 'refs/heads/android'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: ${{ fromJSON(inputs.all_abis && '["arm64-v8a","armeabi-v7a","x86","x86_64"]' || '["arm64-v8a"]') }}
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.local/ci-target
+      HORIZON_TELEMETRY_URL: 'off'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - name: Restore dedicated dev signing identity
+        env:
+          DEV_KEYSTORE: ${{ secrets.ANDROID_DEV_KEYSTORE_BASE64 }}
+        run: |
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          value = os.environ.get('DEV_KEYSTORE', '')
+          if not value:
+              raise SystemExit('Set ANDROID_DEV_KEYSTORE_BASE64 first; see docs/android-dev-builds.md')
+          path = Path('.local/android/debug.keystore')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_bytes(base64.b64decode(value, validate=True))
+          path.chmod(0o600)
+          PY
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          gradle-version: '8.14'
+      - name: Install Android toolchain
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then
+            sdkmanager=$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)
+          fi
+          test -x "$sdkmanager"
+          "$sdkmanager" --sdk_root="$ANDROID_HOME" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+          rustup show
+          case "$ABI" in
+            arm64-v8a) target=aarch64-linux-android ;;
+            armeabi-v7a) target=armv7-linux-androideabi ;;
+            x86) target=i686-linux-android ;;
+            x86_64) target=x86_64-linux-android ;;
+          esac
+          rustup target add "$target"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .local/ci-target
+          key: android-dev-${{ runner.os }}-${{ matrix.abi }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'packaging/android/build.gradle') }}-${{ github.sha }}
+          restore-keys: |
+            android-dev-${{ runner.os }}-${{ matrix.abi }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'packaging/android/build.gradle') }}-
+      - name: Check public source and packaging boundaries
+        run: |
+          python3 tools/check_public_tree.py
+          python3 -m unittest discover -s tests -p 'test_android_release_audit.py'
+      - name: Prepare private engine inputs from official downloads
+        run: python3 tools/android_prepare.py --java-home "$JAVA_HOME"
+      - name: Build optimized public dev APK
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          python3 tools/android_build.py --abi "$ABI" --public --profile release \
+            --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" --gradle "$(command -v gradle)" \
+            --ndk-version 28.2.13676358 --build-tools-version 35.0.0 \
+            --dev-build "${GITHUB_RUN_NUMBER}.${GITHUB_SHA:0:12}" \
+            --dev-version-code "$((1000 + GITHUB_RUN_NUMBER))"
+      - name: Collect only audited APK and public metadata
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, shutil
+          from pathlib import Path
+          out = Path('dist')
+          out.mkdir()
+          sha, abi = os.environ['GITHUB_SHA'], os.environ['ABI']
+          name = f'Horizon-Android-dev.{os.environ["GITHUB_RUN_NUMBER"]}.{sha[:12]}-{abi}.apk'
+          apk = out / name
+          shutil.copyfile(Path('.local/android/apk') / abi / 'horizon-android-public.apk', apk)
+          (out / 'SHA256SUMS.txt').write_text(f'{hashlib.sha256(apk.read_bytes()).hexdigest()}  {name}\n')
+          for source, dest in [('LICENSE', 'LICENSE.txt'), ('THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md')]:
+              shutil.copyfile(source, out / dest)
+          (out / 'BUILD.json').write_text(json.dumps({'commit': sha, 'abi': abi, 'profile': 'release',
+              'package': 'dev.horizon.android.dev', 'experimental': True,
+              'run': f'https://github.com/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'}, indent=2) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f'### Dev APK: {abi}\n\nCommit: `{sha}`. Optimized release profile; experimental build.\n\n'
+                  'Download the APK artifact below. Installs separately from the stable app. '
+                  'Existing worlds/accounts are not copied automatically.\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: horizon-dev-${{ github.run_number }}-${{ matrix.abi }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove signing key
+        if: always()
+        run: rm -f .local/android/debug.keystore

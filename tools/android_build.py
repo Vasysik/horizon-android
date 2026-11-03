@@ -12,6 +12,7 @@ import subprocess
 import zipfile
 import json
 import hashlib
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = {'x86_64': 'x86_64-linux-android', 'arm64-v8a': 'aarch64-linux-android',
@@ -97,16 +98,27 @@ def main():
     parser.add_argument('--abi', choices=TARGETS, default='arm64-v8a')
     parser.add_argument('--sdk', type=Path, default=os.environ.get('ANDROID_HOME') or Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'Android/Sdk')
     parser.add_argument('--java-home', type=Path, default=os.environ.get('JAVA_HOME') or 'C:/Program Files/Android/Android Studio/jbr')
+    parser.add_argument('--ndk-version', help='Select an installed NDK version explicitly (CI reproducibility)')
+    parser.add_argument('--build-tools-version', help='Select an installed Android build-tools version explicitly')
     parser.add_argument('--skip-rust', action='store_true')
     parser.add_argument('--rust-only', action='store_true', help='Build the Rust host without touching shared APK staging')
     parser.add_argument('--release-candidate', action='store_true', help='Build a non-debuggable candidate and audit privacy; this does not authorize redistribution of bundled game resources')
     parser.add_argument('--public', action='store_true', help='Distribution APK: generated tables only; original resources download from Mojang')
+    parser.add_argument('--dev-build', help='Public, non-debuggable dev channel label (separate .dev package)')
+    parser.add_argument('--dev-version-code', type=int, help='Monotonically increasing dev channel version code')
     parser.add_argument('--profile', choices=['release', 'fast', 'dev'], help='Public/candidate builds default to release (ThinLTO); local builds default to optimized fast')
     parser.add_argument('--gradle', type=Path, help='Gradle 8.14 executable (otherwise discover the cached distribution)')
     parser.add_argument('--check', action='store_true', help='Only type-check the Android target')
     parser.add_argument('--clippy', action='store_true', help='Run Android Clippy with warnings denied')
     parser.add_argument('--bootstrap', type=Path, help=argparse.SUPPRESS)  # Old scripts: no longer used.
     args = parser.parse_args()
+    if args.dev_build is not None:
+        if not args.public or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]{0,63}', args.dev_build):
+            parser.error('--dev-build requires --public and a short alphanumeric/dot/dash label')
+        if args.dev_version_code is None or not 1 <= args.dev_version_code <= 2100000000:
+            parser.error('--dev-build requires --dev-version-code in 1..2100000000')
+    elif args.dev_version_code is not None:
+        parser.error('--dev-version-code requires --dev-build')
     if args.profile is None:
         args.profile = 'release' if args.public or args.release_candidate else 'fast'
     if args.public:
@@ -116,8 +128,14 @@ def main():
     if args.release_candidate and args.profile == 'dev':
         parser.error('--release-candidate requires an optimized release or fast profile')
     suffix = '.exe' if os.name == 'nt' else ''
-    tools = latest(args.sdk / 'build-tools')
-    ndk = latest(args.sdk / 'ndk') / 'toolchains/llvm/prebuilt' / ('windows-x86_64' if os.name == 'nt' else 'linux-x86_64')
+    for name, value in [('ndk-version', args.ndk_version), ('build-tools-version', args.build_tools_version)]:
+        if value is not None and not re.fullmatch(r'\d+(?:\.\d+)+', value):
+            parser.error(f'--{name} must be a numeric SDK version')
+    tools = args.sdk / 'build-tools' / args.build_tools_version if args.build_tools_version else latest(args.sdk / 'build-tools')
+    ndk_root = args.sdk / 'ndk' / args.ndk_version if args.ndk_version else latest(args.sdk / 'ndk')
+    if not tools.is_dir() or not ndk_root.is_dir():
+        raise FileNotFoundError('Requested Android build-tools or NDK version is not installed')
+    ndk = ndk_root / 'toolchains/llvm/prebuilt' / ('windows-x86_64' if os.name == 'nt' else 'linux-x86_64')
     target = TARGETS[args.abi]
     # NDK spells the ARMv7 compiler triple differently from Rust. Android 8.1
     # is the legacy build's floor; the modern builds keep their existing floor.
@@ -206,7 +224,9 @@ def main():
         gradle = candidates[0]
     environment['ANDROID_HOME'] = str(args.sdk)
     variant = 'release' if args.release_candidate else 'debug'
-    run([gradle, '--no-daemon', '-p', ROOT / 'packaging/android', '-Pabi=' + args.abi, '-PminSdk=' + str(min_sdk), 'assemble' + variant.title()], cwd=ROOT, env=environment)
+    dev_properties = (['-PappId=dev.horizon.android.dev', '-PdevBuild=' + args.dev_build,
+                       '-PdevVersionCode=' + str(args.dev_version_code)] if args.dev_build else [])
+    run([gradle, '--no-daemon', '-p', ROOT / 'packaging/android', '-Pabi=' + args.abi, '-PminSdk=' + str(min_sdk), *dev_properties, 'assemble' + variant.title()], cwd=ROOT, env=environment)
     apk = output / ('horizon-android-public.apk' if args.public else 'horizon-android-release.apk' if args.release_candidate else 'horizon-android.apk')
     shutil.copyfile(ROOT / f'.local/android/gradle-build/outputs/apk/{variant}/HorizonAndroid-{variant}.apk', apk)
     # Invoke the signing JAR directly so Windows does not need a batch-file shell.
@@ -214,7 +234,7 @@ def main():
     run([*signer, 'verify', '--verbose', apk])
     if args.release_candidate:
         import sys
-        run([sys.executable, ROOT / 'tools/check_android_release.py', apk, '--aapt2', tools / ('aapt2' + suffix), *(['--public'] if args.public else [])], cwd=ROOT)
+        run([sys.executable, ROOT / 'tools/check_android_release.py', apk, '--aapt2', tools / ('aapt2' + suffix), *(['--public'] if args.public else []), *(['--app-id', 'dev.horizon.android.dev'] if args.dev_build else [])], cwd=ROOT)
     print(f'APK: {apk}', flush=True)
 
 

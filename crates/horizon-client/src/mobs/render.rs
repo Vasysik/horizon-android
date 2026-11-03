@@ -654,9 +654,14 @@ pub fn layers(m: &Mob, age: f32) -> Vec<Layer> {
             if let Some(armor) = m.extra.head.as_deref()
                 && let Some(material) = armor
                     .strip_prefix("minecraft:")
-                    .and_then(|a| a.strip_suffix("_horse_armor"))
+                    .unwrap_or(armor)
+                    .strip_suffix("_horse_armor")
             {
-                let tex = format!("entity/equipment/horse_body/{material}");
+                let asset = match material {
+                    "golden" => "gold",
+                    other => other,
+                };
+                let tex = format!("entity/equipment/horse_body/{asset}");
                 let color = if material == "leather" {
                     abgr(0xA06540)
                 } else {
@@ -2880,5 +2885,86 @@ mod scroll_tests {
                 layer("sheep#wool", "entity/sheep/sheep_wool")
             ]
         );
+    }
+
+    #[test]
+    fn horse_armor_layers_use_vanilla_equipment_asset_names() {
+        let kind = std::sync::Arc::new(crate::mobs::MobType {
+            id: "minecraft:horse".into(),
+            species: Species::Horse,
+            width: 1.3964844,
+            height: 1.6,
+            eye_height: 1.52,
+            category: "creature".into(),
+            max_health: 20.0,
+            speed: 0.225,
+            flying_speed: 0.02,
+            attack_damage: 0.0,
+            attack_knockback: 0.0,
+            follow_range: 16.0,
+            step_height: 1.0,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.7,
+            attributes: Default::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 80,
+            flags: Default::default(),
+            model: std::sync::Arc::new(crate::mobs::Part {
+                name: String::new(),
+                pose: [0.0; 9],
+                polygons: Vec::new(),
+                children: Vec::new(),
+            }),
+            layers: Default::default(),
+            texture: "entity/horse/horse_white".into(),
+            brain: crate::mobs::Brain::Passive,
+            anim: crate::mobs::Anim::Horse,
+            sounds: [""; 3],
+            step_sound: None,
+            food: Default::default(),
+            tempt: Default::default(),
+        });
+        let mut mob = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+        // Golden horse armor maps "golden" -> "gold" to match vanilla equipment texture assets (#93).
+        mob.extra.head = Some("minecraft:golden_horse_armor".into());
+        let armor_layer = layers(&mob, 0.0)
+            .into_iter()
+            .find(|l| l.model == "horse_armor#main")
+            .expect("golden horse armor layer should be present");
+        assert_eq!(armor_layer.texture, "entity/equipment/horse_body/gold");
+
+        // Iron, diamond, and leather use their material names directly.
+        mob.extra.head = Some("minecraft:iron_horse_armor".into());
+        let iron_layer = layers(&mob, 0.0)
+            .into_iter()
+            .find(|l| l.model == "horse_armor#main")
+            .unwrap();
+        assert_eq!(iron_layer.texture, "entity/equipment/horse_body/iron");
+
+        mob.extra.head = Some("minecraft:diamond_horse_armor".into());
+        let diamond_layer = layers(&mob, 0.0)
+            .into_iter()
+            .find(|l| l.model == "horse_armor#main")
+            .unwrap();
+        assert_eq!(diamond_layer.texture, "entity/equipment/horse_body/diamond");
+
+        mob.extra.head = Some("minecraft:leather_horse_armor".into());
+        let leather_layer = layers(&mob, 0.0)
+            .into_iter()
+            .find(|l| l.model == "horse_armor#main")
+            .unwrap();
+        assert_eq!(leather_layer.texture, "entity/equipment/horse_body/leather");
+        assert_eq!(leather_layer.color, abgr(0xA06540));
     }
 }

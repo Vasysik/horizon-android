@@ -7,12 +7,20 @@ buttons, browses that directory in a system file manager. If the phone shows an
 app chooser, select Files. Alternatively open the system Files app and select
 **Horizon Android** in its navigation drawer.
 
-The provider contains **Mods**, **Resource Packs**, **Shader Packs** for the
-selected launcher profile, and **Reports**. Files stay in app storage; no migration
+The provider contains **Mods**, **Resource Packs**, **Shader Packs**, **Worlds**,
+and **Configuration** for the selected launcher profile, and **Reports**. Files stay in app storage; no migration
 or second copy is needed. Android grants other apps access to documents you select.
-Account files, settings, prepared game resources and worlds are not exposed.
+Account files, launcher configuration and prepared game resources are not exposed.
 Reports are read-only and can be copied or shared through Files. Screenshots
 continue to appear in **Pictures/HorizonAndroid**.
+
+**Configuration** exposes only `options.txt`, `horizon-graphics.txt`,
+`horizon-touch.json` and `horizon-keypad.json`. These are the existing engine
+settings, not copied or relocated files. Return to the launcher before reading
+or editing Configuration or Worlds. Changes apply when the game starts again.
+Keep a backup before manual edits; invalid settings may be reset by their loader.
+Configuration allows editing known files but not renaming/deleting them or adding
+arbitrary folders. It does not grant access to account tokens or internal files.
 
 To download a `.hmod` from a link, paste its HTTPS URL in the Mods search field
 and press **Import .hmod** (the Search button changes when a URL is entered).
@@ -70,7 +78,7 @@ The allowlisted DocumentsProvider supports browsing, copying files in and out,
 editing, renaming files and deleting add-ons. Fixed directories cannot be removed;
 nonempty subdirectories must be emptied explicitly. Hidden paths, traversal and
 symlinks are rejected. It does not require MANAGE_EXTERNAL_STORAGE. World import/
-export and moving the game to an external folder remain separate tasks.
+ZIP-world import/export and moving the game to an external folder remain separate tasks.
 
 Copying directly with a file manager bypasses the Import file validator; wait for
 the copy to finish before starting the game, and use the game's pack selection to

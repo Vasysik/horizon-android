@@ -151,11 +151,15 @@ pub fn wanted(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
 
 /// Whether frames without a shader pack's terrain draw flat: where the backend
 /// emulates multi-draw (Metal, past `MIN_SECTIONS`), on Intel Gen11/Gen12's Vulkan
-/// driver, or with `HORIZON_FLAT_DRAWS=1`. Elsewhere per-section draws stay.
+/// driver, Android's explicitly selected Vulkan batching mode, or with
+/// `HORIZON_FLAT_DRAWS=1`. Elsewhere per-section draws stay.
 pub fn for_vanilla(info: &wgpu::AdapterInfo) -> bool {
     std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1")
         || info.backend == wgpu::Backend::Metal
         || is_broken_intel_vulkan(info)
+        || (cfg!(target_os = "android")
+            && info.backend == wgpu::Backend::Vulkan
+            && !crate::android_runtime::compatibility())
 }
 
 /// Intel Gen11 (Ice Lake) and Gen12 (Tiger Lake, Rocket Lake, Alder Lake,
