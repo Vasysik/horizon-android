@@ -78,6 +78,8 @@ pub struct Creative {
     pub scrolling: bool,
     /// CreativeModeInventoryScreen's search box: an unbordered `EditBox` of 50.
     pub search: EditBox,
+    /// The grid's rows: vanilla's five, or Bedrock Inventory's six, its hotbar being beside them.
+    pub shown_rows: usize,
     /// The search tab's stacks, in its display order.
     search_items: Vec<ItemStack>,
     search_index: Vec<SearchEntry>,
@@ -229,13 +231,23 @@ impl Creative {
         (Self::DISPLAY..Self::DISPLAY + 45).chain(0..9)
     }
 
-    /// ItemPickerMenu's slot positions.
+    /// Bedrock Inventory's item window: six rows of items, the last where the hotbar row was.
+    pub fn six_row_slots() -> impl Iterator<Item = usize> {
+        Self::DISPLAY..Self::DISPLAY + 54
+    }
+
+    /// ItemPickerMenu's slot positions (a sixth row of items takes the hotbar row's place).
     pub fn tab_slot_position(slot: usize) -> Option<(f32, f32)> {
         match slot {
             0..9 => Some((9.0 + slot as f32 * 18.0, 112.0)),
-            _ if (Self::DISPLAY..Self::DISPLAY + 45).contains(&slot) => {
+            _ if (Self::DISPLAY..Self::DISPLAY + 54).contains(&slot) => {
                 let i = slot - Self::DISPLAY;
-                Some((9.0 + (i % 9) as f32 * 18.0, 18.0 + (i / 9) as f32 * 18.0))
+                let y = if i >= 45 {
+                    112.0
+                } else {
+                    18.0 + (i / 9) as f32 * 18.0
+                };
+                Some((9.0 + (i % 9) as f32 * 18.0, y))
             }
             _ => None,
         }
@@ -384,6 +396,7 @@ impl Creative {
                 search.text_color = u32::MAX;
                 search
             },
+            shown_rows: 5,
             search_items: Vec::new(),
             search_index: Vec::new(),
             exported,
@@ -702,17 +715,17 @@ impl Creative {
     pub fn rows(&self, names: &Names) -> usize {
         self.items(names).len().div_ceil(9)
     }
-    /// ItemPickerMenu.calculateRowCount: rows beyond the five shown.
+    /// ItemPickerMenu.calculateRowCount: rows beyond the ones shown.
     fn hidden_rows(&self, names: &Names) -> i32 {
-        self.rows(names) as i32 - 5
+        self.rows(names) as i32 - self.shown_rows as i32
     }
     /// First visible grid row for the scroll position (getRowIndexForScroll).
     pub fn first_row(&self, names: &Names) -> usize {
         ((self.scroll * self.hidden_rows(names) as f32 + 0.5) as i32).max(0) as usize
     }
-    /// CreativeModeInventoryScreen.canScroll: more than five rows, on a tab with a scrollbar.
+    /// CreativeModeInventoryScreen.canScroll: more rows than shown, on a tab with a scrollbar.
     pub fn can_scroll(&self, names: &Names) -> bool {
-        !self.tab().inventory && self.items(names).len() > 45
+        !self.tab().inventory && self.items(names).len() > self.shown_rows * 9
     }
     /// insideScrollbar, for a point relative to the screen origin.
     pub fn inside_scrollbar(&self, x: f32, y: f32) -> bool {

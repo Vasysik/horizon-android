@@ -21,7 +21,7 @@ use winit::event::{Touch, TouchPhase};
 /// The mod build service (packaging/android/mod_build_server.py).
 const BUILD_SERVER: &str = "https://191-234-193-205.sslip.io";
 /// A build's folder here starts with this, and a new one takes the place of the last.
-const COMPILED: &str = "vm-";
+const COMPILED: &str = "compiled-";
 /// The service's waits: between looks at the job, and how long it may go on at all.
 const POLL: Duration = Duration::from_secs(2);
 const LONGEST: Duration = Duration::from_secs(40 * 60);
@@ -30,9 +30,6 @@ const WAKING: Duration = Duration::from_secs(5 * 60);
 const QUIET_TRIES: u32 = 15;
 
 const RELEASE: &str = "https://api.github.com/repos/JuanLuci/starling/releases/tags/native-builds";
-/// The issue form that asks for a build (.github/ISSUE_TEMPLATE/native-build.yml), its version
-/// filled in.
-const REQUEST: &str = "https://github.com/JuanLuci/starling/issues/new?template=native-build.yml";
 /// The library's name in a build's folder, as NativeMods.java loads it.
 const LIBRARY: &str = "libhorizon_android.so";
 /// Rows of builds the card shows.
@@ -74,6 +71,8 @@ struct Shared {
     /// A compile is under way (its card may be hidden), and what it says.
     compiling: bool,
     status: String,
+    /// When the service began compiling: the card counts from it, each frame.
+    building_since: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -94,7 +93,6 @@ pub(super) struct NativeBuilds {
 enum Act {
     Use(Build),
     StopUsing,
-    Request,
     Restart,
     Retry,
     Close,
@@ -372,7 +370,9 @@ fn fetch_library(
 /// for the next start: the folder's name.
 fn compile(version: &str, shared: &Mutex<Shared>) -> Result<String, String> {
     let say = |text: String| {
-        shared.lock().unwrap_or_else(PoisonError::into_inner).status = text;
+        let mut s = shared.lock().unwrap_or_else(PoisonError::into_inner);
+        s.status = text;
+        s.building_since = None;
     };
     let server = std::env::var("HORIZON_BUILD_SERVER").unwrap_or_else(|_| BUILD_SERVER.into());
     let agent = ureq::AgentBuilder::new()
@@ -436,11 +436,10 @@ fn compile(version: &str, shared: &Mutex<Shared>) -> Result<String, String> {
             )),
             Some("building") => {
                 let seconds = status["seconds"].as_u64().unwrap_or(0);
-                say(format!(
-                    "Compiling: {}:{:02}, usually about 3 minutes",
-                    seconds / 60,
-                    seconds % 60
-                ));
+                let mut s = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                if s.building_since.is_none() {
+                    s.building_since = Instant::now().checked_sub(Duration::from_secs(seconds));
+                }
             }
             Some("done") => break status,
             Some("failed") => {
@@ -457,6 +456,7 @@ fn compile(version: &str, shared: &Mutex<Shared>) -> Result<String, String> {
     if want.len() != 64 || size == 0 {
         return Err("The build does not say its SHA-256.".into());
     }
+    say("Downloading...".into());
     let name = format!("{COMPILED}{job}");
     let folder = dir().join(&name);
     std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
@@ -503,8 +503,8 @@ impl Game<'_> {
         installed.push(horizon_client::mod_list::Installed {
             id: ID.into(),
             title: "Native mods".into(),
-            description: "This game with native mods compiled in, built by GitHub: choose a \
-                          build, or play without."
+            description: "This game with native mods compiled in: choose a build, or play \
+                          without."
                 .into(),
             problem: None,
             dev: false,
@@ -663,7 +663,6 @@ impl Game<'_> {
                 if current.is_some() {
                     acts.push(("Play without native mods".into(), Act::StopUsing));
                 }
-                acts.push(("Ask for another set".into(), Act::Request));
                 let playing = match now {
                     Some(n) => format!("This game has {}. ", label(&n)),
                     None => String::new(),
@@ -676,9 +675,8 @@ impl Game<'_> {
                 (
                     "Native mods".to_owned(),
                     format!(
-                        "{playing}{found} Native mods run with the game's full access, unlike \
-                         Starling mods: only those in Starling's native-mods folder are built, \
-                         each read before it was added."
+                        "{playing}{found} Native mods run with the game's full access. To add \
+                         one, open its .hnmod with Starling and press Compile on its row."
                     ),
                 )
             }
@@ -713,7 +711,7 @@ impl Game<'_> {
                     format!("Compile {id}?"),
                     "A native mod runs with the game's full access: it can do anything the game \
                      can on this phone, so only compile mods you trust. It is sent to Starling's \
-                     build server, which compiles the game with your native mods in about 3 \
+                     build server, which compiles the game with your native mods in a few \
                      minutes; then the game restarts with them. If it closes before it shows, \
                      Starling starts without it the time after."
                         .to_owned(),
@@ -807,13 +805,20 @@ impl Game<'_> {
 
     /// The water over the screen while the build goes on: what it says, and a way out of it.
     fn draw_compiling(&self, batch: &mut HudBatch) {
-        let status = self
-            .native_builds
-            .shared
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .status
-            .clone();
+        let status = {
+            let s = self
+                .native_builds
+                .shared
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match s.building_since {
+                Some(since) => {
+                    let seconds = since.elapsed().as_secs();
+                    format!("Compiling: {}:{:02}", seconds / 60, seconds % 60)
+                }
+                None => s.status.clone(),
+            }
+        };
         let now = Instant::now();
         let card = &self.native_builds;
         let mut ui = Ui::new(&self.gui.atlas, batch, (-1.0, -1.0));
@@ -944,11 +949,6 @@ impl Game<'_> {
             Act::StopUsing => {
                 let _ = std::fs::remove_file(dir().join("current"));
                 self.native_builds.stage = Some(Stage::List);
-            }
-            Act::Request => {
-                super::packs::open_uri(&format!(
-                    "{REQUEST}&title=%5Bnative+build%5D+&version={version}"
-                ));
             }
             Act::Restart => crate::android::restart_app(),
             Act::Retry => self.open_native_builds(),

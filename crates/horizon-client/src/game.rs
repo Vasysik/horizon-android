@@ -8403,9 +8403,12 @@ impl Game<'_> {
                     hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
                 });
                 let draws = hud_layout::crosshair(wi, hi, attack, full);
-                self.gui_layer("minecraft:crosshair", &mut batch, |g, batch| {
-                    hud_layout::paint(batch, &g.gui.atlas, &draws);
-                });
+                // Under one creative window it hides; Bedrock Inventory has a gap at the middle.
+                if self.screen != Screen::Creative || CREATIVE_SHIFT.get() == 0.0 {
+                    self.gui_layer("minecraft:crosshair", &mut batch, |g, batch| {
+                        hud_layout::paint(batch, &g.gui.atlas, &draws);
+                    });
+                }
             }
             self.gui_layer("minecraft:hotbar", &mut batch, |g, batch| {
                 if spectator {
@@ -8759,6 +8762,9 @@ impl Game<'_> {
             return v;
         }
         if self.creative_tab_open() {
+            if CREATIVE_SHIFT.get() != 0.0 {
+                return Creative::six_row_slots().collect();
+            }
             return Creative::tab_slots().collect();
         }
         if let Some(v) = self.station_slots().or_else(|| self.mount_slots()) {
@@ -8824,6 +8830,9 @@ impl Game<'_> {
             return Creative::inventory_slots().count() + craft;
         }
         if self.creative_tab_open() {
+            if CREATIVE_SHIFT.get() != 0.0 {
+                return Creative::six_row_slots().count();
+            }
             return Creative::tab_slots().count();
         }
         if let Some(n) = self
@@ -14699,6 +14708,7 @@ impl Game<'_> {
             && self.screen == Screen::Creative
             && width >= BEDROCK_SHIFT * 2.0 + Creative::WIDTH
             && screen.tabs.get(items).is_some_and(|t| !t.inventory);
+        screen.shown_rows = if both && inventory.is_some() { 6 } else { 5 };
         match inventory.filter(|_| both) {
             Some(inventory) if panel => {
                 self.bedrock_items = Some(items);
@@ -14724,17 +14734,19 @@ impl Game<'_> {
             self.bedrock_show(x >= width / 2.0, width);
         }
     }
-    /// The window that shows `slot` becomes the one worked with. The hotbar shows in both.
+    /// The window that shows `slot` becomes the one worked with.
     pub(super) fn bedrock_for_slot(&mut self, slot: usize) {
         if CREATIVE_SHIFT.get() == 0.0 {
             return;
         }
         let width = HudBatch::new(self.touch_size()).width;
-        if slot >= Creative::DISPLAY {
-            self.bedrock_show(false, width);
-        } else if slot >= 9 {
-            self.bedrock_show(true, width);
-        }
+        self.bedrock_show(slot < Creative::DISPLAY, width);
+    }
+    /// Where the creative screen's window, or both of Bedrock Inventory's, start and end across.
+    pub(super) fn creative_bounds(batch: &HudBatch) -> (f32, f32) {
+        let (x, _) = batch.centered_origin(Creative::WIDTH, Creative::HEIGHT);
+        let shift = CREATIVE_SHIFT.get().abs();
+        (x - shift, x + Creative::WIDTH + shift)
     }
     /// A creative tab's title: `itemGroup.*` for vanilla's; a mod tab's
     /// `itemGroup.<mod>.<name>`, else its `title` as a lang key (a mod's own
@@ -14961,12 +14973,19 @@ impl Game<'_> {
         } else {
             let items = self.creative_screen.items(&self.pack.names);
             let first = self.creative_screen.first_row(&self.pack.names);
-            for r in 0..5 {
+            let six = CREATIVE_SHIFT.get() != 0.0;
+            for r in 0..if six { 6 } else { 5 } {
                 for c in 0..9 {
                     let Some(stack) = items.get((first + r) * 9 + c).filter(|s| s.count > 0) else {
                         continue;
                     };
-                    let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 18.0 + r as f32 * 18.0);
+                    // The sixth row sits where the window has the hotbar's.
+                    let row_y = if r == 5 {
+                        112.0
+                    } else {
+                        18.0 + r as f32 * 18.0
+                    };
+                    let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + row_y);
                     let over = hovered_slot == Some(Creative::DISPLAY + r * 9 + c);
                     if over {
                         self.draw_slot_highlight(batch, false, x, y);
@@ -14979,7 +14998,7 @@ impl Game<'_> {
                 }
             }
             let drag = self.drag_view();
-            for c in 0..9 {
+            for c in 0..if six { 0 } else { 9 } {
                 let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
                 let over = hovered_slot == Some(c);
                 if over {
@@ -14991,7 +15010,8 @@ impl Game<'_> {
                     hovered = self.inventory[c].clone().map(|s| (s, false));
                 }
             }
-            let scrollable = self.creative_screen.rows(&self.pack.names) > 5;
+            let scrollable =
+                self.creative_screen.rows(&self.pack.names) > self.creative_screen.shown_rows;
             let scroller = if scrollable {
                 "gui/sprites/container/creative_inventory/scroller"
             } else {

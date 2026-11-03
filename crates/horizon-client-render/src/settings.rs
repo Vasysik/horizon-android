@@ -284,7 +284,7 @@ impl Default for Settings {
             improved_transparency: false,
             attack_indicator: 1,
             inactivity_fps_limit: "afk".into(),
-            bedrock_inventory: false,
+            bedrock_inventory: true,
             prioritize_chunk_updates: 0,
             menu_blur: 5,
             invert_y: false,
@@ -496,7 +496,8 @@ impl Settings {
             improved_transparency: f.bool("improvedTransparency"),
             attack_indicator: f.int("attackIndicator") as u8,
             inactivity_fps_limit: f.name("inactivityFpsLimit"),
-            bedrock_inventory: f.bool("bedrockInventory"),
+            // Saved by what turns it off, so a file from before it has it on.
+            bedrock_inventory: !f.bool("javaCreativeInventory"),
             prioritize_chunk_updates: f.int("prioritizeChunkUpdates") as u8,
             menu_blur: f.int("menuBackgroundBlurriness"),
             invert_x: f.bool("invertXMouse"),
@@ -602,7 +603,7 @@ impl Settings {
         put_b(&mut f, "improvedTransparency", self.improved_transparency);
         put_i(&mut f, "attackIndicator", i32::from(self.attack_indicator));
         put_name(&mut f, "inactivityFpsLimit", &self.inactivity_fps_limit);
-        put_b(&mut f, "bedrockInventory", self.bedrock_inventory);
+        put_b(&mut f, "javaCreativeInventory", !self.bedrock_inventory);
         put_i(
             &mut f,
             "prioritizeChunkUpdates",

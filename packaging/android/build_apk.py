@@ -251,6 +251,9 @@ def main():
         "--keep-symbols", action="store_true", help="ship the library unstripped (backtraces)"
     )
     parser.add_argument(
+        "--library-only", action="store_true", help="stop at the stripped library: no APK"
+    )
+    parser.add_argument(
         "--dev", action="store_true",
         help=f"Starling Dev ({APPLICATION_ID}{DEV_SUFFIX}), installed beside the release",
     )
@@ -278,6 +281,8 @@ def main():
         shutil.copyfile(built, library)
     else:
         run(ndk_tool(ndk, "llvm-strip"), "--strip-unneeded", "-o", library, built)
+    if args.library_only:
+        return
 
     link_resources(tool(build_tools, "aapt2"), android_jar, out, assets(out), args.dev)
     dex = compile_java(build_tools, android_jar, out)

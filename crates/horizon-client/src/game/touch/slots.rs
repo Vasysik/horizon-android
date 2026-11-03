@@ -158,6 +158,7 @@ impl Game<'_> {
 
     /// The stack a slot shows: a creative tab's display slots show the tab's list.
     fn touch_stack(&mut self, slot: usize) -> Option<ItemStack> {
+        self.bedrock_for_slot(slot);
         if !self.touch_display_slot(slot) {
             return self.slot_view(slot);
         }
@@ -197,6 +198,8 @@ impl Game<'_> {
                 {
                     return true;
                 }
+                let batch = self.touch_gui_batch();
+                self.bedrock_side(t.location.x as f32 / batch.scale, batch.width);
                 if self.touch_on_player(t.location) {
                     self.touch.slots.turning = Some((t.id, t.location.x));
                     return true;
@@ -472,6 +475,8 @@ impl Game<'_> {
 
     /// What every slot holds now (a creative tab's display slots aside: they never change).
     fn touch_contents(&mut self) -> Vec<(usize, Option<ItemStack>)> {
+        // Bedrock Inventory: its inventory's window has them all, whichever is worked with.
+        self.bedrock_for_slot(0);
         let slots: Vec<usize> = self
             .slots()
             .into_iter()
@@ -584,9 +589,17 @@ impl Game<'_> {
         )
     }
 
+    /// Where `slot` is on the screen (GUI pixels), in whichever window shows it.
+    fn touch_slot_gui(&mut self, slot: usize, batch: &HudBatch) -> (f32, f32) {
+        self.bedrock_for_slot(slot);
+        let (ox, oy) = self.inventory_origin(batch);
+        let (sx, sy) = self.slot_position(slot);
+        (ox + sx, oy + sy)
+    }
+
     fn touch_display_slot(&self, slot: usize) -> bool {
         self.screen == Screen::Creative
-            && (Creative::DISPLAY..Creative::DISPLAY + 45).contains(&slot)
+            && (Creative::DISPLAY..Creative::DISPLAY + 54).contains(&slot)
     }
 
     fn touch_slot_click(
@@ -673,7 +686,6 @@ impl Game<'_> {
             stack.count
         };
         let share = count / slots.len().max(1) as u32;
-        let (ox, oy) = self.inventory_origin(batch);
         let white = rgba(255, 255, 255, 255);
         for slot in slots {
             let there = self.slot_view(slot);
@@ -683,8 +695,7 @@ impl Game<'_> {
             {
                 continue;
             }
-            let (sx, sy) = self.slot_position(slot);
-            let (x, y) = (ox + sx, oy + sy);
+            let (x, y) = self.touch_slot_gui(slot, batch);
             let atlas = &self.gui.atlas;
             batch.fill(atlas, x - 1.0, y - 1.0, 18.0, 1.0, white);
             batch.fill(atlas, x - 1.0, y + 16.0, 18.0, 1.0, white);
@@ -701,7 +712,6 @@ impl Game<'_> {
     /// A moved stack slides from where it was (eased out), its slot showing it once it lands.
     fn draw_slides(&mut self, batch: &mut HudBatch) {
         let slides = std::mem::take(&mut self.touch.slots.slides);
-        let (ox, oy) = self.inventory_origin(batch);
         let mut kept = Vec::new();
         for slide in slides {
             let t = slide.at.elapsed().as_secs_f32() / SLIDE.as_secs_f32();
@@ -709,20 +719,13 @@ impl Game<'_> {
                 continue;
             }
             let eased = 1.0 - (1.0 - t).powi(3);
-            let (fx, fy) = self.slot_position(slide.from);
-            let (tx, ty) = self.slot_position(slide.to);
+            let (fx, fy) = self.touch_slot_gui(slide.from, batch);
+            let (tx, ty) = self.touch_slot_gui(slide.to, batch);
             // The slot's own drawing waits under its background colour.
             let slot_grey = rgba(139, 139, 139, 255);
-            batch.fill(&self.gui.atlas, ox + tx, oy + ty, 16.0, 16.0, slot_grey);
+            batch.fill(&self.gui.atlas, tx, ty, 16.0, 16.0, slot_grey);
             let (x, y) = (fx + (tx - fx) * eased, fy + (ty - fy) * eased);
-            self.draw_slot_item(
-                batch,
-                None,
-                usize::MAX,
-                &Some(slide.stack.clone()),
-                ox + x,
-                oy + y,
-            );
+            self.draw_slot_item(batch, None, usize::MAX, &Some(slide.stack.clone()), x, y);
             kept.push(slide);
         }
         self.touch.slots.slides = kept;
@@ -738,9 +741,7 @@ impl Game<'_> {
         let Some(stack) = self.touch_stack(p.slot) else {
             return;
         };
-        let (ox, oy) = self.inventory_origin(batch);
-        let (sx, sy) = self.slot_position(p.slot);
-        let (x, y) = (ox + sx, oy + sy);
+        let (x, y) = self.touch_slot_gui(p.slot, batch);
         let white = rgba(255, 255, 255, 255);
         let atlas = &self.gui.atlas;
         batch.fill(atlas, x - 1.0, y - 1.0, 18.0, 1.0, white);
@@ -753,7 +754,12 @@ impl Game<'_> {
             batch.fill(atlas, x + 1.0, y + 1.0, 7.0, 2.0, rgba(85, 255, 85, 255));
         }
         let window = self.window_image(batch);
-        let (left, right) = (window.left as f32, (window.left + window.width) as f32);
+        // Bedrock Inventory's two windows count as one: no slot of either under the tooltip.
+        let (left, right) = if self.screen == Screen::Creative {
+            Self::creative_bounds(batch)
+        } else {
+            (window.left as f32, (window.left + window.width) as f32)
+        };
         // Clear of the window's frame and of the tooltip's own, on the roomier side; lines too
         // long for it wrap (a phone's GUI is narrow).
         const GAP: f32 = 8.0;
