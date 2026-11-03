@@ -27,7 +27,7 @@ unsafe extern "C" {
     ) -> i32;
 }
 enum Command {
-    Show(String),
+    Show(String, bool),
     Hide,
     Poll,
     Capture(bool),
@@ -370,7 +370,13 @@ impl Ui {
                     crate::documents::picker_failed("No Android document picker is available");
                 }
             }
-            Command::Show(text) => {
+            Command::Show(text, secret) => {
+                env.call_method(
+                    &self.edit,
+                    "setInputType",
+                    "(I)V",
+                    &[JValue::Int(if secret { 0x80081 } else { 0x20001 })],
+                )?;
                 let s = JObject::from(env.new_string(&text)?);
                 env.call_method(
                     &self.edit,
@@ -646,12 +652,18 @@ fn callback_inner(ui: &Ui) -> i32 {
     1
 }
 pub fn show(text: &str) -> bool {
+    show_mode(text, false)
+}
+pub fn show_secret(text: &str) -> bool {
+    show_mode(text, true)
+}
+fn show_mode(text: &str, secret: bool) -> bool {
     if let Some(ui) = UI.get().filter(|ui| !ui.failed.load(Ordering::Acquire)) {
         winit::platform::android::set_native_text_input_active(true);
         // Do not diff an earlier editor buffer while Show is queued on the UI thread.
         ui.ready.store(false, Ordering::Release);
         ui.active.store(true, Ordering::Release);
-        ui.enqueue(Command::Show(text.into()));
+        ui.enqueue(Command::Show(text.into(), secret));
         true
     } else {
         false

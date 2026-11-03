@@ -13,6 +13,7 @@ pub mod jmath;
 pub mod no_ai;
 pub mod noise;
 pub mod paletted;
+pub mod player_texture;
 pub mod position;
 pub mod random;
 pub mod storage;

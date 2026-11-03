@@ -1762,9 +1762,9 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             if as_json {
                 json(serde_json::json!({
                     "accounts": accounts.accounts.iter().map(|a| serde_json::json!({
-                        "name": a.name, "uuid": a.uuid,
-                        "selected": accounts.selected.as_ref() == Some(&a.uuid),
-                        "authentication": account::session::status(account::store(), &a.uuid),
+                        "name": a.name, "uuid": a.uuid, "provider": a.provider, "key": a.key(),
+                        "selected": accounts.selected.as_ref() == Some(&a.key()),
+                        "authentication": account::session::status(account::store(), &a.key()),
                     })).collect::<Vec<_>>(),
                     "offline": accounts.offline.iter().map(|n| serde_json::json!({
                         "name": n,
@@ -1780,12 +1780,12 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 );
             } else {
                 for a in &accounts.accounts {
-                    let mark = if accounts.selected.as_ref() == Some(&a.uuid) {
+                    let mark = if accounts.selected.as_ref() == Some(&a.key()) {
                         "*"
                     } else {
                         " "
                     };
-                    let status = account::session::status(account::store(), &a.uuid);
+                    let status = account::session::status(account::store(), &a.key());
                     println!("{mark} {}  {}  {}", a.name, a.uuid, status.label());
                 }
                 for n in &accounts.offline {
@@ -1871,7 +1871,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
         }
         AccountCmd::SignOut { who } => {
             let a = find(&accounts, &who)?;
-            accounts.remove(account::store(), &a.uuid)?;
+            accounts.remove(account::store(), &a.key())?;
             accounts.save()?;
             println!("Signed out {}.", a.name);
         }
@@ -1882,7 +1882,7 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                 .find(|n| n.eq_ignore_ascii_case(&who))
                 .cloned();
             let (player, name) = match (accounts.find(&who).cloned(), offline) {
-                (Some(a), _) => (account::Player::Microsoft(a.uuid), a.name),
+                (Some(a), _) => (account::Player::Microsoft(a.key()), a.name),
                 (None, Some(n)) => (
                     account::Player::Offline(n.clone()),
                     format!("{n} (offline)"),

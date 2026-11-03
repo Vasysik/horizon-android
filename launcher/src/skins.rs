@@ -7,6 +7,12 @@
 //! and leg are the right ones mirrored). Capes are 64×32 (or the older 22×17).
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+#[path = "skins/cloud.rs"]
+pub mod cloud;
+#[path = "skins/library.rs"]
+pub mod library;
+#[path = "skins/preview.rs"]
+pub mod preview;
 
 pub const SKIN_ENV: &str = "HORIZON_OFFLINE_SKIN";
 pub const MODEL_ENV: &str = "HORIZON_OFFLINE_SKIN_MODEL";
@@ -61,7 +67,10 @@ pub fn read_file(file: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut bytes = Vec::new();
     std::fs::File::open(file)
-        .and_then(|file| file.take(MAX_IMPORT_BYTES as u64 + 1).read_to_end(&mut bytes))
+        .and_then(|file| {
+            file.take(MAX_IMPORT_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+        })
         .map_err(|e| format!("{}: {e}", file.display()))?;
     check_size(&bytes)?;
     Ok(bytes)
