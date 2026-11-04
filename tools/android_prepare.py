@@ -63,7 +63,19 @@ def download_game(version, directory):
     # and client/server jar hashes are checked against the engine pins below.
     versions = directory / 'versions' / version
     manifest_path = versions / f'{version}.json'
-    lab.download(entry['url'], manifest_path, entry['sha1'])
+    if entry['sha1'] != pins['manifest_sha1']:
+        # Mojang republished the version JSON (their accepted republishes only
+        # differ in the asset index). The pinned manifest stays downloadable
+        # content-addressed by its SHA-1, so CI always prepares the exact file
+        # research-lock.json pins, whatever the catalog currently lists.
+        pinned = pins['manifest_sha1']
+        lab.download(
+            f'https://piston-meta.mojang.com/v1/packages/{pinned}/{version}.json',
+            manifest_path,
+            pinned,
+        )
+    else:
+        lab.download(entry['url'], manifest_path, entry['sha1'])
     manifest = json.loads(manifest_path.read_text())
     files = []
     for side in ['client', 'server']:
