@@ -1,12 +1,8 @@
 //! Simple Voice Chat (SVC) Client Subsystem for Horizon.
-//!
-//! Provides full protocol parity with Simple Voice Chat Java Edition (version 21),
-//! including AES-128-GCM encrypted UDP transport, 14 CustomPayload TCP channels,
-//! RNNoise dual sub-frame neural noise reduction, 3D spatial gain audio,
-//! dynamic protocol negotiation, desktop keybinds, and Android touch controls.
 
 pub mod audio_pipeline;
 pub mod config;
+pub mod hardware_io;
 pub mod protocol;
 pub mod udp_worker;
 pub mod ui;
@@ -15,10 +11,11 @@ pub use protocol::parse_voice_host;
 
 use audio_pipeline::{FRAME_SIZE, VoiceCapturePipeline, VoicePlaybackPipeline};
 use config::SvcProtocolConfig;
+use hardware_io::VoiceHardwareIo;
 use protocol::*;
 use std::collections::HashMap;
 use std::path::Path;
-use udp_worker::{UdpConnectionState, UdpWorker, UdpWorkerHandle};
+use udp_worker::{IncomingSound, UdpConnectionState, UdpWorker, UdpWorkerHandle};
 use ui::{VoiceChatScreenState, VoiceHudStatus};
 
 pub struct VoiceChatClient {
@@ -27,6 +24,7 @@ pub struct VoiceChatClient {
     pub secret: Option<SecretPacket>,
     pub capture_pipeline: VoiceCapturePipeline,
     pub playback_pipeline: VoicePlaybackPipeline,
+    pub hardware_io: VoiceHardwareIo,
     pub player_states: HashMap<u128, PlayerState>,
     pub groups: HashMap<u128, ClientGroup>,
     pub screen_state: VoiceChatScreenState,
@@ -48,6 +46,7 @@ impl VoiceChatClient {
             secret: None,
             capture_pipeline: VoiceCapturePipeline::new(),
             playback_pipeline: VoicePlaybackPipeline::new(),
+            hardware_io: VoiceHardwareIo::new(),
             player_states: HashMap::new(),
             groups: HashMap::new(),
             screen_state,
@@ -60,19 +59,16 @@ impl VoiceChatClient {
         }
     }
 
-    /// Set current connected server hostname for UDP fallback
     pub fn set_server_host(&mut self, host: &str) {
         self.current_server_host = host.to_string();
     }
 
-    /// Build RequestSecretPacket payload to initiate voice chat handshake on server join.
     pub fn initiate_handshake(&mut self) -> (String, Vec<u8>) {
         self.fallback_timer = Some(std::time::Instant::now());
         let pkt = RequestSecretPacket::new(self.config.compatibility_version);
         (CHANNEL_REQUEST_SECRET.to_string(), pkt.to_bytes())
     }
 
-    /// Check for 4-second timeout during initial handshake and cycle fallback version if needed.
     pub fn check_handshake_timeout(&mut self) -> Option<(String, Vec<u8>)> {
         if let Some(timer) = self.fallback_timer
             && self.secret.is_none()
@@ -90,7 +86,6 @@ impl VoiceChatClient {
         None
     }
 
-    /// Handle incoming Minecraft CustomPayload packets for all voicechat:* channels.
     pub fn handle_custom_payload(
         &mut self,
         channel: &str,
@@ -114,10 +109,8 @@ impl VoiceChatClient {
                     secret.mtu_size
                 );
 
-                // Stop compatibility retry timer immediately upon receiving valid secret
                 self.fallback_timer = None;
 
-                // Stop previous UDP worker if any
                 if let Some(handle) = self.udp_handle.take() {
                     handle.stop();
                 }
@@ -126,7 +119,6 @@ impl VoiceChatClient {
                 self.udp_handle = Some(handle);
                 self.secret = Some(secret);
 
-                // Send back initial client state
                 let state_pkt = UpdateStatePacket {
                     muted: self.config.muted,
                     disabled: self.config.disabled,
@@ -184,7 +176,6 @@ impl VoiceChatClient {
         Ok(None)
     }
 
-    /// Toggle mute microphone state
     pub fn toggle_mute(&mut self) -> (String, Vec<u8>) {
         self.config.muted = !self.config.muted;
         let _ = self.config.save_to_dir(&self.config_dir);
@@ -195,7 +186,6 @@ impl VoiceChatClient {
         (CHANNEL_CLIENT_STATE.to_string(), pkt.to_bytes())
     }
 
-    /// Toggle disable voice chat state
     pub fn toggle_disable(&mut self) -> (String, Vec<u8>) {
         self.config.disabled = !self.config.disabled;
         let _ = self.config.save_to_dir(&self.config_dir);
@@ -206,17 +196,15 @@ impl VoiceChatClient {
         (CHANNEL_CLIENT_STATE.to_string(), pkt.to_bytes())
     }
 
-    /// Set Push-to-Talk key held state
     pub fn set_ptt_pressed(&mut self, pressed: bool) {
         self.ptt_pressed = pressed;
     }
 
-    /// Set whispering key held state
     pub fn set_whispering(&mut self, whispering: bool) {
         self.whispering = whispering;
     }
 
-    /// Poll and process microphone input audio buffer
+    /// Process a single 960-sample microphone frame and queue it to the UDP worker.
     pub fn process_mic_audio(&mut self, pcm_in: &[f32; FRAME_SIZE]) {
         if self.config.disabled || self.config.muted {
             self.is_talking = false;
@@ -238,33 +226,123 @@ impl VoiceChatClient {
                     sequence_number: self.capture_pipeline.current_sequence(),
                     whispering: self.whispering,
                 };
-                let _ = handle.outgoing_mic_tx.send(mic);
+                let _ = handle.outgoing_mic_tx.try_send(mic);
             }
         } else {
             self.is_talking = false;
         }
     }
 
-    /// Retrieve active connection state
+    /// Called every game tick: polls hardware microphone frames when active and
+    /// decodes + mixes incoming UDP voice packets with 3D spatial attenuation.
+    pub fn tick_audio<F>(
+        &mut self,
+        listener_pos: [f64; 3],
+        listener_yaw: f32,
+        resolve_player_pos: F,
+    ) where
+        F: Fn(u128) -> Option<[f64; 3]>,
+    {
+        let is_connected = self.udp_handle.as_ref().is_some_and(|h| h.is_connected());
+        if !is_connected || self.config.disabled {
+            self.is_talking = false;
+            return;
+        }
+
+        // 1. Capture & send microphone frames if unmuted and (voice activation OR PTT held)
+        if !self.config.muted && (self.config.voice_activation || self.ptt_pressed) {
+            let mut processed_any = false;
+            while let Some(frame) = self.hardware_io.poll_mic_frame() {
+                processed_any = true;
+                self.process_mic_audio(&frame);
+            }
+            if !processed_any && !self.ptt_pressed && !self.config.voice_activation {
+                self.is_talking = false;
+            }
+        } else {
+            self.is_talking = false;
+        }
+
+        // 2. Drain incoming UDP voice packets and play them on the speaker with 3D spatial gain
+        let default_max_dist = self
+            .secret
+            .as_ref()
+            .map(|s| s.voice_chat_distance as f32)
+            .unwrap_or(48.0);
+
+        let mut incoming = Vec::new();
+        if let Some(ref handle) = self.udp_handle {
+            while let Ok(pkt) = handle.incoming_sound_rx.try_recv() {
+                incoming.push(pkt);
+            }
+        }
+
+        for sound in incoming {
+            match sound {
+                IncomingSound::Player(pkt) => {
+                    let pcm = self.playback_pipeline.decode_frame(&pkt.opus_data);
+                    let max_dist = if pkt.distance > 0.0 {
+                        pkt.distance
+                    } else {
+                        default_max_dist
+                    };
+                    let (left, right) = if let Some(src_pos) = resolve_player_pos(pkt.sender_uuid) {
+                        VoicePlaybackPipeline::calculate_spatial_gain(
+                            listener_pos,
+                            listener_yaw,
+                            src_pos,
+                            max_dist,
+                        )
+                    } else {
+                        (0.8, 0.8)
+                    };
+                    self.hardware_io.push_spatial_audio(&pcm, left, right);
+                }
+                IncomingSound::Group(pkt) => {
+                    let pcm = self.playback_pipeline.decode_frame(&pkt.opus_data);
+                    self.hardware_io.push_spatial_audio(&pcm, 1.0, 1.0);
+                }
+                IncomingSound::Location(pkt) => {
+                    let pcm = self.playback_pipeline.decode_frame(&pkt.opus_data);
+                    let max_dist = if pkt.distance > 0.0 {
+                        pkt.distance
+                    } else {
+                        default_max_dist
+                    };
+                    let (left, right) = VoicePlaybackPipeline::calculate_spatial_gain(
+                        listener_pos,
+                        listener_yaw,
+                        pkt.location,
+                        max_dist,
+                    );
+                    self.hardware_io.push_spatial_audio(&pcm, left, right);
+                }
+            }
+        }
+    }
+
     pub fn connection_state(&self) -> UdpConnectionState {
         if let Some(ref handle) = self.udp_handle {
-            handle.state.read().unwrap().clone()
+            handle
+                .state
+                .read()
+                .map(|s| s.clone())
+                .unwrap_or(UdpConnectionState::Disconnected)
         } else {
             UdpConnectionState::Disconnected
         }
     }
 
-    /// Determine HUD status icon to render
     pub fn hud_status(&self) -> VoiceHudStatus {
         let conn = self.connection_state();
         ui::determine_hud_status(&conn, &self.config, self.is_talking, self.whispering)
     }
 
-    /// Close active connection and reset state on server disconnect
     pub fn disconnect(&mut self) {
         if let Some(handle) = self.udp_handle.take() {
             handle.stop();
         }
+        self.hardware_io.stop();
         self.secret = None;
         self.player_states.clear();
         self.groups.clear();

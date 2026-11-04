@@ -7,9 +7,9 @@
 use super::protocol::*;
 use std::net::{ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UdpConnectionState {
@@ -31,24 +31,24 @@ pub enum IncomingSound {
 /// Handle to control the background UDP worker thread.
 pub struct UdpWorkerHandle {
     pub state: Arc<RwLock<UdpConnectionState>>,
-    pub outgoing_mic_tx: Sender<MicPacket>,
+    pub outgoing_mic_tx: SyncSender<MicPacket>,
     pub incoming_sound_rx: Receiver<IncomingSound>,
     pub stop_signal: Arc<AtomicBool>,
 }
 
 impl UdpWorkerHandle {
     pub fn is_connected(&self) -> bool {
-        matches!(
-            *self.state.read().unwrap(),
-            UdpConnectionState::Connected { .. }
-        )
+        self.state
+            .read()
+            .map(|s| matches!(*s, UdpConnectionState::Connected { .. }))
+            .unwrap_or(false)
     }
 
     pub fn ping_ms(&self) -> Option<u32> {
-        match *self.state.read().unwrap() {
+        self.state.read().ok().and_then(|s| match *s {
             UdpConnectionState::Connected { ping_ms } => Some(ping_ms),
             _ => None,
-        }
+        })
     }
 
     pub fn stop(&self) {
@@ -69,8 +69,8 @@ impl UdpWorker {
         }
 
         let state = Arc::new(RwLock::new(UdpConnectionState::Connecting));
-        let (mic_tx, mic_rx) = std::sync::mpsc::channel::<MicPacket>();
-        let (sound_tx, sound_rx) = std::sync::mpsc::channel::<IncomingSound>();
+        let (mic_tx, mic_rx) = sync_channel::<MicPacket>(128);
+        let (sound_tx, sound_rx) = sync_channel::<IncomingSound>(256);
         let stop_signal = Arc::new(AtomicBool::new(false));
 
         let (host, port) =
@@ -109,7 +109,7 @@ impl UdpWorker {
         state: Arc<RwLock<UdpConnectionState>>,
         stop_signal: Arc<AtomicBool>,
         mic_rx: Receiver<MicPacket>,
-        sound_tx: Sender<IncomingSound>,
+        sound_tx: SyncSender<IncomingSound>,
     ) {
         let set_failed = |msg: String| {
             if let Ok(mut lock) = state.write() {
@@ -137,7 +137,13 @@ impl UdpWorker {
             }
         };
 
-        let socket = match UdpSocket::bind("0.0.0.0:0") {
+        let bind_addr = if remote_addr.is_ipv6() {
+            "[::]:0"
+        } else {
+            "0.0.0.0:0"
+        };
+
+        let socket = match UdpSocket::bind(bind_addr) {
             Ok(s) => {
                 log::info!("SVC: Bound local UDP socket to {:?}", s.local_addr());
                 s
@@ -156,8 +162,7 @@ impl UdpWorker {
         }
         log::info!("SVC: Connected UDP socket to {remote_addr}");
 
-        // Set short timeout to keep loop responsive
-        let _ = socket.set_read_timeout(Some(Duration::from_millis(20)));
+        let _ = socket.set_read_timeout(Some(Duration::from_millis(15)));
 
         let cipher = SvcCipher::new(&secret.secret);
         let conn_id = secret.connection_id;
@@ -165,14 +170,6 @@ impl UdpWorker {
         if let Ok(mut lock) = state.write() {
             *lock = UdpConnectionState::Authenticating;
         }
-
-        // -------------------------------------------------------------------
-        // 4-Step Handshake:
-        // 1. Authenticate (0x05) with [player_uuid (16B)] + [secret (16B)]
-        // 2. AuthenticateAck (0x06) -> optional nonce (v21) or empty (v20)
-        // 3. ConnectionCheck (0x09) with nonce if present, else empty body
-        // 4. ConnectionCheckAck (0x0A) -> empty body
-        // -------------------------------------------------------------------
 
         let auth_body = AuthenticatePacket::new(secret.player_uuid, secret.secret).to_body();
         let auth_pkt =
@@ -202,17 +199,10 @@ impl UdpWorker {
                 return;
             }
 
-            // Retry every 500ms
             if last_send.elapsed() >= Duration::from_millis(500) {
                 if auth_ack_received {
-                    // AuthenticateAck received, retry ConnectionCheck (Step 3)
                     check_retry_count += 1;
                     if let Some(ref pkt) = check_pkt {
-                        log::info!(
-                            "SVC: [Handshake Step 3] Sending ConnectionCheck (attempt {check_retry_count}, {} bytes, has_nonce={})...",
-                            pkt.len(),
-                            saved_nonce.is_some()
-                        );
                         let _ = socket.send(pkt);
                     } else {
                         let check_body = ConnectionCheckPacket::new(saved_nonce).to_body();
@@ -222,22 +212,12 @@ impl UdpWorker {
                             PACKET_ID_CONNECTION_CHECK,
                             &check_body,
                         ) {
-                            log::info!(
-                                "SVC: [Handshake Step 3] Sending ConnectionCheck (attempt {check_retry_count}, {} bytes, has_nonce={})...",
-                                pkt.len(),
-                                saved_nonce.is_some()
-                            );
                             let _ = socket.send(&pkt);
                             check_pkt = Some(pkt);
                         }
                     }
                 } else {
-                    // AuthenticateAck not yet received, retry Authenticate (Step 1)
                     auth_retry_count += 1;
-                    log::info!(
-                        "SVC: [Handshake Step 1] Sending Authenticate (attempt {auth_retry_count}, {} bytes)...",
-                        auth_pkt.len()
-                    );
                     let _ = socket.send(&auth_pkt);
                 }
                 last_send = Instant::now();
@@ -251,45 +231,24 @@ impl UdpWorker {
                                 if let Ok(ack) = AuthenticateAckPacket::from_body(&body) {
                                     auth_ack_received = true;
                                     saved_nonce = ack.nonce;
-                                    log::info!(
-                                        "SVC: [Handshake Step 2] Received AuthenticateAck ({} datagram bytes, has_nonce={}, elapsed: {:.1?})",
-                                        len,
-                                        saved_nonce.is_some(),
-                                        handshake_start.elapsed()
-                                    );
-                                    // Step 3: Send initial ConnectionCheck (0x09)
                                     check_retry_count += 1;
                                     let check_body =
                                         ConnectionCheckPacket::new(saved_nonce).to_body();
-                                    match build_client_udp_packet(
+                                    if let Ok(pkt) = build_client_udp_packet(
                                         conn_id,
                                         &cipher,
                                         PACKET_ID_CONNECTION_CHECK,
                                         &check_body,
                                     ) {
-                                        Ok(pkt) => {
-                                            log::info!(
-                                                "SVC: [Handshake Step 3] Sending initial ConnectionCheck (attempt {check_retry_count}, {} bytes, has_nonce={})...",
-                                                pkt.len(),
-                                                saved_nonce.is_some()
-                                            );
-                                            let _ = socket.send(&pkt);
-                                            check_pkt = Some(pkt);
-                                            last_send = Instant::now();
-                                        }
-                                        Err(e) => {
-                                            log::warn!(
-                                                "SVC: Failed to build ConnectionCheck packet: {e}"
-                                            );
-                                        }
+                                        let _ = socket.send(&pkt);
+                                        check_pkt = Some(pkt);
+                                        last_send = Instant::now();
                                     }
                                 }
                             }
                             PACKET_ID_CONNECTION_CHECK_ACK => {
-                                // Step 4: ConnectionCheckAck received -> Voice Connected!
                                 log::info!(
-                                    "SVC: [Handshake Step 4] Received ConnectionCheckAck ({} datagram bytes). UDP 4-step handshake completed successfully! Voice Connected! (elapsed: {:.1?})",
-                                    len,
+                                    "SVC: [Handshake Step 4] Voice Connected! (elapsed: {:.1?})",
                                     handshake_start.elapsed()
                                 );
                                 handshake_success = true;
@@ -301,10 +260,7 @@ impl UdpWorker {
                 }
                 Err(ref e)
                     if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    // Non-blocking / short read timeout, continue loop
-                }
+                        || e.kind() == std::io::ErrorKind::TimedOut => {}
                 Err(e) => {
                     log::debug!("SVC: UDP socket receive error during handshake: {e}");
                 }
@@ -325,9 +281,6 @@ impl UdpWorker {
             *lock = UdpConnectionState::Connected { ping_ms: 0 };
         }
 
-        // -------------------------------------------------------------------
-        // Active Connected Loop: KeepAlive, Ping, and Audio Transmission
-        // -------------------------------------------------------------------
         let mut last_keep_alive = Instant::now();
         let mut last_ping_sent = Instant::now();
         let keep_alive_interval = Duration::from_millis(secret.keep_alive.clamp(500, 5000) as u64);
@@ -336,7 +289,6 @@ impl UdpWorker {
         let mut current_ping_time = Instant::now();
 
         while !stop_signal.load(Ordering::Relaxed) {
-            // 1. Process Outgoing Mic Packets
             while let Ok(mic) = mic_rx.try_recv() {
                 let body = mic.to_body();
                 if let Ok(pkt) = build_client_udp_packet(conn_id, &cipher, PACKET_ID_MIC, &body) {
@@ -344,7 +296,6 @@ impl UdpWorker {
                 }
             }
 
-            // 2. KeepAlive periodic heartbeat
             if last_keep_alive.elapsed() >= keep_alive_interval {
                 if let Ok(ka_pkt) =
                     build_client_udp_packet(conn_id, &cipher, PACKET_ID_KEEP_ALIVE, &[])
@@ -354,13 +305,16 @@ impl UdpWorker {
                 last_keep_alive = Instant::now();
             }
 
-            // 3. Ping latency check
             if last_ping_sent.elapsed() >= ping_interval {
                 current_ping_id = current_ping_id.wrapping_add(1);
                 current_ping_time = Instant::now();
+                let unix_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
                 let ping = PingPacket {
                     id: current_ping_id,
-                    timestamp: current_ping_time.elapsed().as_millis() as i64,
+                    timestamp: unix_ms,
                 };
                 if let Ok(pkt) =
                     build_client_udp_packet(conn_id, &cipher, PACKET_ID_PING, &ping.to_body())
@@ -370,47 +324,62 @@ impl UdpWorker {
                 last_ping_sent = Instant::now();
             }
 
-            // 4. Receive Incoming Packets
-            match socket.recv(&mut recv_buf) {
-                Ok(len) => {
-                    if let Ok((pkt_id, body)) = parse_server_udp_packet(&recv_buf[..len], &cipher) {
-                        match pkt_id {
-                            PACKET_ID_PING => {
-                                let rtt_ms = current_ping_time.elapsed().as_millis() as u32;
-                                if let Ok(mut lock) = state.write() {
-                                    *lock = UdpConnectionState::Connected { ping_ms: rtt_ms };
+            for _ in 0..16 {
+                match socket.recv(&mut recv_buf) {
+                    Ok(len) => {
+                        if let Ok((pkt_id, body)) =
+                            parse_server_udp_packet(&recv_buf[..len], &cipher)
+                        {
+                            match pkt_id {
+                                PACKET_ID_PING => {
+                                    if let Ok(pong) = PingPacket::from_body(&body)
+                                        && pong.id == current_ping_id
+                                    {
+                                        let rtt_ms = current_ping_time.elapsed().as_millis() as u32;
+                                        if let Ok(mut lock) = state.write() {
+                                            *lock =
+                                                UdpConnectionState::Connected { ping_ms: rtt_ms };
+                                        }
+                                    }
                                 }
-                            }
-                            PACKET_ID_KEEP_ALIVE => {
-                                // Server keepalive ack
-                            }
-                            PACKET_ID_PLAYER_SOUND => {
-                                if let Ok(sound) = PlayerSoundPacket::from_body(&body) {
-                                    let _ = sound_tx.send(IncomingSound::Player(sound));
+                                PACKET_ID_KEEP_ALIVE => {
+                                    if let Ok(ka_pkt) = build_client_udp_packet(
+                                        conn_id,
+                                        &cipher,
+                                        PACKET_ID_KEEP_ALIVE,
+                                        &[],
+                                    ) {
+                                        let _ = socket.send(&ka_pkt);
+                                    }
                                 }
-                            }
-                            PACKET_ID_GROUP_SOUND => {
-                                if let Ok(sound) = GroupSoundPacket::from_body(&body) {
-                                    let _ = sound_tx.send(IncomingSound::Group(sound));
+                                PACKET_ID_PLAYER_SOUND => {
+                                    if let Ok(sound) = PlayerSoundPacket::from_body(&body) {
+                                        let _ = sound_tx.try_send(IncomingSound::Player(sound));
+                                    }
                                 }
-                            }
-                            PACKET_ID_LOCATION_SOUND => {
-                                if let Ok(sound) = LocationSoundPacket::from_body(&body) {
-                                    let _ = sound_tx.send(IncomingSound::Location(sound));
+                                PACKET_ID_GROUP_SOUND => {
+                                    if let Ok(sound) = GroupSoundPacket::from_body(&body) {
+                                        let _ = sound_tx.try_send(IncomingSound::Group(sound));
+                                    }
                                 }
+                                PACKET_ID_LOCATION_SOUND => {
+                                    if let Ok(sound) = LocationSoundPacket::from_body(&body) {
+                                        let _ = sound_tx.try_send(IncomingSound::Location(sound));
+                                    }
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
-                }
-                Err(ref e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
-                {
-                    // Normal timeout from short read_timeout
-                }
-                Err(_) => {
-                    // UDP socket error
+                    Err(ref e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        break;
+                    }
+                    Err(_) => {
+                        break;
+                    }
                 }
             }
         }

@@ -9155,6 +9155,22 @@ impl Game<'_> {
                 horizon_protocol::packets::configuration::CustomPayload { channel: ch, data },
             ));
         }
+        let listener_pos = self.view.eye;
+        let listener_yaw = self.yaw;
+        let uuids = &self.persist.uuids;
+        let remote_ref = self.remote.as_ref();
+        self.voice
+            .tick_audio(listener_pos, listener_yaw, |sender_uuid| {
+                let r = remote_ref?;
+                for (&eid, &u) in uuids.iter() {
+                    if u == sender_uuid {
+                        if let Some(tracked) = r.entities.get(&(eid as i32)) {
+                            return Some(tracked.position);
+                        }
+                    }
+                }
+                None
+            });
     }
 }
 

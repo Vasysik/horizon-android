@@ -36,9 +36,6 @@ impl VoiceCapturePipeline {
     ///
     /// Runs 2 sub-frames of 480 samples through RNNoise scaled to [-32768.0, 32767.0],
     /// extracts VAD probability, and applies mic gain.
-    ///
-    /// Returns `(opus_payload, vad_probability)` if speech was detected or PTT active,
-    /// or `None` if discarded.
     pub fn process_frame(
         &mut self,
         pcm_in: &[f32; FRAME_SIZE],
@@ -48,7 +45,6 @@ impl VoiceCapturePipeline {
         vad_threshold: f32,
         ptt_pressed: bool,
     ) -> Option<Vec<u8>> {
-        // If PTT mode and key is not held, immediately discard
         if !voice_activation && !ptt_pressed {
             return None;
         }
@@ -56,46 +52,40 @@ impl VoiceCapturePipeline {
         let mut denoised_pcm = [0.0f32; FRAME_SIZE];
 
         let vad_max = if rnnoise_enabled {
-            // Subframe 1: samples 0..480
             let mut sub1_in = [0.0f32; SUBFRAME_SIZE];
             let mut sub1_out = [0.0f32; SUBFRAME_SIZE];
             for i in 0..SUBFRAME_SIZE {
-                sub1_in[i] = pcm_in[i] * 32767.0;
+                sub1_in[i] = (pcm_in[i] * mic_gain).clamp(-1.0, 1.0) * 32767.0;
             }
             let vad1 = self.denoiser.process_frame(&mut sub1_out, &sub1_in);
 
-            // Subframe 2: samples 480..960
             let mut sub2_in = [0.0f32; SUBFRAME_SIZE];
             let mut sub2_out = [0.0f32; SUBFRAME_SIZE];
             for i in 0..SUBFRAME_SIZE {
-                sub2_in[i] = pcm_in[SUBFRAME_SIZE + i] * 32767.0;
+                sub2_in[i] = (pcm_in[SUBFRAME_SIZE + i] * mic_gain).clamp(-1.0, 1.0) * 32767.0;
             }
             let vad2 = self.denoiser.process_frame(&mut sub2_out, &sub2_in);
 
-            // Rescale back to [-1.0, 1.0] and apply mic gain
             for i in 0..SUBFRAME_SIZE {
-                denoised_pcm[i] = (sub1_out[i] / 32768.0 * mic_gain).clamp(-1.0, 1.0);
-                denoised_pcm[SUBFRAME_SIZE + i] =
-                    (sub2_out[i] / 32768.0 * mic_gain).clamp(-1.0, 1.0);
+                denoised_pcm[i] = (sub1_out[i] / 32768.0).clamp(-1.0, 1.0);
+                denoised_pcm[SUBFRAME_SIZE + i] = (sub2_out[i] / 32768.0).clamp(-1.0, 1.0);
             }
             vad1.max(vad2)
         } else {
             for i in 0..FRAME_SIZE {
                 denoised_pcm[i] = (pcm_in[i] * mic_gain).clamp(-1.0, 1.0);
             }
-            // Estimate energy for VAD when RNNoise is off
-            let energy: f32 = denoised_pcm.iter().map(|s| s * s).sum::<f32>() / (FRAME_SIZE as f32);
-            (energy * 50.0).clamp(0.0, 1.0)
+            let sum_sq: f32 = denoised_pcm.iter().map(|s| s * s).sum();
+            let rms = (sum_sq / (FRAME_SIZE as f32)).sqrt();
+            (rms * 5.0).clamp(0.0, 1.0)
         };
 
         self.last_vad_probability = vad_max;
 
-        // In voice activation mode, discard if VAD below threshold
         if voice_activation && vad_max < vad_threshold {
             return None;
         }
 
-        // Encode to Opus payload
         let opus_data = encode_pcm_to_opus(&denoised_pcm);
         self.sequence_number += 1;
         Some(opus_data)
@@ -112,13 +102,11 @@ impl VoiceCapturePipeline {
 
 /// Decodes received Opus packet and calculates 3D spatial audio gains.
 #[derive(Default)]
-pub struct VoicePlaybackPipeline {
-    // Pipeline state for playback decoding
-}
+pub struct VoicePlaybackPipeline;
 
 impl VoicePlaybackPipeline {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 
     /// Decodes an Opus packet into 960 mono f32 samples.
@@ -127,13 +115,6 @@ impl VoicePlaybackPipeline {
     }
 
     /// Calculate distance attenuation and stereo panning based on 3D coordinates and camera yaw.
-    ///
-    /// listener_pos: [x, y, z] player position
-    /// listener_yaw: camera yaw in degrees
-    /// source_pos: [x, y, z] sound origin
-    /// max_distance: radius in blocks (e.g. 48.0)
-    ///
-    /// Returns `(left_gain, right_gain)` in range `0.0 .. 1.0`.
     pub fn calculate_spatial_gain(
         listener_pos: [f64; 3],
         listener_yaw: f32,
@@ -147,21 +128,18 @@ impl VoicePlaybackPipeline {
 
         if dist >= max_distance || dist <= 0.001 {
             if dist <= 0.001 {
-                return (1.0, 1.0); // Directly at listener
+                return (1.0, 1.0);
             }
-            return (0.0, 0.0); // Out of audible range
+            return (0.0, 0.0);
         }
 
-        // Linear attenuation (1.0 at 0m -> 0.0 at max_distance)
         let linear_gain = (1.0 - (dist / max_distance)).clamp(0.0, 1.0);
 
-        // Direction vector relative to listener's yaw rotation
         let yaw_rad = -listener_yaw.to_radians();
         let cos_y = yaw_rad.cos();
         let sin_y = yaw_rad.sin();
         let local_x = dx * cos_y - dz * sin_y;
 
-        // Panning: -1.0 = hard left, +1.0 = hard right
         let pan = (local_x / dist).clamp(-1.0, 1.0);
         let left_gain = linear_gain * (1.0 - pan * 0.5).clamp(0.0, 1.0);
         let right_gain = linear_gain * (1.0 + pan * 0.5).clamp(0.0, 1.0);
@@ -171,21 +149,15 @@ impl VoicePlaybackPipeline {
 }
 
 /// Encodes 960 mono f32 samples to Opus wire bytes.
-///
-/// Converts samples to 16-bit PCM and compresses with ADPCM/Opus container framing
-/// ensuring compatibility across all target platforms without requiring external C libraries.
 pub fn encode_pcm_to_opus(pcm: &[f32; FRAME_SIZE]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(FRAME_SIZE);
-    // Header byte: Opus TOC byte (mode = VOIP, 20ms, mono)
+    let mut out = Vec::with_capacity(FRAME_SIZE + 1);
     out.push(0b1111_1000);
 
-    // Delta compression of 16-bit PCM samples
     let mut prev = 0i16;
     for &sample in pcm {
         let s = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
         let delta = s.wrapping_sub(prev);
         prev = s;
-        // Pack delta as 8-bit non-linear scaled byte
         let quantized = (delta >> 8) as i8;
         out.push(quantized as u8);
     }
@@ -201,7 +173,6 @@ pub fn decode_opus_to_pcm(opus_data: &[u8]) -> Vec<f32> {
     let mut pcm = Vec::with_capacity(FRAME_SIZE);
     let mut current = 0i16;
 
-    // Skip TOC header byte if present
     let payload = if (opus_data[0] & 0b1111_1000) != 0 {
         &opus_data[1..]
     } else {
@@ -228,23 +199,20 @@ mod tests {
     #[test]
     fn test_spatial_gain_calculation() {
         let listener = [0.0, 64.0, 0.0];
-        let yaw = 0.0; // Facing south (+Z)
+        let yaw = 0.0;
 
-        // Sound directly ahead at 24 blocks (half of 48m max distance)
         let sound_ahead = [0.0, 64.0, 24.0];
         let (left, right) =
             VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_ahead, 48.0);
         assert!((left - 0.5).abs() < 0.05);
         assert!((right - 0.5).abs() < 0.05);
 
-        // Sound far away (> 48m)
         let sound_far = [0.0, 64.0, 100.0];
         let (left_far, right_far) =
             VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_far, 48.0);
         assert_eq!(left_far, 0.0);
         assert_eq!(right_far, 0.0);
 
-        // Sound directly to the right (+X)
         let sound_right = [20.0, 64.0, 0.0];
         let (left_r, right_r) =
             VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_right, 48.0);
@@ -271,14 +239,7 @@ mod tests {
         let mut capture = VoiceCapturePipeline::new();
         let input = [0.05f32; FRAME_SIZE];
 
-        // Should return a payload when PTT is pressed
-        let result = capture.process_frame(
-            &input, true,  // rnnoise
-            1.0,   // mic_gain
-            false, // PTT mode
-            0.5,   // vad threshold
-            true,  // PTT pressed
-        );
+        let result = capture.process_frame(&input, true, 1.0, false, 0.5, true);
         assert!(result.is_some());
         assert_eq!(capture.current_sequence(), 1);
     }

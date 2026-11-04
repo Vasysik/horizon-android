@@ -123,7 +123,14 @@ impl<'a> ByteBufReader<'a> {
     }
 
     pub fn read_string(&mut self) -> Result<String, std::io::Error> {
-        let len = self.read_varint()? as usize;
+        let raw = self.read_varint()?;
+        if raw < 0 || (raw as usize) > self.remaining().min(32767) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bad len",
+            ));
+        }
+        let len = raw as usize;
         let mut bytes = vec![0u8; len];
         self.cursor.read_exact(&mut bytes)?;
         String::from_utf8(bytes)
@@ -131,7 +138,14 @@ impl<'a> ByteBufReader<'a> {
     }
 
     pub fn read_byte_array(&mut self) -> Result<Vec<u8>, std::io::Error> {
-        let len = self.read_varint()? as usize;
+        let raw = self.read_varint()?;
+        if raw < 0 || (raw as usize) > self.remaining().min(32767) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bad len",
+            ));
+        }
+        let len = raw as usize;
         let mut bytes = vec![0u8; len];
         self.cursor.read_exact(&mut bytes)?;
         Ok(bytes)
@@ -574,7 +588,14 @@ pub struct PlayerStatesPacket {
 impl PlayerStatesPacket {
     pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
         let mut r = ByteBufReader::new(data);
-        let count = r.read_i32()? as usize;
+        let raw_c = r.read_i32()?;
+        if raw_c < 0 || (raw_c as usize) > (r.remaining() / 18) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bad count",
+            ));
+        }
+        let count = raw_c as usize;
         let mut states = Vec::with_capacity(count);
         for _ in 0..count {
             states.push(PlayerState::read_from(&mut r)?);

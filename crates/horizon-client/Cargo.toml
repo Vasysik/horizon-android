@@ -23,6 +23,8 @@ horizon-protocol = { path = "../horizon-protocol" }
 aes-gcm = "0.10"
 getrandom = "0.3"
 nnnoiseless = "0.5"
+cpal = { version = "0.16", optional = true }
+audiopus = { version = "0.2", optional = true }
 # server.properties, eula.txt and the user lists, shared with horizon-server.
 horizon-server-files = { path = "../horizon-server-files" }
 # The dedicated server's anticheat, off unless server.toml's [anticheat] turns it on (docs/anticheat.md).
@@ -113,7 +115,9 @@ winresource = "0.1"
 default = ["audio", "controllers"]
 # Sound output. Without it (and `controllers`) the program links neither libasound nor libudev on
 # Linux: the server build (`--no-default-features`, released as horizon-engine; docs/server.md).
-audio = ["horizon-client-render/audio"]
+audio = ["horizon-client-render/audio", "opus"]
+# Native Opus codec for Simple Voice Chat (SVC) wire compatibility with Java Edition.
+opus = ["dep:audiopus"]
 # Controllers: gilrs, and the DualSense's own output. Without it only `horizon-ctl pad`'s virtual pad.
 controllers = ["dep:gilrs", "dep:horizon-dualsense", "horizon-client-input/controllers"]
 # Runs code mods (wasmtime and cranelift: a quarter of a clean build). On in every release build
