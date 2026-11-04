@@ -151,10 +151,30 @@ def main():
     environment['CARGO_TARGET_DIR'] = str(target_dir)
     triple = target.replace('-', '_')
     clang = ndk / 'bin' / (compiler_target + str(min_sdk) + '-clang' + ('.cmd' if os.name == 'nt' else ''))
+    ar = ndk / 'bin' / ('llvm-ar' + suffix)
+    ranlib = ndk / 'bin' / ('llvm-ranlib' + suffix)
+    strip = ndk / 'bin' / ('llvm-strip' + suffix)
     environment[f'CC_{triple}'] = str(clang)
     environment[f'CXX_{triple}'] = str(ndk / 'bin' / (compiler_target + str(min_sdk) + '-clang++' + ('.cmd' if os.name == 'nt' else '')))
-    environment[f'AR_{triple}'] = str(ndk / 'bin' / ('llvm-ar' + suffix))
+    environment[f'AR_{triple}'] = str(ar)
+    environment[f'RANLIB_{triple}'] = str(ranlib)
     environment[f'CARGO_TARGET_{triple.upper()}_LINKER'] = str(clang)
+    environment['LIBOPUS_STATIC'] = '1'
+    environment['OPUS_STATIC'] = '1'
+    environment['LIBOPUS_NO_PKG'] = '1'
+    environment['OPUS_NO_PKG'] = '1'
+    target_dir.mkdir(parents=True, exist_ok=True)
+    config_site = target_dir / f'opus-config-{target}.site'
+    config_site.write_text(
+        f'host_alias={compiler_target}\n'
+        f'cross_compiling=yes\n'
+        f'CC="{clang.as_posix()}"\n'
+        f'AR="{ar.as_posix()}"\n'
+        f'RANLIB="{ranlib.as_posix()}"\n'
+        f'STRIP="{strip.as_posix()}"\n',
+        encoding='utf-8',
+    )
+    environment['CONFIG_SITE'] = str(config_site)
     environment['CARGO_PROFILE_DEV_DEBUG'] = '0'
     environment['HORIZON_ANDROID_PUBLIC'] = '1' if args.public else '0'
     try:
