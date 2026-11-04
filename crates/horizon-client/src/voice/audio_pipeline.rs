@@ -10,6 +10,9 @@ use audiopus::{
     coder::{Decoder as OpusDecoder, Encoder as OpusEncoder, GenericCtl},
     packet::Packet as OpusPacket,
 };
+
+use audiopus::coder::GenericCtl;
+use audiopus::TryFrom; // This shadows std::convert::TryFrom for OpusPacket and MutSignals
 use nnnoiseless::DenoiseState;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -166,7 +169,7 @@ impl SenderDecoder {
 
     fn decode_plc(&mut self, out: &mut [f32; FRAME_SIZE]) -> Option<usize> {
         let mut signals = MutSignals::try_from(&mut out[..]).ok()?;
-        self.decoder.decode_float::<&OpusPacket, _>(None, &mut signals, false).ok()
+        self.decoder.decode_float(None::<&OpusPacket>, &mut signals, false).ok()
     }
 }
 
