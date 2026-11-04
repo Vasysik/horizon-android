@@ -1514,7 +1514,7 @@ impl Game<'_> {
             batch,
             &self.gui.atlas,
             (x, y),
-            self.pad.touch.settings.virtual_mouse_pointer_scale,
+            self.settings.touch.virtual_mouse_pointer_scale,
         );
     }
 
