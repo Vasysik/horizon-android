@@ -63,6 +63,7 @@ too_many_arguments = "allow"
 type_complexity = "allow"
 needless_range_loop = "allow"
 large_enum_variant = "allow"
+collapsible_match = "allow"
 
 # wgpu-hal 30.0.1 with gfx-rs/wgpu#10124: wgpu 30 creates a Vulkan descriptor
 # pool with no pool sizes while it creates the device, which Vulkan allows only
