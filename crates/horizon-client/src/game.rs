@@ -9893,10 +9893,18 @@ impl Game<'_> {
     /// and a sneak the key no longer held: #4166's in-game report), so a
     /// cached key set is not vanilla's answer.
     pub(super) fn has_shift_down(&self) -> bool {
+        #[cfg(target_os = "android")]
+        if self.pad.touch_ui.modifier_latched(KeyCode::ShiftLeft) {
+            return true;
+        }
         self.modifiers.shift_key()
     }
     /// The same live word for Control (`InputWithModifiers.hasControlDown`).
     pub(super) fn has_control_down(&self) -> bool {
+        #[cfg(target_os = "android")]
+        if self.pad.touch_ui.modifier_latched(KeyCode::ControlLeft) {
+            return true;
+        }
         self.modifiers.control_key()
     }
     /// Real events word the modifiers by their own `ModifiersChanged`; a

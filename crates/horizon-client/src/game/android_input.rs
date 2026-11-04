@@ -93,24 +93,29 @@ impl Game<'_> {
         };
         let point = [self.cursor.0, self.cursor.1];
         let normalized = [point[0] / batch.width, point[1] / batch.height];
-        let utility = self
+        // What the pad has under the pointer, and what it holds: touches are
+        // position-dependent and change with the layout, ownership survives
+        // screen transitions (a held press must complete before the pad
+        // frees it, see `aux_mouse_phase`).
+        let touched = self
             .pad
             .touch_ui
             .action(batch.width, batch.height, point, self.pad_in_menu())
             .is_some()
-            || self.pad.touch_ui.owns_key(POINTER)
-            || self.pad.touch.owns_pointer(POINTER)
             || (!self.pad_in_menu() && self.pad.touch.auxiliary_at(normalized));
-        if !utility {
+        let owned = self.pad.touch_ui.owns_key(POINTER)
+            || self.pad.touch_ui.owns_mouse(POINTER)
+            || self.pad.touch.owns_pointer(POINTER);
+        let Some(phase) = horizon_client::touch_ui::aux_mouse_phase(
+            *state == ElementState::Pressed,
+            owned,
+            touched,
+        ) else {
             return false;
-        }
+        };
         let touch = Touch {
             device_id: *device_id,
-            phase: if *state == ElementState::Pressed {
-                TouchPhase::Started
-            } else {
-                TouchPhase::Ended
-            },
+            phase,
             location: winit::dpi::PhysicalPosition::new(
                 f64::from(point[0] * batch.scale),
                 f64::from(point[1] * batch.scale),
@@ -376,11 +381,19 @@ impl Game<'_> {
                             key,
                             KeyCode::Tab | KeyCode::ShiftLeft | KeyCode::ControlLeft
                         ) {
-                            let down = !self.physical_keys.remove(&key);
-                            if down {
-                                self.physical_keys.insert(key);
+                            let down = if key == KeyCode::Tab {
+                                if self.physical_keys.remove(&key) {
+                                    false
+                                } else {
+                                    self.physical_keys.insert(key);
+                                    true
+                                }
+                            } else {
+                                self.pad.touch_ui.toggle_modifier(key)
+                            };
+                            if !self.pad_in_menu() {
+                                self.mapped_key(key, down, false)?;
                             }
-                            self.mapped_key(key, down, false)?;
                         } else {
                             if !self.pad.touch_ui.key_down(t.id, key) {
                                 return Ok(true);
@@ -542,6 +555,7 @@ impl Game<'_> {
         self.debug_key(key, KeyAction::Release);
     }
     pub(super) fn android_release_touch_keys(&mut self, cancelled: bool) {
+        self.pad.touch_ui.clear_modifiers();
         if cancelled && matches!(self.screen, Screen::Inventory | Screen::Creative) {
             self.inv_clicks = Default::default();
             self.inv_drag = None;
