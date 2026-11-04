@@ -114,6 +114,7 @@ impl Game<'_> {
         // bindings can also change before the physical key is released.
         self.keys.clear();
         self.screen = Screen::Options;
+        self.capture(false);
         self.options_from_title = from_title;
         self.options_to_game = false;
         let need_languages = self.ui.options.languages.is_empty() || page == Page::Language;

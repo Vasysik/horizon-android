@@ -139,7 +139,7 @@ mod hardware {
         }
         pub(super) fn pad_output_frame(&mut self) {
             #[cfg(target_os = "android")]
-            if !self.settings.controller.vibration {
+            if !self.settings.controller.vibration || !self.pad.touch.settings.vibrate {
                 crate::platform::cancel_vibration();
             }
         }
@@ -716,6 +716,10 @@ impl Game<'_> {
     /// playing (a pad lying idle while the mouse plays stays still).
     pub(super) fn pad_rumble(&mut self, rumble: Rumble) {
         let settings = &self.settings.controller;
+        #[cfg(target_os = "android")]
+        if !self.pad.touch.settings.vibrate {
+            return;
+        }
         if (!settings.enabled && !cfg!(target_os = "android"))
             || !settings.vibration
             || !self.pad.in_use

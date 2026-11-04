@@ -146,6 +146,9 @@ impl StartupMenu {
         #[cfg(target_os = "android")]
         {
             game.pad.touch = std::mem::take(&mut self.controls);
+            game.pad.touch_ui.pointer_off = !game.pad.touch.settings.virtual_mouse_enabled;
+            game.pad.touch_ui.cursor_initialized = self.touch.cursor_initialized;
+            game.pad.touch_ui.last_viewport = self.touch.last_viewport;
         }
         #[cfg(target_os = "android")]
         {
@@ -507,10 +510,25 @@ impl Loading {
 
     fn update_menu_cursor(&mut self) {
         let batch = HudBatch::new(self.menu_size());
+        #[cfg(target_os = "android")]
+        if self.menu.pointer == (0.0, 0.0) || !self.menu.touch.cursor_initialized {
+            self.menu
+                .touch
+                .sync_viewport_cursor(&mut self.menu.cursor, [batch.width, batch.height]);
+            self.menu.pointer = (
+                f64::from(self.menu.cursor.0 * batch.scale),
+                f64::from(self.menu.cursor.1 * batch.scale),
+            );
+            return;
+        }
         self.menu.cursor = (
             self.menu.pointer.0 as f32 / batch.scale,
             self.menu.pointer.1 as f32 / batch.scale,
         );
+        #[cfg(target_os = "android")]
+        self.menu
+            .touch
+            .sync_viewport_cursor(&mut self.menu.cursor, [batch.width, batch.height]);
     }
 
     fn menu_size(&self) -> [u32; 2] {
@@ -1268,7 +1286,6 @@ impl Loading {
                             let _ = self.startup_mouse_button(event_loop, right, false);
                         }
                         self.menu.touch.cancel();
-                        self.menu.touch.virtual_mouse = false;
                         self.menu.controls.clear();
                         self.menu
                             .controls
@@ -1276,6 +1293,13 @@ impl Loading {
                             .switch_control_system(std::path::Path::new("."), style);
                         self.menu.touch.goy_mode =
                             style == horizon_client::touch::ControlStyle::GoyControl;
+                        self.menu.touch.pointer_off =
+                            !self.menu.controls.settings.virtual_mouse_enabled;
+                        self.menu.touch.virtual_mouse =
+                            self.menu.controls.settings.virtual_mouse_enabled;
+                        self.menu
+                            .touch
+                            .sync_viewport_cursor(&mut self.menu.cursor, [b.width, b.height]);
                         self.menu.touch.refresh_presets_cache(style);
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
@@ -1360,6 +1384,10 @@ impl Loading {
                             }
                             horizon_client::touch::Mode::Tap => horizon_client::touch::Mode::Dpad,
                         };
+                        if self.menu.controls.settings.mode != horizon_client::touch::Mode::Crosshair
+                        {
+                            self.menu.controls.settings.split_controls = false;
+                        }
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
@@ -1370,16 +1398,17 @@ impl Loading {
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
                     InGameMenuAction::ToggleSplitTouch => {
-                        self.menu.controls.settings.split_controls =
-                            !self.menu.controls.settings.split_controls;
+                        self.menu.controls.settings.toggle_split_touch();
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
                     InGameMenuAction::ToggleInvertY => {
-                        self.menu.controls.settings.invert_y =
-                            !self.menu.controls.settings.invert_y;
+                        let next = !self.menu.controls.settings.invert_y;
+                        self.menu.controls.settings.invert_y = next;
+                        self.settings.invert_y = next;
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
+                        self.save_menu_settings();
                     }
                     InGameMenuAction::ToggleLeftHanded => {
                         self.menu.controls.settings.left_handed =
@@ -1388,10 +1417,13 @@ impl Loading {
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
                     InGameMenuAction::ToggleSprintMode => {
-                        self.menu.controls.settings.toggle_sprint =
-                            !self.menu.controls.settings.toggle_sprint;
+                        let next = !self.menu.controls.settings.sprint_toggle;
+                        self.menu.controls.settings.sprint_toggle = next;
+                        self.menu.controls.settings.toggle_sprint = next;
+                        self.settings.toggle_sprint = next;
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
+                        self.save_menu_settings();
                     }
                     InGameMenuAction::ToggleInventoryControls => {
                         self.menu.controls.settings.inventory_controls =
@@ -1400,15 +1432,27 @@ impl Loading {
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
                     InGameMenuAction::ToggleVibrate => {
-                        self.menu.controls.settings.vibrate = !self.menu.controls.settings.vibrate;
+                        let next = !self.menu.controls.settings.vibrate;
+                        self.menu.controls.settings.vibrate = next;
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
+                        if next {
+                            crate::platform::vibrate(horizon_client::gamepad::Pulse {
+                                strong: 0.30,
+                                weak: 0.55,
+                                millis: 22,
+                            });
+                        } else {
+                            crate::platform::cancel_vibration();
+                        }
                     }
                     InGameMenuAction::ToggleAutoJump => {
-                        self.menu.controls.settings.auto_jump =
-                            !self.menu.controls.settings.auto_jump;
+                        let next = !self.menu.controls.settings.auto_jump;
+                        self.menu.controls.settings.auto_jump = next;
+                        self.settings.auto_jump = next;
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
+                        self.save_menu_settings();
                     }
                     InGameMenuAction::ToggleGyro => {
                         self.menu.controls.settings.gyroscope =
@@ -1417,13 +1461,38 @@ impl Loading {
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
                     InGameMenuAction::ToggleVirtualMouse => {
-                        // The switch turns the pointer off for good; while it is on
-                        // the pointer follows the mouse lock and comes back centred.
-                        self.menu.touch.pointer_off = !self.menu.touch.pointer_off;
-                        self.menu.touch.virtual_mouse = !self.menu.touch.pointer_off;
-                        if !self.menu.touch.pointer_off {
-                            self.menu.cursor = (b.width * 0.5, b.height * 0.5);
+                        let next = !self.menu.controls.settings.virtual_mouse_enabled;
+                        self.menu.controls.settings.virtual_mouse_enabled = next;
+                        self.menu.touch.pointer_off = !next;
+                        self.menu.touch.virtual_mouse = next;
+                        let _ = self.menu.controls.settings.save();
+                        self.settings.touch = self.menu.controls.settings.clone();
+                        if next {
+                            self.menu
+                                .touch
+                                .sync_viewport_cursor(&mut self.menu.cursor, [b.width, b.height]);
                         }
+                    }
+                    InGameMenuAction::SetVirtualMouseSpeed(spd) => {
+                        self.menu.controls.settings.virtual_mouse_sensitivity =
+                            spd.clamp(0.25, 3.00);
+                        let _ = self.menu.controls.settings.save();
+                        self.settings.touch = self.menu.controls.settings.clone();
+                    }
+                    InGameMenuAction::StepVirtualMouseSpeed(dir) => {
+                        self.menu.controls.settings.virtual_mouse_sensitivity =
+                            (self.menu.controls.settings.virtual_mouse_sensitivity
+                                + dir as f32 * 0.25)
+                                .clamp(0.25, 3.00);
+                        let _ = self.menu.controls.settings.save();
+                        self.settings.touch = self.menu.controls.settings.clone();
+                    }
+                    InGameMenuAction::StepGyroSensitivity(dir) => {
+                        self.menu.controls.settings.gyro_sensitivity =
+                            (self.menu.controls.settings.gyro_sensitivity + dir as f32 * 0.20)
+                                .clamp(0.20, 3.00);
+                        let _ = self.menu.controls.settings.save();
+                        self.settings.touch = self.menu.controls.settings.clone();
                     }
                     InGameMenuAction::SetTouchSensitivity(sens) => {
                         self.menu.controls.settings.sensitivity = sens.clamp(0.10, 3.00);
@@ -1490,14 +1559,16 @@ impl Loading {
                                 self.startup_mouse_button(event_loop, right, false)?;
                             }
                             self.menu.touch.cancel();
-                            self.menu.touch.pointer_off = !self.menu.touch.pointer_off;
-                            self.menu.touch.virtual_mouse = !self.menu.touch.pointer_off;
-                            if self.menu.touch.virtual_mouse
-                                && ((self.menu.cursor.0 <= 2.0 && self.menu.cursor.1 <= 2.0)
-                                    || self.menu.cursor.0 >= b.width
-                                    || self.menu.cursor.1 >= b.height)
-                            {
-                                self.menu.cursor = (b.width * 0.5, b.height * 0.5);
+                            let next = !self.menu.controls.settings.virtual_mouse_enabled;
+                            self.menu.controls.settings.virtual_mouse_enabled = next;
+                            self.menu.touch.pointer_off = !next;
+                            self.menu.touch.virtual_mouse = next;
+                            let _ = self.menu.controls.settings.save();
+                            self.settings.touch = self.menu.controls.settings.clone();
+                            if next {
+                                self.menu
+                                    .touch
+                                    .sync_viewport_cursor(&mut self.menu.cursor, [b.width, b.height]);
                             }
                         }
                         "key.mouse.left" | "action:key.attack" => {
@@ -1555,14 +1626,16 @@ impl Loading {
                             self.startup_mouse_button(event_loop, right, false)?;
                         }
                         self.menu.touch.cancel();
-                        self.menu.touch.pointer_off = !self.menu.touch.pointer_off;
-                        self.menu.touch.virtual_mouse = !self.menu.touch.pointer_off;
-                        if self.menu.touch.virtual_mouse
-                            && ((self.menu.cursor.0 <= 2.0 && self.menu.cursor.1 <= 2.0)
-                                || self.menu.cursor.0 >= b.width
-                                || self.menu.cursor.1 >= b.height)
-                        {
-                            self.menu.cursor = (b.width * 0.5, b.height * 0.5);
+                        let next = !self.menu.controls.settings.virtual_mouse_enabled;
+                        self.menu.controls.settings.virtual_mouse_enabled = next;
+                        self.menu.touch.pointer_off = !next;
+                        self.menu.touch.virtual_mouse = next;
+                        let _ = self.menu.controls.settings.save();
+                        self.settings.touch = self.menu.controls.settings.clone();
+                        if next {
+                            self.menu
+                                .touch
+                                .sync_viewport_cursor(&mut self.menu.cursor, [b.width, b.height]);
                         }
                     }
                     Action::MouseButton(right) => {
@@ -1608,15 +1681,20 @@ impl Loading {
                 return Ok(());
             }
             if self.menu.touch.virtual_mouse {
+                self.menu
+                    .touch
+                    .sync_viewport_cursor(&mut self.menu.cursor, [b.width, b.height]);
                 let cursor = self.menu.touch.relative_touch(
                     touch.id,
                     p,
                     touch.phase,
                     [self.menu.cursor.0, self.menu.cursor.1],
                     [b.width, b.height],
-                    self.settings.touch.virtual_mouse_sensitivity,
+                    self.menu.controls.settings.virtual_mouse_sensitivity,
                     !self.menu.touch.mouse_held(),
                 );
+                self.menu.cursor = (cursor[0], cursor[1]);
+                self.menu.pointer = (f64::from(cursor[0] * b.scale), f64::from(cursor[1] * b.scale));
                 self.menu_event(
                     event_loop,
                     WindowEvent::CursorMoved {
@@ -2045,8 +2123,12 @@ impl Loading {
             let is_goy = self.menu.controls.settings.control_style
                 == horizon_client::touch::ControlStyle::GoyControl;
             self.menu.touch.goy_mode = is_goy;
-            // The title menu never locks the mouse: the touch pointer is free here.
-            self.menu.touch.virtual_mouse = !self.menu.touch.pointer_off;
+            // Sync title menu pointer visibility and viewport centering from authoritative settings.
+            self.menu.touch.pointer_off = !self.menu.controls.settings.virtual_mouse_enabled;
+            self.menu.touch.virtual_mouse = self.menu.controls.settings.virtual_mouse_enabled;
+            self.menu
+                .touch
+                .sync_viewport_cursor(&mut self.menu.cursor, [batch.width, batch.height]);
             if is_goy {
                 horizon_client::touch_ui::draw_goy_hud(
                     &self.menu.controls,

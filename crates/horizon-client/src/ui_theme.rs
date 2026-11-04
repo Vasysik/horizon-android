@@ -821,6 +821,16 @@ impl<'a> Ui<'a> {
         });
     }
 
+    /// Runs `draw` with the clip narrowed to `rect` (dp), restoring the outer clip afterwards.
+    pub fn clipped(&mut self, rect: [f32; 4], draw: impl FnOnce(&mut Self)) {
+        let previous = self.clip;
+        if let Some(narrowed) = self.clip_rect(rect) {
+            self.set_clip(Some(narrowed));
+        }
+        draw(self);
+        self.clip = previous;
+    }
+
     pub fn clip_rect(&self, rect: [f32; 4]) -> Option<[f32; 4]> {
         let [x, y, w, h] = rect;
         if let Some([cx0, cy0, cx1, cy1]) = self.clip {
@@ -1077,47 +1087,49 @@ impl<'a> Ui<'a> {
 
     /// Draw an authentic Material You 3 Switch (`52x28dp` pill track with sliding thumb and checkmark).
     pub fn m3_switch(&mut self, x: f32, y: f32, on: bool) {
+        let theme = active_theme();
         let track_w = 52.0;
         let track_h = 28.0;
         if on {
-            self.rounded(x, y, track_w, track_h, 14.0, color::hex(0x9A7BFF, 255));
+            self.rounded(x, y, track_w, track_h, 14.0, theme.accent);
             let thumb_d = 22.0;
             let tx = x + track_w - thumb_d - 3.0;
             let ty = y + (track_h - thumb_d) * 0.5;
-            self.rounded(tx, ty, thumb_d, thumb_d, 11.0, color::hex(0x17112E, 255));
+            self.rounded(tx, ty, thumb_d, thumb_d, 11.0, theme.on_accent);
             self.icon(
                 Icon::Check,
                 tx + 4.0,
                 ty + 4.0,
                 14.0,
-                color::hex(0x9A7BFF, 255),
+                theme.accent,
             );
         } else {
-            self.rounded(x, y, track_w, track_h, 14.0, color::hex(0x262336, 255));
-            self.stroke_rounded(x, y, track_w, track_h, 14.0, 1.6, color::hex(0x7A7394, 255));
+            self.rounded(x, y, track_w, track_h, 14.0, theme.surface_dim);
+            self.stroke_rounded(x, y, track_w, track_h, 14.0, 1.6, theme.border_strong);
             let thumb_d = 16.0;
             let tx = x + 6.0;
             let ty = y + (track_h - thumb_d) * 0.5;
-            self.rounded(tx, ty, thumb_d, thumb_d, 8.0, color::hex(0x9C96B0, 255));
+            self.rounded(tx, ty, thumb_d, thumb_d, 8.0, theme.text_muted);
         }
     }
 
     /// Draw an authentic Material You 3 Checkbox with label (`[✓] Label`) and return total width.
     pub fn m3_checkbox(&mut self, x: f32, y: f32, size: f32, checked: bool, label: &str) -> f32 {
+        let theme = active_theme();
         let r = (size * 0.28).clamp(4.0, 7.0);
         if checked {
-            self.rounded(x, y, size, size, r, color::hex(0x9A7BFF, 255));
+            self.rounded(x, y, size, size, r, theme.accent);
             let icon_s = (size - 4.0).max(10.0);
             self.icon(
                 Icon::Check,
                 x + (size - icon_s) * 0.5,
                 y + (size - icon_s) * 0.5,
                 icon_s,
-                color::hex(0x17112E, 255),
+                theme.on_accent,
             );
         } else {
-            self.rounded(x, y, size, size, r, color::hex(0x1C192B, 255));
-            self.stroke_rounded(x, y, size, size, r, 1.6, color::hex(0x7A7394, 255));
+            self.rounded(x, y, size, size, r, theme.surface_dim);
+            self.stroke_rounded(x, y, size, size, r, 1.6, theme.border_strong);
         }
         if !label.is_empty() {
             let tw = self.text(
@@ -1126,9 +1138,9 @@ impl<'a> Ui<'a> {
                 x + size + 8.0,
                 y + (size - 18.0) * 0.5,
                 if checked {
-                    color::hex(0xF4F0FC, 255)
+                    theme.text_primary
                 } else {
-                    color::hex(0xB8B1CC, 255)
+                    theme.text_muted
                 },
                 label,
             );
@@ -1179,7 +1191,8 @@ impl<'a> Ui<'a> {
         placeholder: &str,
         focused: bool,
     ) {
-        let accent = color::hex(0x9A7BFF, 255);
+        let theme = active_theme();
+        let accent = theme.accent;
         let radius = (h * 0.24).clamp(10.0, 14.0);
         self.rounded(
             x,
@@ -1188,9 +1201,9 @@ impl<'a> Ui<'a> {
             h,
             radius,
             if focused {
-                color::hex(0x221C36, 255)
+                theme.surface_bright
             } else {
-                color::hex(0x171326, 255)
+                theme.surface_dim
             },
         );
         self.stroke_rounded(
@@ -1203,7 +1216,7 @@ impl<'a> Ui<'a> {
             if focused {
                 accent
             } else {
-                color::hex(0x373050, 255)
+                theme.border
             },
         );
         let pad = (w * 0.035).clamp(10.0, 14.0);
@@ -1538,6 +1551,99 @@ impl<'a> Ui<'a> {
         }
     }
 
+    /// Renders a multi-stop linear gradient inside `[x, y, w, h]` dp using the resolved theme configuration.
+    pub fn fill_gradient(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        direction: GradientDirection,
+        c0: u32,
+        c1: u32,
+        c2: Option<(f32, u32)>,
+        steps: usize,
+    ) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let bands = steps.clamp(8, 32);
+        let sample = |t: f32| -> u32 {
+            let t = t.clamp(0.0, 1.0);
+            if let Some((mid_pos, cm)) = c2 {
+                let mp = mid_pos.clamp(0.10, 0.90);
+                if t <= mp {
+                    lerp_color(c0, cm, (t / mp).clamp(0.0, 1.0))
+                } else {
+                    lerp_color(cm, c1, ((t - mp) / (1.0 - mp)).clamp(0.0, 1.0))
+                }
+            } else {
+                lerp_color(c0, c1, t)
+            }
+        };
+        match direction {
+            GradientDirection::Vertical => {
+                let bh = h / bands as f32;
+                for i in 0..bands {
+                    let t = (i as f32 + 0.5) / bands as f32;
+                    self.fill(x, y + i as f32 * bh, w, bh + 0.6, sample(t));
+                }
+            }
+            GradientDirection::Horizontal => {
+                let bw = w / bands as f32;
+                for i in 0..bands {
+                    let t = (i as f32 + 0.5) / bands as f32;
+                    self.fill(x + i as f32 * bw, y, bw + 0.6, h, sample(t));
+                }
+            }
+            GradientDirection::DiagonalDown | GradientDirection::DiagonalUp => {
+                // Render smooth 2D grid cells for diagonal gradients without heavy shader switches
+                let gx = (bands / 2).clamp(6, 14);
+                let gy = (bands / 2).clamp(6, 14);
+                let cw = w / gx as f32;
+                let ch = h / gy as f32;
+                for iy in 0..gy {
+                    let ty = (iy as f32 + 0.5) / gy as f32;
+                    for ix in 0..gx {
+                        let tx = (ix as f32 + 0.5) / gx as f32;
+                        let t = if direction == GradientDirection::DiagonalDown {
+                            (tx + ty) * 0.5
+                        } else {
+                            (tx + (1.0 - ty)) * 0.5
+                        };
+                        self.fill(
+                            x + ix as f32 * cw,
+                            y + iy as f32 * ch,
+                            cw + 0.6,
+                            ch + 0.6,
+                            sample(t),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Paints the active theme background (solid or multi-stop gradient) over `[x, y, w, h]` dp.
+    pub fn draw_theme_background(&mut self, x: f32, y: f32, w: f32, h: f32, theme: &ResolvedTheme) {
+        if theme.is_gradient {
+            let mid = theme.use_three_stops.then_some((theme.gradient_mid_pos, theme.gradient_mid));
+            self.fill_gradient(
+                x,
+                y,
+                w,
+                h,
+                theme.gradient_direction,
+                theme.gradient_start,
+                theme.gradient_end,
+                mid,
+                20,
+            );
+        } else {
+            self.fill(x, y, w, h, theme.bg_solid);
+        }
+    }
+
     // ---- the launcher's components ----
 }
 
@@ -1648,6 +1754,589 @@ fn wrapping_lines(ui: &Ui, face: Face, size: f32, text: &str, max_w: f32) -> Vec
         lines.push(line);
     }
     lines
+}
+
+// ---- Centralized Launcher Theme System & Motion Utilities ----
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemePreset {
+    #[default]
+    ObsidianViolet,
+    CyberCyan,
+    EmeraldForest,
+    CrimsonEmber,
+    SolarGold,
+    SakuraRose,
+    DaylightFrost,
+    Custom,
+}
+
+impl ThemePreset {
+    pub const ALL: [Self; 8] = [
+        Self::ObsidianViolet,
+        Self::CyberCyan,
+        Self::EmeraldForest,
+        Self::CrimsonEmber,
+        Self::SolarGold,
+        Self::SakuraRose,
+        Self::DaylightFrost,
+        Self::Custom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ObsidianViolet => "Obsidian Violet",
+            Self::CyberCyan => "Cyber Cyan",
+            Self::EmeraldForest => "Emerald Forest",
+            Self::CrimsonEmber => "Crimson Ember",
+            Self::SolarGold => "Solar Gold",
+            Self::SakuraRose => "Sakura Rose",
+            Self::DaylightFrost => "Daylight Frost",
+            Self::Custom => "Custom Theme",
+        }
+    }
+
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Self::ObsidianViolet => "Signature Horizon dark violet",
+            Self::CyberCyan => "Deep slate with electric cyan",
+            Self::EmeraldForest => "Woodland moss with emerald mint",
+            Self::CrimsonEmber => "Obsidian ruby with warm coral",
+            Self::SolarGold => "Dark bronze with radiant amber",
+            Self::SakuraRose => "Twilight plum with blossom pink",
+            Self::DaylightFrost => "High-contrast Material 3 light",
+            Self::Custom => "Personalized colors & gradients",
+        }
+    }
+
+    /// Returns `(bg_rgb, surface_rgb, accent_rgb, grad_start_rgb, grad_mid_rgb, grad_end_rgb, is_light)`
+    pub fn palette_rgb(self) -> (u32, u32, u32, u32, u32, u32, bool) {
+        match self {
+            Self::ObsidianViolet | Self::Custom => (
+                0x13111C, 0x1D192B, 0x9A7BFF, 0x161129, 0x1E1638, 0x0E0C16, false,
+            ),
+            Self::CyberCyan => (
+                0x0C131F, 0x152033, 0x38BDF8, 0x0D1B2E, 0x102942, 0x09101B, false,
+            ),
+            Self::EmeraldForest => (
+                0x0D1714, 0x152620, 0x34D399, 0x0F231C, 0x163329, 0x0A120F, false,
+            ),
+            Self::CrimsonEmber => (
+                0x191013, 0x26181D, 0xF87171, 0x261219, 0x361922, 0x120B0E, false,
+            ),
+            Self::SolarGold => (
+                0x18140D, 0x251F15, 0xFBBF24, 0x241C0F, 0x332714, 0x120F0A, false,
+            ),
+            Self::SakuraRose => (
+                0x18111A, 0x261A29, 0xF472B6, 0x251429, 0x341C3A, 0x110C13, false,
+            ),
+            Self::DaylightFrost => (
+                0xF3F1FA, 0xFFFFFF, 0x6750A4, 0xEDE8FA, 0xF5F2FC, 0xE4DDF8, true,
+            ),
+        }
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeAppearance {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl ThemeAppearance {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dark => "Dark Mode",
+            Self::Light => "Light Mode",
+        }
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum BackgroundMode {
+    #[default]
+    Solid,
+    Gradient,
+}
+
+impl BackgroundMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Solid => "Solid Color",
+            Self::Gradient => "Multi-Stop Gradient",
+        }
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum GradientDirection {
+    #[default]
+    Vertical,
+    Horizontal,
+    DiagonalDown,
+    DiagonalUp,
+}
+
+impl GradientDirection {
+    pub const ALL: [Self; 4] = [
+        Self::Vertical,
+        Self::Horizontal,
+        Self::DiagonalDown,
+        Self::DiagonalUp,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Vertical => "Top → Bottom",
+            Self::Horizontal => "Left → Right",
+            Self::DiagonalDown => "Diagonal ↘",
+            Self::DiagonalUp => "Diagonal ↗",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Vertical => Self::Horizontal,
+            Self::Horizontal => Self::DiagonalDown,
+            Self::DiagonalDown => Self::DiagonalUp,
+            Self::DiagonalUp => Self::Vertical,
+        }
+    }
+}
+
+/// Curated palette swatches for quick one-tap selection in Launcher Settings -> Theme.
+pub const THEME_ACCENT_SWATCHES: [(u32, &str, &str); 8] = [
+    (0x9A7BFF, "#9A7BFF", "Violet"),
+    (0x38BDF8, "#38BDF8", "Cyan"),
+    (0x34D399, "#34D399", "Emerald"),
+    (0xF87171, "#F87171", "Crimson"),
+    (0xFBBF24, "#FBBF24", "Amber"),
+    (0xF472B6, "#F472B6", "Sakura"),
+    (0x60A5FA, "#60A5FA", "Cobalt"),
+    (0xA78BFA, "#A78BFA", "Iris"),
+];
+
+pub const THEME_BG_SWATCHES_DARK: [(u32, &str, &str); 6] = [
+    (0x13111C, "#13111C", "Obsidian"),
+    (0x0C131F, "#0C131F", "Abyss Blue"),
+    (0x0D1714, "#0D1714", "Deep Pine"),
+    (0x191013, "#191013", "Dark Ruby"),
+    (0x141418, "#141418", "Carbon"),
+    (0x0A0A0E, "#0A0A0E", "OLED Pitch"),
+];
+
+pub const THEME_BG_SWATCHES_LIGHT: [(u32, &str, &str); 6] = [
+    (0xF3F1FA, "#F3F1FA", "Frost Lavender"),
+    (0xEEF4FA, "#EEF4FA", "Ice Sky"),
+    (0xEFF7F3, "#EFF7F3", "Mint Cream"),
+    (0xFAF1F2, "#FAF1F2", "Rose Quartz"),
+    (0xF9F6EE, "#F9F6EE", "Warm Ivory"),
+    (0xF4F5F7, "#F4F5F7", "Pure Alabaster"),
+];
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LauncherThemeConfig {
+    pub preset: ThemePreset,
+    pub appearance: ThemeAppearance,
+    pub background_mode: BackgroundMode,
+    pub custom_bg_hex: String,
+    pub custom_surface_hex: String,
+    pub custom_accent_hex: String,
+    pub gradient_direction: GradientDirection,
+    pub gradient_start_hex: String,
+    pub gradient_mid_hex: String,
+    pub gradient_end_hex: String,
+    pub gradient_mid_pos: f32,
+    pub use_three_stops: bool,
+}
+
+impl Default for LauncherThemeConfig {
+    fn default() -> Self {
+        Self {
+            preset: ThemePreset::ObsidianViolet,
+            appearance: ThemeAppearance::Dark,
+            background_mode: BackgroundMode::Solid,
+            custom_bg_hex: "#13111C".into(),
+            custom_surface_hex: "#1D192B".into(),
+            custom_accent_hex: "#9A7BFF".into(),
+            gradient_direction: GradientDirection::DiagonalDown,
+            gradient_start_hex: "#1A1333".into(),
+            gradient_mid_hex: "#131A2E".into(),
+            gradient_end_hex: "#0D0B14".into(),
+            gradient_mid_pos: 0.50,
+            use_three_stops: true,
+        }
+    }
+}
+
+/// Safely parses a hex color string (`#RRGGBB`, `RRGGBB`, `#RGB`, `0xRRGGBB`) into `0xRRGGBB`.
+/// Returns `None` on invalid input so callers can provide sensible fallbacks.
+pub fn parse_hex_color(input: &str) -> Option<u32> {
+    let clean = input
+        .trim()
+        .trim_start_matches('#')
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+    if clean.len() == 6 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
+        u32::from_str_radix(clean, 16).ok()
+    } else if clean.len() == 3 && clean.chars().all(|c| c.is_ascii_hexdigit()) {
+        let mut expanded = String::with_capacity(6);
+        for ch in clean.chars() {
+            expanded.push(ch);
+            expanded.push(ch);
+        }
+        u32::from_str_radix(&expanded, 16).ok()
+    } else {
+        None
+    }
+}
+
+pub fn format_hex_color(rgb: u32) -> String {
+    format!("#{:06X}", rgb & 0xFFFFFF)
+}
+
+fn rgb_luminance(rgb: u32) -> f32 {
+    let r = ((rgb >> 16) & 0xFF) as f32 / 255.0;
+    let g = ((rgb >> 8) & 0xFF) as f32 / 255.0;
+    let b = (rgb & 0xFF) as f32 / 255.0;
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+fn blend_rgb(a: u32, b: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    let ar = ((a >> 16) & 0xFF) as f32;
+    let ag = ((a >> 8) & 0xFF) as f32;
+    let ab = (a & 0xFF) as f32;
+    let br = ((b >> 16) & 0xFF) as f32;
+    let bg = ((b >> 8) & 0xFF) as f32;
+    let bb = (b & 0xFF) as f32;
+    let r = (ar + (br - ar) * t).round().clamp(0.0, 255.0) as u32;
+    let g = (ag + (bg - ag) * t).round().clamp(0.0, 255.0) as u32;
+    let bl = (ab + (bb - ab) * t).round().clamp(0.0, 255.0) as u32;
+    (r << 16) | (g << 8) | bl
+}
+
+/// Linearly interpolates two HUD ABGR colors (`color::hex` format).
+pub fn lerp_color(c0: u32, c1: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    let mut out = 0u32;
+    for shift in [0, 8, 16, 24] {
+        let v0 = ((c0 >> shift) & 0xFF) as f32;
+        let v1 = ((c1 >> shift) & 0xFF) as f32;
+        let v = (v0 + (v1 - v0) * t).round().clamp(0.0, 255.0) as u32;
+        out |= v << shift;
+    }
+    out
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedTheme {
+    pub is_light: bool,
+    pub is_gradient: bool,
+    pub gradient_direction: GradientDirection,
+    pub use_three_stops: bool,
+    pub gradient_mid_pos: f32,
+    /// Solid fallback background color (always valid even when gradient is enabled).
+    pub bg_solid: u32,
+    pub gradient_start: u32,
+    pub gradient_mid: u32,
+    pub gradient_end: u32,
+    pub sidebar_bg: u32,
+    pub header_bg: u32,
+    pub surface: u32,
+    pub surface_dim: u32,
+    pub surface_bright: u32,
+    pub surface_selected: u32,
+    pub border: u32,
+    pub border_strong: u32,
+    pub accent: u32,
+    pub accent_soft: u32,
+    pub on_accent: u32,
+    pub text_primary: u32,
+    pub text_muted: u32,
+    pub success: u32,
+    pub danger: u32,
+}
+
+impl Default for ResolvedTheme {
+    fn default() -> Self {
+        LauncherThemeConfig::default().resolve()
+    }
+}
+
+impl LauncherThemeConfig {
+    pub fn sanitize(&mut self) {
+        if !self.gradient_mid_pos.is_finite() {
+            self.gradient_mid_pos = 0.50;
+        }
+        self.gradient_mid_pos = self.gradient_mid_pos.clamp(0.15, 0.85);
+        if parse_hex_color(&self.custom_bg_hex).is_none() {
+            self.custom_bg_hex = "#13111C".into();
+        }
+        if parse_hex_color(&self.custom_surface_hex).is_none() {
+            self.custom_surface_hex = "#1D192B".into();
+        }
+        if parse_hex_color(&self.custom_accent_hex).is_none() {
+            self.custom_accent_hex = "#9A7BFF".into();
+        }
+        if parse_hex_color(&self.gradient_start_hex).is_none() {
+            self.gradient_start_hex = "#1A1333".into();
+        }
+        if parse_hex_color(&self.gradient_mid_hex).is_none() {
+            self.gradient_mid_hex = "#131A2E".into();
+        }
+        if parse_hex_color(&self.gradient_end_hex).is_none() {
+            self.gradient_end_hex = "#0D0B14".into();
+        }
+    }
+
+    pub fn apply_preset(&mut self, preset: ThemePreset) {
+        self.preset = preset;
+        if preset != ThemePreset::Custom {
+            let (bg, surf, acc, gs, gm, ge, is_light) = preset.palette_rgb();
+            self.appearance = if is_light {
+                ThemeAppearance::Light
+            } else {
+                ThemeAppearance::Dark
+            };
+            self.custom_bg_hex = format_hex_color(bg);
+            self.custom_surface_hex = format_hex_color(surf);
+            self.custom_accent_hex = format_hex_color(acc);
+            self.gradient_start_hex = format_hex_color(gs);
+            self.gradient_mid_hex = format_hex_color(gm);
+            self.gradient_end_hex = format_hex_color(ge);
+        }
+    }
+
+    pub fn resolve(&self) -> ResolvedTheme {
+        let (def_bg, def_surf, def_acc, def_gs, def_gm, def_ge, preset_light) =
+            self.preset.palette_rgb();
+        let is_light = if self.preset == ThemePreset::DaylightFrost {
+            true
+        } else {
+            self.appearance == ThemeAppearance::Light || preset_light
+        };
+
+        let mut bg_rgb = if self.preset == ThemePreset::Custom {
+            parse_hex_color(&self.custom_bg_hex).unwrap_or(def_bg)
+        } else if is_light && self.preset != ThemePreset::DaylightFrost {
+            blend_rgb(0xF4F2FA, def_acc, 0.06)
+        } else {
+            parse_hex_color(&self.custom_bg_hex).unwrap_or(def_bg)
+        };
+
+        // Ensure background matches light/dark appearance mode if user toggled appearance
+        if is_light && rgb_luminance(bg_rgb) < 0.45 {
+            bg_rgb = blend_rgb(0xF3F1FA, def_acc, 0.06);
+        } else if !is_light && rgb_luminance(bg_rgb) > 0.65 {
+            bg_rgb = 0x13111C;
+        }
+
+        let mut accent_rgb = parse_hex_color(&self.custom_accent_hex).unwrap_or(def_acc);
+        // Protect accent legibility against background
+        if is_light && rgb_luminance(accent_rgb) > 0.72 {
+            accent_rgb = blend_rgb(accent_rgb, 0x1E1638, 0.45);
+        } else if !is_light && rgb_luminance(accent_rgb) < 0.15 {
+            accent_rgb = blend_rgb(accent_rgb, 0xFFFFFF, 0.45);
+        }
+
+        let surf_rgb = if is_light {
+            blend_rgb(bg_rgb, 0xFFFFFF, 0.72)
+        } else {
+            let candidate = parse_hex_color(&self.custom_surface_hex).unwrap_or(def_surf);
+            if rgb_luminance(candidate) > 0.55 {
+                blend_rgb(bg_rgb, 0xFFFFFF, 0.07)
+            } else {
+                blend_rgb(bg_rgb, candidate, 0.75)
+            }
+        };
+
+        let gs_rgb = parse_hex_color(&self.gradient_start_hex).unwrap_or(def_gs);
+        let gm_rgb = parse_hex_color(&self.gradient_mid_hex).unwrap_or(def_gm);
+        let ge_rgb = parse_hex_color(&self.gradient_end_hex).unwrap_or(def_ge);
+        let (gs_adj, gm_adj, ge_adj) = if is_light {
+            (
+                if rgb_luminance(gs_rgb) < 0.45 {
+                    blend_rgb(0xEDE8FA, accent_rgb, 0.14)
+                } else {
+                    gs_rgb
+                },
+                if rgb_luminance(gm_rgb) < 0.45 {
+                    blend_rgb(0xF6F4FC, accent_rgb, 0.06)
+                } else {
+                    gm_rgb
+                },
+                if rgb_luminance(ge_rgb) < 0.45 {
+                    blend_rgb(0xE3DCF7, accent_rgb, 0.18)
+                } else {
+                    ge_rgb
+                },
+            )
+        } else {
+            (gs_rgb, gm_rgb, ge_rgb)
+        };
+
+        let sidebar_rgb = if is_light {
+            blend_rgb(bg_rgb, accent_rgb, 0.07)
+        } else {
+            blend_rgb(bg_rgb, 0x07060C, 0.35)
+        };
+        let header_rgb = if is_light {
+            blend_rgb(bg_rgb, 0xFFFFFF, 0.50)
+        } else {
+            blend_rgb(bg_rgb, surf_rgb, 0.50)
+        };
+        let surf_dim_rgb = if is_light {
+            blend_rgb(bg_rgb, 0x000000, 0.04)
+        } else {
+            blend_rgb(bg_rgb, 0x000000, 0.22)
+        };
+        let surf_bright_rgb = if is_light {
+            blend_rgb(surf_rgb, accent_rgb, 0.10)
+        } else {
+            blend_rgb(surf_rgb, 0xFFFFFF, 0.07)
+        };
+        let surf_sel_rgb = if is_light {
+            blend_rgb(surf_rgb, accent_rgb, 0.18)
+        } else {
+            blend_rgb(surf_rgb, accent_rgb, 0.24)
+        };
+        let border_rgb = if is_light {
+            blend_rgb(bg_rgb, 0x1D192B, 0.16)
+        } else {
+            blend_rgb(surf_rgb, 0xFFFFFF, 0.11)
+        };
+        let border_strong_rgb = if is_light {
+            blend_rgb(bg_rgb, 0x1D192B, 0.34)
+        } else {
+            blend_rgb(surf_rgb, 0xFFFFFF, 0.28)
+        };
+        let on_accent_rgb = if rgb_luminance(accent_rgb) > 0.48 {
+            0x140E26
+        } else {
+            0xFFFFFF
+        };
+        let text_primary_rgb = if is_light { 0x1A1626 } else { 0xF5F2FC };
+        let text_muted_rgb = if is_light { 0x5E5675 } else { 0xA39BBF };
+
+        // Solid fallback even if gradient mode is active
+        let solid_fallback_rgb = if self.background_mode == BackgroundMode::Gradient {
+            blend_rgb(gs_adj, ge_adj, 0.5)
+        } else {
+            bg_rgb
+        };
+
+        ResolvedTheme {
+            is_light,
+            is_gradient: self.background_mode == BackgroundMode::Gradient,
+            gradient_direction: self.gradient_direction,
+            use_three_stops: self.use_three_stops,
+            gradient_mid_pos: self.gradient_mid_pos.clamp(0.15, 0.85),
+            bg_solid: color::hex(solid_fallback_rgb, 255),
+            gradient_start: color::hex(gs_adj, 255),
+            gradient_mid: color::hex(gm_adj, 255),
+            gradient_end: color::hex(ge_adj, 255),
+            sidebar_bg: color::hex(sidebar_rgb, 246),
+            header_bg: color::hex(header_rgb, 246),
+            surface: color::hex(surf_rgb, 245),
+            surface_dim: color::hex(surf_dim_rgb, 248),
+            surface_bright: color::hex(surf_bright_rgb, 250),
+            surface_selected: color::hex(surf_sel_rgb, 252),
+            border: color::hex(border_rgb, 255),
+            border_strong: color::hex(border_strong_rgb, 255),
+            accent: color::hex(accent_rgb, 255),
+            accent_soft: color::with_alpha(color::hex(accent_rgb, 255), 0.22),
+            on_accent: color::hex(on_accent_rgb, 255),
+            text_primary: color::hex(text_primary_rgb, 255),
+            text_muted: color::hex(text_muted_rgb, 255),
+            success: color::hex(if is_light { 0x15803D } else { 0x4ADE80 }, 255),
+            danger: color::hex(if is_light { 0xDC2626 } else { 0xF87171 }, 255),
+        }
+    }
+}
+
+static ACTIVE_THEME: std::sync::Mutex<Option<ResolvedTheme>> = std::sync::Mutex::new(None);
+
+pub fn active_theme() -> ResolvedTheme {
+    if let Ok(guard) = ACTIVE_THEME.lock()
+        && let Some(theme) = *guard
+    {
+        return theme;
+    }
+    ResolvedTheme::default()
+}
+
+pub fn set_active_theme(theme: ResolvedTheme) {
+    if let Ok(mut guard) = ACTIVE_THEME.lock() {
+        *guard = Some(theme);
+    }
+}
+
+/// Performant, hardware-conscious motion utilities following Material 3 Expressive
+/// and Disney choreography principles. Automatically respects low-power / reduced-motion modes.
+pub mod motion {
+    use std::{
+        sync::atomic::{AtomicBool, Ordering},
+        time::Instant,
+    };
+
+    static REDUCED_MOTION: AtomicBool = AtomicBool::new(false);
+
+    pub fn set_reduced_motion(reduced: bool) {
+        REDUCED_MOTION.store(reduced, Ordering::Relaxed);
+    }
+
+    pub fn reduced_motion() -> bool {
+        REDUCED_MOTION.load(Ordering::Relaxed)
+    }
+
+    /// Standard Material 3 decelerate cubic-bezier approximation (`1 - (1 - t)^3`).
+    pub fn ease_out_cubic(t: f32) -> f32 {
+        let x = t.clamp(0.0, 1.0);
+        1.0 - (1.0 - x).powi(3)
+    }
+
+    /// Snappy quintic ease-out (`1 - (1 - t)^5`) for quick page/tab entrances.
+    pub fn ease_out_quint(t: f32) -> f32 {
+        let x = t.clamp(0.0, 1.0);
+        1.0 - (1.0 - x).powi(5)
+    }
+
+    /// Critically damped Material 3 spatial spring response (smooth settle, zero distracting bounce).
+    pub fn spring_spatial(t: f32) -> f32 {
+        let x = t.clamp(0.0, 1.0);
+        if x >= 1.0 {
+            return 1.0;
+        }
+        1.0 - (-6.5 * x).exp() * (1.0 + 6.5 * x * 0.45)
+    }
+
+    /// Evaluates elapsed progress `(0.0..=1.0)` since `since` over `duration_secs`.
+    /// Returns `1.0` immediately when `reduced_motion()` is enabled.
+    pub fn progress(since: Option<Instant>, now: Instant, duration_secs: f32) -> f32 {
+        if reduced_motion() || duration_secs <= 0.001 {
+            return 1.0;
+        }
+        let Some(start) = since else {
+            return 1.0;
+        };
+        let dt = now.duration_since(start).as_secs_f32();
+        (dt / duration_secs).clamp(0.0, 1.0)
+    }
 }
 
 #[cfg(test)]
@@ -1769,5 +2458,31 @@ mod tests {
         draw_boot_log(&atlas, &mut batch, &[]);
         assert!(batch.vertices.is_empty() && batch.patches.is_empty());
         reset_atlas();
+    }
+
+    #[test]
+    fn theme_config_parses_hex_safely_and_resolves_presets_and_gradients() {
+        assert_eq!(parse_hex_color("#9A7BFF"), Some(0x9A7BFF));
+        assert_eq!(parse_hex_color("38bdf8"), Some(0x38BDF8));
+        assert_eq!(parse_hex_color("#F0A"), Some(0xFF00AA));
+        assert_eq!(parse_hex_color("not-a-color"), None);
+
+        let mut cfg = LauncherThemeConfig::default();
+        cfg.custom_bg_hex = "invalid".into();
+        cfg.gradient_mid_pos = 99.0;
+        cfg.sanitize();
+        assert_eq!(cfg.custom_bg_hex, "#13111C");
+        assert_eq!(cfg.gradient_mid_pos, 0.85);
+
+        cfg.apply_preset(ThemePreset::DaylightFrost);
+        let light = cfg.resolve();
+        assert!(light.is_light);
+        assert_ne!(light.bg_solid, light.text_primary);
+
+        cfg.background_mode = BackgroundMode::Gradient;
+        cfg.gradient_direction = GradientDirection::DiagonalDown;
+        let grad = cfg.resolve();
+        assert!(grad.is_gradient);
+        assert_ne!(grad.bg_solid >> 24, 0, "solid fallback is always opaque");
     }
 }
