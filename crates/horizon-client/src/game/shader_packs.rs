@@ -498,7 +498,13 @@ impl Game<'_> {
                         programs.join(" "),
                         making.started.elapsed().as_millis()
                     );
-                    self.pack_ids = Some(making.ids);
+                    // None could be made (the notes above say why): the world would stay as it
+                    // is with the pack still "on".
+                    if programs.is_empty() {
+                        self.shader_pack_failed(&name, dimension, "none of its programs loaded");
+                    } else {
+                        self.pack_ids = Some(making.ids);
+                    }
                 }
                 Err(e) => self.shader_pack_failed(&name, dimension, &e),
             }

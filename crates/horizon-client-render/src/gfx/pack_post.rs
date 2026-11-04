@@ -1040,6 +1040,13 @@ pub(super) fn prepass_wanted() -> bool {
         || std::env::var_os("HORIZON_SHADER_PACK_PREPASS").is_some()
 }
 
+/// A pipeline layout's groups up to the last one used: a device limits how long the list is, the
+/// empty places at its end too (Mali's drivers allow 4, and most programs use no more).
+fn used_groups<T>(groups: &[Option<T>]) -> &[Option<T>] {
+    let used = groups.iter().rposition(Option::is_some);
+    &groups[..used.map_or(0, |last| last + 1)]
+}
+
 /// What a pack brings besides its programs: custom textures, images and storage buffers.
 struct Resources<'a> {
     textures: &'a [pack_textures::PackTexture],
@@ -1506,16 +1513,17 @@ fn build_pass(
             label: Some(&p.name),
             entries: &entries,
         });
+        let groups = [
+            Some(&layout),
+            geometry.and_then(|g| g.table),
+            draw.then_some(draws),
+            geometry.and_then(|g| g.ids),
+            (!interface.buffers.is_empty()).then_some(&pack.buffers.layout),
+            pack.indices.filter(|_| p.geometry_triangles > 0),
+        ];
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&p.name),
-            bind_group_layouts: &[
-                Some(&layout),
-                geometry.and_then(|g| g.table),
-                draw.then_some(draws),
-                geometry.and_then(|g| g.ids),
-                (!interface.buffers.is_empty()).then_some(&pack.buffers.layout),
-                pack.indices.filter(|_| p.geometry_triangles > 0),
-            ],
+            bind_group_layouts: used_groups(&groups),
             ..Default::default()
         });
         let module = |mut m: naga::Module| {
@@ -1752,15 +1760,16 @@ fn build_compute(
             label: Some(&name),
             entries: &entries,
         });
+        let groups = [
+            Some(&layout),
+            None,
+            None,
+            None,
+            (!interface.buffers.is_empty()).then_some(&pack.buffers.layout),
+        ];
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&name),
-            bind_group_layouts: &[
-                Some(&layout),
-                None,
-                None,
-                None,
-                (!interface.buffers.is_empty()).then_some(&pack.buffers.layout),
-            ],
+            bind_group_layouts: used_groups(&groups),
             ..Default::default()
         });
         let mut module = c.module;
@@ -4307,6 +4316,20 @@ impl PackPost {
 mod tests {
     use super::*;
     use wgpu::TextureFormat as T;
+
+    #[test]
+    fn a_layout_lists_groups_up_to_the_last_used() {
+        // A program of the world, without storage buffers or a geometry stage: four, as Mali allows.
+        let terrain = [Some(0), Some(1), Some(2), Some(3), None, None];
+        assert_eq!(used_groups(&terrain).len(), 4);
+        // A post program: its own group alone.
+        let post = [Some(0), None, None, None, None, None];
+        assert_eq!(used_groups(&post).len(), 1);
+        // A hole stays a hole, so that what follows keeps its number.
+        let buffers = [Some(0), None, None, None, Some(4), None];
+        assert_eq!(used_groups(&buffers), &buffers[..5]);
+        assert!(used_groups::<u8>(&[None, None]).is_empty());
+    }
 
     #[test]
     fn shadow_cache_key_tracks_world_and_time_changes() {

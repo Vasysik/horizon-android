@@ -1,11 +1,17 @@
-**Starling 0.2.0: the biggest update yet. `.hmod` and `.hnmod` mods, right from your phone.**
+**Starling 0.2.1: shader packs on Mali phones.**
 
 ## Install
 
 - **Already have Starling:** tap **Update** inside the game.
-- **New here:** download **`starling-0.2.0-arm64-v8a.apk`** below and open it.
+- **New here:** download **`starling-0.2.1-arm64-v8a.apk`** below and open it.
 
 ## What's new
+
+- **Shader packs run on Mali phones again.** On phones with a Mali GPU every pack stayed vanilla since 0.2.0.
+- A pack that can't run on your phone now says so in the chat and turns off.
+- Compiled native mods: compile them again after this update.
+
+## New in 0.2.0, the biggest update yet
 
 ### Mods: `.hmod` and `.hnmod`
 
