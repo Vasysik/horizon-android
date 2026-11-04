@@ -1,15 +1,21 @@
-**Starling 0.2.1: shader packs on Mali phones.**
+**Starling 0.2.2: many more native mods, and a fix for phones that crashed on opening.**
 
 ## Install
 
 - **Already have Starling:** tap **Update** inside the game.
-- **New here:** download **`starling-0.2.1-arm64-v8a.apk`** below and open it.
+- **New here:** download **`starling-0.2.2-arm64-v8a.apk`** below and open it.
 
 ## What's new
 
+- **Many more `.hnmod` native mods from [playhorizon.dev/mods](https://playhorizon.dev/mods) now compile**, like AppleSkin, Mod Menu, SmartF3, Freecam, Waymap and Distant Horizons. Open the mod's `.hnmod` with Starling, go to **Mods** and tap **Compile**.
+- **Fixed the crash on opening** on GPUs limited to 4096x4096 textures, like the PowerVR GE8320. The largest textures load at half size when they don't fit.
+- **More builds a day:** 16 instead of 8, and a build that fails gives its place back.
+- Compiled native mods: compile them again after this update.
+
+## New in 0.2.1
+
 - **Shader packs run on Mali phones again.** On phones with a Mali GPU every pack stayed vanilla since 0.2.0.
 - A pack that can't run on your phone now says so in the chat and turns off.
-- Compiled native mods: compile them again after this update.
 
 ## New in 0.2.0, the biggest update yet
 
