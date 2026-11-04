@@ -23,6 +23,7 @@ horizon-protocol = { path = "../horizon-protocol" }
 aes-gcm = "0.10"
 getrandom = "0.3"
 nnnoiseless = "0.5"
+audiopus = "0.2"
 cpal = { version = "0.16", optional = true }
 # server.properties, eula.txt and the user lists, shared with horizon-server.
 horizon-server-files = { path = "../horizon-server-files" }

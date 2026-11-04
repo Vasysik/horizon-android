@@ -1,3 +1,4 @@
+
 name: Build Android APK
 
 on:
@@ -14,6 +15,7 @@ on:
           - x86
           - all
         default: 'arm64-v8a'
+
       build_type:
         description: 'Build type (--public is clean distribution APK with generated tables only)'
         type: choice
@@ -22,6 +24,7 @@ on:
           - public
           - dev
         default: 'public'
+
   push:
     branches:
       - 'build-apk*'
@@ -38,40 +41,56 @@ concurrency:
 jobs:
   configure:
     name: Select Target ABIs
+
     # Guard: only run on fork, never in upstream repository (Vasysik/horizon-android)
     if: github.repository != 'Vasysik/horizon-android'
+
     runs-on: ubuntu-latest
+
     outputs:
       targets: ${{ steps.select.outputs.targets }}
+
     steps:
       - id: select
         run: |
           ABI="${{ github.event.inputs.abi || 'arm64-v8a' }}"
+
           echo "Selected ABI: $ABI"
+
           if [ "$ABI" = "all" ]; then
             echo 'targets=[{"abi":"arm64-v8a","target":"aarch64-linux-android"},{"abi":"armeabi-v7a","target":"armv7-linux-androideabi"},{"abi":"x86_64","target":"x86_64-linux-android"},{"abi":"x86","target":"i686-linux-android"}]' >> "$GITHUB_OUTPUT"
+
           elif [ "$ABI" = "armeabi-v7a" ]; then
             echo 'targets=[{"abi":"armeabi-v7a","target":"armv7-linux-androideabi"}]' >> "$GITHUB_OUTPUT"
+
           elif [ "$ABI" = "x86_64" ]; then
             echo 'targets=[{"abi":"x86_64","target":"x86_64-linux-android"}]' >> "$GITHUB_OUTPUT"
+
           elif [ "$ABI" = "x86" ]; then
             echo 'targets=[{"abi":"x86","target":"i686-linux-android"}]' >> "$GITHUB_OUTPUT"
+
           else
             echo 'targets=[{"abi":"arm64-v8a","target":"aarch64-linux-android"}]' >> "$GITHUB_OUTPUT"
           fi
 
   build:
     name: Build APK (${{ matrix.abi }})
+
     needs: configure
+
     runs-on: ubuntu-latest
     timeout-minutes: 60
+
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.configure.outputs.targets) }}
+
     env:
       CARGO_BUILD_JOBS: "2"
       HORIZON_TELEMETRY_URL: "off"
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -97,11 +116,17 @@ jobs:
       - name: Install Android SDK platform and NDK
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="$(which sdkmanager)"
           fi
+
           yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" "ndk;28.2.13676358" "build-tools;35.0.0" "platforms;android-35"
+
+          "$SDKMANAGER" \
+            "ndk;28.2.13676358" \
+            "build-tools;35.0.0" \
+            "platforms;android-35"
 
       - name: Add Rust target
         run: |
@@ -109,22 +134,35 @@ jobs:
 
       - name: Prepare engine data tables
         run: |
-          mkdir -p .local/minecraft/26.3 .local/android/minecraft/versions/26.3
-          curl -fsSL https://piston-meta.mojang.com/v1/packages/11f1aefe473eefba0af62e3286c33b692807b2eb/26.3.json -o .local/minecraft/26.3/manifest.json
+          mkdir -p .local/minecraft/26.3
+          mkdir -p .local/android/minecraft/versions/26.3
+
+          curl -fsSL \
+            https://piston-meta.mojang.com/v1/packages/11f1aefe473eefba0af62e3286c33b692807b2eb/26.3.json \
+            -o .local/minecraft/26.3/manifest.json
+
           python3 - << 'PY'
           p = "tools/android_prepare.py"
           t = open(p).read()
-          t = t.replace("lab.download(entry['url'], manifest_path, entry['sha1'])", "import shutil; manifest_path.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile('.local/minecraft/26.3/manifest.json', manifest_path)")
+
+          t = t.replace(
+              "lab.download(entry['url'], manifest_path, entry['sha1'])",
+              "import shutil; manifest_path.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile('.local/minecraft/26.3/manifest.json', manifest_path)"
+          )
+
           open(p, "w").write(t)
           PY
+
           python3 tools/android_prepare.py
 
       - name: Build Android APK
         run: |
           BUILD_FLAG="--public"
+
           if [ "${{ github.event.inputs.build_type }}" = "dev" ]; then
             BUILD_FLAG="--profile dev"
           fi
+
           python3 tools/android_build.py \
             --abi "${{ matrix.abi }}" \
             $BUILD_FLAG \
@@ -134,8 +172,10 @@ jobs:
 
       - name: Generate Checksums
         run: |
-          cd .local/android/apk/${{ matrix.abi }}
+          cd ".local/android/apk/${{ matrix.abi }}"
+
           sha256sum *.apk > SHA256SUMS.txt
+
           cat SHA256SUMS.txt
 
       - name: Upload APK Artifact

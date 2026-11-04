@@ -9,6 +9,160 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+/// ~60ms prebuffer at 48kHz (3 frames * 960 samples = 2880 stereo samples).
+pub const PREBUFFER_SAMPLES: usize = FRAME_SIZE * 3;
+
+/// Stateful speaker playback resampler (48000 Hz -> hardware `out_rate`) with 60ms prebuffering
+/// and linear interpolation.
+pub struct SpeakerResampler {
+    prebuffering: bool,
+    phase: f64,
+    prev: (f32, f32),
+    curr: (f32, f32),
+}
+
+impl Default for SpeakerResampler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SpeakerResampler {
+    pub fn new() -> Self {
+        Self {
+            prebuffering: true,
+            phase: 0.0,
+            prev: (0.0, 0.0),
+            curr: (0.0, 0.0),
+        }
+    }
+
+    fn enter_prebuffering(&mut self) {
+        self.prebuffering = true;
+        self.phase = 0.0;
+        self.prev = (0.0, 0.0);
+        self.curr = (0.0, 0.0);
+    }
+
+    /// Fills `data` (interleaved `out_channels` @ `out_rate` Hz) from `queue` (48kHz stereo).
+    pub fn fill_f32(
+        &mut self,
+        queue: &mut VecDeque<(f32, f32)>,
+        data: &mut [f32],
+        out_channels: usize,
+        out_rate: usize,
+    ) {
+        let out_channels = out_channels.max(1);
+        if self.prebuffering {
+            if queue.len() < PREBUFFER_SAMPLES {
+                data.fill(0.0);
+                return;
+            }
+            self.prebuffering = false;
+            self.phase = 0.0;
+            self.prev = queue.pop_front().unwrap_or((0.0, 0.0));
+            self.curr = queue.pop_front().unwrap_or(self.prev);
+        }
+
+        let step = (SAMPLE_RATE as f64) / (out_rate.max(1) as f64);
+
+        for frame in data.chunks_mut(out_channels) {
+            while self.phase >= 1.0 {
+                self.phase -= 1.0;
+                self.prev = self.curr;
+                if let Some(next) = queue.pop_front() {
+                    self.curr = next;
+                } else {
+                    // Buffer underrun: stop continuous (0,0) stepping and re-prebuffer
+                    self.enter_prebuffering();
+                    frame.fill(0.0);
+                    continue;
+                }
+            }
+
+            if self.prebuffering {
+                frame.fill(0.0);
+                continue;
+            }
+
+            let frac = self.phase as f32;
+            let left = self.prev.0 + (self.curr.0 - self.prev.0) * frac;
+            let right = self.prev.1 + (self.curr.1 - self.prev.1) * frac;
+
+            if out_channels == 1 {
+                frame[0] = (left + right) * 0.5;
+            } else {
+                frame[0] = left;
+                frame[1] = right;
+                for extra in &mut frame[2..] {
+                    *extra = 0.0;
+                }
+            }
+
+            self.phase += step;
+        }
+    }
+
+    /// Fills `data` (i16 interleaved `out_channels` @ `out_rate` Hz) from `queue` (48kHz stereo).
+    pub fn fill_i16(
+        &mut self,
+        queue: &mut VecDeque<(f32, f32)>,
+        data: &mut [i16],
+        out_channels: usize,
+        out_rate: usize,
+    ) {
+        let out_channels = out_channels.max(1);
+        if self.prebuffering {
+            if queue.len() < PREBUFFER_SAMPLES {
+                data.fill(0);
+                return;
+            }
+            self.prebuffering = false;
+            self.phase = 0.0;
+            self.prev = queue.pop_front().unwrap_or((0.0, 0.0));
+            self.curr = queue.pop_front().unwrap_or(self.prev);
+        }
+
+        let step = (SAMPLE_RATE as f64) / (out_rate.max(1) as f64);
+
+        for frame in data.chunks_mut(out_channels) {
+            while self.phase >= 1.0 {
+                self.phase -= 1.0;
+                self.prev = self.curr;
+                if let Some(next) = queue.pop_front() {
+                    self.curr = next;
+                } else {
+                    self.enter_prebuffering();
+                    frame.fill(0);
+                    continue;
+                }
+            }
+
+            if self.prebuffering {
+                frame.fill(0);
+                continue;
+            }
+
+            let frac = self.phase as f32;
+            let left = (self.prev.0 + (self.curr.0 - self.prev.0) * frac).clamp(-1.0, 1.0);
+            let right = (self.prev.1 + (self.curr.1 - self.prev.1) * frac).clamp(-1.0, 1.0);
+
+            if out_channels == 1 {
+                let mono = ((left + right) * 0.5).clamp(-1.0, 1.0);
+                frame[0] = (mono * 32767.0) as i16;
+            } else {
+                frame[0] = (left * 32767.0) as i16;
+                frame[1] = (right * 32767.0) as i16;
+                for extra in &mut frame[2..] {
+                    *extra = 0;
+                }
+            }
+
+            self.phase += step;
+        }
+    }
+}
+
 pub struct VoiceHardwareIo {
     #[cfg(feature = "audio")]
     _input_stream: Option<cpal::Stream>,
@@ -75,13 +229,19 @@ impl VoiceHardwareIo {
                 }
                 if in_rate == SAMPLE_RATE {
                     guard.extend(mono_samples.iter().copied());
-                } else if in_rate > 0 {
-                    // Linear resample from hardware sample rate to 48000 Hz
+                } else if in_rate > 0 && !mono_samples.is_empty() {
+                    // Linear interpolation resample from hardware sample rate to 48000 Hz
                     let ratio = in_rate as f64 / SAMPLE_RATE as f64;
                     let out_len = ((mono_samples.len() as f64) / ratio) as usize;
                     for i in 0..out_len {
-                        let src_idx = (i as f64 * ratio) as usize;
-                        if src_idx < mono_samples.len() {
+                        let src_pos = i as f64 * ratio;
+                        let src_idx = src_pos as usize;
+                        let frac = (src_pos - src_idx as f64) as f32;
+                        if src_idx + 1 < mono_samples.len() {
+                            let s0 = mono_samples[src_idx];
+                            let s1 = mono_samples[src_idx + 1];
+                            guard.push_back(s0 + (s1 - s0) * frac);
+                        } else if src_idx < mono_samples.len() {
                             guard.push_back(mono_samples[src_idx]);
                         }
                     }
@@ -176,9 +336,7 @@ impl VoiceHardwareIo {
 
             let stream_res = match supported.sample_format() {
                 cpal::SampleFormat::F32 => {
-                    let mut phase = 0.0f64;
-                    let step = SAMPLE_RATE as f64 / (out_rate.max(1) as f64);
-                    let mut current = (0.0f32, 0.0f32);
+                    let mut resampler = SpeakerResampler::new();
                     device.build_output_stream(
                         &config,
                         move |data: &mut [f32], _| {
@@ -186,31 +344,14 @@ impl VoiceHardwareIo {
                                 data.fill(0.0);
                                 return;
                             };
-                            for frame in data.chunks_mut(out_channels) {
-                                phase += step;
-                                while phase >= 1.0 {
-                                    phase -= 1.0;
-                                    current = guard.pop_front().unwrap_or((0.0, 0.0));
-                                }
-                                if out_channels == 1 {
-                                    frame[0] = (current.0 + current.1) * 0.5;
-                                } else {
-                                    frame[0] = current.0;
-                                    frame[1] = current.1;
-                                    for extra in &mut frame[2..] {
-                                        *extra = 0.0;
-                                    }
-                                }
-                            }
+                            resampler.fill_f32(&mut guard, data, out_channels, out_rate);
                         },
                         err_fn,
                         None,
                     )
                 }
                 cpal::SampleFormat::I16 => {
-                    let mut phase = 0.0f64;
-                    let step = SAMPLE_RATE as f64 / (out_rate.max(1) as f64);
-                    let mut current = (0.0f32, 0.0f32);
+                    let mut resampler = SpeakerResampler::new();
                     device.build_output_stream(
                         &config,
                         move |data: &mut [i16], _| {
@@ -218,23 +359,7 @@ impl VoiceHardwareIo {
                                 data.fill(0);
                                 return;
                             };
-                            for frame in data.chunks_mut(out_channels) {
-                                phase += step;
-                                while phase >= 1.0 {
-                                    phase -= 1.0;
-                                    current = guard.pop_front().unwrap_or((0.0, 0.0));
-                                }
-                                if out_channels == 1 {
-                                    let mono = ((current.0 + current.1) * 0.5).clamp(-1.0, 1.0);
-                                    frame[0] = (mono * 32767.0) as i16;
-                                } else {
-                                    frame[0] = (current.0.clamp(-1.0, 1.0) * 32767.0) as i16;
-                                    frame[1] = (current.1.clamp(-1.0, 1.0) * 32767.0) as i16;
-                                    for extra in &mut frame[2..] {
-                                        *extra = 0;
-                                    }
-                                }
-                            }
+                            resampler.fill_i16(&mut guard, data, out_channels, out_rate);
                         },
                         err_fn,
                         None,
@@ -306,5 +431,58 @@ impl VoiceHardwareIo {
         if let Ok(mut g) = self.speaker_buffer.lock() {
             g.clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prebuffer_and_underrun_recovery() {
+        let mut resampler = SpeakerResampler::new();
+        let mut queue = VecDeque::new();
+        let mut out = vec![1.0f32; 480 * 2]; // 10ms stereo buffer
+
+        // Push only 2 frames (40ms < 60ms prebuffer): output must remain silent and queue untouched
+        for _ in 0..(FRAME_SIZE * 2) {
+            queue.push_back((0.5, -0.5));
+        }
+        resampler.fill_f32(&mut queue, &mut out, 2, 48000);
+        assert!(out.iter().all(|&s| s == 0.0));
+        assert_eq!(queue.len(), FRAME_SIZE * 2);
+
+        // Push 3rd frame to reach 60ms (2880 samples): playback starts
+        for _ in 0..FRAME_SIZE {
+            queue.push_back((0.5, -0.5));
+        }
+        resampler.fill_f32(&mut queue, &mut out, 2, 48000);
+        assert!(out.iter().any(|&s| s != 0.0));
+
+        // Drain remaining samples until empty, verify resampler re-enters prebuffering
+        let mut drain_buf = vec![0.0f32; PREBUFFER_SAMPLES * 4];
+        resampler.fill_f32(&mut queue, &mut drain_buf, 2, 48000);
+        assert!(queue.is_empty());
+        assert!(resampler.prebuffering);
+    }
+
+    #[test]
+    fn test_linear_interpolation_resampling() {
+        let mut resampler = SpeakerResampler::new();
+        let mut queue = VecDeque::new();
+        for i in 0..PREBUFFER_SAMPLES {
+            let v = (i as f32) / (PREBUFFER_SAMPLES as f32);
+            queue.push_back((v, v));
+        }
+
+        // Resample 48000 -> 96000 Hz (step = 0.5): midpoint must be linearly interpolated
+        let mut out = vec![0.0f32; 8]; // 4 stereo frames
+        resampler.fill_f32(&mut queue, &mut out, 2, 96000);
+        let s0 = 0.0f32;
+        let s1 = 1.0f32 / (PREBUFFER_SAMPLES as f32);
+        let mid = (s0 + s1) * 0.5;
+        assert!((out[0] - s0).abs() < 1e-6);
+        assert!((out[2] - mid).abs() < 1e-6);
+        assert!((out[4] - s1).abs() < 1e-6);
     }
 }

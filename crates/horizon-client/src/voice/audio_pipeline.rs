@@ -2,25 +2,41 @@
 //!
 //! Handles 48kHz mono PCM frames (20ms = 960 samples), dual 480-sample sub-frame
 //! RNNoise neural noise suppression, Voice Activity Detection (VAD),
-//! Opus framing, and 3D spatial gain (attenuation & stereo panning).
+//! stateful Opus encoding/decoding (VOIP mode), Packet Loss Concealment (PLC),
+//! and 3D spatial gain (attenuation & stereo panning).
 
+use audiopus::{
+    Application, Channels, MutSignals, SampleRate,
+    coder::{Decoder as OpusDecoder, Encoder as OpusEncoder},
+    packet::Packet as OpusPacket,
+};
 use nnnoiseless::DenoiseState;
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::time::{Duration, Instant};
 
 pub const SAMPLE_RATE: usize = 48000;
 pub const FRAME_SIZE: usize = (SAMPLE_RATE / 1000) * 20; // 960 samples (20ms @ 48kHz)
 pub const SUBFRAME_SIZE: usize = FRAME_SIZE / 2; // 480 samples
+pub const MAX_OPUS_PACKET_SIZE: usize = 1275;
+pub const MAX_PLC_FRAMES: i64 = 5; // Conceal up to 100ms (5 frames) of consecutive packet loss
+pub const DECODER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Audio capture processing pipeline (Microphone -> RNNoise -> VAD -> Opus)
+/// Audio capture processing pipeline (Microphone -> RNNoise -> VAD -> Opus Encoder)
 pub struct VoiceCapturePipeline {
     denoiser: Box<DenoiseState<'static>>,
+    encoder: OpusEncoder,
     sequence_number: i64,
     last_vad_probability: f32,
 }
 
 impl Default for VoiceCapturePipeline {
     fn default() -> Self {
+        let encoder = OpusEncoder::new(SampleRate::Hz48000, Channels::Mono, Application::Voip)
+            .expect("Failed to initialize 48kHz mono VOIP Opus encoder");
         Self {
             denoiser: DenoiseState::new(),
+            encoder,
             sequence_number: 0,
             last_vad_probability: 0.0,
         }
@@ -32,10 +48,31 @@ impl VoiceCapturePipeline {
         Self::default()
     }
 
+    /// Encodes a single 960-sample mono f32 frame into Opus wire bytes.
+    pub fn encode_frame(&mut self, pcm: &[f32; FRAME_SIZE]) -> Option<Vec<u8>> {
+        let mut out = vec![0u8; MAX_OPUS_PACKET_SIZE];
+        match self.encoder.encode_float(pcm, &mut out) {
+            Ok(len) if len > 0 => {
+                out.truncate(len);
+                Some(out)
+            }
+            Ok(_) => None,
+            Err(e) => {
+                log::warn!("SVC: Opus encode error: {e}");
+                None
+            }
+        }
+    }
+
+    /// Resets the internal Opus encoder state (e.g., when speech stops).
+    pub fn reset_encoder(&mut self) {
+        let _ = self.encoder.reset_state();
+    }
+
     /// Process a 960-sample PCM frame (-1.0 .. 1.0).
     ///
     /// Runs 2 sub-frames of 480 samples through RNNoise scaled to [-32768.0, 32767.0],
-    /// extracts VAD probability, and applies mic gain.
+    /// extracts VAD probability, applies mic gain, and encodes with Opus.
     pub fn process_frame(
         &mut self,
         pcm_in: &[f32; FRAME_SIZE],
@@ -86,7 +123,7 @@ impl VoiceCapturePipeline {
             return None;
         }
 
-        let opus_data = encode_pcm_to_opus(&denoised_pcm);
+        let opus_data = self.encode_frame(&denoised_pcm)?;
         self.sequence_number += 1;
         Some(opus_data)
     }
@@ -100,18 +137,149 @@ impl VoiceCapturePipeline {
     }
 }
 
-/// Decodes received Opus packet and calculates 3D spatial audio gains.
+struct SenderDecoder {
+    decoder: OpusDecoder,
+    last_sequence: Option<i64>,
+    last_active: Instant,
+}
+
+impl SenderDecoder {
+    fn new() -> Option<Self> {
+        let decoder = OpusDecoder::new(SampleRate::Hz48000, Channels::Mono).ok()?;
+        Some(Self {
+            decoder,
+            last_sequence: None,
+            last_active: Instant::now(),
+        })
+    }
+
+    fn reset(&mut self) {
+        let _ = self.decoder.reset_state();
+        self.last_sequence = None;
+        self.last_active = Instant::now();
+    }
+
+    fn decode_packet(&mut self, opus_data: &[u8], out: &mut [f32; FRAME_SIZE]) -> Option<usize> {
+        let packet = OpusPacket::try_from(opus_data).ok()?;
+        let signals = MutSignals::try_from(&mut out[..]).ok()?;
+        self.decoder.decode_float(Some(packet), signals, false).ok()
+    }
+
+    fn decode_plc(&mut self, out: &mut [f32; FRAME_SIZE]) -> Option<usize> {
+        let signals = MutSignals::try_from(&mut out[..]).ok()?;
+        self.decoder.decode_float(None, signals, false).ok()
+    }
+}
+
+/// Decodes received Opus packets per sender UUID and calculates 3D spatial audio gains.
 #[derive(Default)]
-pub struct VoicePlaybackPipeline;
+pub struct VoicePlaybackPipeline {
+    decoders: HashMap<u128, SenderDecoder>,
+}
 
 impl VoicePlaybackPipeline {
     pub fn new() -> Self {
-        Self
+        Self {
+            decoders: HashMap::new(),
+        }
     }
 
-    /// Decodes an Opus packet into 960 mono f32 samples.
-    pub fn decode_frame(&self, opus_data: &[u8]) -> Vec<f32> {
-        decode_opus_to_pcm(opus_data)
+    /// Decodes an incoming Opus packet for a specific `sender_uuid` and `sequence_number`.
+    ///
+    /// - If `opus_data` is empty: the sender stopped talking; resets that sender's decoder
+    ///   and returns an empty `Vec<f32>` (no samples decoded).
+    /// - If packets were lost (`sequence_number > last_sequence + 1`): runs Opus PLC
+    ///   (decoding with `None`) for missing frames up to `MAX_PLC_FRAMES` before decoding
+    ///   the current packet.
+    /// - If a packet is late/duplicate (`sequence_number <= last_sequence`): drops it.
+    pub fn decode_sender_frame(
+        &mut self,
+        sender_uuid: u128,
+        sequence_number: i64,
+        opus_data: &[u8],
+    ) -> Vec<f32> {
+        if opus_data.is_empty() {
+            if let Some(sender) = self.decoders.get_mut(&sender_uuid) {
+                sender.reset();
+            }
+            return Vec::new();
+        }
+
+        if !self.decoders.contains_key(&sender_uuid) {
+            let Some(new_decoder) = SenderDecoder::new() else {
+                log::warn!("SVC: Failed to create Opus decoder for sender {sender_uuid:032x}");
+                return Vec::new();
+            };
+            self.decoders.insert(sender_uuid, new_decoder);
+        }
+
+        let Some(sender) = self.decoders.get_mut(&sender_uuid) else {
+            return Vec::new();
+        };
+        sender.last_active = Instant::now();
+
+        let mut output = Vec::with_capacity(FRAME_SIZE);
+
+        if let Some(last_seq) = sender.last_sequence {
+            let gap = sequence_number.wrapping_sub(last_seq);
+            if gap <= 0 {
+                // If sequence jumped far backwards (e.g. sender reconnected), reset decoder
+                if gap < -100 {
+                    sender.reset();
+                } else {
+                    // Late or duplicate packet: ignore to preserve decoder state
+                    return Vec::new();
+                }
+            } else if gap > 1 {
+                let missing = (gap - 1).min(MAX_PLC_FRAMES);
+                let mut plc_buf = [0.0f32; FRAME_SIZE];
+                for _ in 0..missing {
+                    if let Some(decoded_len) = sender.decode_plc(&mut plc_buf) {
+                        output.extend_from_slice(&plc_buf[..decoded_len.min(FRAME_SIZE)]);
+                    }
+                }
+            }
+        }
+
+        let mut pcm_buf = [0.0f32; FRAME_SIZE];
+        if let Some(decoded_len) = sender.decode_packet(opus_data, &mut pcm_buf) {
+            sender.last_sequence = Some(sequence_number);
+            output.extend_from_slice(&pcm_buf[..decoded_len.min(FRAME_SIZE)]);
+        }
+
+        output
+    }
+
+    /// Explicitly generates a single 960-sample PLC frame for `sender_uuid` when a packet is lost.
+    pub fn conceal_packet_loss(&mut self, sender_uuid: u128) -> Vec<f32> {
+        let Some(sender) = self.decoders.get_mut(&sender_uuid) else {
+            return Vec::new();
+        };
+        sender.last_active = Instant::now();
+        let mut plc_buf = [0.0f32; FRAME_SIZE];
+        if let Some(decoded_len) = sender.decode_plc(&mut plc_buf) {
+            if let Some(ref mut seq) = sender.last_sequence {
+                *seq = seq.wrapping_add(1);
+            }
+            plc_buf[..decoded_len.min(FRAME_SIZE)].to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Removes decoders for senders that have been idle longer than `DECODER_IDLE_TIMEOUT`.
+    pub fn prune_idle_decoders(&mut self) {
+        self.decoders
+            .retain(|_, state| state.last_active.elapsed() <= DECODER_IDLE_TIMEOUT);
+    }
+
+    /// Clears all active sender decoders (e.g. on disconnect).
+    pub fn clear_decoders(&mut self) {
+        self.decoders.clear();
+    }
+
+    pub fn active_decoder_count(&self) -> usize {
+        self.decoders.len()
     }
 
     /// Calculate distance attenuation and stereo panning based on 3D coordinates and camera yaw.
@@ -148,53 +316,31 @@ impl VoicePlaybackPipeline {
     }
 }
 
-/// Encodes 960 mono f32 samples to Opus wire bytes.
-pub fn encode_pcm_to_opus(pcm: &[f32; FRAME_SIZE]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(FRAME_SIZE + 1);
-    out.push(0b1111_1000);
-
-    let mut prev = 0i16;
-    for &sample in pcm {
-        let s = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
-        let delta = s.wrapping_sub(prev);
-        prev = s;
-        let quantized = (delta >> 8) as i8;
-        out.push(quantized as u8);
-    }
-    out
-}
-
-/// Decodes Opus wire bytes back to 960 mono f32 samples.
-pub fn decode_opus_to_pcm(opus_data: &[u8]) -> Vec<f32> {
-    if opus_data.is_empty() {
-        return vec![0.0; FRAME_SIZE];
-    }
-
-    let mut pcm = Vec::with_capacity(FRAME_SIZE);
-    let mut current = 0i16;
-
-    let payload = if (opus_data[0] & 0b1111_1000) != 0 {
-        &opus_data[1..]
-    } else {
-        opus_data
-    };
-
-    for &b in payload.iter().take(FRAME_SIZE) {
-        let delta = ((b as i8) as i16) << 8;
-        current = current.wrapping_add(delta);
-        pcm.push(current as f32 / 32768.0);
-    }
-
-    while pcm.len() < FRAME_SIZE {
-        pcm.push(0.0);
-    }
-
-    pcm
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::TAU;
+
+    fn pearson_correlation(a: &[f32], b: &[f32]) -> f32 {
+        assert_eq!(a.len(), b.len());
+        let n = a.len() as f32;
+        let mean_a = a.iter().sum::<f32>() / n;
+        let mean_b = b.iter().sum::<f32>() / n;
+        let mut num = 0.0f32;
+        let mut den_a = 0.0f32;
+        let mut den_b = 0.0f32;
+        for (&xa, &xb) in a.iter().zip(b.iter()) {
+            let da = xa - mean_a;
+            let db = xb - mean_b;
+            num += da * db;
+            den_a += da * da;
+            den_b += db * db;
+        }
+        if den_a <= 1e-12 || den_b <= 1e-12 {
+            return 0.0;
+        }
+        num / (den_a.sqrt() * den_b.sqrt())
+    }
 
     #[test]
     fn test_spatial_gain_calculation() {
@@ -220,18 +366,112 @@ mod tests {
     }
 
     #[test]
-    fn test_pcm_codec_roundtrip() {
-        let mut input = [0.0f32; FRAME_SIZE];
-        for i in 0..FRAME_SIZE {
-            input[i] = ((i as f32) * 0.05).sin() * 0.8;
+    fn test_opus_440hz_sine_roundtrip() {
+        let mut capture = VoiceCapturePipeline::new();
+        let mut playback = VoicePlaybackPipeline::new();
+        let sender_uuid: u128 = 0x1234_5678_9ABC_DEF0_1122_3344_5566_7788;
+
+        // Generate 10 consecutive 20ms frames (200ms = 9600 samples) of a 440 Hz sine wave at 48 kHz
+        let num_frames = 10;
+        let total_samples = FRAME_SIZE * num_frames;
+        let mut input_stream = Vec::with_capacity(total_samples);
+        let mut decoded_stream = Vec::with_capacity(total_samples);
+
+        for frame_idx in 0..num_frames {
+            let mut frame = [0.0f32; FRAME_SIZE];
+            for i in 0..FRAME_SIZE {
+                let sample_idx = frame_idx * FRAME_SIZE + i;
+                let t = (sample_idx as f32) / (SAMPLE_RATE as f32);
+                frame[i] = (TAU * 440.0 * t).sin() * 0.8;
+            }
+            input_stream.extend_from_slice(&frame);
+
+            let encoded = capture
+                .encode_frame(&frame)
+                .expect("Opus encoder must produce packet");
+            assert!(!encoded.is_empty());
+            assert!(encoded.len() < FRAME_SIZE);
+
+            let decoded = playback.decode_sender_frame(sender_uuid, frame_idx as i64, &encoded);
+            assert_eq!(decoded.len(), FRAME_SIZE);
+            decoded_stream.extend_from_slice(&decoded);
         }
 
-        let encoded = encode_pcm_to_opus(&input);
-        assert!(!encoded.is_empty());
-        assert!(encoded.len() <= 1275);
+        // Opus VOIP at 48kHz has a standard lookahead (algorithmic delay) of ~312 samples (6.5ms).
+        // Evaluate correlation after warm-up (frames 2..10) compensated for algorithmic delay.
+        let warmup = FRAME_SIZE * 2;
+        let mut best_corr = -1.0f32;
+        let mut best_lag = 0usize;
+        for lag in 0..=400 {
+            let len = total_samples - warmup - lag;
+            let corr = pearson_correlation(
+                &input_stream[warmup..warmup + len],
+                &decoded_stream[warmup + lag..warmup + lag + len],
+            );
+            if corr > best_corr {
+                best_corr = corr;
+                best_lag = lag;
+            }
+        }
 
-        let decoded = decode_opus_to_pcm(&encoded);
-        assert_eq!(decoded.len(), FRAME_SIZE);
+        println!(
+            "Opus 440Hz roundtrip correlation: r = {:.6} (lookahead lag = {} samples)",
+            best_corr, best_lag
+        );
+        assert!(
+            best_corr > 0.95,
+            "Expected high Opus 440Hz sine correlation > 0.95, got {best_corr}"
+        );
+    }
+
+    #[test]
+    fn test_empty_opus_data_resets_decoder_without_decoding() {
+        let mut capture = VoiceCapturePipeline::new();
+        let mut playback = VoicePlaybackPipeline::new();
+        let sender = 0xAA_u128;
+
+        let frame = [0.25f32; FRAME_SIZE];
+        let pkt = capture.encode_frame(&frame).unwrap();
+        let pcm = playback.decode_sender_frame(sender, 1, &pkt);
+        assert_eq!(pcm.len(), FRAME_SIZE);
+
+        // Empty opus_data = sender stopped speaking -> reset decoder, return empty Vec
+        let stop_pcm = playback.decode_sender_frame(sender, 2, &[]);
+        assert!(stop_pcm.is_empty());
+    }
+
+    #[test]
+    fn test_plc_and_per_sender_decoder_isolation() {
+        let mut capture = VoiceCapturePipeline::new();
+        let mut playback = VoicePlaybackPipeline::new();
+        let sender_a = 1u128;
+        let sender_b = 2u128;
+
+        let mut frame = [0.0f32; FRAME_SIZE];
+        for (i, sample) in frame.iter_mut().enumerate() {
+            *sample = ((i as f32) * 0.05).sin() * 0.5;
+        }
+        let pkt1 = capture.encode_frame(&frame).unwrap();
+        let pkt2 = capture.encode_frame(&frame).unwrap();
+        let pkt3 = capture.encode_frame(&frame).unwrap();
+
+        assert_eq!(
+            playback.decode_sender_frame(sender_a, 1, &pkt1).len(),
+            FRAME_SIZE
+        );
+        assert_eq!(
+            playback.decode_sender_frame(sender_b, 10, &pkt2).len(),
+            FRAME_SIZE
+        );
+        assert_eq!(playback.active_decoder_count(), 2);
+
+        // Sequence jump 1 -> 3 for sender_a (packet 2 lost): triggers 1 PLC frame + 1 decoded frame
+        let recovered = playback.decode_sender_frame(sender_a, 3, &pkt3);
+        assert_eq!(recovered.len(), FRAME_SIZE * 2);
+
+        // Late packet (seq 2 after seq 3) is ignored
+        let late = playback.decode_sender_frame(sender_a, 2, &pkt2);
+        assert!(late.is_empty());
     }
 
     #[test]

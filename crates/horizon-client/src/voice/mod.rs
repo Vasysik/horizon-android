@@ -207,6 +207,9 @@ impl VoiceChatClient {
     /// Process a single 960-sample microphone frame and queue it to the UDP worker.
     pub fn process_mic_audio(&mut self, pcm_in: &[f32; FRAME_SIZE]) {
         if self.config.disabled || self.config.muted {
+            if self.is_talking {
+                self.capture_pipeline.reset_encoder();
+            }
             self.is_talking = false;
             return;
         }
@@ -229,6 +232,9 @@ impl VoiceChatClient {
                 let _ = handle.outgoing_mic_tx.try_send(mic);
             }
         } else {
+            if self.is_talking {
+                self.capture_pipeline.reset_encoder();
+            }
             self.is_talking = false;
         }
     }
@@ -260,8 +266,14 @@ impl VoiceChatClient {
                 self.is_talking = false;
             }
         } else {
+            if self.is_talking {
+                self.capture_pipeline.reset_encoder();
+            }
             self.is_talking = false;
         }
+
+        // Prune sender decoders that have been idle > DECODER_IDLE_TIMEOUT
+        self.playback_pipeline.prune_idle_decoders();
 
         // 2. Drain incoming UDP voice packets and play them on the speaker with 3D spatial gain
         let default_max_dist = self
@@ -280,7 +292,14 @@ impl VoiceChatClient {
         for sound in incoming {
             match sound {
                 IncomingSound::Player(pkt) => {
-                    let pcm = self.playback_pipeline.decode_frame(&pkt.opus_data);
+                    let pcm = self.playback_pipeline.decode_sender_frame(
+                        pkt.sender_uuid,
+                        pkt.sequence_number,
+                        &pkt.opus_data,
+                    );
+                    if pcm.is_empty() {
+                        continue;
+                    }
                     let max_dist = if pkt.distance > 0.0 {
                         pkt.distance
                     } else {
@@ -299,11 +318,25 @@ impl VoiceChatClient {
                     self.hardware_io.push_spatial_audio(&pcm, left, right);
                 }
                 IncomingSound::Group(pkt) => {
-                    let pcm = self.playback_pipeline.decode_frame(&pkt.opus_data);
+                    let pcm = self.playback_pipeline.decode_sender_frame(
+                        pkt.sender_uuid,
+                        pkt.sequence_number,
+                        &pkt.opus_data,
+                    );
+                    if pcm.is_empty() {
+                        continue;
+                    }
                     self.hardware_io.push_spatial_audio(&pcm, 1.0, 1.0);
                 }
                 IncomingSound::Location(pkt) => {
-                    let pcm = self.playback_pipeline.decode_frame(&pkt.opus_data);
+                    let pcm = self.playback_pipeline.decode_sender_frame(
+                        pkt.sender_uuid,
+                        pkt.sequence_number,
+                        &pkt.opus_data,
+                    );
+                    if pcm.is_empty() {
+                        continue;
+                    }
                     let max_dist = if pkt.distance > 0.0 {
                         pkt.distance
                     } else {
@@ -343,6 +376,8 @@ impl VoiceChatClient {
             handle.stop();
         }
         self.hardware_io.stop();
+        self.capture_pipeline.reset_encoder();
+        self.playback_pipeline.clear_decoders();
         self.secret = None;
         self.player_states.clear();
         self.groups.clear();
