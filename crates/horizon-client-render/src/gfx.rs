@@ -1891,6 +1891,7 @@ async fn open_backend(
                 | wgpu::Features::TEXTURE_ATOMIC
                 | wgpu::Features::DEPTH_CLIP_CONTROL));
     let driver = format!("{} {}", info.driver, info.driver_info);
+    crate::hud::set_gpu_texture_side(adapter.limits().max_texture_dimension_2d);
     startup_step(format_args!(
         "requesting the device (driver {}) with features [{features}] and the adapter's \
          limits (buffers up to {} bytes, storage bindings up to {} bytes, {} texture layers)",

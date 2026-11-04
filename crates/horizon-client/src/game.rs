@@ -8247,6 +8247,15 @@ impl Game<'_> {
         hud_layout::paint(batch, &self.gui.atlas, &draws);
         self.native_item_decorations(stack, x, y, batch);
     }
+    // A function of its own: native mods can't hook one with a `cfg` in its body, and mods hook `hud`.
+    #[cfg(target_os = "android")]
+    fn draw_phone_offers(&mut self, batch: &mut HudBatch) {
+        self.draw_files_offer(batch);
+        self.draw_update_offer(batch);
+        self.draw_native_builds(batch);
+    }
+    #[cfg(not(target_os = "android"))]
+    fn draw_phone_offers(&mut self, _batch: &mut HudBatch) {}
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         // The pack prompt replaces the connecting screen (setScreen), but
         // in game it opens over the world.
@@ -8283,12 +8292,7 @@ impl Game<'_> {
         self.draw_stats_overlay(&mut batch);
         self.draw_pad_cursor(&mut batch);
         self.lift_over_keyboard(&mut batch);
-        #[cfg(target_os = "android")]
-        {
-            self.draw_files_offer(&mut batch);
-            self.draw_update_offer(&mut batch);
-            self.draw_native_builds(&mut batch);
-        }
+        self.draw_phone_offers(&mut batch);
         // Over the keyboard's lift: the note stays at the top.
         self.draw_imports(&mut batch);
         self.resolve_inline_profiles(&batch.inline_profiles);

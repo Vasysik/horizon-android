@@ -72,6 +72,7 @@ for bundle in "$@"; do
   sed -i -E "s|^horizon_revision = \"[0-9a-f]*\"|horizon_revision = \"$commit\"|" \
     "$copy/horizon-mixin.toml"
 done
+python3 "$source/packaging/android/native_mod_adapt.py" "$work/source" "$work/mods"
 
 # What went in names the build: the commit, the profile, horizon-mixins, every bundle file.
 key=$(

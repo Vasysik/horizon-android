@@ -109,6 +109,43 @@ pub const GLYPH_ROWS: u32 = 512;
 /// The largest atlas side: the 2D texture limit of the GPUs Horizon runs on
 /// (Apple silicon, RADV and Intel allow 16384; NVIDIA 32768).
 pub const MAX_ATLAS_SIZE: u32 = 16384;
+/// Below this a texture at half size stops being worth what it costs to look at.
+const SMALLEST_SHRUNK_SIDE: u32 = 32;
+/// A side of a GPU's largest texture, once the renderer has found the GPU; 0 before.
+static GPU_TEXTURE_SIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// The renderer's word on what the GPU takes, which the atlas is packed within.
+pub fn set_gpu_texture_side(side: u32) {
+    GPU_TEXTURE_SIDE.store(side, std::sync::atomic::Ordering::Relaxed);
+}
+/// The most an atlas may measure a side. On a phone the renderer finds the GPU while the atlas
+/// loads, and the small GPUs are there, so this waits for its word (not for ever: it only asks
+/// the driver); elsewhere a GPU not found yet counts as one that takes the most.
+fn atlas_limit() -> u32 {
+    let side = || GPU_TEXTURE_SIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if cfg!(target_os = "android") {
+        let start = std::time::Instant::now();
+        while side() == 0 && start.elapsed() < std::time::Duration::from_secs(20) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    match side() {
+        0 => MAX_ATLAS_SIZE,
+        side => side.min(MAX_ATLAS_SIZE),
+    }
+}
+/// `image` at half its size, by every other texel: no new colors or alpha, so what was cut out
+/// stays cut out.
+fn halved((name, w, h, data): &PackedImage) -> PackedImage {
+    let (half_w, half_h) = (w.div_ceil(2), h.div_ceil(2));
+    let mut half = Vec::with_capacity((half_w * half_h * 4) as usize);
+    for y in 0..half_h {
+        for x in 0..half_w {
+            let at = ((y * 2 * w + x * 2) * 4) as usize;
+            half.extend_from_slice(&data[at..at + 4]);
+        }
+    }
+    (name.clone(), half_w, half_h, half)
+}
 /// 128x128 atlas slots for map textures. A lobby paints its signs as walls of
 /// framed maps, so the pool holds a wall; too few slots re-upload every map
 /// every frame. 26.3's `MapTextureManager` keeps a texture per map instead.
@@ -1157,6 +1194,51 @@ impl HudAtlas {
             blinks: Default::default(),
         }
     }
+    /// `layout_leaving_out`, but when the images still don't fit (a small GPU: the PowerVR GE8320
+    /// takes 4096x4096 and the default resources need 4096x5120), with the largest at half size,
+    /// then the largest of what is left, until they do. A sprite's `Rect` keeps its size in
+    /// `full_sizes` and draws the same, with fewer texels. What is written or read by the texel
+    /// keeps its size: the run-time slots, the fonts, and the sprites with a wrapped border.
+    fn layout_within(
+        images: &mut Vec<PackedImage>,
+        animated: &mut Vec<String>,
+        extras: &HashSet<String>,
+        bordered: &HashSet<String>,
+        max: u32,
+        full_sizes: &mut HashMap<String, (u32, u32)>,
+    ) -> Result<(u32, Vec<(u32, u32)>, u32)> {
+        let shrinks = |name: &str| {
+            !name.starts_with("horizon/")
+                && !name.contains("font/")
+                && name != MISSING_SPRITE
+                && !bordered.contains(name)
+        };
+        loop {
+            let error = match Self::layout_leaving_out(images, animated, extras, max) {
+                Ok(layout) => return Ok(layout),
+                Err(error) => error,
+            };
+            let side = images
+                .iter()
+                .filter(|i| shrinks(&i.0))
+                .map(|i| i.1.max(i.2))
+                .max()
+                .unwrap_or(0);
+            if side < SMALLEST_SHRUNK_SIDE {
+                return Err(error);
+            }
+            for image in images.iter_mut() {
+                if shrinks(&image.0) && image.1.max(image.2) == side {
+                    full_sizes
+                        .entry(image.0.clone())
+                        .or_insert((image.1, image.2));
+                    *image = halved(image);
+                }
+            }
+            images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
+            log::warn!("the atlas does not fit {max}x{max}: {side} px textures at half size");
+        }
+    }
     /// `layout`, but when `extras` (Custom Item Textures) make the images more than `max`
     /// holds, without them: they are left out, not the packs.
     fn layout_leaving_out(
@@ -1507,11 +1589,21 @@ impl HudAtlas {
             }
         }
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
-        let (width, placements, glyph_region) =
-            Self::layout_leaving_out(&mut images, &mut animated, &cit_names, MAX_ATLAS_SIZE)?;
+        let limit = atlas_limit();
+        let mut full_sizes = HashMap::new();
+        let (width, placements, glyph_region) = Self::layout_within(
+            &mut images,
+            &mut animated,
+            &cit_names,
+            &bordered,
+            limit,
+            &mut full_sizes,
+        )?;
         // A multiple of 1024 rather than a power of two: the default resources
         // need 4096x5120 (8192 rows before), Faithful 32x 4096x12288 (16384).
-        let height = (glyph_region + GLYPH_ROWS).next_multiple_of(1024);
+        let height = (glyph_region + GLYPH_ROWS)
+            .next_multiple_of(1024)
+            .min(limit);
         let mut pixels = vec![0u8; (width * height * 4) as usize];
         let mut sprites = HashMap::new();
         let mut translucent = HashSet::new();
@@ -1531,7 +1623,11 @@ impl HudAtlas {
             }
             let b = u32::from(bordered.contains(name));
             let (px, py, w, h) = (px + b, py + b, w - 2 * b, h - 2 * b);
-            let (gw, gh) = gui_sizes.get(name).copied().unwrap_or((w, h));
+            let (gw, gh) = gui_sizes
+                .get(name)
+                .or(full_sizes.get(name))
+                .copied()
+                .unwrap_or((w, h));
             sprites.insert(
                 name.clone(),
                 Rect {
@@ -3707,6 +3803,42 @@ texture=wide",
         let mut alone = vec![image("item/big", 1100)];
         let none = HashSet::new();
         assert!(HudAtlas::layout_leaving_out(&mut alone, &mut animated, &none, 1024).is_err());
+    }
+    #[test]
+    fn a_small_gpu_gets_the_largest_textures_at_half_size() {
+        // A 1024 atlas keeps 512 rows of glyphs, so 512 rows of textures.
+        let image = |name: &str, side: u32| {
+            let pixels = vec![0; (side * side * 4) as usize];
+            (name.to_owned(), side, side, pixels)
+        };
+        let mut images = vec![
+            image("entity/big", 600),
+            image("horizon/slot", 300),
+            image("gui/small", 16),
+        ];
+        let mut animated = Vec::new();
+        let none = HashSet::new();
+        let mut full = HashMap::new();
+        HudAtlas::layout_within(&mut images, &mut animated, &none, &none, 1024, &mut full).unwrap();
+        let sizes: HashMap<_, _> = images.iter().map(|i| (i.0.as_str(), i.1)).collect();
+        assert_eq!(sizes["entity/big"], 300);
+        assert_eq!(sizes["horizon/slot"], 300);
+        assert_eq!(sizes["gui/small"], 16);
+        assert_eq!(full, HashMap::from([("entity/big".to_owned(), (600, 600))]));
+        // What is written by the texel never shrinks, so that much of it does not fit.
+        let mut slots = vec![image("horizon/huge", 600)];
+        assert!(
+            HudAtlas::layout_within(&mut slots, &mut animated, &none, &none, 1024, &mut full)
+                .is_err()
+        );
+    }
+    #[test]
+    fn half_size_keeps_every_other_texel() {
+        let data: Vec<u8> = (0..9u8).flat_map(|i| [i, i, i, 255]).collect();
+        let half = halved(&("a".to_owned(), 3, 3, data));
+        assert_eq!((half.1, half.2), (2, 2));
+        let kept: Vec<u8> = half.3.chunks(4).map(|p| p[0]).collect();
+        assert_eq!(kept, [0, 2, 6, 8]);
     }
     #[test]
     fn a_root_without_cit_rules_packs_the_same_sprites() {
