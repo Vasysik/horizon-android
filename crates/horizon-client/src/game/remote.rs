@@ -9193,7 +9193,12 @@ impl Game<'_> {
             .tick_audio(listener_pos, listener_yaw, |sender_uuid| {
                 let r = remote_ref?;
                 for (&eid, &u) in uuids.iter() {
-                    if u == sender_uuid {
+                    if u == [
+                        (sender_uuid >> 96) as i32,
+                        (sender_uuid >> 64) as i32,
+                        (sender_uuid >> 32) as i32,
+                        sender_uuid as i32,
+                    ] {
                         if let Some(tracked) = r.entities.get(&(eid as i32)) {
                             return Some(tracked.position);
                         }
