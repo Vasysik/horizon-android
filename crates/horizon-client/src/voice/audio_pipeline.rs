@@ -6,13 +6,12 @@
 //! and 3D spatial gain (attenuation & stereo panning).
 
 use audiopus::{
-    Application, Channels, MutSignals, SampleRate,
-    coder::{Decoder as OpusDecoder, Encoder as OpusEncoder},
+    Application, Channels, MutSignals, SampleRate, TryFrom,
+    coder::{Decoder as OpusDecoder, Encoder as OpusEncoder, GenericCtl},
     packet::Packet as OpusPacket,
 };
 use nnnoiseless::DenoiseState;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::time::{Duration, Instant};
 
 pub const SAMPLE_RATE: usize = 48000;
@@ -161,13 +160,13 @@ impl SenderDecoder {
 
     fn decode_packet(&mut self, opus_data: &[u8], out: &mut [f32; FRAME_SIZE]) -> Option<usize> {
         let packet = OpusPacket::try_from(opus_data).ok()?;
-        let signals = MutSignals::try_from(&mut out[..]).ok()?;
-        self.decoder.decode_float(Some(packet), signals, false).ok()
+        let mut signals = MutSignals::try_from(&mut out[..]).ok()?;
+        self.decoder.decode_float(Some(&packet), &mut signals, false).ok()
     }
 
     fn decode_plc(&mut self, out: &mut [f32; FRAME_SIZE]) -> Option<usize> {
-        let signals = MutSignals::try_from(&mut out[..]).ok()?;
-        self.decoder.decode_float(None, signals, false).ok()
+        let mut signals = MutSignals::try_from(&mut out[..]).ok()?;
+        self.decoder.decode_float::<&OpusPacket, _>(None, &mut signals, false).ok()
     }
 }
 
