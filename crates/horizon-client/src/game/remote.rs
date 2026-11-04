@@ -9523,8 +9523,21 @@ impl horizon_client::interaction_input::TargetUseWorld for RemoteUseWorld<'_, '_
     }
     fn use_block(&mut self) -> bool {
         #[cfg(target_os = "android")]
-        if self.0.pad.touch_shield {
-            return false;
+        {
+            let main_hand_transformer = self
+                .0
+                .stack_in(self.0.selected)
+                .and_then(|s| self.0.items().get(&s.item))
+                .is_some_and(|i| i.block_transformer.is_some());
+            if horizon_client::block_transform::touch_shield_skips_block(
+                self.0.pad.touch_shield,
+                self.0.settings.touch.shield_button,
+                self.0.pad.touch.shield_held(),
+                main_hand_transformer,
+                self.0.pick().is_some(),
+            ) {
+                return false;
+            }
         }
         self.0.remote_use_block(Hand::Main)
     }
