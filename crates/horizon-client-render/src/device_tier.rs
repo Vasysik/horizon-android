@@ -48,10 +48,10 @@ pub fn parse_mem_total_kib(content: &str) -> Option<u64> {
     for line in content.lines() {
         if let Some(rest) = line.strip_prefix("MemTotal:") {
             let mut parts = rest.split_whitespace();
-            if let Some(num_str) = parts.next() {
-                if let Ok(kib) = num_str.parse::<u64>() {
-                    return Some(kib);
-                }
+            if let Some(num_str) = parts.next()
+                && let Ok(kib) = num_str.parse::<u64>()
+            {
+                return Some(kib);
             }
         }
     }
