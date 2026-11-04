@@ -6,9 +6,8 @@
 //! and 3D spatial gain (attenuation & stereo panning).
 
 use audiopus::{
-    Application, Channels, MutSignals, SampleRate, TryFrom,
+    Application, Channels, SampleRate,
     coder::{Decoder as OpusDecoder, Encoder as OpusEncoder, GenericCtl},
-    packet::Packet as OpusPacket,
 };
 use nnnoiseless::DenoiseState;
 use std::collections::HashMap;
@@ -159,14 +158,15 @@ impl SenderDecoder {
     }
 
     fn decode_packet(&mut self, opus_data: &[u8], out: &mut [f32; FRAME_SIZE]) -> Option<usize> {
-        let packet = <OpusPacket<'_> as TryFrom<_>>::try_from(opus_data).ok()?;
-        let mut signals = <MutSignals<'_, f32> as TryFrom<_>>::try_from(&mut out[..]).ok()?;
-        self.decoder.decode_float(Some(&packet), &mut signals, false).ok()
+        self.decoder
+            .decode_float(Some(opus_data), &mut out[..], false)
+            .ok()
     }
 
     fn decode_plc(&mut self, out: &mut [f32; FRAME_SIZE]) -> Option<usize> {
-        let mut signals = <MutSignals<'_, f32> as TryFrom<_>>::try_from(&mut out[..]).ok()?;
-        self.decoder.decode_float(None::<&OpusPacket>, &mut signals, false).ok()
+        self.decoder
+            .decode_float(None::<&[u8]>, &mut out[..], false)
+            .ok()
     }
 }
 
