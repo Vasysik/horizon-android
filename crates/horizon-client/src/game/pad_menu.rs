@@ -1510,7 +1510,12 @@ impl Game<'_> {
             self.draw_pad_focus(batch, focus);
             return;
         }
-        horizon_client::touch_ui::draw_pointer(batch, &self.gui.atlas, (x, y));
+        horizon_client::touch_ui::draw_pointer(
+            batch,
+            &self.gui.atlas,
+            (x, y),
+            self.pad.touch.settings.virtual_mouse_pointer_scale,
+        );
     }
 
     /// The focus highlight, as vanilla's keyboard focus looks: buttons,

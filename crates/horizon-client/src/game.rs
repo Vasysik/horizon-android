@@ -15028,7 +15028,12 @@ impl Game<'_> {
             // Above every overlay, including the control editor and the floating
             // menu: that is where the pointer is needed most.
             if self.pad.touch_ui.virtual_mouse {
-                horizon_client::touch_ui::draw_pointer(&mut hud, &self.gui.atlas, self.cursor);
+                horizon_client::touch_ui::draw_pointer(
+                    &mut hud,
+                    &self.gui.atlas,
+                    self.cursor,
+                    self.pad.touch.settings.virtual_mouse_pointer_scale,
+                );
             }
         }
         self.flush_ime(&mut hud);

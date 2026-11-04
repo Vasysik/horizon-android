@@ -32,6 +32,8 @@ pub struct TouchUi {
     pub cached_presets: Vec<crate::touch::PresetMeta>,
     pub cached_presets_style: Option<crate::touch::ControlStyle>,
     pub sensitivity_dragging: bool,
+    /// The pointer-size slider of the Aiming tab is being dragged.
+    pub pointer_size_dragging: bool,
     pub goy_mode: bool,
     pub virtual_mouse: bool,
     /// Mirror of `!settings.virtual_mouse_enabled` for legacy callers; authoritative state lives in `touch::Settings::virtual_mouse_enabled`.
@@ -70,6 +72,7 @@ impl Default for TouchUi {
             cached_presets: Vec::new(),
             cached_presets_style: None,
             sensitivity_dragging: false,
+            pointer_size_dragging: false,
             goy_mode: false,
             virtual_mouse: false,
             pointer_off: false,
@@ -125,6 +128,7 @@ pub enum InGameMenuAction {
     StepTouchSensitivity(i32),
     SetVirtualMouseSpeed(f32),
     StepVirtualMouseSpeed(i32),
+    SetVirtualMousePointerSize(f32),
     StepGyroSensitivity(i32),
     StepButtonScale(i32),
     TriggerKey(KeyCode),
@@ -202,8 +206,13 @@ fn mouse_button_rects(w: f32, h: f32) -> [([f32; 4], bool); 2] {
 /// Faithful Windows 11-style standard arrow pointer (`aero_arrow`) with sub-pixel
 /// vector geometry, crisp dark outline, pure white body, subtle contact shadow,
 /// and exact tip hotspot at `(cursor.0, cursor.1)`.
-pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
-    let h = (batch.height * 0.052).clamp(12.0, 15.5);
+pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32), scale: f32) {
+    let scale = if scale.is_finite() {
+        scale.clamp(0.5, 2.0)
+    } else {
+        1.0
+    };
+    let h = (batch.height * 0.052).clamp(12.0, 15.5) * scale;
     let s = h / 16.0;
     let (x, y) = (cursor.0, cursor.1);
     let pt = |dx: f32, dy: f32| -> [f32; 2] { [x + dx * s, y + dy * s] };
@@ -1110,6 +1119,23 @@ impl TouchUi {
             }
         }
 
+        // Handle ongoing pointer-size slider drag on Tab 1
+        if self.pointer_size_dragging {
+            match phase {
+                TouchPhase::Moved => {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetVirtualMousePointerSize(0.5 + t * 1.5));
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    self.pointer_size_dragging = false;
+                    return Some(InGameMenuAction::Close);
+                }
+                _ => {}
+            }
+        }
+
         // Handle content pane vertical scroll drag
         if let Some((scroll_id, start_y, start_scroll, mut scrolled)) = self.hub_scroll_drag {
             if scroll_id == id {
@@ -1289,6 +1315,19 @@ impl TouchUi {
                 }
             }
 
+            // Check if touch started on the Pointer Size slider track in Tab 1
+            if self.hub_tab == 1 && inside(content_pane) {
+                let body_y = body_top - self.hub_scroll;
+                let size_card_y = body_y + 234.0;
+                if inside([cx, size_card_y, cw, 50.0]) {
+                    self.pointer_size_dragging = true;
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetVirtualMousePointerSize(0.5 + t * 1.5));
+                }
+            }
+
             // Start scroll-or-tap tracking inside the right content pane
             if inside(content_pane) && self.hub_max_scroll.get() > 2.0 {
                 self.hub_scroll_drag = Some((id, p[1], self.hub_scroll, false));
@@ -1296,9 +1335,9 @@ impl TouchUi {
             }
         }
 
-        // Row activation occurs on Started (when content fits without scroll) or Ended (when not scrolled)
-        let activate = (phase == TouchPhase::Started && self.hub_max_scroll.get() <= 2.0)
-            || (phase == TouchPhase::Ended && self.hub_scroll_drag.is_none());
+        // Rows activate on release only: pressing and releasing both used to run the row,
+        // so switches toggled twice per tap and snapped back as if they had to be held.
+        let activate = phase == TouchPhase::Ended && self.hub_scroll_drag.is_none();
         if !activate || !inside(content_pane) {
             return Some(InGameMenuAction::Close);
         }
@@ -1364,8 +1403,9 @@ impl TouchUi {
                 let r1 = [cx, body_y + 18.0 + step, cw, row_h]; // Joystick Active Zone
                 let r2 = [cx, body_y + 18.0 + step * 2.0, cw, row_h]; // Virtual Mouse Toggle
                 let r3 = [cx, body_y + 18.0 + step * 3.0, cw, row_h]; // Virtual Mouse Speed
-                let r4 = [cx, body_y + 18.0 + step * 4.0, cw, row_h]; // Gyroscope Aiming
-                let r5 = [cx, body_y + 18.0 + step * 5.0, cw, row_h]; // Gyro Sensitivity
+                let size_card = [cx, body_y + 234.0, cw, 50.0]; // Pointer Size slider
+                let r4 = [cx, body_y + 292.0, cw, row_h]; // Gyroscope Aiming
+                let r5 = [cx, body_y + 346.0, cw, row_h]; // Gyro Sensitivity
                 if inside(r0) {
                     return Some(InGameMenuAction::CycleMovementMode);
                 }
@@ -1381,6 +1421,12 @@ impl TouchUi {
                     } else {
                         Some(InGameMenuAction::StepVirtualMouseSpeed(1))
                     };
+                }
+                if inside(size_card) {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetVirtualMousePointerSize(0.5 + t * 1.5));
                 }
                 if inside(r4) {
                     return Some(InGameMenuAction::ToggleGyro);
@@ -1625,7 +1671,7 @@ impl TouchUi {
         let tab_slide = (1.0 - tab_ease) * 6.0;
         let content_height = match self.hub_tab {
             0 => 368.0,
-            1 => 348.0,
+            1 => 406.0,
             2 => 242.0,
             _ => 290.0,
         };
@@ -1906,9 +1952,84 @@ impl TouchUi {
                     None,
                     Some("−   +"),
                 );
+
+                // Pointer Size slider card
+                let size_y = body_y + 234.0;
+                ui.rounded(cx, size_y, cw, 50.0, 11.0, card_bg);
+                ui.border(cx, size_y, cw, 50.0, 11.0, border_c);
+                ui.text(
+                    Face::SemiBold,
+                    10.8,
+                    cx + 14.0,
+                    size_y + 6.0,
+                    text_c,
+                    "Pointer Size",
+                );
+                let size_pct = format!("{:.0}%", settings.virtual_mouse_pointer_scale * 100.0);
+                let size_pill_w = 48.0;
+                ui.rounded(
+                    cx + cw - size_pill_w - 12.0,
+                    size_y + 6.0,
+                    size_pill_w,
+                    18.0,
+                    6.0,
+                    card_sel,
+                );
+                ui.border(
+                    cx + cw - size_pill_w - 12.0,
+                    size_y + 6.0,
+                    size_pill_w,
+                    18.0,
+                    6.0,
+                    accent,
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    9.4,
+                    [
+                        cx + cw - size_pill_w - 12.0,
+                        size_y + 6.0,
+                        size_pill_w,
+                        18.0,
+                    ],
+                    accent_hi,
+                    &size_pct,
+                );
+                let size_sl_x = cx + 14.0;
+                let size_sl_w = (cw - 28.0).max(40.0);
+                let size_sl_y = size_y + 33.0;
+                let size_frac =
+                    ((settings.virtual_mouse_pointer_scale - 0.5) / 1.5).clamp(0.0, 1.0);
+                ui.rounded(size_sl_x, size_sl_y, size_sl_w, 6.0, 3.0, sidebar_bg);
+                ui.rounded(
+                    size_sl_x,
+                    size_sl_y,
+                    (size_sl_w * size_frac).max(6.0),
+                    6.0,
+                    3.0,
+                    accent,
+                );
+                let size_thumb_x = size_sl_x + size_sl_w * size_frac;
+                ui.rounded(
+                    size_thumb_x - 7.0,
+                    size_sl_y - 4.0,
+                    14.0,
+                    14.0,
+                    7.0,
+                    accent_hi,
+                );
+                ui.border(
+                    size_thumb_x - 7.0,
+                    size_sl_y - 4.0,
+                    14.0,
+                    14.0,
+                    7.0,
+                    color::hex(0xFFFFFF, 220),
+                );
+
                 draw_toggle_row(
                     &mut ui,
-                    body_y + 18.0 + step * 4.0,
+                    body_y + 292.0,
                     "Gyroscope Aiming",
                     "Tilt device for fine camera and bow aiming",
                     Some(settings.gyroscope),
@@ -1916,7 +2037,7 @@ impl TouchUi {
                 );
                 draw_toggle_row(
                     &mut ui,
-                    body_y + 18.0 + step * 5.0,
+                    body_y + 346.0,
                     "Gyroscope Sensitivity",
                     &gyro_spd_lbl,
                     None,

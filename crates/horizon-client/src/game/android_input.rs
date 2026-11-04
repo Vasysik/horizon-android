@@ -683,6 +683,11 @@ impl Game<'_> {
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
+                InGameMenuAction::SetVirtualMousePointerSize(scale) => {
+                    self.pad.touch.settings.virtual_mouse_pointer_scale = scale.clamp(0.5, 2.0);
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
                 InGameMenuAction::StepGyroSensitivity(dir) => {
                     self.pad.touch.settings.gyro_sensitivity =
                         (self.pad.touch.settings.gyro_sensitivity + dir as f32 * 0.20)

@@ -1487,6 +1487,12 @@ impl Loading {
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
+                    InGameMenuAction::SetVirtualMousePointerSize(scale) => {
+                        self.menu.controls.settings.virtual_mouse_pointer_scale =
+                            scale.clamp(0.5, 2.0);
+                        let _ = self.menu.controls.settings.save();
+                        self.settings.touch = self.menu.controls.settings.clone();
+                    }
                     InGameMenuAction::StepGyroSensitivity(dir) => {
                         self.menu.controls.settings.gyro_sensitivity =
                             (self.menu.controls.settings.gyro_sensitivity + dir as f32 * 0.20)
@@ -2148,7 +2154,12 @@ impl Loading {
                 .touch
                 .draw_floating_menu(batch, &gui.atlas, &self.menu.controls.settings);
             if self.menu.touch.virtual_mouse {
-                horizon_client::touch_ui::draw_pointer(batch, &gui.atlas, self.menu.cursor);
+                horizon_client::touch_ui::draw_pointer(
+                    batch,
+                    &gui.atlas,
+                    self.menu.cursor,
+                    self.menu.controls.settings.virtual_mouse_pointer_scale,
+                );
             }
         }
         self.menu

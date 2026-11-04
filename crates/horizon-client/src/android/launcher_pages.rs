@@ -2516,8 +2516,8 @@ impl Launcher {
                     ),
                     (
                         "Immersive fullscreen",
-                        "Hide Android status and navigation bars during play",
-                        SettingControl::Toggle(c.screen.immersive, Action::Immersive),
+                        "Disabled for now while the reported freezes are investigated",
+                        SettingControl::Button("Off", Action::Immersive, false),
                     ),
                     (
                         "Avoid camera cutout / notch",
@@ -4030,9 +4030,9 @@ impl Launcher {
                 self.modify_touch_settings(|t| t.gyroscope = !t.gyroscope);
             }
             Some(Action::Immersive) => {
-                self.catalog.config.screen.immersive ^= true;
-                self.catalog.config.save(&self.home)?;
-                self.configure_screen();
+                self.catalog.status =
+                    "Immersive fullscreen is disabled for now while the reported freezes are investigated; Android's navigation bar stays visible."
+                        .into();
             }
             Some(Action::Cutout) => {
                 self.catalog.config.screen.avoid_cutout ^= true;

@@ -457,6 +457,9 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub virtual_mouse_enabled: bool,
     pub virtual_mouse_sensitivity: f32,
+    /// Rendered size of the virtual mouse pointer, where 1.0 is the default height.
+    #[serde(default = "default_pointer_scale")]
+    pub virtual_mouse_pointer_scale: f32,
     pub crosshair_gestures: bool,
     pub gyroscope: bool,
     pub gyro_sensitivity: f32,
@@ -515,6 +518,9 @@ fn default_goy_preset_desc() -> String {
 }
 fn default_floating_pos() -> [f32; 2] {
     [0.44, 0.05]
+}
+fn default_pointer_scale() -> f32 {
+    1.0
 }
 // Append new buttons without resetting a player's existing ten-button layout.
 fn deserialize_layouts<'de, D: serde::Deserializer<'de>>(
@@ -593,6 +599,7 @@ impl Default for Settings {
             inventory_controls: false,
             virtual_mouse_enabled: true,
             virtual_mouse_sensitivity: 1.0,
+            virtual_mouse_pointer_scale: default_pointer_scale(),
             crosshair_gestures: false,
             gyroscope: false,
             gyro_sensitivity: 1.0,
@@ -763,6 +770,11 @@ impl Settings {
             self.virtual_mouse_sensitivity.clamp(0.25, 3.0)
         } else {
             1.0
+        };
+        self.virtual_mouse_pointer_scale = if self.virtual_mouse_pointer_scale.is_finite() {
+            self.virtual_mouse_pointer_scale.clamp(0.5, 2.0)
+        } else {
+            default_pointer_scale()
         };
         self.gyro_sensitivity = if self.gyro_sensitivity.is_finite() {
             self.gyro_sensitivity.clamp(0.1, 3.0)
@@ -1182,6 +1194,7 @@ impl Settings {
         let prev_invert_y = self.invert_y;
         let prev_vm_enabled = self.virtual_mouse_enabled;
         let prev_vm_sens = self.virtual_mouse_sensitivity;
+        let prev_pointer_scale = self.virtual_mouse_pointer_scale;
         let prev_vibrate = self.vibrate;
         let prev_auto_jump = self.auto_jump;
         let mut loaded = Self::load_preset(game_home, style, id);
@@ -1200,6 +1213,7 @@ impl Settings {
         loaded.invert_y = prev_invert_y;
         loaded.virtual_mouse_enabled = prev_vm_enabled;
         loaded.virtual_mouse_sensitivity = prev_vm_sens;
+        loaded.virtual_mouse_pointer_scale = prev_pointer_scale;
         loaded.vibrate = prev_vibrate;
         loaded.auto_jump = prev_auto_jump;
         *self = loaded;
@@ -1234,6 +1248,7 @@ impl Settings {
         let prev_invert_y = self.invert_y;
         let prev_vm_enabled = self.virtual_mouse_enabled;
         let prev_vm_sens = self.virtual_mouse_sensitivity;
+        let prev_pointer_scale = self.virtual_mouse_pointer_scale;
         let prev_vibrate = self.vibrate;
         let prev_auto_jump = self.auto_jump;
         let mut loaded = Self::load_preset(game_home, target, &target_preset_id);
@@ -1244,6 +1259,7 @@ impl Settings {
         loaded.invert_y = prev_invert_y;
         loaded.virtual_mouse_enabled = prev_vm_enabled;
         loaded.virtual_mouse_sensitivity = prev_vm_sens;
+        loaded.virtual_mouse_pointer_scale = prev_pointer_scale;
         loaded.vibrate = prev_vibrate;
         loaded.auto_jump = prev_auto_jump;
         *self = loaded;
@@ -1708,6 +1724,7 @@ impl Settings {
             let prev_invert_y = self.invert_y;
             let prev_vm_enabled = self.virtual_mouse_enabled;
             let prev_vm_sens = self.virtual_mouse_sensitivity;
+            let prev_pointer_scale = self.virtual_mouse_pointer_scale;
             let prev_vibrate = self.vibrate;
             let prev_auto_jump = self.auto_jump;
             *self = Self::default_for_style(style);
@@ -1717,6 +1734,7 @@ impl Settings {
             self.invert_y = prev_invert_y;
             self.virtual_mouse_enabled = prev_vm_enabled;
             self.virtual_mouse_sensitivity = prev_vm_sens;
+            self.virtual_mouse_pointer_scale = prev_pointer_scale;
             self.vibrate = prev_vibrate;
             self.auto_jump = prev_auto_jump;
             match style {
@@ -1751,6 +1769,7 @@ impl Settings {
         loaded.invert_y = active.invert_y;
         loaded.virtual_mouse_enabled = active.virtual_mouse_enabled;
         loaded.virtual_mouse_sensitivity = active.virtual_mouse_sensitivity;
+        loaded.virtual_mouse_pointer_scale = active.virtual_mouse_pointer_scale;
         loaded.vibrate = active.vibrate;
         loaded.auto_jump = active.auto_jump;
         match loaded.control_style {
@@ -2107,6 +2126,7 @@ mod tests {
         assert!(settings.virtual_mouse_enabled);
         settings.virtual_mouse_enabled = false;
         settings.virtual_mouse_sensitivity = 1.75;
+        settings.virtual_mouse_pointer_scale = 1.6;
         settings.vibrate = false;
         settings.auto_jump = true;
         settings.toggle_sprint = true;
@@ -2116,14 +2136,33 @@ mod tests {
         settings.switch_control_system(&tmp, ControlStyle::GoyControl);
         assert!(!settings.virtual_mouse_enabled);
         assert_eq!(settings.virtual_mouse_sensitivity, 1.75);
+        assert_eq!(settings.virtual_mouse_pointer_scale, 1.6);
         assert!(!settings.vibrate);
         assert!(settings.auto_jump);
 
         settings.switch_control_system(&tmp, ControlStyle::Mcpe);
         assert!(!settings.virtual_mouse_enabled);
         assert_eq!(settings.virtual_mouse_sensitivity, 1.75);
+        assert_eq!(settings.virtual_mouse_pointer_scale, 1.6);
         assert!(!settings.vibrate);
         assert!(settings.auto_jump);
+
+        // A layout file written before the pointer-size setting keeps the default size.
+        let mut old_json = serde_json::to_value(Settings::default()).unwrap();
+        old_json
+            .as_object_mut()
+            .unwrap()
+            .remove("virtual_mouse_pointer_scale");
+        let old: Settings = serde_json::from_value(old_json).unwrap();
+        assert_eq!(old.virtual_mouse_pointer_scale, 1.0);
+
+        // Sizes outside the slider's range clamp to its ends.
+        settings.virtual_mouse_pointer_scale = 9.0;
+        settings.sanitize();
+        assert_eq!(settings.virtual_mouse_pointer_scale, 2.0);
+        settings.virtual_mouse_pointer_scale = 0.1;
+        settings.sanitize();
+        assert_eq!(settings.virtual_mouse_pointer_scale, 0.5);
 
         // Split touch toggles cleanly between Crosshair and Tap modes
         assert!(settings.crosshair());

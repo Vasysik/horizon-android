@@ -271,10 +271,9 @@ impl Launcher {
         }
     }
     pub(super) fn configure_screen(&self) {
-        crate::native_ime::configure_screen(
-            self.catalog.config.screen.immersive,
-            self.catalog.config.screen.avoid_cutout,
-        );
+        // Immersive system-bar hiding is off until the reported freezes are fixed:
+        // always keep Android's navigation bar visible.
+        crate::native_ime::configure_screen(false, self.catalog.config.screen.avoid_cutout);
         winit::platform::android::set_native_content_aspect(
             self.catalog.config.screen.aspect.ratio(),
         );
