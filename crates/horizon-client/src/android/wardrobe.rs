@@ -45,6 +45,8 @@ pub(super) struct Wardrobe {
     name: String,
     /// Decoded head of the selected appearance, drawn by the launcher header.
     head: Option<HeadSkin>,
+    pub tab_changed_at: Option<std::time::Instant>,
+    pub selection_changed_at: Option<std::time::Instant>,
 }
 impl Wardrobe {
     pub fn new(home: &Path) -> Self {
@@ -73,6 +75,8 @@ impl Wardrobe {
             damaged,
             name: String::new(),
             head: None,
+            tab_changed_at: None,
+            selection_changed_at: None,
         };
         value.preview();
         value
@@ -176,6 +180,7 @@ impl Wardrobe {
                 Ok(()) => "Applied locally. The account's cloud profile is unchanged.".into(),
                 Err(error) => error,
             };
+            self.selection_changed_at = Some(std::time::Instant::now());
             self.preview();
         }
     }
@@ -421,6 +426,34 @@ impl Wardrobe {
             }
         }
     }
+    pub fn is_animating(&self) -> bool {
+        let now = std::time::Instant::now();
+        self.worker.is_some()
+            || crate::documents::busy()
+            || self
+                .tab_changed_at
+                .is_some_and(|t| now.duration_since(t).as_secs_f32() < 0.22)
+            || self
+                .selection_changed_at
+                .is_some_and(|t| now.duration_since(t).as_secs_f32() < 0.22)
+    }
+
+    pub fn set_tab(&mut self, capes: bool) {
+        if self.capes != capes {
+            self.capes = capes;
+            self.tab_changed_at = Some(std::time::Instant::now());
+            // Orient camera to showcase the back when switching to Capes, or front when switching to Skins
+            if capes && (self.camera.yaw < 70.0 || self.camera.yaw > 290.0) {
+                self.camera.yaw = 155.0;
+                self.camera.pitch = -6.0;
+            } else if !capes && (self.camera.yaw >= 90.0 && self.camera.yaw <= 270.0) {
+                self.camera.yaw = 335.0;
+                self.camera.pitch = -8.0;
+            }
+            self.preview();
+        }
+    }
+
     pub fn gesture(&mut self, touch: &winit::event::Touch, density: f32) -> bool {
         use winit::event::TouchPhase;
         let point = [
@@ -454,13 +487,14 @@ impl Wardrobe {
                 self.camera.zoom(distance(point) / before);
             }
         } else {
-            self.camera
-                .rotate((point[0] - old[0]) * 0.7, (point[1] - old[1]) * 0.5);
+            // Horizontal & vertical drag matches user finger direction in both front and back views
+            self.camera.drag(point[0] - old[0], point[1] - old[1]);
         }
         self.fingers.insert(touch.id, point);
         self.preview();
         true
     }
+
     pub fn draw(
         &mut self,
         ui: &mut Ui,
@@ -470,77 +504,214 @@ impl Wardrobe {
         w: f32,
         top: f32,
     ) {
+        use horizon_client::ui_theme::{Icon, active_theme, motion};
+        let theme = active_theme();
+        let now = std::time::Instant::now();
+        let tab_t = motion::ease_out_cubic(motion::progress(self.tab_changed_at, now, 0.20));
+        let sel_t = motion::spring_spatial(motion::progress(self.selection_changed_at, now, 0.22));
+        let slide_y = (1.0 - tab_t) * 8.0;
+
         let h = ui.h;
-        let wide = w >= 600.0;
-        ui.text(Face::SemiBold, 19.0, x, top, color::TEXT, "Skins & Capes");
+        let wide = w >= 580.0;
+
+        // 1. Header & Segmented Skins / Capes Switcher
+        ui.text(
+            Face::SemiBold,
+            19.0,
+            x,
+            top,
+            theme.text_primary,
+            "Skins & Capes Studio",
+        );
         let subtitle = ui.fit_text(
             Face::Regular,
-            12.0,
-            "Local choices change your view. Cloud buttons update your account.",
+            11.5,
+            if self.capes {
+                "Preview 3D capes, manage local cape overrides, or activate cloud account capes."
+            } else {
+                "Inspect your 3D character model, switch arm styles, and manage local or cloud skins."
+            },
             w,
         );
-        ui.text(Face::Regular, 12.0, x, top + 27.0, color::MUTED, &subtitle);
+        ui.text(
+            Face::Regular,
+            11.5,
+            x,
+            top + 24.0,
+            theme.text_muted,
+            &subtitle,
+        );
 
-        // Keep the tabs at the top of the content column, so they never sit in
-        // a second layout while the title is drawn under the navigation rail.
-        let tabs = top + 50.0;
+        let skin_count = self
+            .library
+            .entries
+            .iter()
+            .filter(|e| e.kind == Kind::Skin)
+            .count();
+        let cape_count = self
+            .library
+            .entries
+            .iter()
+            .filter(|e| e.kind == Kind::Cape)
+            .count()
+            + if self.provider.is_some() {
+                self.cache.snapshot.capes.len()
+            } else {
+                0
+            };
+
+        let tabs_y = top + 46.0;
+        ui.rounded(x, tabs_y, w, 38.0, 12.0, theme.surface_dim);
+        ui.border(x, tabs_y, w, 38.0, 12.0, theme.border);
         let tw = (w - 8.0) * 0.5;
-        button(
-            ui,
-            targets,
-            [x, tabs, tw, 34.0],
-            "Skins",
-            Action::WardrobeKind(false),
-            !self.capes,
-        );
-        button(
-            ui,
-            targets,
-            [x + tw + 8.0, tabs, tw, 34.0],
-            "Capes",
-            Action::WardrobeKind(true),
-            self.capes,
-        );
+        for (i, (lbl, is_cape, active)) in [
+            (format!("Skins ({skin_count})"), false, !self.capes),
+            (format!("Capes ({cape_count})"), true, self.capes),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let tx = x + 3.0 + i as f32 * (tw + 2.0);
+            let tr = [tx, tabs_y + 3.0, tw, 32.0];
+            if active {
+                ui.rounded(tr[0], tr[1], tr[2], tr[3], 9.0, theme.accent);
+                ui.centered_fit(Face::SemiBold, 12.0, tr, theme.on_accent, &lbl);
+            } else {
+                ui.centered_fit(Face::Medium, 12.0, tr, theme.text_muted, &lbl);
+            }
+            targets.push((tr, Action::WardrobeKind(is_cape)));
+        }
 
-        let preview_y = tabs + 46.0;
-        let preview_w = if wide {
-            250.0_f32.min(w * 0.42)
+        let selection = self
+            .library
+            .selections
+            .get(&self.key)
+            .cloned()
+            .unwrap_or_default();
+        let selected_id = if self.capes {
+            selection.cape.as_deref()
         } else {
-            (w - 40.0).min(300.0)
+            selection.skin.as_deref()
+        };
+        let model = selection.model;
+
+        // 2. Left / Top Studio 3D Preview Card
+        let preview_y = tabs_y + 48.0;
+        let preview_w = if wide {
+            248.0_f32.min(w * 0.41)
+        } else {
+            w
         };
         let preview_h = if wide {
-            (h - preview_y - 120.0).clamp(150.0, 260.0)
+            (h - preview_y - 84.0).clamp(165.0, 276.0)
         } else {
-            (h * 0.28).clamp(120.0, 180.0)
+            (h * 0.30).clamp(138.0, 192.0)
         };
-        let px = if wide { x } else { x + (w - preview_w) * 0.5 };
+        let px = x;
         self.rect = [px, preview_y, preview_w, preview_h];
-        ui.rounded(px, preview_y, preview_w, preview_h, 16.0, color::RAISED);
-        let scale = (preview_w / 160.0).min(preview_h / 200.0);
+
+        // Studio stage background with subtle inner rim and pedestal
+        ui.rounded(px, preview_y, preview_w, preview_h, 16.0, theme.surface);
+        ui.rounded(
+            px + 4.0,
+            preview_y + 4.0,
+            preview_w - 8.0,
+            preview_h - 8.0,
+            13.0,
+            theme.surface_dim,
+        );
+        ui.stroke_rounded(px, preview_y, preview_w, preview_h, 16.0, 1.2, theme.border);
+
+        // Studio floor pedestal oval beneath the character
+        let ped_w = (preview_w * 0.46).clamp(72.0, 124.0);
+        let ped_h = 12.0;
+        let ped_x = px + (preview_w - ped_w) * 0.5;
+        let ped_y = preview_y + preview_h - 48.0;
+        ui.rounded(ped_x, ped_y, ped_w, ped_h, 6.0, theme.accent_soft);
+        ui.stroke_rounded(ped_x, ped_y, ped_w, ped_h, 6.0, 1.0, theme.border);
+
+        // Top-left status badge inside studio card
+        let badge_txt = if self.capes {
+            if selection.hide_cape {
+                "Cape Hidden"
+            } else {
+                "3D Cape View"
+            }
+        } else if model == Model::Slim {
+            "Slim (3px Arms)"
+        } else {
+            "Classic (4px Arms)"
+        };
+        let badge_w = (ui.measure(Face::SemiBold, 9.5, badge_txt) + 16.0).min(preview_w * 0.55);
+        ui.rounded(
+            px + 10.0,
+            preview_y + 10.0,
+            badge_w,
+            20.0,
+            6.0,
+            theme.surface_selected,
+        );
+        ui.border(
+            px + 10.0,
+            preview_y + 10.0,
+            badge_w,
+            20.0,
+            6.0,
+            theme.accent,
+        );
+        ui.centered_fit(
+            Face::SemiBold,
+            9.5,
+            [px + 10.0, preview_y + 10.0, badge_w, 20.0],
+            theme.text_primary,
+            badge_txt,
+        );
+
+        // Top-right orbit & zoom hint
+        let hint = format!("{:.0}%", self.camera.zoom * 100.0);
+        let hint_w = 42.0;
+        ui.rounded(
+            px + preview_w - hint_w - 10.0,
+            preview_y + 10.0,
+            hint_w,
+            20.0,
+            6.0,
+            theme.surface,
+        );
+        ui.centered_fit(
+            Face::Mono,
+            9.0,
+            [px + preview_w - hint_w - 10.0, preview_y + 10.0, hint_w, 20.0],
+            theme.text_muted,
+            &hint,
+        );
+
+        // Render 3D character bitmap with subtle selection pop scale
+        let pop = 0.97 + 0.03 * sel_t;
+        let scale = ((preview_w / 160.0).min((preview_h - 18.0) / 200.0)) * pop;
         let ox = px + (preview_w - 160.0 * scale) * 0.5;
-        let oy = preview_y + (preview_h - 200.0 * scale) * 0.5;
-        for ([bx, by, bw, bh], color) in &self.bitmap {
+        let oy = preview_y + (preview_h - 14.0 - 200.0 * scale) * 0.5;
+        for ([bx, by, bw, bh], col) in &self.bitmap {
             ui.rounded(
                 ox + bx * scale,
                 oy + by * scale,
                 bw * scale,
                 bh * scale,
                 0.0,
-                *color,
+                *col,
             );
         }
 
-        // Rotate/zoom sit on the preview instead of below it, so a short
-        // landscape screen still leaves room for the gallery list.
-        let control_y = preview_y + preview_h - 38.0;
-        let btn_w = 32.0;
+        // Floating camera orbit & zoom dock at the bottom of the 3D preview card
+        let control_y = preview_y + preview_h - 36.0;
+        let btn_w = 34.0;
         let gap = 6.0;
         let cluster = 4.0 * btn_w + 3.0 * gap;
         let cx = px + (preview_w - cluster) * 0.5;
         for (i, (label, action)) in [
             ("<", Action::WardrobeRotate(-1)),
             (">", Action::WardrobeRotate(1)),
-            ("-", Action::WardrobeZoom(false)),
+            ("−", Action::WardrobeZoom(false)),
             ("+", Action::WardrobeZoom(true)),
         ]
         .into_iter()
@@ -556,81 +727,261 @@ impl Wardrobe {
             );
         }
 
-        let model = self
-            .library
-            .selections
-            .get(&self.key)
-            .map(|s| s.model)
-            .unwrap_or_default();
-        let model_y = preview_y + preview_h + 8.0;
-        button(
-            ui,
-            targets,
-            [px, model_y, preview_w, 32.0],
-            if model == Model::Slim {
-                "Alex / Slim"
-            } else {
-                "Steve / Classic"
-            },
-            Action::WardrobeModel,
-            false,
-        );
+        // Primary quick-toggle button directly below 3D preview card
+        let primary_toggle_y = preview_y + preview_h + 8.0;
+        if self.capes {
+            button(
+                ui,
+                targets,
+                [px, primary_toggle_y, preview_w, 34.0],
+                if selection.hide_cape {
+                    "Cape Visibility: Hidden (Tap to Show)"
+                } else {
+                    "Cape Visibility: Shown (Tap to Hide)"
+                },
+                Action::WardrobeHideCape,
+                !selection.hide_cape,
+            );
+        } else {
+            button(
+                ui,
+                targets,
+                [px, primary_toggle_y, preview_w, 34.0],
+                if model == Model::Slim {
+                    "Arm Model: Alex / Slim (3px)"
+                } else {
+                    "Arm Model: Steve / Classic (4px)"
+                },
+                Action::WardrobeModel,
+                false,
+            );
+        }
 
-        let lx = if wide { x + preview_w + 18.0 } else { x };
-        let lw = if wide { w - preview_w - 18.0 } else { w };
-        let listtop = if wide { preview_y } else { model_y + 42.0 };
+        // 3. Right / Bottom Gallery & Details Column
+        let lx = if wide { x + preview_w + 16.0 } else { x };
+        let lw = if wide { w - preview_w - 16.0 } else { w };
+        let listtop = if wide {
+            preview_y + slide_y
+        } else {
+            primary_toggle_y + 42.0 + slide_y
+        };
+
+        // Active Appearance Details & Primary Action Bar
+        let active_title = if let Some(id) = selected_id {
+            self.library
+                .entries
+                .iter()
+                .find(|e| e.id == id && e.kind == self.kind())
+                .map(|e| format!("Active Local: {}", e.title))
+                .unwrap_or_else(|| "Active Local Override".into())
+        } else if self.capes {
+            if selection.hide_cape {
+                "Cape Hidden Locally".into()
+            } else if let Some(c) = self.cache.snapshot.capes.iter().find(|c| c.active) {
+                format!("Active Cloud Cape: {}", c.title)
+            } else if self.provider.is_some() {
+                "Account Cloud Cape".into()
+            } else {
+                "No Cape Equipped".into()
+            }
+        } else if self.provider.is_some() {
+            format!("Cloud Profile ({})", self.name)
+        } else {
+            "Default Appearance (Steve / Classic)".into()
+        };
+
+        let detail_h = 46.0;
+        ui.rounded(lx, listtop, lw, detail_h, 12.0, theme.surface);
+        ui.border(lx, listtop, lw, detail_h, 12.0, theme.border);
+        let import_w = (lw * 0.42).clamp(118.0, 168.0);
+        let info_w = (lw - import_w - 24.0).max(60.0);
+        let fitted_active = ui.fit_text(Face::SemiBold, 11.5, &active_title, info_w);
+        ui.text(
+            Face::SemiBold,
+            11.5,
+            lx + 12.0,
+            listtop + 6.0,
+            theme.text_primary,
+            &fitted_active,
+        );
+        let detail_sub = if self.worker.is_some() {
+            "Synchronizing with account service..."
+        } else if crate::documents::busy() {
+            "Waiting for Android file picker..."
+        } else if self.capes {
+            "Import a 64×32 PNG cape or select below"
+        } else {
+            "Import a 64×64 PNG skin or select below"
+        };
+        let fitted_sub = ui.fit_text(Face::Regular, 9.5, detail_sub, info_w);
+        ui.text(
+            Face::Regular,
+            9.5,
+            lx + 12.0,
+            listtop + 24.0,
+            if self.worker.is_some() {
+                theme.accent
+            } else {
+                theme.text_muted
+            },
+            &fitted_sub,
+        );
         button(
             ui,
             targets,
-            [lx, listtop, lw, 34.0],
-            "Import PNG to local gallery",
+            [lx + lw - import_w - 8.0, listtop + 7.0, import_w, 32.0],
+            if self.capes {
+                "+ Import Cape PNG"
+            } else {
+                "+ Import Skin PNG"
+            },
             Action::WardrobeImport,
             true,
         );
 
-        let list_start = listtop + 42.0;
-        let bottom = h - 52.0;
+        let list_start = listtop + detail_h + 10.0;
+        let bottom = h - 42.0;
         let mut row = list_start - scroll;
-        let selection = self
-            .library
-            .selections
-            .get(&self.key)
-            .cloned()
-            .unwrap_or_default();
-        let selected = if self.capes {
-            selection.cape.as_deref()
-        } else {
-            selection.skin.as_deref()
+        let card_h = 42.0;
+        let card_step = 48.0;
+
+        let draw_gallery_item = |ui: &mut Ui,
+                                 targets: &mut Vec<([f32; 4], Action)>,
+                                 ry: f32,
+                                 title: &str,
+                                 badge: &str,
+                                 is_selected: bool,
+                                 action: Action| {
+            let r = [lx, ry, lw, card_h];
+            ui.rounded(
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                11.0,
+                if is_selected {
+                    theme.surface_selected
+                } else {
+                    theme.surface
+                },
+            );
+            ui.stroke_rounded(
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                11.0,
+                if is_selected { 1.6 } else { 1.0 },
+                if is_selected {
+                    theme.accent
+                } else {
+                    theme.border
+                },
+            );
+            // Leading icon badge
+            let ib = [r[0] + 10.0, r[1] + 8.0, 26.0, 26.0];
+            ui.rounded(
+                ib[0],
+                ib[1],
+                ib[2],
+                ib[3],
+                8.0,
+                if is_selected {
+                    theme.accent
+                } else {
+                    theme.surface_dim
+                },
+            );
+            if is_selected {
+                ui.icon(Icon::Check, ib[0] + 5.0, ib[1] + 5.0, 16.0, theme.on_accent);
+            } else {
+                ui.icon(
+                    Icon::Installed,
+                    ib[0] + 5.0,
+                    ib[1] + 5.0,
+                    16.0,
+                    theme.text_muted,
+                );
+            }
+            let max_tw = (lw - 132.0).max(60.0);
+            let t_fit = ui.fit_text(Face::SemiBold, 12.0, title, max_tw);
+            ui.text(
+                Face::SemiBold,
+                12.0,
+                r[0] + 44.0,
+                r[1] + 6.0,
+                theme.text_primary,
+                &t_fit,
+            );
+            ui.text(
+                Face::Regular,
+                9.5,
+                r[0] + 44.0,
+                r[1] + 23.0,
+                if is_selected {
+                    theme.accent
+                } else {
+                    theme.text_muted
+                },
+                badge,
+            );
+
+            let pill_txt = if is_selected { "Active" } else { "Apply" };
+            let pill_w = 64.0;
+            let pr = [r[0] + lw - pill_w - 10.0, r[1] + 8.0, pill_w, 26.0];
+            ui.rounded(
+                pr[0],
+                pr[1],
+                pr[2],
+                pr[3],
+                8.0,
+                if is_selected {
+                    theme.accent
+                } else {
+                    theme.surface_dim
+                },
+            );
+            ui.centered_fit(
+                Face::SemiBold,
+                10.5,
+                pr,
+                if is_selected {
+                    theme.on_accent
+                } else {
+                    theme.text_primary
+                },
+                pill_txt,
+            );
+            targets.push((r, action));
         };
+
+        let mut shown_items = 0usize;
+
+        // Cloud Capes (when on Capes tab and signed into an account)
         if self.capes && self.provider.is_some() {
             for (index, cape) in self.cache.snapshot.capes.iter().enumerate() {
-                if row >= list_start && row + 32.0 <= bottom {
-                    let label = ui.fit_text(
-                        Face::Medium,
-                        14.0,
-                        &format!(
-                            "{} · cloud{}",
-                            cape.title,
-                            if cape.active {
-                                " · active"
-                            } else {
-                                " · activate"
-                            }
-                        ),
-                        lw - 24.0,
-                    );
-                    button(
+                shown_items += 1;
+                if row >= list_start - 4.0 && row + card_h <= bottom + 4.0 {
+                    let is_active = cape.active && selected_id.is_none() && !selection.hide_cape;
+                    draw_gallery_item(
                         ui,
                         targets,
-                        [lx, row, lw, 32.0],
-                        &label,
+                        row,
+                        &cape.title,
+                        if is_active {
+                            "Cloud Cape · Equipped on profile"
+                        } else {
+                            "Cloud Cape · Tap to activate"
+                        },
+                        is_active,
                         Action::WardrobeActivateCape(index),
-                        cape.active,
                     );
                 }
-                row += 38.0;
+                row += card_step;
             }
         }
+
+        // Local Gallery Items (Skins or Capes)
         for (index, entry) in self
             .library
             .entries
@@ -638,86 +989,141 @@ impl Wardrobe {
             .enumerate()
             .filter(|(_, e)| e.kind == self.kind())
         {
-            if row >= list_start && row + 32.0 <= bottom {
-                let label = ui.fit_text(
-                    Face::Medium,
-                    14.0,
-                    &format!(
-                        "{}  · local{}",
-                        entry.title,
-                        if selected == Some(&entry.id) {
-                            " · selected"
-                        } else {
-                            ""
-                        }
-                    ),
-                    lw - 24.0,
-                );
-                button(
+            shown_items += 1;
+            if row >= list_start - 4.0 && row + card_h <= bottom + 4.0 {
+                let is_sel = selected_id == Some(entry.id.as_str());
+                draw_gallery_item(
                     ui,
                     targets,
-                    [lx, row, lw, 32.0],
-                    &label,
+                    row,
+                    &entry.title,
+                    if is_sel {
+                        "Local Gallery · Currently applied"
+                    } else if self.capes {
+                        "Local Cape PNG · Tap to equip"
+                    } else {
+                        "Local Skin PNG · Tap to equip"
+                    },
+                    is_sel,
                     Action::WardrobeSelect(index),
-                    selected == Some(&entry.id),
                 );
             }
-            row += 38.0;
+            row += card_step;
         }
+
+        // Empty State Card when gallery has no items for this tab
+        if shown_items == 0 {
+            if row >= list_start - 4.0 && row + 64.0 <= bottom + 8.0 {
+                ui.rounded(lx, row, lw, 60.0, 12.0, theme.surface_dim);
+                ui.border(lx, row, lw, 60.0, 12.0, theme.border);
+                ui.text(
+                    Face::SemiBold,
+                    12.0,
+                    lx + 14.0,
+                    row + 10.0,
+                    theme.text_primary,
+                    if self.capes {
+                        "No custom capes in your gallery yet"
+                    } else {
+                        "No custom skins in your gallery yet"
+                    },
+                );
+                let empty_sub = ui.fit_text(
+                    Face::Regular,
+                    10.0,
+                    if self.capes {
+                        "Tap '+ Import Cape PNG' above to add a 64×32 cape texture from your device."
+                    } else {
+                        "Tap '+ Import Skin PNG' above to add a 64×64 skin texture from your device."
+                    },
+                    lw - 28.0,
+                );
+                ui.text(
+                    Face::Regular,
+                    10.0,
+                    lx + 14.0,
+                    row + 31.0,
+                    theme.text_muted,
+                    &empty_sub,
+                );
+            }
+            row += 68.0;
+        }
+
+        // Account & Reset Action Buttons
         if self.provider.is_none() {
-            if row >= list_start && row + 32.0 <= bottom {
+            if row >= list_start - 4.0 && row + 34.0 <= bottom + 4.0 {
                 button(
                     ui,
                     targets,
-                    [lx, row, lw, 32.0],
-                    "Reset to default locally",
+                    [lx, row, lw, 34.0],
+                    if self.capes {
+                        "Clear Local Cape Override"
+                    } else {
+                        "Reset to Default Appearance Locally"
+                    },
                     Action::WardrobeUseCloud,
                     false,
                 );
             }
-            row += 38.0;
-        }
-        if self.provider.is_some() {
-            for (label, action) in [
-                ("Use current cloud appearance", Action::WardrobeUseCloud),
-                ("Refresh cloud profile", Action::WardrobeCloud),
-            ] {
-                if row >= list_start && row + 32.0 <= bottom {
-                    button(ui, targets, [lx, row, lw, 32.0], label, action, false);
-                }
-                row += 38.0;
+            row += 42.0;
+        } else {
+            let half_w = (lw - 8.0) * 0.5;
+            if row >= list_start - 4.0 && row + 34.0 <= bottom + 4.0 {
+                button(
+                    ui,
+                    targets,
+                    [lx, row, half_w, 34.0],
+                    "Use Cloud Appearance",
+                    Action::WardrobeUseCloud,
+                    false,
+                );
+                button(
+                    ui,
+                    targets,
+                    [lx + half_w + 8.0, row, half_w, 34.0],
+                    if self.worker.is_some() {
+                        "Syncing Cloud..."
+                    } else {
+                        "Refresh Cloud Profile"
+                    },
+                    Action::WardrobeCloud,
+                    false,
+                );
             }
+            row += 42.0;
             if !self.capes {
-                if row >= list_start && row + 32.0 <= bottom {
+                if row >= list_start - 4.0 && row + 34.0 <= bottom + 4.0 {
                     button(
                         ui,
                         targets,
-                        [lx, row, lw, 32.0],
+                        [lx, row, lw, 34.0],
                         if self.provider == Some(Provider::Microsoft) {
-                            "Upload selected skin to Microsoft"
+                            "Upload Selected Skin to Microsoft Profile"
                         } else {
-                            "Manage Ely.by cloud skin on website"
+                            "Manage Ely.by Cloud Skin on Website"
                         },
                         Action::WardrobeUpload,
                         false,
                     );
                 }
-                row += 38.0;
+                row += 42.0;
             }
         }
-        if self.capes && row >= list_start && row + 32.0 <= bottom {
-            button(
-                ui,
-                targets,
-                [lx, row, lw, 32.0],
-                "Hide / show cape locally",
-                Action::WardrobeHideCape,
-                false,
-            );
-        }
-        row += 38.0;
+
         self.view = [list_start, bottom, (row + scroll + 38.0 - bottom).max(0.0)];
-        let note = ui.fit_text(Face::Regular, 11.5, &self.note, w);
-        ui.text(Face::Regular, 11.5, x, h - 36.0, color::MUTED, &note);
+
+        // Bottom status / feedback bar
+        if !self.note.is_empty() {
+            let banner_y = h - 36.0;
+            ui.rounded(x, banner_y, w, 28.0, 8.0, theme.surface_dim);
+            let note_col = if self.damaged {
+                theme.danger
+            } else {
+                theme.text_muted
+            };
+            let note = ui.fit_text(Face::Regular, 10.8, &self.note, w - 20.0);
+            ui.text(Face::Regular, 10.8, x + 10.0, banner_y + 6.0, note_col, &note);
+        }
     }
 }

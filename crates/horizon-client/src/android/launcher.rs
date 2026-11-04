@@ -365,7 +365,12 @@ impl Launcher {
         } else if self.catalog.page == Page::Settings
             && self.catalog.settings_category != crate::catalog::SettingsCategory::Overview
         {
-            self.catalog.settings_category = crate::catalog::SettingsCategory::Overview;
+            self.catalog.settings_category =
+                if self.catalog.settings_category == crate::catalog::SettingsCategory::Theme {
+                    crate::catalog::SettingsCategory::Launcher
+                } else {
+                    crate::catalog::SettingsCategory::Overview
+                };
             self.catalog.scroll = 0.0;
             self.anim.trigger_page_transition();
         } else if self.catalog.editing.take().is_none() {
@@ -859,6 +864,10 @@ impl ApplicationHandler for Launcher {
                 .as_ref()
                 .is_some_and(|m| m.loading)
             || self.anim.is_active()
+            || (self.catalog.page == Page::Skins && self.wardrobe.is_animating())
+            || self
+                .feedback
+                .is_some_and(|(_, t)| t.elapsed() < Duration::from_millis(180))
         {
             16
         } else {

@@ -2777,7 +2777,6 @@ impl OptionsUi {
                     Opt::TouchSprintToggle,
                     Opt::TouchInventoryControls,
                     Opt::TouchInteract,
-                    Opt::TouchMouseSensitivity,
                     Opt::TouchDynamicJoystick,
                     Opt::TouchDynamicAreaX,
                     Opt::TouchDynamicAreaY,

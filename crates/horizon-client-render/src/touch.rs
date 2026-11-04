@@ -103,7 +103,7 @@ pub fn camera_delta_with_mouse(
         1.0
     };
     let ix = if invert_x { -1.0 } else { 1.0 };
-    let iy = if invert_y ^ s.invert_y { -1.0 } else { 1.0 };
+    let iy = if invert_y || s.invert_y { -1.0 } else { 1.0 };
     [
         base[0] * mouse_scale * zoom * ix,
         base[1] * mouse_scale * zoom * iy,
@@ -302,6 +302,31 @@ impl TouchControls {
     pub fn tap(&mut self, button: Button) {
         self.pending.set(button, true);
     }
+    /// State-driven check for whether MCPE gameplay controls are currently visible on screen.
+    /// Used by the virtual mouse visibility controller so that whenever MCPE controls are visible
+    /// in gameplay, the virtual pointer is hidden, and whenever MCPE controls are hidden
+    /// (menus/overlays open, HUD hidden via F1, non-touch input mode, or all MCPE controls hidden),
+    /// the virtual pointer automatically appears if its authoritative toggle is enabled.
+    pub fn mcpe_controls_visible(&self, in_menu: bool, hide_gui: bool, touch_active: bool) -> bool {
+        if self.settings.control_style != ControlStyle::Mcpe {
+            return false;
+        }
+        if self.editor.is_some() || hide_gui || !touch_active {
+            return false;
+        }
+        if in_menu && !self.inventory_mode {
+            return Control::ALL
+                .into_iter()
+                .any(|c| self.visible_for_state(c, true));
+        }
+        if in_menu && self.inventory_mode {
+            return false;
+        }
+        Control::ALL
+            .into_iter()
+            .any(|c| self.visible_for_state(c, false))
+    }
+
     pub fn visible_for_state(&self, c: Control, in_menu: bool) -> bool {
         if !self.visible(c) {
             return false;
@@ -470,7 +495,10 @@ impl TouchControls {
                     Role::Move(anchor) => Some(*anchor),
                     _ => None,
                 });
-                let dynamic = self.dynamic_joystick();
+                let dynamic = self.dynamic_joystick()
+                    || (self.settings.mode != Mode::Dpad
+                        && self.settings.joystick_style.move_area
+                            == JoystickMoveArea::FollowFinger);
                 let (x, y) = match anchor {
                     Some(anchor) if dynamic => {
                         (anchor[0] * w - size / 2.0, anchor[1] * h - size / 2.0)
@@ -734,9 +762,11 @@ impl TouchControls {
                 .fingers
                 .values()
                 .any(|(r, _)| matches!(r, Role::Move(_)));
+            let joy_zone_supported = self.settings.control_style == ControlStyle::GoyControl
+                || self.settings.mode != Mode::Dpad;
             if control.is_none()
                 && !has_move
-                && self.settings.control_style == ControlStyle::GoyControl
+                && joy_zone_supported
                 && self.visible(Control::Move)
                 && !self.dynamic_joystick()
             {
@@ -760,7 +790,11 @@ impl TouchControls {
                         .values()
                         .any(|(r, _)| matches!(r, Role::Move(_))) =>
                 {
-                    let anchor = if self.dynamic_joystick() {
+                    let anchor = if self.dynamic_joystick()
+                        || (joy_zone_supported
+                            && self.settings.joystick_style.move_area
+                                == JoystickMoveArea::FollowFinger)
+                    {
                         point
                     } else {
                         self.placement(Control::Move).center

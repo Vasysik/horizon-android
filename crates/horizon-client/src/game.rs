@@ -3361,7 +3361,14 @@ impl Game<'_> {
         player.mobility_restricted = blind;
         player.yaw = self.yaw;
         player.pitch = self.pitch;
-        player.auto_jump_enabled = self.settings.auto_jump;
+        #[cfg(target_os = "android")]
+        {
+            player.auto_jump_enabled = self.settings.auto_jump || self.pad.touch.settings.auto_jump;
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            player.auto_jump_enabled = self.settings.auto_jump;
+        }
         player.item_use_speed = item_use_speed;
         player.item_use_slows_sprint = item_use_slows_sprint;
         player.respiration = respiration;
@@ -13491,6 +13498,16 @@ impl Game<'_> {
     fn apply_settings(&mut self) {
         #[cfg(target_os = "android")]
         {
+            if self.settings.touch.auto_jump != self.settings.auto_jump {
+                self.settings.touch.auto_jump = self.settings.auto_jump;
+                let _ = self.settings.touch.save();
+            }
+            if self.settings.touch.sprint_toggle != self.settings.toggle_sprint {
+                let s = self.settings.toggle_sprint || self.settings.touch.sprint_toggle;
+                self.settings.touch.sprint_toggle = s;
+                self.settings.touch.toggle_sprint = s;
+                self.settings.toggle_sprint = s;
+            }
             self.pad.touch.settings = self.settings.touch.clone();
             self.pad.touch.force_crosshair =
                 !crate::touch_visible() || self.settings.keypad.enabled;
@@ -14957,10 +14974,13 @@ impl Game<'_> {
                 None,
             );
         } else {
+            #[cfg(target_os = "android")]
+            self.android_sync_pointer();
             let in_menu = self.pad_in_menu();
             self.pad.touch.in_menu = in_menu;
             self.pad.touch.goy_rendered_by_ui = true;
-            if (self.player.is_some() || self.settings.keypad.enabled)
+            if (in_menu || !self.ui.hide_gui)
+                && (self.player.is_some() || self.settings.keypad.enabled)
                 && (!in_menu
                     || self.android_inventory_controls()
                     || self.pad.touch.settings.layouts[self.pad.touch.settings.mode.index()]
@@ -14977,7 +14997,7 @@ impl Game<'_> {
                 self.pad.touch.break_progress = self.touch_mining_progress();
                 self.pad.touch.draw(&mut hud, &self.gui.atlas);
             }
-            if !self.settings.keypad.enabled {
+            if !self.settings.keypad.enabled && (in_menu || !self.ui.hide_gui) {
                 horizon_client::touch_ui::draw_goy_hud(
                     &self.pad.touch,
                     &mut hud,
@@ -16331,6 +16351,7 @@ impl Game<'_> {
                 }
                 if std::mem::take(&mut self.pad.touch.clicked) {
                     self.audio.play_button_click();
+                    self.android_touch_haptic(10);
                 }
                 return;
             }
@@ -16494,6 +16515,7 @@ impl Game<'_> {
                 if !self.android_inventory_controls() {
                     self.pad.touch.clear_world_gesture();
                 }
+                self.android_sync_pointer();
                 if !matches!(self.screen, Screen::Inventory | Screen::Creative) {
                     self.android_menu_touch(touch, event_loop, id);
                     return;

@@ -214,6 +214,28 @@ impl Game<'_> {
             if name == "mouse.look" {
                 continue;
             }
+            if name == "mouse.virtual.toggle" {
+                if down {
+                    if self.pad_in_menu() || !self.pad.touch.settings.virtual_mouse_enabled {
+                        self.pad.touch.settings.virtual_mouse_enabled =
+                            !self.pad.touch.settings.virtual_mouse_enabled;
+                        self.pad.touch_ui.pointer_off =
+                            !self.pad.touch.settings.virtual_mouse_enabled;
+                        if self.pad.touch.settings.virtual_mouse_enabled && !self.pad_in_menu() {
+                            self.pad.touch_ui.goy_in_game_mouse = true;
+                        } else {
+                            self.pad.touch_ui.goy_in_game_mouse = false;
+                        }
+                        let _ = self.pad.touch.settings.save();
+                        self.settings.touch = self.pad.touch.settings.clone();
+                    } else {
+                        self.pad.touch_ui.goy_in_game_mouse = !self.pad.touch_ui.goy_in_game_mouse;
+                    }
+                    self.android_sync_pointer();
+                    self.android_touch_haptic(14);
+                }
+                continue;
+            }
             let Some(key) = horizon_client::keybinds::key_code(&name) else {
                 continue;
             };
@@ -292,6 +314,16 @@ impl Game<'_> {
         }
     }
 
+    pub(super) fn android_touch_haptic(&self, millis: u32) {
+        if self.pad.touch.settings.vibrate {
+            crate::platform::vibrate(horizon_client::gamepad::Pulse {
+                strong: 0.30,
+                weak: 0.55,
+                millis,
+            });
+        }
+    }
+
     pub(super) fn android_set_virtual_mouse(&mut self, enabled: bool) {
         if !enabled {
             self.pad.touch_ui.cancel_relative();
@@ -308,26 +340,30 @@ impl Game<'_> {
         }
         self.pad.touch_ui.virtual_mouse = true;
         if let Some(b) = self.gui_scale() {
-            // The pointer comes back at the middle of the screen every time.
-            self.cursor = (b.width * 0.5, b.height * 0.5);
+            self.pad
+                .touch_ui
+                .sync_viewport_cursor(&mut self.cursor, [b.width, b.height]);
         }
     }
 
-    /// The pointer is not a setting: it exists exactly while the mouse is not
-    /// locked. Menus and the HUD show it; gameplay hides it and releases any
-    /// touch drag that was still holding a mouse button.
+    /// State-driven Virtual Mouse visibility synchronization across MCPE and GoyControl.
     pub(super) fn android_sync_pointer(&mut self) {
-        let want = !self.pad.touch_ui.pointer_off && !self.captured;
+        self.pad.touch_ui.pointer_off = !self.pad.touch.settings.virtual_mouse_enabled;
+        let in_menu = self.pad_in_menu();
+        if let Some(b) = self.gui_scale() {
+            self.pad
+                .touch_ui
+                .sync_viewport_cursor(&mut self.cursor, [b.width, b.height]);
+        }
+        let want = self.pad.touch_ui.compute_virtual_mouse_visibility(
+            &self.pad.touch,
+            in_menu,
+            self.ui.hide_gui,
+            crate::touch_visible(),
+            self.captured,
+        );
         if self.pad.touch_ui.virtual_mouse != want {
             self.android_set_virtual_mouse(want);
-        }
-        // A pointer that never moved yet starts at the centre of the view, not
-        // at the window corner, so it is immediately usable in menus.
-        if want
-            && self.cursor == (0.0, 0.0)
-            && let Some(b) = self.gui_scale()
-        {
-            self.cursor = (b.width * 0.5, b.height * 0.5);
         }
     }
 
@@ -453,15 +489,17 @@ impl Game<'_> {
             self.pad.touch.ignore(t.id);
             if t.phase == TouchPhase::Started {
                 self.audio.play_button_click();
+                self.android_touch_haptic(12);
             }
             match menu_act {
                 InGameMenuAction::Close => {}
                 InGameMenuAction::OpenControlEditor => {
                     self.pad.touch.open_editor();
+                    self.android_sync_pointer();
                 }
                 InGameMenuAction::SetControlStyle(style) => {
                     self.android_release_touch_keys(false);
-                    self.android_set_virtual_mouse(false);
+                    self.pad.touch_ui.goy_in_game_mouse = false;
                     self.pad.touch.clear();
                     self.pad
                         .touch
@@ -471,6 +509,7 @@ impl Game<'_> {
                         style == horizon_client::touch::ControlStyle::GoyControl;
                     self.pad.touch_ui.refresh_presets_cache(style);
                     self.settings.touch = self.pad.touch.settings.clone();
+                    self.android_sync_pointer();
                 }
                 InGameMenuAction::SelectPreset(preset_id) => {
                     let cur_style = self.pad.touch.settings.control_style;
@@ -548,6 +587,9 @@ impl Game<'_> {
                         Mode::Crosshair => Mode::Tap,
                         Mode::Tap => Mode::Dpad,
                     };
+                    if self.pad.touch.settings.mode != Mode::Crosshair {
+                        self.pad.touch.settings.split_controls = false;
+                    }
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
@@ -558,15 +600,17 @@ impl Game<'_> {
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ToggleSplitTouch => {
-                    self.pad.touch.settings.split_controls =
-                        !self.pad.touch.settings.split_controls;
+                    self.pad.touch.settings.toggle_split_touch();
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ToggleInvertY => {
-                    self.pad.touch.settings.invert_y = !self.pad.touch.settings.invert_y;
+                    let next = !self.pad.touch.settings.invert_y;
+                    self.pad.touch.settings.invert_y = next;
+                    self.settings.invert_y = next;
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
+                    self.settings.save(&Self::options_path());
                 }
                 InGameMenuAction::ToggleLeftHanded => {
                     self.pad.touch.settings.left_handed = !self.pad.touch.settings.left_handed;
@@ -574,25 +618,42 @@ impl Game<'_> {
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ToggleSprintMode => {
-                    self.pad.touch.settings.toggle_sprint = !self.pad.touch.settings.toggle_sprint;
+                    let next = !self.pad.touch.settings.sprint_toggle;
+                    self.pad.touch.settings.sprint_toggle = next;
+                    self.pad.touch.settings.toggle_sprint = next;
+                    self.settings.toggle_sprint = next;
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
+                    self.settings.save(&Self::options_path());
                 }
                 InGameMenuAction::ToggleInventoryControls => {
                     self.pad.touch.settings.inventory_controls =
                         !self.pad.touch.settings.inventory_controls;
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
+                    self.android_sync_pointer();
                 }
                 InGameMenuAction::ToggleVibrate => {
-                    self.pad.touch.settings.vibrate = !self.pad.touch.settings.vibrate;
+                    let next = !self.pad.touch.settings.vibrate;
+                    self.pad.touch.settings.vibrate = next;
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
+                    if next {
+                        self.android_touch_haptic(22);
+                    } else {
+                        crate::platform::cancel_vibration();
+                    }
                 }
                 InGameMenuAction::ToggleAutoJump => {
-                    self.pad.touch.settings.auto_jump = !self.pad.touch.settings.auto_jump;
+                    let next = !self.pad.touch.settings.auto_jump;
+                    self.pad.touch.settings.auto_jump = next;
+                    self.settings.auto_jump = next;
+                    if let Some(player) = &mut self.player {
+                        player.auto_jump_enabled = next;
+                    }
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
+                    self.settings.save(&Self::options_path());
                 }
                 InGameMenuAction::ToggleGyro => {
                     self.pad.touch.settings.gyroscope = !self.pad.touch.settings.gyroscope;
@@ -600,8 +661,34 @@ impl Game<'_> {
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::ToggleVirtualMouse => {
-                    self.pad.touch_ui.pointer_off = !self.pad.touch_ui.pointer_off;
+                    let next = !self.pad.touch.settings.virtual_mouse_enabled;
+                    self.pad.touch.settings.virtual_mouse_enabled = next;
+                    self.pad.touch_ui.pointer_off = !next;
+                    if !next {
+                        self.pad.touch_ui.goy_in_game_mouse = false;
+                    }
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
                     self.android_sync_pointer();
+                }
+                InGameMenuAction::SetVirtualMouseSpeed(spd) => {
+                    self.pad.touch.settings.virtual_mouse_sensitivity = spd.clamp(0.25, 3.00);
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::StepVirtualMouseSpeed(dir) => {
+                    self.pad.touch.settings.virtual_mouse_sensitivity =
+                        (self.pad.touch.settings.virtual_mouse_sensitivity + dir as f32 * 0.25)
+                            .clamp(0.25, 3.00);
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::StepGyroSensitivity(dir) => {
+                    self.pad.touch.settings.gyro_sensitivity =
+                        (self.pad.touch.settings.gyro_sensitivity + dir as f32 * 0.20)
+                            .clamp(0.20, 3.00);
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
                 }
                 InGameMenuAction::SetTouchSensitivity(sens) => {
                     self.pad.touch.settings.sensitivity = sens.clamp(0.10, 3.00);
@@ -721,7 +808,11 @@ impl Game<'_> {
                             self.android_menu_mouse(events, id, right, false)?;
                         }
                         self.pad.touch_ui.cancel();
-                        self.pad.touch_ui.pointer_off = !self.pad.touch_ui.pointer_off;
+                        let next = !self.pad.touch.settings.virtual_mouse_enabled;
+                        self.pad.touch.settings.virtual_mouse_enabled = next;
+                        self.pad.touch_ui.pointer_off = !next;
+                        let _ = self.pad.touch.settings.save();
+                        self.settings.touch = self.pad.touch.settings.clone();
                         self.android_sync_pointer();
                     }
                     Action::More => self.pad.touch_ui.expanded = !self.pad.touch_ui.expanded,
@@ -1110,7 +1201,7 @@ impl Game<'_> {
             t.phase,
             [self.cursor.0, self.cursor.1],
             [b.width, b.height],
-            self.settings.touch.virtual_mouse_sensitivity,
+            self.pad.touch.settings.virtual_mouse_sensitivity,
             !self.pad.touch_ui.mouse_held(),
         );
         self.cursor = (position[0], position[1]);

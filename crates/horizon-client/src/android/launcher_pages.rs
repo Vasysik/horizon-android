@@ -11,24 +11,70 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
-/// Material You 3 dark violet-black palette matching the Horizon Android revamp design.
-const MY3_BG: u32 = color::hex(0x0D0C14, 255);
-const MY3_SURFACE: u32 = color::hex(0x171522, 255);
-const MY3_CARD_BG: u32 = color::hex(0x171621, 255);
-const MY3_CARD_BORDER: u32 = color::hex(0x262435, 255);
-const MY3_SURFACE_HIGH: u32 = color::hex(0x232032, 255);
-const MY3_BORDER: u32 = color::hex(0x282538, 255);
-const MY3_NAV_ACTIVE: u32 = color::hex(0x5B4898, 255);
-const MY3_ACCENT: u32 = color::hex(0x9A7BFF, 255);
-const MY3_ACCENT_SOFT: u32 = color::hex(0x332854, 255);
-const MY3_ON_ACCENT: u32 = color::hex(0x17112E, 255);
-const MY3_TRACK: u32 = color::hex(0x2B2937, 255);
-const MY3_PAUSE_BG: u32 = color::hex(0x252333, 255);
-const MY3_CANCEL_BG: u32 = color::hex(0x382E4C, 255);
-const MY3_TEXT: u32 = color::hex(0xF4F0FC, 255);
-const MY3_MUTED: u32 = color::hex(0x9C96B0, 255);
+/// Centralized dynamic theme accessors backed by `horizon_client::ui_theme::active_theme()`.
+#[inline]
+fn my3_bg() -> u32 {
+    horizon_client::ui_theme::active_theme().bg_solid
+}
+#[inline]
+fn my3_surface() -> u32 {
+    horizon_client::ui_theme::active_theme().surface
+}
+#[inline]
+fn my3_card_bg() -> u32 {
+    horizon_client::ui_theme::active_theme().surface_dim
+}
+#[inline]
+fn my3_card_border() -> u32 {
+    horizon_client::ui_theme::active_theme().border
+}
+#[inline]
+fn my3_surface_high() -> u32 {
+    horizon_client::ui_theme::active_theme().surface_bright
+}
+#[inline]
+fn my3_border() -> u32 {
+    horizon_client::ui_theme::active_theme().border
+}
+#[inline]
+fn my3_nav_active() -> u32 {
+    horizon_client::ui_theme::active_theme().surface_selected
+}
+#[inline]
+fn my3_accent() -> u32 {
+    horizon_client::ui_theme::active_theme().accent
+}
+#[inline]
+fn my3_accent_soft() -> u32 {
+    horizon_client::ui_theme::active_theme().accent_soft
+}
+#[inline]
+fn my3_on_accent() -> u32 {
+    horizon_client::ui_theme::active_theme().on_accent
+}
+#[inline]
+fn my3_track() -> u32 {
+    horizon_client::ui_theme::active_theme().surface_dim
+}
+#[inline]
+fn my3_pause_bg() -> u32 {
+    horizon_client::ui_theme::active_theme().surface_bright
+}
+#[inline]
+fn my3_cancel_bg() -> u32 {
+    color::with_alpha(horizon_client::ui_theme::active_theme().danger, 0.28)
+}
+#[inline]
+fn my3_text() -> u32 {
+    horizon_client::ui_theme::active_theme().text_primary
+}
+#[inline]
+fn my3_muted() -> u32 {
+    horizon_client::ui_theme::active_theme().text_muted
+}
 
-/// Smooth 60fps UI animation state across navigation, pages, progress bars, and modals.
+/// Smooth 60fps UI animation state across navigation, pages, accordions, theme previews, progress bars, and modals.
+/// Automatically respects `motion::reduced_motion()` on low-end Android hardware.
 pub(super) struct AnimState {
     pub last_tick: std::time::Instant,
     pub last_page: Page,
@@ -39,6 +85,8 @@ pub(super) struct AnimState {
     pub progress_smooth: f32,
     pub modal_anim: f32,
     pub shimmer_phase: f32,
+    pub section_expand: [f32; 3],
+    pub theme_pulse: f32,
 }
 
 impl Default for AnimState {
@@ -53,6 +101,8 @@ impl Default for AnimState {
             progress_smooth: 0.0,
             modal_anim: 0.0,
             shimmer_phase: 0.0,
+            section_expand: [0.0; 3],
+            theme_pulse: 1.0,
         }
     }
 }
@@ -64,6 +114,7 @@ impl AnimState {
         category: SettingsCategory,
         target_nav_y: f32,
         has_modal: bool,
+        sections: [bool; 3],
     ) {
         let now = std::time::Instant::now();
         let dt = now
@@ -72,31 +123,66 @@ impl AnimState {
             .clamp(0.001, 0.08);
         self.last_tick = now;
 
+        if horizon_client::ui_theme::motion::reduced_motion() {
+            self.last_page = page;
+            self.last_category = category;
+            self.nav_pill_y = target_nav_y;
+            self.page_fade = 1.0;
+            self.page_slide = 0.0;
+            self.modal_anim = if has_modal { 1.0 } else { 0.0 };
+            self.theme_pulse = 1.0;
+            for i in 0..3 {
+                self.section_expand[i] = if sections[i] { 1.0 } else { 0.0 };
+            }
+            return;
+        }
+
         if page != self.last_page || (page == Page::Settings && category != self.last_category) {
             self.last_page = page;
             self.last_category = category;
             self.page_fade = 0.0;
-            self.page_slide = 14.0;
+            self.page_slide = 12.0;
         }
 
-        let speed = (dt * 16.0).min(1.0);
-        self.nav_pill_y += (target_nav_y - self.nav_pill_y) * (dt * 18.0).min(1.0);
-        self.page_fade = (self.page_fade + dt * 7.5).min(1.0);
+        let speed = (dt * 16.5).min(1.0);
+        self.nav_pill_y += (target_nav_y - self.nav_pill_y) * (dt * 19.0).min(1.0);
+        self.page_fade = (self.page_fade + dt * 8.0).min(1.0);
         self.page_slide *= (1.0 - speed).max(0.0);
         let modal_target = if has_modal { 1.0 } else { 0.0 };
-        self.modal_anim += (modal_target - self.modal_anim) * (dt * 15.0).min(1.0);
+        self.modal_anim += (modal_target - self.modal_anim) * (dt * 16.0).min(1.0);
+        self.theme_pulse = (self.theme_pulse + dt * 6.5).min(1.0);
+        for i in 0..3 {
+            let target = if sections[i] { 1.0 } else { 0.0 };
+            self.section_expand[i] += (target - self.section_expand[i]) * (dt * 15.0).min(1.0);
+        }
         self.shimmer_phase = (self.shimmer_phase + dt * 0.85) % 1.0;
     }
 
     pub fn trigger_page_transition(&mut self) {
-        self.page_fade = 0.0;
-        self.page_slide = 14.0;
+        if !horizon_client::ui_theme::motion::reduced_motion() {
+            self.page_fade = 0.0;
+            self.page_slide = 12.0;
+        }
+    }
+
+    pub fn trigger_theme_pulse(&mut self) {
+        if !horizon_client::ui_theme::motion::reduced_motion() {
+            self.theme_pulse = 0.0;
+        }
     }
 
     pub fn is_active(&self) -> bool {
+        if horizon_client::ui_theme::motion::reduced_motion() {
+            return false;
+        }
         self.page_fade < 0.99
-            || self.page_slide.abs() > 0.4
+            || self.page_slide.abs() > 0.35
             || (self.modal_anim > 0.01 && self.modal_anim < 0.99)
+            || self.theme_pulse < 0.99
+            || self
+                .section_expand
+                .iter()
+                .any(|v| *v > 0.01 && *v < 0.99)
     }
 }
 
@@ -228,6 +314,18 @@ pub(super) enum Action {
     ToggleLeftHanded,
     ToggleInvertY,
     ToggleGyro,
+    // Theme customization actions (Settings -> Launcher Settings -> Theme)
+    SelectThemePreset(horizon_client::ui_theme::ThemePreset),
+    SetThemeAppearance(horizon_client::ui_theme::ThemeAppearance),
+    SetThemeBackgroundMode(horizon_client::ui_theme::BackgroundMode),
+    SetGradientDirection(horizon_client::ui_theme::GradientDirection),
+    ToggleGradientThreeStops,
+    StepGradientMidPos(i8),
+    SelectAccentSwatch(u32),
+    SelectBgSwatch(u32),
+    SelectGradStartSwatch(u32),
+    SelectGradEndSwatch(u32),
+    ResetTheme,
 }
 
 pub(super) fn button(
@@ -246,10 +344,10 @@ pub(super) fn button(
         w,
         h,
         radius,
-        if accent { MY3_ACCENT } else { MY3_SURFACE_HIGH },
+        if accent { my3_accent() } else { my3_surface_high() },
     );
     if !accent {
-        ui.border(x, y, w, h, radius, MY3_BORDER);
+        ui.border(x, y, w, h, radius, my3_border());
     }
     let padding = (w * 0.10).clamp(8.0, 14.0);
     let font = if w < 90.0 {
@@ -273,7 +371,7 @@ pub(super) fn button(
         font,
         tx,
         ty,
-        if accent { MY3_ON_ACCENT } else { MY3_TEXT },
+        if accent { my3_on_accent() } else { my3_text() },
         &fitted,
     );
     if let Some(c) = ui.clip_rect(rect) {
@@ -294,7 +392,7 @@ fn toggle(
         13.5,
         x,
         y + (h - 20.0) * 0.5,
-        if on { MY3_ACCENT } else { MY3_MUTED },
+        if on { my3_accent() } else { my3_muted() },
         if on { "Enabled" } else { "Off" },
     );
     let track_x = x + w - 52.0;
@@ -305,7 +403,7 @@ fn toggle(
         50.0,
         26.0,
         13.0,
-        if on { MY3_ACCENT } else { MY3_TRACK },
+        if on { my3_accent() } else { my3_track() },
     );
     ui.rounded(
         track_x + if on { 26.0 } else { 4.0 },
@@ -313,7 +411,7 @@ fn toggle(
         20.0,
         20.0,
         10.0,
-        if on { MY3_ON_ACCENT } else { MY3_MUTED },
+        if on { my3_on_accent() } else { my3_muted() },
     );
     if let Some(c) = ui.clip_rect([x, y, w, h]) {
         targets.push((c, action));
@@ -333,8 +431,8 @@ fn draw_setting_card(
     subtitle: &str,
     right_control: SettingControl<'_>,
 ) {
-    ui.rounded(x, y, w, h, 14.0, MY3_CARD_BG);
-    ui.border(x, y, w, h, 14.0, MY3_CARD_BORDER);
+    ui.rounded(x, y, w, h, 14.0, my3_card_bg());
+    ui.border(x, y, w, h, 14.0, my3_card_border());
 
     let text_max = (w - 220.0).max(90.0);
     let fitted_title = ui.fit_text(Face::SemiBold, 15.0, title, text_max);
@@ -343,7 +441,7 @@ fn draw_setting_card(
         15.0,
         x + 16.0,
         y + 10.0,
-        MY3_TEXT,
+        my3_text(),
         &fitted_title,
     );
     let fitted_sub = ui.fit_text(Face::Regular, 12.5, subtitle, text_max);
@@ -352,7 +450,7 @@ fn draw_setting_card(
         12.5,
         x + 16.0,
         y + 32.0,
-        MY3_MUTED,
+        my3_muted(),
         &fitted_sub,
     );
 
@@ -375,8 +473,8 @@ fn draw_setting_card(
             let val_x = plus_rect[0] - val_w - 6.0;
             let minus_rect = [val_x - 36.0 - 6.0, y + (h - 36.0) * 0.5, 36.0, 36.0];
 
-            ui.rounded(val_x, y + (h - 36.0) * 0.5, val_w, 36.0, 12.0, MY3_SURFACE);
-            ui.border(val_x, y + (h - 36.0) * 0.5, val_w, 36.0, 12.0, MY3_BORDER);
+            ui.rounded(val_x, y + (h - 36.0) * 0.5, val_w, 36.0, 12.0, my3_surface());
+            ui.border(val_x, y + (h - 36.0) * 0.5, val_w, 36.0, 12.0, my3_border());
             let fitted_v = ui.fit_text(Face::SemiBold, 13.5, value_label, val_w - 10.0);
             let tw = ui.measure(Face::SemiBold, 13.5, &fitted_v);
             ui.text(
@@ -384,7 +482,7 @@ fn draw_setting_card(
                 13.5,
                 val_x + (val_w - tw) * 0.5,
                 y + (h - 20.0) * 0.5,
-                MY3_ACCENT,
+                my3_accent(),
                 &fitted_v,
             );
             list_targets.push((minus_rect, minus_action));
@@ -429,7 +527,7 @@ fn icon_action_button(
         x + (w - icon_size) * 0.5,
         y + (h - icon_size) * 0.5,
         icon_size,
-        MY3_TEXT,
+        my3_text(),
     );
     targets.push((rect, action));
 }
@@ -462,7 +560,7 @@ fn draw_my3_progress_view(
         23.0,
         content_x,
         center_y - 68.0,
-        MY3_TEXT,
+        my3_text(),
         &title_fitted,
     );
 
@@ -479,14 +577,14 @@ fn draw_my3_progress_view(
         badge_w,
         22.0,
         11.0,
-        MY3_ACCENT_SOFT,
+        my3_accent_soft(),
     );
     ui.text(
         Face::SemiBold,
         12.0,
         content_x + 9.0,
         center_y - 31.0,
-        MY3_ACCENT,
+        my3_accent(),
         &step_badge,
     );
 
@@ -499,7 +597,7 @@ fn draw_my3_progress_view(
         13.5,
         left_x,
         center_y - 32.0,
-        MY3_MUTED,
+        my3_muted(),
         &left_fitted,
     );
     ui.text(
@@ -507,18 +605,18 @@ fn draw_my3_progress_view(
         13.5,
         content_x + content_w - right_w,
         center_y - 32.0,
-        MY3_TEXT,
+        my3_text(),
         subtitle_right,
     );
 
     // Thick Material You 3 rounded progress bar (#9A7BFF on #2B2937) with animated shimmer.
     let bar_y = center_y + 2.0;
     let bar_h = 12.0;
-    ui.rounded(content_x, bar_y, content_w, bar_h, 6.0, MY3_TRACK);
+    ui.rounded(content_x, bar_y, content_w, bar_h, 6.0, my3_track());
     let clamped = fraction.clamp(0.0, 1.0);
     if clamped > 0.0 {
         let fill_w = (content_w * clamped).max(bar_h).min(content_w);
-        ui.rounded(content_x, bar_y, fill_w, bar_h, 6.0, MY3_ACCENT);
+        ui.rounded(content_x, bar_y, fill_w, bar_h, 6.0, my3_accent());
         if !paused && fill_w > 36.0 {
             let sw = (fill_w * 0.25).clamp(24.0, 72.0);
             let sx = content_x + (fill_w - sw) * shimmer_phase.clamp(0.0, 1.0);
@@ -548,7 +646,7 @@ fn draw_my3_progress_view(
         13.0,
         content_x,
         bar_y + 20.0,
-        MY3_MUTED,
+        my3_muted(),
         &stage_fitted,
     );
     ui.text(
@@ -556,7 +654,7 @@ fn draw_my3_progress_view(
         13.0,
         content_x + content_w - metrics_w,
         bar_y + 20.0,
-        MY3_ACCENT,
+        my3_accent(),
         &metrics_line,
     );
 
@@ -571,18 +669,18 @@ fn draw_my3_progress_view(
             let done = idx < step_index;
             let active = idx == step_index;
             let bg = if active {
-                MY3_ACCENT_SOFT
+                my3_accent_soft()
             } else if done {
                 color::hex(0x1E2832, 255)
             } else {
-                MY3_SURFACE
+                my3_surface()
             };
             let border_col = if active {
-                MY3_ACCENT
+                my3_accent()
             } else if done {
                 color::hex(0x4E8E6E, 255)
             } else {
-                MY3_BORDER
+                my3_border()
             };
             ui.rounded(px, step_y, pill_w, 26.0, 8.0, bg);
             ui.border(px, step_y, pill_w, 26.0, 8.0, border_col);
@@ -595,7 +693,7 @@ fn draw_my3_progress_view(
                 11.5,
                 px + (pill_w - tw) * 0.5,
                 step_y + 5.0,
-                if active || done { MY3_TEXT } else { MY3_MUTED },
+                if active || done { my3_text() } else { my3_muted() },
                 &fitted,
             );
         }
@@ -609,7 +707,7 @@ fn draw_my3_progress_view(
         ui,
         targets,
         [pause_x, btn_y, 46.0, 46.0],
-        MY3_PAUSE_BG,
+        my3_pause_bg(),
         if paused { Icon::Play } else { Icon::Pause },
         pause_action,
     );
@@ -617,7 +715,7 @@ fn draw_my3_progress_view(
         ui,
         targets,
         [cancel_x, btn_y, 46.0, 46.0],
-        MY3_CANCEL_BG,
+        my3_cancel_bg(),
         Icon::Close,
         cancel_action,
     );
@@ -741,9 +839,8 @@ impl Launcher {
             ui.h = ui.h.min(bottom as f32 / ui.density);
         }
         let (w, h) = (ui.w, ui.h);
-        let scale = ui.density / ui.batch.scale;
-        ui.batch
-            .fill(&gui.atlas, 0.0, 0.0, w * scale, h * scale, MY3_BG);
+        let active_th = horizon_client::ui_theme::active_theme();
+        ui.draw_theme_background(0.0, 0.0, w, h, &active_th);
 
         // ---- Top Header Bar (brand lockup ... account pill) ----
         ui.horizon_logo(18.0, 12.0, 28.0);
@@ -765,7 +862,7 @@ impl Launcher {
             eq_btn_rect[2],
             eq_btn_rect[3],
             pill_h * 0.5,
-            color::hex(0x1C1929, 255),
+            my3_surface(),
         );
         ui.border(
             eq_btn_rect[0],
@@ -773,22 +870,22 @@ impl Launcher {
             eq_btn_rect[2],
             eq_btn_rect[3],
             pill_h * 0.5,
-            color::hex(0x312C45, 255),
+            my3_border(),
         );
         ui.icon(
             Icon::MenuEquals,
             eq_btn_rect[0] + 9.0,
             eq_btn_rect[1] + 9.0,
             18.0,
-            MY3_ACCENT,
+            my3_accent(),
         );
         self.targets.push((eq_btn_rect, Action::OpenControlEditor));
 
         let brand_w = (eq_btn_rect[0] - 66.0).max(70.0);
-        ui.text(Face::SemiBold, 16.0, 54.0, 10.0, MY3_TEXT, "Horizon");
+        ui.text(Face::SemiBold, 16.0, 54.0, 10.0, my3_text(), "Horizon");
         let version_line = format!("Android {}", crate::backend::VERSION);
         let fitted_version = ui.fit_text(Face::Regular, 11.0, &version_line, brand_w);
-        ui.text(Face::Regular, 11.0, 54.0, 30.0, MY3_MUTED, &fitted_version);
+        ui.text(Face::Regular, 11.0, 54.0, 30.0, my3_muted(), &fitted_version);
 
         // Top-right Account Selector Pill with circular avatar head, username, and chevron.
         ui.rounded(
@@ -797,7 +894,7 @@ impl Launcher {
             pill_w,
             pill_h,
             pill_h * 0.5,
-            color::hex(0x1C1929, 255),
+            my3_surface(),
         );
         ui.border(
             pill_x,
@@ -805,11 +902,11 @@ impl Launcher {
             pill_w,
             pill_h,
             pill_h * 0.5,
-            color::hex(0x312C45, 255),
+            my3_border(),
         );
         ui.avatar_head_2d(pill_x + 6.0, pill_y + 4.0, 28.0, &account_name);
         if self.login.signed_in {
-            ui.rounded(pill_x + 26.0, pill_y + 24.0, 9.0, 9.0, 4.5, MY3_BG);
+            ui.rounded(pill_x + 26.0, pill_y + 24.0, 9.0, 9.0, 4.5, my3_bg());
             ui.rounded(
                 pill_x + 27.0,
                 pill_y + 25.0,
@@ -825,7 +922,7 @@ impl Launcher {
             13.5,
             pill_x + 37.0,
             pill_y + 8.0,
-            MY3_TEXT,
+            my3_text(),
             &fitted_acct,
         );
         ui.icon(
@@ -833,14 +930,14 @@ impl Launcher {
             pill_x + pill_w - 22.0,
             pill_y + 12.0,
             12.0,
-            MY3_MUTED,
+            my3_muted(),
         );
         self.targets
             .push(([pill_x, pill_y, pill_w, pill_h], Action::Account));
 
         // ---- Left Vertical Navigation Rail + Smooth Gliding Active Pill ----
         let sidebar_w = if w < 560.0 { 136.0 } else { 184.0 };
-        ui.rounded(sidebar_w, 56.0, 1.0, (h - 68.0).max(10.0), 0.0, MY3_BORDER);
+        ui.rounded(sidebar_w, 56.0, 1.0, (h - 68.0).max(10.0), 0.0, my3_border());
         let nav_start_y = 62.0;
         let nav_step = ((h - nav_start_y - 14.0) / 6.0).clamp(36.0, 48.0);
         let nav_h = (nav_step - 5.0).clamp(32.0, 41.0);
@@ -849,11 +946,16 @@ impl Launcher {
             .position(|p| *p == self.catalog.page)
             .unwrap_or(0);
         let target_nav_y = nav_start_y + selected_idx as f32 * nav_step;
+        let has_any_modal = self.catalog.project_modal.is_some()
+            || self.chooser.is_some()
+            || self.login.visible
+            || self.exit_confirmation;
         self.anim.step(
             self.catalog.page,
             self.catalog.settings_category,
             target_nav_y,
-            self.catalog.project_modal.is_some(),
+            has_any_modal,
+            self.catalog.sections,
         );
 
         // Draw gliding MY3 active indicator pill
@@ -863,7 +965,7 @@ impl Launcher {
             sidebar_w - 20.0,
             nav_h,
             nav_h * 0.5,
-            MY3_NAV_ACTIVE,
+            my3_nav_active(),
         );
 
         for (i, page) in Page::ALL.iter().enumerate() {
@@ -872,9 +974,9 @@ impl Launcher {
             let nw = sidebar_w - 20.0;
             let selected = *page == self.catalog.page;
             let fg = if selected {
-                MY3_TEXT
+                my3_text()
             } else {
-                color::hex(0xCFC9E2, 255)
+                my3_muted()
             };
             ui.icon(
                 page_icon(*page),
@@ -1031,15 +1133,15 @@ impl Launcher {
             } else {
                 let card_y = 66.0 + slide_y;
                 let card_h = (h - 178.0).clamp(148.0, 236.0);
-                ui.rounded(content_x, card_y, content_w, card_h, 20.0, MY3_SURFACE);
-                ui.border(content_x, card_y, content_w, card_h, 20.0, MY3_BORDER);
+                ui.rounded(content_x, card_y, content_w, card_h, 20.0, my3_surface());
+                ui.border(content_x, card_y, content_w, card_h, 20.0, my3_border());
 
                 ui.text(
                     Face::SemiBold,
                     23.0,
                     content_x + 22.0,
                     card_y + 18.0,
-                    MY3_TEXT,
+                    my3_text(),
                     if installed {
                         "Ready to play"
                     } else if compact {
@@ -1053,7 +1155,7 @@ impl Launcher {
                     14.0,
                     content_x + 22.0,
                     card_y + 52.0,
-                    MY3_MUTED,
+                    my3_muted(),
                     &format!(
                         "Minecraft 26.3 • Profile {} • {}",
                         self.catalog.config.profile + 1,
@@ -1082,7 +1184,7 @@ impl Launcher {
                         13.5,
                         content_x + 22.0,
                         card_y + 86.0 + index as f32 * 25.0,
-                        MY3_MUTED,
+                        my3_muted(),
                         &fitted,
                     );
                 }
@@ -1132,7 +1234,7 @@ impl Launcher {
                 19.0,
                 content_x,
                 header_y,
-                MY3_TEXT,
+                my3_text(),
                 if page == Page::Mods {
                     "Mods"
                 } else if page == Page::Shaders {
@@ -1171,14 +1273,14 @@ impl Launcher {
             let search_y = 98.0 + slide_y;
             let search_btn_w = 98.0;
             let field_w = (content_w - search_btn_w - 8.0).max(120.0);
-            ui.rounded(content_x, search_y, field_w, 36.0, 18.0, MY3_SURFACE);
-            ui.border(content_x, search_y, field_w, 36.0, 18.0, MY3_BORDER);
+            ui.rounded(content_x, search_y, field_w, 36.0, 18.0, my3_surface());
+            ui.border(content_x, search_y, field_w, 36.0, 18.0, my3_border());
             ui.icon(
                 Icon::Search,
                 content_x + 12.0,
                 search_y + 9.0,
                 17.0,
-                MY3_MUTED,
+                my3_muted(),
             );
             let prompt = if self.catalog.query.is_empty() {
                 if page == Page::Mods {
@@ -1196,9 +1298,9 @@ impl Launcher {
                 content_x + 35.0,
                 search_y + 8.0,
                 if self.catalog.query.is_empty() {
-                    MY3_MUTED
+                    my3_muted()
                 } else {
-                    MY3_TEXT
+                    my3_text()
                 },
                 &fitted_q,
             );
@@ -1255,7 +1357,7 @@ impl Launcher {
                     12.5,
                     content_x + 246.0,
                     sub_y + 5.0,
-                    MY3_MUTED,
+                    my3_muted(),
                     &fitted_status,
                 );
             }
@@ -1320,8 +1422,8 @@ impl Launcher {
                 if y + 64.0 < top || y > bottom {
                     continue;
                 }
-                ui.rounded(content_x, y, content_w, 64.0, 14.0, MY3_CARD_BG);
-                ui.border(content_x, y, content_w, 64.0, 14.0, MY3_CARD_BORDER);
+                ui.rounded(content_x, y, content_w, 64.0, 14.0, my3_card_bg());
+                ui.border(content_x, y, content_w, 64.0, 14.0, my3_card_border());
 
                 // Project icon: fetched Modrinth PFP if available, else MY3 vector icon badge.
                 let drawn_icon = if let Some((iw, ih, rgba)) = self.catalog.icons.get(*id) {
@@ -1338,7 +1440,7 @@ impl Launcher {
                         12.0,
                         color::hex(0x27213C, 255),
                     );
-                    ui.icon(fallback_icon, content_x + 21.0, y + 21.0, 22.0, MY3_ACCENT);
+                    ui.icon(fallback_icon, content_x + 21.0, y + 21.0, 22.0, my3_accent());
                 }
 
                 // Badge chip ("Built-in • Tap for info")
@@ -1355,7 +1457,7 @@ impl Launcher {
                     15.0,
                     content_x + 64.0,
                     y + 8.0,
-                    MY3_TEXT,
+                    my3_text(),
                     &fitted_title,
                 );
                 ui.text(
@@ -1363,7 +1465,7 @@ impl Launcher {
                     12.5,
                     content_x + 64.0,
                     y + 28.0,
-                    MY3_MUTED,
+                    my3_muted(),
                     &summary,
                 );
                 ui.text(
@@ -1371,7 +1473,7 @@ impl Launcher {
                     11.0,
                     content_x + 64.0,
                     y + 45.0,
-                    MY3_ACCENT,
+                    my3_accent(),
                     "Horizon Built-in • Tap for versions, Modrinth info & screenshots",
                 );
                 if let Some(c) = ui.clip_rect(card_rect) {
@@ -1399,8 +1501,8 @@ impl Launcher {
                 if y + 64.0 < top || y > bottom {
                     continue;
                 }
-                ui.rounded(content_x, y, content_w, 64.0, 14.0, MY3_CARD_BG);
-                ui.border(content_x, y, content_w, 64.0, 14.0, MY3_CARD_BORDER);
+                ui.rounded(content_x, y, content_w, 64.0, 14.0, my3_card_bg());
+                ui.border(content_x, y, content_w, 64.0, 14.0, my3_card_border());
 
                 // Project icon: fetched RGBA icon if ready, else MY3 vector icon badge.
                 let drawn_icon = if let Some((iw, ih, rgba)) = self.catalog.icons.get(&p.id) {
@@ -1426,7 +1528,7 @@ impl Launcher {
                         12.0,
                         color::hex(0x27213C, 255),
                     );
-                    ui.icon(fallback_icon, content_x + 21.0, y + 21.0, 22.0, MY3_ACCENT);
+                    ui.icon(fallback_icon, content_x + 21.0, y + 21.0, 22.0, my3_accent());
                 }
 
                 let text_max = (content_w - 190.0).max(80.0);
@@ -1442,7 +1544,7 @@ impl Launcher {
                     15.0,
                     content_x + 64.0,
                     y + 8.0,
-                    MY3_TEXT,
+                    my3_text(),
                     &title,
                 );
                 ui.text(
@@ -1450,7 +1552,7 @@ impl Launcher {
                     12.5,
                     content_x + 64.0,
                     y + 28.0,
-                    MY3_MUTED,
+                    my3_muted(),
                     &summary,
                 );
                 let meta_tag = if p.downloads > 0 {
@@ -1471,7 +1573,7 @@ impl Launcher {
                     11.0,
                     content_x + 64.0,
                     y + 45.0,
-                    MY3_ACCENT,
+                    my3_accent(),
                     &fitted_meta,
                 );
                 if let Some(c) = ui.clip_rect(card_rect) {
@@ -1485,21 +1587,21 @@ impl Launcher {
                         btn_rect[2],
                         btn_rect[3],
                         19.0,
-                        MY3_SURFACE_HIGH,
+                        my3_surface_high(),
                     );
                     ui.icon(
                         Icon::Check,
                         btn_rect[0] + 10.0,
                         btn_rect[1] + 11.0,
                         15.0,
-                        MY3_ACCENT,
+                        my3_accent(),
                     );
                     ui.text(
                         Face::Medium,
                         13.0,
                         btn_rect[0] + 28.0,
                         btn_rect[1] + 9.0,
-                        MY3_TEXT,
+                        my3_text(),
                         &state,
                     );
                     if let Some(c) = ui.clip_rect(btn_rect) {
@@ -1542,7 +1644,7 @@ impl Launcher {
                 19.0,
                 content_x,
                 62.0 + slide_y,
-                MY3_TEXT,
+                my3_text(),
                 "Installed Add-ons",
             );
             let top = 96.0;
@@ -1552,12 +1654,10 @@ impl Launcher {
                 .iter()
                 .enumerate()
                 .map(|(i, k)| {
-                    44.0 + if self.catalog.sections[i] {
-                        self.catalog.local.iter().filter(|e| e.kind == *k).count() as f32
-                            * row_height
-                    } else {
-                        0.0
-                    }
+                    let expand = self.anim.section_expand[i].clamp(0.0, 1.0);
+                    44.0 + (self.catalog.local.iter().filter(|e| e.kind == *k).count() as f32
+                        * row_height
+                        * expand)
                 })
                 .sum::<f32>();
             let maximum = (total - (bottom - top)).max(0.0);
@@ -1608,7 +1708,8 @@ impl Launcher {
                     );
                 }
                 offset += 44.0;
-                if !self.catalog.sections[section] {
+                let expand = self.anim.section_expand[section].clamp(0.0, 1.0);
+                if !self.catalog.sections[section] && expand <= 0.02 {
                     continue;
                 }
                 for (i, item) in self
@@ -1618,8 +1719,8 @@ impl Launcher {
                     .enumerate()
                     .filter(|(_, e)| e.kind == kind)
                 {
-                    let y = top + offset - self.catalog.scroll;
-                    offset += row_height;
+                    let y = top + offset - self.catalog.scroll + (1.0 - expand) * -6.0;
+                    offset += row_height * expand;
                     let toggle_x = if compact {
                         content_x + 14.0
                     } else {
@@ -1637,14 +1738,14 @@ impl Launcher {
                     if y + row_height < top || y > bottom {
                         continue;
                     }
-                    ui.rounded(content_x, y, content_w, row_height - 6.0, 14.0, MY3_CARD_BG);
+                    ui.rounded(content_x, y, content_w, row_height - 6.0, 14.0, my3_card_bg());
                     ui.border(
                         content_x,
                         y,
                         content_w,
                         row_height - 6.0,
                         14.0,
-                        MY3_CARD_BORDER,
+                        my3_card_border(),
                     );
                     let title = ui.fit_text(
                         Face::SemiBold,
@@ -1661,7 +1762,7 @@ impl Launcher {
                         15.0,
                         content_x + 16.0,
                         y + 8.0,
-                        MY3_TEXT,
+                        my3_text(),
                         &title,
                     );
                     ui.text(
@@ -1669,7 +1770,7 @@ impl Launcher {
                         12.5,
                         content_x + 16.0,
                         y + 30.0,
-                        MY3_MUTED,
+                        my3_muted(),
                         kind.label(),
                     );
                     toggle(
@@ -1702,7 +1803,7 @@ impl Launcher {
             if !status.is_empty() && !page.is_catalog() {
                 let fitted =
                     ui.fit_text(Face::Regular, 12.5, status, (content_w - 116.0).max(60.0));
-                ui.text(Face::Regular, 12.5, content_x, h - 32.0, MY3_MUTED, &fitted);
+                ui.text(Face::Regular, 12.5, content_x, h - 32.0, my3_muted(), &fitted);
             }
             if page == Page::Play
                 || (page == Page::Settings
@@ -1751,8 +1852,8 @@ impl Launcher {
             let height = bottom - top;
             let thumb = (height * height / (height + maximum)).max(20.0).min(height);
             let y = top + (height - thumb) * (scroll / maximum).clamp(0.0, 1.0);
-            ui.rounded(w - 10.0, top, 4.0, height, 2.0, MY3_BORDER);
-            ui.rounded(w - 10.0, y, 4.0, thumb, 2.0, MY3_MUTED);
+            ui.rounded(w - 10.0, top, 4.0, height, 2.0, my3_border());
+            ui.rounded(w - 10.0, y, 4.0, thumb, 2.0, my3_muted());
         }
         let caret_visible = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1761,8 +1862,15 @@ impl Launcher {
             let value = match name {
                 "name" => self.catalog.config.name.clone(),
                 "profile_name" => self.catalog.config.custom_profile_name.clone(),
+                "profile_desc" => self.catalog.config.custom_profile_desc.clone(),
                 "server" => self.catalog.config.server.clone(),
                 "render_scale" => self.catalog.render_scale_text.clone(),
+                "theme_bg" => self.catalog.config.theme.custom_bg_hex.clone(),
+                "theme_surface" => self.catalog.config.theme.custom_surface_hex.clone(),
+                "theme_accent" => self.catalog.config.theme.custom_accent_hex.clone(),
+                "theme_grad_start" => self.catalog.config.theme.gradient_start_hex.clone(),
+                "theme_grad_mid" => self.catalog.config.theme.gradient_mid_hex.clone(),
+                "theme_grad_end" => self.catalog.config.theme.gradient_end_hex.clone(),
                 _ => self.catalog.query.clone(),
             };
             for ([x, y, w, _], action) in &self.targets {
@@ -1778,7 +1886,7 @@ impl Launcher {
                         1.5,
                         18.0,
                         0.5,
-                        MY3_ACCENT,
+                        my3_accent(),
                     );
                 }
             }
@@ -1787,18 +1895,27 @@ impl Launcher {
             self.targets.clear();
             self.list_targets.clear();
             self.list_view = None;
-            ui.rounded(0.0, 0.0, w, h, 0.0, horizon_client::hud::rgba(0, 0, 0, 180));
-            let width = (w - 32.0).min(360.0);
+            let modal_t = self.anim.modal_anim.clamp(0.2, 1.0);
+            ui.rounded(
+                0.0,
+                0.0,
+                w,
+                h,
+                0.0,
+                horizon_client::hud::rgba(0, 0, 0, (180.0 * modal_t) as u8),
+            );
+            let scale_in = 0.94 + 0.06 * modal_t;
+            let width = (w - 32.0).min(360.0) * scale_in;
             let x = (w - width) * 0.5;
-            let y = (h - 160.0) * 0.5;
-            ui.rounded(x, y, width, 160.0, 20.0, MY3_SURFACE);
-            ui.border(x, y, width, 160.0, 20.0, MY3_BORDER);
+            let y = (h - 160.0) * 0.5 + (1.0 - modal_t) * 8.0;
+            ui.rounded(x, y, width, 160.0, 20.0, my3_surface());
+            ui.border(x, y, width, 160.0, 20.0, my3_border());
             ui.text(
                 Face::SemiBold,
                 20.0,
                 x + 22.0,
                 y + 24.0,
-                MY3_TEXT,
+                my3_text(),
                 "Exit Horizon Android?",
             );
             let bw = (width - 52.0) * 0.5;
@@ -1825,7 +1942,7 @@ impl Launcher {
         if let Some(index) = self.focus
             && let Some(([x, y, w, h], _)) = self.targets.get(index)
         {
-            ui.border(*x - 2.0, *y - 2.0, *w + 4.0, *h + 4.0, 12.0, MY3_ACCENT);
+            ui.border(*x - 2.0, *y - 2.0, *w + 4.0, *h + 4.0, 12.0, my3_accent());
             self.cursor = (
                 f64::from((x + w / 2.0) * ui.density),
                 f64::from((y + h / 2.0) * ui.density),
@@ -1925,8 +2042,8 @@ impl Launcher {
         let mx = (w - mw) * 0.5;
         let my = (h - mh) * 0.5;
 
-        ui.rounded(mx, my, mw, mh, 22.0, MY3_SURFACE);
-        ui.border(mx, my, mw, mh, 22.0, MY3_BORDER);
+        ui.rounded(mx, my, mw, mh, 22.0, my3_surface());
+        ui.border(mx, my, mw, mh, 22.0, my3_border());
 
         // Modal Top Header (PFP + Title + Author/Downloads + Close Button)
         let icon_drawn = if let Some((iw, ih, rgba)) = self.catalog.icons.get(&modal.project.id) {
@@ -1957,7 +2074,7 @@ impl Launcher {
                 mx + 31.0,
                 my + 29.0,
                 24.0,
-                MY3_ACCENT,
+                my3_accent(),
             );
         }
 
@@ -1966,7 +2083,7 @@ impl Launcher {
             ui,
             &mut self.targets,
             close_rect,
-            MY3_SURFACE_HIGH,
+            my3_surface_high(),
             Icon::Close,
             Action::CloseProjectModal,
         );
@@ -1978,7 +2095,7 @@ impl Launcher {
             18.5,
             mx + 78.0,
             my + 16.0,
-            MY3_TEXT,
+            my3_text(),
             &fitted_title,
         );
 
@@ -1999,12 +2116,12 @@ impl Launcher {
             12.5,
             mx + 78.0,
             my + 41.0,
-            MY3_MUTED,
+            my3_muted(),
             &fitted_meta,
         );
 
         // Divider under modal header
-        ui.rounded(mx + 16.0, my + 74.0, mw - 32.0, 1.0, 0.0, MY3_BORDER);
+        ui.rounded(mx + 16.0, my + 74.0, mw - 32.0, 1.0, 0.0, my3_border());
 
         // Scrollable Body Area (Description + Gallery Screenshots + Versions List)
         let body_top = my + 82.0;
@@ -2041,14 +2158,14 @@ impl Launcher {
                 14.0,
                 inner_x,
                 cy,
-                MY3_ACCENT,
+                my3_accent(),
                 "About Project",
             );
         }
         cy += 22.0;
         for line in &desc_lines {
             if cy + 18.0 >= body_top && cy <= body_bottom {
-                ui.text(Face::Regular, 13.0, inner_x, cy, MY3_TEXT, line);
+                ui.text(Face::Regular, 13.0, inner_x, cy, my3_text(), line);
             }
             cy += 18.5;
         }
@@ -2057,7 +2174,7 @@ impl Launcher {
         // Section 2: Screenshots (from Modrinth gallery)
         if !modal.screenshots.is_empty() {
             if cy + 20.0 >= body_top && cy <= body_bottom {
-                ui.text(Face::SemiBold, 14.0, inner_x, cy, MY3_ACCENT, "Screenshots");
+                ui.text(Face::SemiBold, 14.0, inner_x, cy, my3_accent(), "Screenshots");
             }
             cy += 22.0;
             let count = modal.screenshots.len().min(3) as f32;
@@ -2067,8 +2184,8 @@ impl Launcher {
             if cy + card_h >= body_top && cy <= body_bottom {
                 for (idx, (caption, sw, sh, rgba)) in modal.screenshots.iter().take(3).enumerate() {
                     let sx = inner_x + idx as f32 * (card_w + gap);
-                    ui.rounded(sx, cy, card_w, card_h, 12.0, MY3_CARD_BG);
-                    ui.border(sx, cy, card_w, card_h, 12.0, MY3_CARD_BORDER);
+                    ui.rounded(sx, cy, card_w, card_h, 12.0, my3_card_bg());
+                    ui.border(sx, cy, card_w, card_h, 12.0, my3_card_border());
                     let key = format!("shot:{}:{idx}", modal.project.id);
                     let _ = ui.image(
                         &key,
@@ -2086,7 +2203,7 @@ impl Launcher {
                         11.0,
                         sx + 6.0,
                         cy + card_h - 17.0,
-                        MY3_MUTED,
+                        my3_muted(),
                         &cap_fit,
                     );
                 }
@@ -2101,7 +2218,7 @@ impl Launcher {
                 14.0,
                 inner_x,
                 cy,
-                MY3_ACCENT,
+                my3_accent(),
                 "Available Versions",
             );
         }
@@ -2119,9 +2236,9 @@ impl Launcher {
                     34.0,
                     10.0,
                     if selected {
-                        MY3_ACCENT_SOFT
+                        my3_accent_soft()
                     } else {
-                        MY3_CARD_BG
+                        my3_card_bg()
                     },
                 );
                 ui.border(
@@ -2131,9 +2248,9 @@ impl Launcher {
                     34.0,
                     10.0,
                     if selected {
-                        MY3_ACCENT
+                        my3_accent()
                     } else {
-                        MY3_CARD_BORDER
+                        my3_card_border()
                     },
                 );
                 let ver_title = format!(
@@ -2153,7 +2270,7 @@ impl Launcher {
                     13.0,
                     inner_x + 12.0,
                     cy + 7.0,
-                    if selected { MY3_TEXT } else { MY3_MUTED },
+                    if selected { my3_text() } else { my3_muted() },
                     &fitted_v,
                 );
                 if let Some(c) = ui.clip_rect(row_rect) {
@@ -2165,7 +2282,7 @@ impl Launcher {
 
         ui.set_clip(None);
         // Modal Bottom Action Bar
-        ui.rounded(mx + 16.0, my + mh - 56.0, mw - 32.0, 1.0, 0.0, MY3_BORDER);
+        ui.rounded(mx + 16.0, my + mh - 56.0, mw - 32.0, 1.0, 0.0, my3_border());
 
         button(
             ui,
@@ -2203,7 +2320,7 @@ impl Launcher {
                 20.0,
                 content_x,
                 62.0 + slide_y,
-                MY3_TEXT,
+                my3_text(),
                 "Settings",
             );
 
@@ -2217,7 +2334,7 @@ impl Launcher {
                 (
                     Icon::Gear,
                     "Launcher Settings",
-                    "Profiles, orientation and app preferences",
+                    "Theme customization, profiles, DPI scale & preferences",
                     Action::SettingsCat(SettingsCategory::Launcher),
                 ),
                 (
@@ -2264,8 +2381,8 @@ impl Launcher {
                 let cy = grid_top + row as f32 * (card_h + gap_y);
                 let rect = [cx, cy, card_w, card_h];
 
-                ui.rounded(cx, cy, card_w, card_h, 16.0, MY3_CARD_BG);
-                ui.border(cx, cy, card_w, card_h, 16.0, MY3_CARD_BORDER);
+                ui.rounded(cx, cy, card_w, card_h, 16.0, my3_card_bg());
+                ui.border(cx, cy, card_w, card_h, 16.0, my3_card_border());
 
                 // Left vector icon + vertical divider line matching 45062.jpg
                 let icon_size = 20.0;
@@ -2295,7 +2412,7 @@ impl Launcher {
                     15.5,
                     text_x,
                     text_block_y,
-                    MY3_TEXT,
+                    my3_text(),
                     &fitted_title,
                 );
                 ui.text(
@@ -2303,7 +2420,7 @@ impl Launcher {
                     12.5,
                     text_x,
                     text_block_y + 22.0,
-                    MY3_MUTED,
+                    my3_muted(),
                     &fitted_sub,
                 );
 
@@ -2313,14 +2430,19 @@ impl Launcher {
             return;
         }
 
-        // Sub-category Header Bar with Back button
+        // Sub-category Header Bar with hierarchical Back button
         let header_y = 60.0 + slide_y;
+        let back_cat = if cat == SettingsCategory::Theme {
+            SettingsCategory::Launcher
+        } else {
+            SettingsCategory::Overview
+        };
         button(
             ui,
             &mut self.targets,
             [content_x, header_y, 88.0, 32.0],
             "← Back",
-            Action::SettingsCat(SettingsCategory::Overview),
+            Action::SettingsCat(back_cat),
             false,
         );
         let fitted_cat = ui.fit_text(
@@ -2334,7 +2456,7 @@ impl Launcher {
             18.5,
             content_x + 100.0,
             header_y + 3.0,
-            MY3_TEXT,
+            my3_text(),
             &fitted_cat,
         );
 
@@ -2432,11 +2554,12 @@ impl Launcher {
             }
             SettingsCategory::Launcher => {
                 let c = &self.catalog.config;
-                let count = 7;
+                let count = 8;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
+                let theme_str = format!("{} ›", c.theme.preset.label());
                 let ui_scale_str = format!("{} v", c.ui_scale_label());
                 let profile_str = format!("Profile {} v", c.profile + 1);
                 let input_str = format!("{} v", c.input_host.label());
@@ -2456,7 +2579,16 @@ impl Launcher {
                     c.server.clone()
                 };
 
-                let rows: [(&str, &str, SettingControl<'_>); 7] = [
+                let rows: [(&str, &str, SettingControl<'_>); 8] = [
+                    (
+                        "Theme",
+                        "Preset themes, custom solid/accent colors, multi-stop gradients & light/dark mode",
+                        SettingControl::Button(
+                            &theme_str,
+                            Action::SettingsCat(SettingsCategory::Theme),
+                            true,
+                        ),
+                    ),
                     (
                         "Launcher UI scale (Phone DPI)",
                         "Adapts launcher cards, text and buttons to your screen DPI",
@@ -2520,8 +2652,500 @@ impl Launcher {
                 }
                 ui.set_clip(None);
             }
+            SettingsCategory::Theme => {
+                use horizon_client::ui_theme::{
+                    BackgroundMode, GradientDirection, THEME_ACCENT_SWATCHES,
+                    THEME_BG_SWATCHES_DARK, THEME_BG_SWATCHES_LIGHT, ThemeAppearance, ThemePreset,
+                    color,
+                };
+                let theme_cfg = self.catalog.config.theme.clone();
+                let resolved = theme_cfg.resolve();
+                let total_h = if theme_cfg.background_mode == BackgroundMode::Gradient {
+                    690.0
+                } else {
+                    580.0
+                };
+                let max_scroll = (total_h - (list_bottom - list_top)).max(0.0);
+                self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
+                self.list_view = Some([list_top, list_bottom, max_scroll]);
+
+                ui.set_clip(Some([
+                    content_x - 2.0,
+                    list_top,
+                    content_w + 4.0,
+                    (list_bottom - list_top).max(1.0),
+                ]));
+                let mut cy = list_top - self.catalog.scroll;
+
+                // 1. Live Interactive Theme Preview Card (with smooth pulse on change)
+                let pulse = 0.985 + 0.015 * self.anim.theme_pulse;
+                let prev_h = 96.0;
+                let pw = content_w * pulse;
+                let px = content_x + (content_w - pw) * 0.5;
+                if cy + prev_h >= list_top && cy <= list_bottom {
+                    ui.rounded(px, cy, pw, prev_h, 16.0, resolved.surface);
+                    ui.clipped([px + 2.0, cy + 2.0, pw - 4.0, prev_h - 4.0], |ui| {
+                        ui.draw_theme_background(px + 2.0, cy + 2.0, pw - 4.0, prev_h - 4.0, &resolved);
+                    });
+                    ui.stroke_rounded(px, cy, pw, prev_h, 16.0, 1.5, resolved.accent);
+
+                    // Mini surface card inside Live Preview
+                    let inner_w = (pw - 28.0).max(160.0);
+                    let inner_x = px + 14.0;
+                    let inner_y = cy + 12.0;
+                    ui.rounded(inner_x, inner_y, inner_w, 72.0, 12.0, resolved.surface);
+                    ui.border(inner_x, inner_y, inner_w, 72.0, 12.0, resolved.border);
+                    ui.rounded(
+                        inner_x + 12.0,
+                        inner_y + 12.0,
+                        42.0,
+                        20.0,
+                        6.0,
+                        resolved.accent_soft,
+                    );
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        9.5,
+                        [inner_x + 12.0, inner_y + 12.0, 42.0, 20.0],
+                        resolved.accent,
+                        "LIVE",
+                    );
+                    let p_title = format!(
+                        "{} • {} • {}",
+                        theme_cfg.preset.label(),
+                        if resolved.is_light { "Light" } else { "Dark" },
+                        theme_cfg.background_mode.label()
+                    );
+                    let fit_pt = ui.fit_text(
+                        Face::SemiBold,
+                        13.5,
+                        &p_title,
+                        (inner_w - 190.0).max(80.0),
+                    );
+                    ui.text(
+                        Face::SemiBold,
+                        13.5,
+                        inner_x + 62.0,
+                        inner_y + 11.0,
+                        resolved.text_primary,
+                        &fit_pt,
+                    );
+                    let p_sub = format!(
+                        "Accent {}  •  Background {}",
+                        theme_cfg.custom_accent_hex,
+                        if resolved.is_gradient {
+                            format!(
+                                "{} → {}",
+                                theme_cfg.gradient_start_hex, theme_cfg.gradient_end_hex
+                            )
+                        } else {
+                            theme_cfg.custom_bg_hex.clone()
+                        }
+                    );
+                    let fit_ps = ui.fit_text(
+                        Face::Regular,
+                        11.0,
+                        &p_sub,
+                        (inner_w - 190.0).max(80.0),
+                    );
+                    ui.text(
+                        Face::Regular,
+                        11.0,
+                        inner_x + 12.0,
+                        inner_y + 42.0,
+                        resolved.text_muted,
+                        &fit_ps,
+                    );
+
+                    // Reset to Default button inside Live Preview card
+                    let reset_r = [inner_x + inner_w - 118.0, inner_y + 18.0, 106.0, 36.0];
+                    button(
+                        ui,
+                        &mut self.targets,
+                        reset_r,
+                        "Reset Default",
+                        Action::ResetTheme,
+                        false,
+                    );
+                    self.list_targets.push((reset_r, Action::ResetTheme));
+                }
+                cy += prev_h + 14.0;
+
+                // 2. Appearance Mode (Dark Mode vs Light Mode) & Background Mode (Solid vs Gradient)
+                if cy + 44.0 >= list_top && cy <= list_bottom {
+                    let half = (content_w - 10.0) * 0.5;
+                    let quarter = (half - 6.0) * 0.5;
+                    for (i, (lbl, mode, active)) in [
+                        ("Dark", ThemeAppearance::Dark, !resolved.is_light),
+                        ("Light", ThemeAppearance::Light, resolved.is_light),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let r = [content_x + i as f32 * (quarter + 6.0), cy, quarter, 38.0];
+                        button(
+                            ui,
+                            &mut self.targets,
+                            r,
+                            lbl,
+                            Action::SetThemeAppearance(mode),
+                            active,
+                        );
+                        self.list_targets.push((r, Action::SetThemeAppearance(mode)));
+                    }
+                    for (i, (lbl, bmode, active)) in [
+                        (
+                            "Solid BG",
+                            BackgroundMode::Solid,
+                            theme_cfg.background_mode == BackgroundMode::Solid,
+                        ),
+                        (
+                            "Gradient BG",
+                            BackgroundMode::Gradient,
+                            theme_cfg.background_mode == BackgroundMode::Gradient,
+                        ),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let r = [
+                            content_x + half + 10.0 + i as f32 * (quarter + 6.0),
+                            cy,
+                            quarter,
+                            38.0,
+                        ];
+                        button(
+                            ui,
+                            &mut self.targets,
+                            r,
+                            lbl,
+                            Action::SetThemeBackgroundMode(bmode),
+                            active,
+                        );
+                        self.list_targets
+                            .push((r, Action::SetThemeBackgroundMode(bmode)));
+                    }
+                }
+                cy += 50.0;
+
+                // 3. Preset Themes Grid (8 Presets: 2 rows x 4 columns on wide, or 4 rows x 2 columns on compact)
+                ui.text(
+                    Face::SemiBold,
+                    12.5,
+                    content_x,
+                    cy,
+                    my3_accent(),
+                    "PRESET THEMES",
+                );
+                cy += 22.0;
+                let p_cols = if compact { 2 } else { 4 };
+                let p_gap = 8.0;
+                let p_w = (content_w - p_gap * (p_cols as f32 - 1.0)) / p_cols as f32;
+                let p_h = 54.0;
+                let p_rows = ThemePreset::ALL.len().div_ceil(p_cols);
+                for (idx, preset) in ThemePreset::ALL.into_iter().enumerate() {
+                    let col = idx % p_cols;
+                    let row = idx / p_cols;
+                    let rx = content_x + col as f32 * (p_w + p_gap);
+                    let ry = cy + row as f32 * (p_h + p_gap);
+                    let r = [rx, ry, p_w, p_h];
+                    let active = theme_cfg.preset == preset;
+                    self.list_targets.push((r, Action::SelectThemePreset(preset)));
+                    if ry + p_h >= list_top && ry <= list_bottom {
+                        ui.rounded(
+                            rx,
+                            ry,
+                            p_w,
+                            p_h,
+                            12.0,
+                            if active {
+                                my3_nav_active()
+                            } else {
+                                my3_card_bg()
+                            },
+                        );
+                        ui.stroke_rounded(
+                            rx,
+                            ry,
+                            p_w,
+                            p_h,
+                            12.0,
+                            if active { 1.8 } else { 1.0 },
+                            if active {
+                                my3_accent()
+                            } else {
+                                my3_card_border()
+                            },
+                        );
+                        let (p_bg, _, p_acc, _, _, _, _) = preset.palette_rgb();
+                        ui.rounded(rx + 10.0, ry + 11.0, 16.0, 16.0, 8.0, color::hex(p_bg, 255));
+                        ui.stroke_rounded(
+                            rx + 10.0,
+                            ry + 11.0,
+                            16.0,
+                            16.0,
+                            8.0,
+                            1.2,
+                            color::hex(p_acc, 255),
+                        );
+                        ui.rounded(rx + 20.0, ry + 15.0, 12.0, 12.0, 6.0, color::hex(p_acc, 255));
+                        let fit_lbl = ui.fit_text(Face::SemiBold, 11.8, preset.label(), p_w - 42.0);
+                        ui.text(
+                            Face::SemiBold,
+                            11.8,
+                            rx + 36.0,
+                            ry + 8.0,
+                            my3_text(),
+                            &fit_lbl,
+                        );
+                        let fit_sub =
+                            ui.fit_text(Face::Regular, 9.5, preset.subtitle(), p_w - 20.0);
+                        ui.text(
+                            Face::Regular,
+                            9.5,
+                            rx + 10.0,
+                            ry + 31.0,
+                            my3_muted(),
+                            &fit_sub,
+                        );
+                        if let Some(c) = ui.clip_rect(r) {
+                            self.targets.push((c, Action::SelectThemePreset(preset)));
+                        }
+                    }
+                }
+                cy += p_rows as f32 * (p_h + p_gap) + 8.0;
+
+                // 4. Custom Accent Color Swatches + Hex Input
+                ui.text(
+                    Face::SemiBold,
+                    12.5,
+                    content_x,
+                    cy,
+                    my3_accent(),
+                    "CUSTOM ACCENT COLOR",
+                );
+                cy += 22.0;
+                if cy + 52.0 >= list_top && cy <= list_bottom {
+                    ui.rounded(content_x, cy, content_w, 50.0, 12.0, my3_card_bg());
+                    ui.border(content_x, cy, content_w, 50.0, 12.0, my3_card_border());
+                    let sw_size = 30.0;
+                    let sw_gap = 8.0;
+                    for (i, (rgb, hex_str, _name)) in THEME_ACCENT_SWATCHES.into_iter().enumerate()
+                    {
+                        let sx = content_x + 12.0 + i as f32 * (sw_size + sw_gap);
+                        if sx + sw_size > content_x + content_w - 134.0 {
+                            break;
+                        }
+                        let sr = [sx, cy + 10.0, sw_size, sw_size];
+                        let is_sel = theme_cfg.custom_accent_hex.eq_ignore_ascii_case(hex_str);
+                        ui.rounded(sr[0], sr[1], sr[2], sr[3], 15.0, color::hex(rgb, 255));
+                        if is_sel {
+                            ui.stroke_rounded(
+                                sr[0] - 2.0,
+                                sr[1] - 2.0,
+                                sr[2] + 4.0,
+                                sr[3] + 4.0,
+                                17.0,
+                                2.0,
+                                my3_text(),
+                            );
+                        }
+                        if let Some(c) = ui.clip_rect(sr) {
+                            self.targets.push((c, Action::SelectAccentSwatch(rgb)));
+                            self.list_targets.push((c, Action::SelectAccentSwatch(rgb)));
+                        }
+                    }
+                    let hex_btn_r = [content_x + content_w - 122.0, cy + 7.0, 110.0, 36.0];
+                    let hex_lbl = format!("Hex: {}", theme_cfg.custom_accent_hex);
+                    button(
+                        ui,
+                        &mut self.targets,
+                        hex_btn_r,
+                        &hex_lbl,
+                        Action::Field("theme_accent"),
+                        self.catalog.editing == Some("theme_accent"),
+                    );
+                    self.list_targets
+                        .push((hex_btn_r, Action::Field("theme_accent")));
+                }
+                cy += 62.0;
+
+                // 5. Custom Background & Surface Colors
+                ui.text(
+                    Face::SemiBold,
+                    12.5,
+                    content_x,
+                    cy,
+                    my3_accent(),
+                    "CUSTOM SOLID BACKGROUND & SURFACE COLORS",
+                );
+                cy += 22.0;
+                if cy + 52.0 >= list_top && cy <= list_bottom {
+                    ui.rounded(content_x, cy, content_w, 50.0, 12.0, my3_card_bg());
+                    ui.border(content_x, cy, content_w, 50.0, 12.0, my3_card_border());
+                    let bg_swatches = if resolved.is_light {
+                        THEME_BG_SWATCHES_LIGHT
+                    } else {
+                        THEME_BG_SWATCHES_DARK
+                    };
+                    let sw_size = 30.0;
+                    let sw_gap = 8.0;
+                    for (i, (rgb, hex_str, _name)) in bg_swatches.into_iter().enumerate() {
+                        let sx = content_x + 12.0 + i as f32 * (sw_size + sw_gap);
+                        if sx + sw_size > content_x + content_w - 238.0 {
+                            break;
+                        }
+                        let sr = [sx, cy + 10.0, sw_size, sw_size];
+                        let is_sel = theme_cfg.custom_bg_hex.eq_ignore_ascii_case(hex_str);
+                        ui.rounded(sr[0], sr[1], sr[2], sr[3], 15.0, color::hex(rgb, 255));
+                        ui.stroke_rounded(
+                            sr[0],
+                            sr[1],
+                            sr[2],
+                            sr[3],
+                            15.0,
+                            if is_sel { 2.0 } else { 1.0 },
+                            if is_sel { my3_accent() } else { my3_border() },
+                        );
+                        if let Some(c) = ui.clip_rect(sr) {
+                            self.targets.push((c, Action::SelectBgSwatch(rgb)));
+                            self.list_targets.push((c, Action::SelectBgSwatch(rgb)));
+                        }
+                    }
+                    let bg_hex_r = [content_x + content_w - 228.0, cy + 7.0, 106.0, 36.0];
+                    let bg_lbl = format!("BG {}", theme_cfg.custom_bg_hex);
+                    button(
+                        ui,
+                        &mut self.targets,
+                        bg_hex_r,
+                        &bg_lbl,
+                        Action::Field("theme_bg"),
+                        self.catalog.editing == Some("theme_bg"),
+                    );
+                    self.list_targets
+                        .push((bg_hex_r, Action::Field("theme_bg")));
+
+                    let surf_hex_r = [content_x + content_w - 116.0, cy + 7.0, 106.0, 36.0];
+                    let surf_lbl = format!("Card {}", theme_cfg.custom_surface_hex);
+                    button(
+                        ui,
+                        &mut self.targets,
+                        surf_hex_r,
+                        &surf_lbl,
+                        Action::Field("theme_surface"),
+                        self.catalog.editing == Some("theme_surface"),
+                    );
+                    self.list_targets
+                        .push((surf_hex_r, Action::Field("theme_surface")));
+                }
+                cy += 62.0;
+
+                // 6. Custom Gradient Direction & Color Stops
+                ui.text(
+                    Face::SemiBold,
+                    12.5,
+                    content_x,
+                    cy,
+                    my3_accent(),
+                    "CUSTOM GRADIENT DIRECTION & COLOR STOPS",
+                );
+                cy += 22.0;
+                if cy + 44.0 >= list_top && cy <= list_bottom {
+                    let dir_w = (content_w - 18.0) * 0.25;
+                    for (i, dir) in GradientDirection::ALL.into_iter().enumerate() {
+                        let r = [content_x + i as f32 * (dir_w + 6.0), cy, dir_w, 36.0];
+                        button(
+                            ui,
+                            &mut self.targets,
+                            r,
+                            dir.label(),
+                            Action::SetGradientDirection(dir),
+                            theme_cfg.gradient_direction == dir,
+                        );
+                        self.list_targets
+                            .push((r, Action::SetGradientDirection(dir)));
+                    }
+                }
+                cy += 44.0;
+
+                if cy + 54.0 >= list_top && cy <= list_bottom {
+                    ui.rounded(content_x, cy, content_w, 50.0, 12.0, my3_card_bg());
+                    ui.border(content_x, cy, content_w, 50.0, 12.0, my3_card_border());
+                    let stop_w = ((content_w - 36.0) / 3.0).max(80.0);
+                    for (i, (lbl, hex_val, field_name)) in [
+                        ("Stop 1", theme_cfg.gradient_start_hex.as_str(), "theme_grad_start"),
+                        (
+                            if theme_cfg.use_three_stops {
+                                "Mid Stop"
+                            } else {
+                                "Mid (Off)"
+                            },
+                            theme_cfg.gradient_mid_hex.as_str(),
+                            "theme_grad_mid",
+                        ),
+                        ("End Stop", theme_cfg.gradient_end_hex.as_str(), "theme_grad_end"),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let r = [
+                            content_x + 8.0 + i as f32 * (stop_w + 8.0),
+                            cy + 7.0,
+                            stop_w,
+                            36.0,
+                        ];
+                        let txt = format!("{lbl}: {hex_val}");
+                        button(
+                            ui,
+                            &mut self.targets,
+                            r,
+                            &txt,
+                            Action::Field(field_name),
+                            self.catalog.editing == Some(field_name),
+                        );
+                        self.list_targets.push((r, Action::Field(field_name)));
+                    }
+                }
+                cy += 58.0;
+
+                if cy + 44.0 >= list_top && cy <= list_bottom {
+                    let half = (content_w - 8.0) * 0.5;
+                    let three_r = [content_x, cy, half, 38.0];
+                    button(
+                        ui,
+                        &mut self.targets,
+                        three_r,
+                        if theme_cfg.use_three_stops {
+                            "3-Stop Gradient: Enabled"
+                        } else {
+                            "2-Stop Gradient (Tap for 3)"
+                        },
+                        Action::ToggleGradientThreeStops,
+                        theme_cfg.use_three_stops,
+                    );
+                    self.list_targets
+                        .push((three_r, Action::ToggleGradientThreeStops));
+
+                    let mid_lbl = format!(
+                        "Mid Stop Position: {:.0}%",
+                        theme_cfg.gradient_mid_pos * 100.0
+                    );
+                    let mid_r = [content_x + half + 8.0, cy, half, 38.0];
+                    button(
+                        ui,
+                        &mut self.targets,
+                        mid_r,
+                        &mid_lbl,
+                        Action::StepGradientMidPos(1),
+                        false,
+                    );
+                    self.list_targets.push((mid_r, Action::StepGradientMidPos(1)));
+                }
+
+                ui.set_clip(None);
+            }
             SettingsCategory::Controls => {
-                let count = 14;
+                let count = 13;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
@@ -2591,12 +3215,11 @@ impl Launcher {
 
                 let mouse_sens = format!("{:.0}%", opts.sensitivity * 200.0);
                 let touch_sens = format!("{:.0}%", touch_cfg.sensitivity * 100.0);
-                let vmouse_spd = format!("{:.0}%", touch_cfg.virtual_mouse_sensitivity * 100.0);
                 let btn_scale = format!("{:.0}%", touch_cfg.button_scale * 100.0);
                 let scheme_str = touch_cfg.mode.label();
                 let invert_y_active = opts.invert_y || touch_cfg.invert_y;
 
-                let rows: [(&str, &str, SettingControl<'_>); 13] = [
+                let rows: [(&str, &str, SettingControl<'_>); 12] = [
                     (
                         &editor_title,
                         editor_sub,
@@ -2639,17 +3262,8 @@ impl Launcher {
                         "Split Touch (Aim & Look)",
                         "Separates aiming and camera look with center crosshair",
                         SettingControl::Toggle(
-                            touch_cfg.split_controls,
+                            touch_cfg.crosshair(),
                             Action::ToggleSplitControls,
-                        ),
-                    ),
-                    (
-                        "Virtual Mouse Pointer Speed",
-                        "Zero-lag virtual cursor speed in menus, inventories and HUD",
-                        SettingControl::Stepper(
-                            &vmouse_spd,
-                            Action::VirtualMouseSpeedDelta(-0.15),
-                            Action::VirtualMouseSpeedDelta(0.15),
                         ),
                     ),
                     (
@@ -2721,7 +3335,7 @@ impl Launcher {
                             half_w,
                             58.0,
                             14.0,
-                            if selected { MY3_SURFACE } else { MY3_CARD_BG },
+                            if selected { my3_surface() } else { my3_card_bg() },
                         );
                         ui.border(
                             rx,
@@ -2730,9 +3344,9 @@ impl Launcher {
                             58.0,
                             14.0,
                             if selected {
-                                MY3_ACCENT
+                                my3_accent()
                             } else {
-                                MY3_CARD_BORDER
+                                my3_card_border()
                             },
                         );
                         let rad_x = rx + 14.0;
@@ -2744,10 +3358,10 @@ impl Launcher {
                             16.0,
                             8.0,
                             1.6,
-                            if selected { MY3_ACCENT } else { MY3_MUTED },
+                            if selected { my3_accent() } else { my3_muted() },
                         );
                         if selected {
-                            ui.rounded(rad_x + 4.0, rad_y + 4.0, 8.0, 8.0, 4.0, MY3_ACCENT);
+                            ui.rounded(rad_x + 4.0, rad_y + 4.0, 8.0, 8.0, 4.0, my3_accent());
                         }
                         let text_x = rx + 38.0;
                         let max_w = (half_w - 46.0).max(40.0);
@@ -2757,7 +3371,7 @@ impl Launcher {
                             14.0,
                             text_x,
                             picker_y + 12.0,
-                            MY3_TEXT,
+                            my3_text(),
                             &fitted,
                         );
                         let fitted_sub = ui.fit_text(Face::Regular, 11.5, sub, max_w);
@@ -2766,7 +3380,7 @@ impl Launcher {
                             11.5,
                             text_x,
                             picker_y + 33.0,
-                            MY3_MUTED,
+                            my3_muted(),
                             &fitted_sub,
                         );
                     }
@@ -3150,6 +3764,9 @@ impl Launcher {
                     self.catalog.config.battery_perf_mode = false;
                     self.catalog.config.renderer = crate::catalog::RendererMode::Vulkan;
                 }
+                horizon_client::ui_theme::motion::set_reduced_motion(
+                    self.catalog.config.super_perf_mode || self.catalog.config.battery_perf_mode,
+                );
                 self.catalog.config.save(&self.home)?;
                 self.catalog.config.apply_experimental_to_game(&self.home);
                 self.catalog.status = if self.catalog.config.super_perf_mode {
@@ -3165,6 +3782,9 @@ impl Launcher {
                     self.catalog.config.super_perf_mode = false;
                     self.catalog.config.max_fps_mode = false;
                 }
+                horizon_client::ui_theme::motion::set_reduced_motion(
+                    self.catalog.config.super_perf_mode || self.catalog.config.battery_perf_mode,
+                );
                 self.catalog.config.save(&self.home)?;
                 self.catalog.config.apply_experimental_to_game(&self.home);
                 self.catalog.status = if self.catalog.config.battery_perf_mode {
@@ -3390,7 +4010,7 @@ impl Launcher {
                 });
             }
             Some(Action::ToggleSplitControls) => {
-                self.modify_touch_settings(|t| t.split_controls = !t.split_controls);
+                self.modify_touch_settings(|t| t.toggle_split_touch());
             }
             Some(Action::ToggleSprintLatch) => {
                 self.modify_touch_settings(|t| t.sprint_toggle = !t.sprint_toggle);
@@ -3679,7 +4299,7 @@ impl Launcher {
             }
             Some(Action::Play) => self.action(events)?,
             Some(Action::WardrobeKind(cape)) => {
-                self.wardrobe.capes = cape;
+                self.wardrobe.set_tab(cape);
                 self.catalog.scroll = 0.0;
             }
             Some(Action::WardrobeSelect(index)) => self.wardrobe.select(index),
@@ -3698,7 +4318,7 @@ impl Launcher {
             Some(Action::WardrobeUseCloud) => self.wardrobe.use_cloud(),
             Some(Action::WardrobeModel) => self.wardrobe.model(),
             Some(Action::WardrobeRotate(direction)) => {
-                self.wardrobe.camera.rotate(direction as f32 * 25.0, 0.0);
+                self.wardrobe.camera.rotate(-direction as f32 * 25.0, 0.0);
                 self.wardrobe.preview();
             }
             Some(Action::WardrobeZoom(inward)) => {
@@ -3745,6 +4365,12 @@ impl Launcher {
                     "server" => &self.catalog.config.server,
                     "render_scale" => &self.catalog.render_scale_text,
                     "client_id" => &self.catalog.config.microsoft_client_id,
+                    "theme_bg" => &self.catalog.config.theme.custom_bg_hex,
+                    "theme_surface" => &self.catalog.config.theme.custom_surface_hex,
+                    "theme_accent" => &self.catalog.config.theme.custom_accent_hex,
+                    "theme_grad_start" => &self.catalog.config.theme.gradient_start_hex,
+                    "theme_grad_mid" => &self.catalog.config.theme.gradient_mid_hex,
+                    "theme_grad_end" => &self.catalog.config.theme.gradient_end_hex,
                     _ => &self.catalog.query,
                 };
                 crate::platform::show(initial);
@@ -3849,6 +4475,119 @@ impl Launcher {
                     Ok(()) => "Reports opened in Files. Copy or share a report from there.".into(),
                     Err(e) => e,
                 };
+            }
+            Some(Action::SelectThemePreset(preset)) => {
+                self.catalog.config.theme.apply_preset(preset);
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+                self.catalog.status = format!("Applied '{}' theme.", preset.label());
+            }
+            Some(Action::SetThemeAppearance(appearance)) => {
+                self.catalog.config.theme.appearance = appearance;
+                if self.catalog.config.theme.preset == horizon_client::ui_theme::ThemePreset::DaylightFrost
+                    && appearance == horizon_client::ui_theme::ThemeAppearance::Dark
+                {
+                    self.catalog.config.theme.preset =
+                        horizon_client::ui_theme::ThemePreset::ObsidianViolet;
+                }
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+                self.catalog.status = format!("Switched to {}.", appearance.label());
+            }
+            Some(Action::SetThemeBackgroundMode(mode)) => {
+                self.catalog.config.theme.background_mode = mode;
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+                self.catalog.status = format!("Background style set to {}.", mode.label());
+            }
+            Some(Action::SetGradientDirection(dir)) => {
+                self.catalog.config.theme.gradient_direction = dir;
+                self.catalog.config.theme.background_mode =
+                    horizon_client::ui_theme::BackgroundMode::Gradient;
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+                self.catalog.status = format!("Gradient direction set to {}.", dir.label());
+            }
+            Some(Action::ToggleGradientThreeStops) => {
+                self.catalog.config.theme.use_three_stops =
+                    !self.catalog.config.theme.use_three_stops;
+                self.catalog.config.theme.background_mode =
+                    horizon_client::ui_theme::BackgroundMode::Gradient;
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+            }
+            Some(Action::StepGradientMidPos(dir)) => {
+                let cur = self.catalog.config.theme.gradient_mid_pos;
+                let next = if dir >= 0 {
+                    if cur < 0.35 {
+                        0.50
+                    } else if cur < 0.65 {
+                        0.75
+                    } else {
+                        0.25
+                    }
+                } else if cur > 0.65 {
+                    0.50
+                } else {
+                    0.25
+                };
+                self.catalog.config.theme.gradient_mid_pos = next;
+                self.catalog.config.theme.background_mode =
+                    horizon_client::ui_theme::BackgroundMode::Gradient;
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+            }
+            Some(Action::SelectAccentSwatch(rgb)) => {
+                self.catalog.config.theme.custom_accent_hex =
+                    horizon_client::ui_theme::format_hex_color(rgb);
+                self.catalog.config.theme.preset = horizon_client::ui_theme::ThemePreset::Custom;
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+            }
+            Some(Action::SelectBgSwatch(rgb)) => {
+                self.catalog.config.theme.custom_bg_hex =
+                    horizon_client::ui_theme::format_hex_color(rgb);
+                self.catalog.config.theme.preset = horizon_client::ui_theme::ThemePreset::Custom;
+                self.catalog.config.theme.background_mode =
+                    horizon_client::ui_theme::BackgroundMode::Solid;
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+            }
+            Some(Action::SelectGradStartSwatch(rgb)) => {
+                self.catalog.config.theme.gradient_start_hex =
+                    horizon_client::ui_theme::format_hex_color(rgb);
+                self.catalog.config.theme.preset = horizon_client::ui_theme::ThemePreset::Custom;
+                self.catalog.config.theme.background_mode =
+                    horizon_client::ui_theme::BackgroundMode::Gradient;
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+            }
+            Some(Action::SelectGradEndSwatch(rgb)) => {
+                self.catalog.config.theme.gradient_end_hex =
+                    horizon_client::ui_theme::format_hex_color(rgb);
+                self.catalog.config.theme.preset = horizon_client::ui_theme::ThemePreset::Custom;
+                self.catalog.config.theme.background_mode =
+                    horizon_client::ui_theme::BackgroundMode::Gradient;
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+            }
+            Some(Action::ResetTheme) => {
+                self.catalog.config.theme =
+                    horizon_client::ui_theme::LauncherThemeConfig::default();
+                horizon_client::ui_theme::set_active_theme(self.catalog.config.theme.resolve());
+                self.anim.trigger_theme_pulse();
+                self.catalog.config.save(&self.home)?;
+                self.catalog.status = "Theme reset to Horizon default (Obsidian Violet).".into();
             }
             None => {}
         }

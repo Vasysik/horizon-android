@@ -99,6 +99,8 @@ pub struct Config {
     pub custom_profile_desc: String,
     #[serde(default)]
     pub preset_edit_mode: String,
+    #[serde(default)]
+    pub theme: horizon_client::ui_theme::LauncherThemeConfig,
 }
 
 fn default_true() -> bool {
@@ -167,6 +169,11 @@ impl Config {
             .unwrap_or_default();
         config.device.migrate_missing(&value, &legacy);
         config.name = truncate_player_name(&config.name);
+        config.theme.sanitize();
+        horizon_client::ui_theme::set_active_theme(config.theme.resolve());
+        horizon_client::ui_theme::motion::set_reduced_motion(
+            config.super_perf_mode || config.battery_perf_mode,
+        );
         config
     }
     pub fn save(&self, home: &Path) -> Result<(), String> {
@@ -303,6 +310,7 @@ pub enum SettingsCategory {
     Overview,
     Video,
     Launcher,
+    Theme,
     Controls,
     Experimental,
     Diagnostics,
@@ -314,6 +322,7 @@ impl SettingsCategory {
             Self::Overview => "Settings",
             Self::Video => "Video Settings",
             Self::Launcher => "Launcher Settings",
+            Self::Theme => "Theme Customization",
             Self::Controls => "Controls & HUD Layout",
             Self::Experimental => "Experimental Stuff",
             Self::Diagnostics => "Diagnostics & Logs",
@@ -1433,12 +1442,33 @@ impl Catalog {
         use horizon_client::osk::Output;
         let is_name = self.editing == Some("name");
         let is_profile_name = self.editing == Some("profile_name");
+        let is_theme_field = matches!(
+            self.editing,
+            Some(
+                "theme_bg"
+                    | "theme_surface"
+                    | "theme_accent"
+                    | "theme_grad_start"
+                    | "theme_grad_mid"
+                    | "theme_grad_end"
+            )
+        );
+        if is_theme_field {
+            self.config.theme.preset = horizon_client::ui_theme::ThemePreset::Custom;
+        }
         let field = match self.editing {
             Some("name") => &mut self.config.name,
             Some("profile_name") => &mut self.config.custom_profile_name,
+            Some("profile_desc") => &mut self.config.custom_profile_desc,
             Some("server") => &mut self.config.server,
             Some("render_scale") => &mut self.render_scale_text,
             Some("client_id") => &mut self.config.microsoft_client_id,
+            Some("theme_bg") => &mut self.config.theme.custom_bg_hex,
+            Some("theme_surface") => &mut self.config.theme.custom_surface_hex,
+            Some("theme_accent") => &mut self.config.theme.custom_accent_hex,
+            Some("theme_grad_start") => &mut self.config.theme.gradient_start_hex,
+            Some("theme_grad_mid") => &mut self.config.theme.gradient_mid_hex,
+            Some("theme_grad_end") => &mut self.config.theme.gradient_end_hex,
             _ => &mut self.query,
         };
         match out {
@@ -1484,6 +1514,13 @@ impl Catalog {
                     let _ = touch.save_profile(&game_home, &clean);
                     self.status =
                         format!("Saved controls as '{clean}' in controlmap/{clean}.json.");
+                }
+                if is_theme_field {
+                    self.config.theme.sanitize();
+                    horizon_client::ui_theme::set_active_theme(self.config.theme.resolve());
+                    self.status = "Custom theme color applied and saved.".into();
+                } else {
+                    horizon_client::ui_theme::set_active_theme(self.config.theme.resolve());
                 }
                 self.editing = None;
                 let _ = self.config.save(home);

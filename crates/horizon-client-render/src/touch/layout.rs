@@ -454,6 +454,8 @@ pub struct Settings {
     #[serde(default)]
     pub toggle_sprint: bool,
     pub inventory_controls: bool,
+    #[serde(default = "default_true")]
+    pub virtual_mouse_enabled: bool,
     pub virtual_mouse_sensitivity: f32,
     pub crosshair_gestures: bool,
     pub gyroscope: bool,
@@ -589,6 +591,7 @@ impl Default for Settings {
             sprint_toggle: false,
             toggle_sprint: false,
             inventory_controls: false,
+            virtual_mouse_enabled: true,
             virtual_mouse_sensitivity: 1.0,
             crosshair_gestures: false,
             gyroscope: false,
@@ -750,6 +753,11 @@ impl Settings {
             self.mode = Mode::Crosshair;
             self.split_controls = false;
             self.crosshair_gestures = true;
+        }
+        if self.sprint_toggle != self.toggle_sprint {
+            let latched = self.sprint_toggle || self.toggle_sprint;
+            self.sprint_toggle = latched;
+            self.toggle_sprint = latched;
         }
         self.virtual_mouse_sensitivity = if self.virtual_mouse_sensitivity.is_finite() {
             self.virtual_mouse_sensitivity.clamp(0.25, 3.0)
@@ -1172,6 +1180,10 @@ impl Settings {
         let prev_goy = self.active_goy_preset.clone();
         let prev_floating = self.floating_menu_pos;
         let prev_invert_y = self.invert_y;
+        let prev_vm_enabled = self.virtual_mouse_enabled;
+        let prev_vm_sens = self.virtual_mouse_sensitivity;
+        let prev_vibrate = self.vibrate;
+        let prev_auto_jump = self.auto_jump;
         let mut loaded = Self::load_preset(game_home, style, id);
         let clean = loaded.preset_id.clone();
         loaded.active_mcpe_preset = if style == ControlStyle::Mcpe {
@@ -1186,6 +1198,10 @@ impl Settings {
         };
         loaded.floating_menu_pos = prev_floating;
         loaded.invert_y = prev_invert_y;
+        loaded.virtual_mouse_enabled = prev_vm_enabled;
+        loaded.virtual_mouse_sensitivity = prev_vm_sens;
+        loaded.vibrate = prev_vibrate;
+        loaded.auto_jump = prev_auto_jump;
         *self = loaded;
         let _ = self.save_to(&game_home.join("horizon-touch.json"));
     }
@@ -1216,12 +1232,20 @@ impl Settings {
         let prev_goy = self.active_goy_preset.clone();
         let prev_floating = self.floating_menu_pos;
         let prev_invert_y = self.invert_y;
+        let prev_vm_enabled = self.virtual_mouse_enabled;
+        let prev_vm_sens = self.virtual_mouse_sensitivity;
+        let prev_vibrate = self.vibrate;
+        let prev_auto_jump = self.auto_jump;
         let mut loaded = Self::load_preset(game_home, target, &target_preset_id);
         loaded.control_style = target;
         loaded.active_mcpe_preset = prev_mcpe;
         loaded.active_goy_preset = prev_goy;
         loaded.floating_menu_pos = prev_floating;
         loaded.invert_y = prev_invert_y;
+        loaded.virtual_mouse_enabled = prev_vm_enabled;
+        loaded.virtual_mouse_sensitivity = prev_vm_sens;
+        loaded.vibrate = prev_vibrate;
+        loaded.auto_jump = prev_auto_jump;
         *self = loaded;
         let _ = self.save_to(&game_home.join("horizon-touch.json"));
     }
@@ -1682,11 +1706,19 @@ impl Settings {
             let prev_goy = self.active_goy_preset.clone();
             let prev_floating = self.floating_menu_pos;
             let prev_invert_y = self.invert_y;
+            let prev_vm_enabled = self.virtual_mouse_enabled;
+            let prev_vm_sens = self.virtual_mouse_sensitivity;
+            let prev_vibrate = self.vibrate;
+            let prev_auto_jump = self.auto_jump;
             *self = Self::default_for_style(style);
             self.active_mcpe_preset = prev_mcpe;
             self.active_goy_preset = prev_goy;
             self.floating_menu_pos = prev_floating;
             self.invert_y = prev_invert_y;
+            self.virtual_mouse_enabled = prev_vm_enabled;
+            self.virtual_mouse_sensitivity = prev_vm_sens;
+            self.vibrate = prev_vibrate;
+            self.auto_jump = prev_auto_jump;
             match style {
                 ControlStyle::Mcpe => self.active_mcpe_preset = "default".into(),
                 ControlStyle::GoyControl => self.active_goy_preset = "default".into(),
@@ -1717,6 +1749,10 @@ impl Settings {
         loaded.active_goy_preset = active.active_goy_preset;
         loaded.floating_menu_pos = active.floating_menu_pos;
         loaded.invert_y = active.invert_y;
+        loaded.virtual_mouse_enabled = active.virtual_mouse_enabled;
+        loaded.virtual_mouse_sensitivity = active.virtual_mouse_sensitivity;
+        loaded.vibrate = active.vibrate;
+        loaded.auto_jump = active.auto_jump;
         match loaded.control_style {
             ControlStyle::Mcpe => loaded.active_mcpe_preset = loaded.preset_id.clone(),
             ControlStyle::GoyControl => loaded.active_goy_preset = loaded.preset_id.clone(),
@@ -1742,6 +1778,20 @@ impl Settings {
     }
     pub fn crosshair(&self) -> bool {
         self.mode == Mode::Crosshair || self.split_controls
+    }
+    /// Toggles split-touch (crosshair aiming vs tap-anywhere interaction) across all movement modes.
+    pub fn toggle_split_touch(&mut self) {
+        if self.crosshair() {
+            self.split_controls = false;
+            if self.mode == Mode::Crosshair {
+                self.mode = Mode::Tap;
+            }
+        } else if self.mode == Mode::Tap {
+            self.mode = Mode::Crosshair;
+            self.split_controls = false;
+        } else {
+            self.split_controls = true;
+        }
     }
     pub fn visible(&self, c: Control) -> bool {
         if self.control_style == ControlStyle::GoyControl && c != Control::Move {
@@ -2044,6 +2094,45 @@ mod tests {
             mcpe_def.layouts[0][Control::Jump as usize].center,
             [0.92, 0.78]
         );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn virtual_mouse_and_floating_menu_settings_persist_across_system_switches() {
+        let tmp = std::env::temp_dir().join(format!("horizon-vm-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let mut settings = Settings::default();
+        assert!(settings.virtual_mouse_enabled);
+        settings.virtual_mouse_enabled = false;
+        settings.virtual_mouse_sensitivity = 1.75;
+        settings.vibrate = false;
+        settings.auto_jump = true;
+        settings.toggle_sprint = true;
+        settings.sanitize();
+        assert!(settings.sprint_toggle);
+
+        settings.switch_control_system(&tmp, ControlStyle::GoyControl);
+        assert!(!settings.virtual_mouse_enabled);
+        assert_eq!(settings.virtual_mouse_sensitivity, 1.75);
+        assert!(!settings.vibrate);
+        assert!(settings.auto_jump);
+
+        settings.switch_control_system(&tmp, ControlStyle::Mcpe);
+        assert!(!settings.virtual_mouse_enabled);
+        assert_eq!(settings.virtual_mouse_sensitivity, 1.75);
+        assert!(!settings.vibrate);
+        assert!(settings.auto_jump);
+
+        // Split touch toggles cleanly between Crosshair and Tap modes
+        assert!(settings.crosshair());
+        settings.toggle_split_touch();
+        assert!(!settings.crosshair());
+        assert_eq!(settings.mode, Mode::Tap);
+        settings.toggle_split_touch();
+        assert!(settings.crosshair());
+        assert_eq!(settings.mode, Mode::Crosshair);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

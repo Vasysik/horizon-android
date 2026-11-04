@@ -133,6 +133,12 @@ impl Game<'_> {
         self.renderer
             .as_ref()
             .map(|r| HudBatch::new([r.config.width, r.config.height]))
+            .or_else(|| {
+                self.window.as_ref().map(|w| {
+                    let s = w.inner_size();
+                    HudBatch::new([s.width, s.height])
+                })
+            })
     }
 
     /// Focus mode is on for the open screen (the keyboard always focuses).
@@ -1481,6 +1487,12 @@ impl Game<'_> {
             let mut ui = horizon_client::ui_theme::Ui::new(&self.gui.atlas, batch, self.cursor);
             keyboard.draw(&mut ui, at_top, self.ui.options.pad_style);
             ui.finish();
+            return;
+        }
+        #[cfg(target_os = "android")]
+        if virtual_mouse {
+            // On Android, the virtual mouse pointer is drawn once at the top of the HUD z-order
+            // in `game.rs` above all touch controls, floating menu, and editor overlays.
             return;
         }
         let pointer = if virtual_mouse {

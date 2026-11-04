@@ -3,13 +3,27 @@ use super::pages::{Action, button};
 use crate::account::{self, Account, Accounts, Secrets, SignIn, SignInState};
 use horizon_client::ui_theme::{Face, Icon, Ui, color};
 
-const SURFACE: u32 = color::hex(0x1B1729, 255);
-const SURFACE_HIGH: u32 = color::hex(0x241F36, 255);
-const BORDER: u32 = color::hex(0x322B4A, 255);
-const TEXT: u32 = color::hex(0xF4F0FC, 255);
-const MUTED: u32 = color::hex(0x9C96B0, 255);
-const ACCENT: u32 = color::hex(0x9A7BFF, 255);
-const ACCENT_SOFT: u32 = color::hex(0x332854, 255);
+fn login_surface() -> u32 {
+    horizon_client::ui_theme::active_theme().surface
+}
+fn login_surface_high() -> u32 {
+    horizon_client::ui_theme::active_theme().surface_bright
+}
+fn login_border() -> u32 {
+    horizon_client::ui_theme::active_theme().border
+}
+fn login_text() -> u32 {
+    horizon_client::ui_theme::active_theme().text_primary
+}
+fn login_muted() -> u32 {
+    horizon_client::ui_theme::active_theme().text_muted
+}
+fn login_accent() -> u32 {
+    horizon_client::ui_theme::active_theme().accent
+}
+fn login_accent_soft() -> u32 {
+    horizon_client::ui_theme::active_theme().accent_soft
+}
 
 pub(super) struct Login {
     pub choosing: bool,
@@ -254,13 +268,13 @@ impl Login {
         action: Action,
     ) {
         let [x, y, w, h] = rect;
-        ui.rounded(x, y, w, h, 14.0, SURFACE);
-        ui.border(x, y, w, h, 14.0, if current { ACCENT } else { BORDER });
+        ui.rounded(x, y, w, h, 14.0, login_surface());
+        ui.border(x, y, w, h, 14.0, if current { login_accent() } else { login_border() });
         let avatar = (h - 12.0).clamp(30.0, 40.0);
         ui.avatar_head_2d(x + 10.0, y + (h - avatar) * 0.5, avatar, name);
         let tx = x + avatar + 22.0;
         let fitted = ui.fit_text(Face::SemiBold, 14.0, name, (w - avatar - 56.0).max(60.0));
-        ui.text(Face::SemiBold, 14.0, tx, y + 7.0, TEXT, &fitted);
+        ui.text(Face::SemiBold, 14.0, tx, y + 7.0, login_text(), &fitted);
         let detail = if current {
             format!("{detail} · Current")
         } else {
@@ -271,7 +285,7 @@ impl Login {
             11.5,
             tx,
             y + h - 21.0,
-            if current { ACCENT } else { MUTED },
+            if current { login_accent() } else { login_muted() },
             &detail,
         );
         if current {
@@ -280,7 +294,7 @@ impl Login {
                 x + w - 30.0,
                 y + (h - 18.0) * 0.5,
                 18.0,
-                ACCENT,
+                login_accent(),
             );
         }
         targets.push(([x, y, w, h], action));
@@ -300,8 +314,8 @@ impl Login {
         let y = (ui.h - h) * 0.5;
         ui.fill(0.0, 0.0, ui.w, ui.h, color::hex(0x05040A, 150));
         ui.rounded(x + 2.0, y + 8.0, w, h, 26.0, color::hex(0x000000, 90));
-        ui.rounded(x, y, w, h, 26.0, color::hex(0x14111F, 255));
-        ui.border(x, y, w, h, 26.0, BORDER);
+        ui.rounded(x, y, w, h, 26.0, horizon_client::ui_theme::active_theme().bg_solid);
+        ui.border(x, y, w, h, 26.0, login_border());
 
         let (title, subtitle): (&str, String) = if self.providers {
             ("Accounts", "Choose how you want to play".into())
@@ -340,24 +354,24 @@ impl Login {
         };
         if !self.providers {
             let back = [x + 16.0, y + 16.0, 38.0, 38.0];
-            ui.rounded(back[0], back[1], back[2], back[3], 12.0, SURFACE_HIGH);
-            ui.icon(Icon::ArrowLeft, back[0] + 10.0, back[1] + 10.0, 18.0, TEXT);
+            ui.rounded(back[0], back[1], back[2], back[3], 12.0, login_surface_high());
+            ui.icon(Icon::ArrowLeft, back[0] + 10.0, back[1] + 10.0, 18.0, login_text());
             targets.push((back, Action::Account));
         }
         let close = [x + w - 54.0, y + 16.0, 38.0, 38.0];
-        ui.rounded(close[0], close[1], close[2], close[3], 12.0, SURFACE_HIGH);
-        ui.icon(Icon::Close, close[0] + 11.0, close[1] + 11.0, 16.0, TEXT);
+        ui.rounded(close[0], close[1], close[2], close[3], 12.0, login_surface_high());
+        ui.icon(Icon::Close, close[0] + 11.0, close[1] + 11.0, 16.0, login_text());
         targets.push((close, Action::CloseLogin));
         let text_x = if self.providers { x + 22.0 } else { x + 64.0 };
-        ui.text(Face::SemiBold, 20.0, text_x, y + 14.0, TEXT, title);
+        ui.text(Face::SemiBold, 20.0, text_x, y + 14.0, login_text(), title);
         let fitted = ui.fit_text(
             Face::Regular,
             12.5,
             &subtitle,
             (x + w - 70.0 - text_x).max(70.0),
         );
-        ui.text(Face::Regular, 12.5, text_x, y + 42.0, MUTED, &fitted);
-        ui.rounded(x + 20.0, y + 72.0, w - 40.0, 1.0, 0.5, BORDER);
+        ui.text(Face::Regular, 12.5, text_x, y + 42.0, login_muted(), &fitted);
+        ui.rounded(x + 20.0, y + 72.0, w - 40.0, 1.0, 0.5, login_border());
 
         let content_y = y + 88.0;
         let content_h = (y + h - 20.0 - content_y).max(60.0);
@@ -395,13 +409,13 @@ impl Login {
             {
                 let cx = x + 20.0 + (i % 2) as f32 * (cw + gap);
                 let cy = content_y + (i / 2) as f32 * (ch + gap);
-                ui.rounded(cx, cy, cw, ch, 16.0, SURFACE);
-                ui.border(cx, cy, cw, ch, 16.0, BORDER);
-                ui.rounded(cx + 14.0, cy + 14.0, 34.0, 34.0, 11.0, ACCENT_SOFT);
-                ui.text(Face::SemiBold, 15.0, cx + 23.0, cy + 21.0, ACCENT, mark);
-                ui.text(Face::SemiBold, 15.0, cx + 14.0, cy + 50.0, TEXT, label);
+                ui.rounded(cx, cy, cw, ch, 16.0, login_surface());
+                ui.border(cx, cy, cw, ch, 16.0, login_border());
+                ui.rounded(cx + 14.0, cy + 14.0, 34.0, 34.0, 11.0, login_accent_soft());
+                ui.text(Face::SemiBold, 15.0, cx + 23.0, cy + 21.0, login_accent(), mark);
+                ui.text(Face::SemiBold, 15.0, cx + 14.0, cy + 50.0, login_text(), label);
                 let note = ui.fit_text(Face::Regular, 11.5, note, cw - 28.0);
-                ui.text(Face::Regular, 11.5, cx + 14.0, cy + 68.0, MUTED, &note);
+                ui.text(Face::Regular, 11.5, cx + 14.0, cy + 68.0, login_muted(), &note);
                 targets.push(([cx, cy, cw, ch], action));
             }
             button(
@@ -555,7 +569,7 @@ impl Login {
             }
             let note_y = content_y + 3.0 * (field_h + gap) + 4.0;
             if !self.message.is_empty() {
-                paragraph(ui, x + 20.0, note_y, w - 40.0, &self.message, TEXT, 2);
+                paragraph(ui, x + 20.0, note_y, w - 40.0, &self.message, login_text(), 2);
             }
             button(
                 ui,
@@ -599,7 +613,7 @@ impl Login {
                 11.5,
                 x + 20.0,
                 content_y + 66.0,
-                MUTED,
+                login_muted(),
                 &count,
             );
             ui.text(
@@ -607,7 +621,7 @@ impl Login {
                 12.5,
                 x + 20.0,
                 content_y + 88.0,
-                MUTED,
+                login_muted(),
                 "This name is local; it is not an online identity.",
             );
             if focused {
@@ -643,13 +657,13 @@ impl Login {
         // Microsoft
         let card_h = 84.0;
         let card = [x + 20.0, content_y, w - 40.0, card_h];
-        ui.rounded(card[0], card[1], card[2], card[3], 16.0, SURFACE);
-        ui.border(card[0], card[1], card[2], card[3], 16.0, BORDER);
+        ui.rounded(card[0], card[1], card[2], card[3], 16.0, login_surface());
+        ui.border(card[0], card[1], card[2], card[3], 16.0, login_border());
         let display_name = self.profile.as_deref().unwrap_or(offline_name);
         ui.avatar_head_2d(card[0] + 14.0, card[1] + 14.0, 56.0, display_name);
         let name_x = card[0] + 84.0;
         let fitted = ui.fit_text(Face::SemiBold, 17.0, display_name, card[2] - 100.0);
-        ui.text(Face::SemiBold, 17.0, name_x, card[1] + 14.0, TEXT, &fitted);
+        ui.text(Face::SemiBold, 17.0, name_x, card[1] + 14.0, login_text(), &fitted);
         let status = self.status(offline_name);
         let fitted = ui.fit_text(Face::Regular, 12.5, &status, card[2] - 100.0);
         ui.text(
@@ -657,7 +671,7 @@ impl Login {
             12.5,
             name_x,
             card[1] + 40.0,
-            if self.signed_in { ACCENT } else { MUTED },
+            if self.signed_in { login_accent() } else { login_muted() },
             &fitted,
         );
         ui.text(
@@ -665,7 +679,7 @@ impl Login {
             11.0,
             name_x,
             card[1] + 60.0,
-            MUTED,
+            login_muted(),
             if self.signed_in {
                 "Microsoft · Connected"
             } else {
@@ -676,14 +690,14 @@ impl Login {
         let mut row_y = content_y + card_h + 12.0;
         if let Some(SignInState::Code(code)) = &self.state {
             let code_h = 84.0;
-            ui.rounded(x + 20.0, row_y, w - 40.0, code_h, 14.0, SURFACE_HIGH);
-            ui.border(x + 20.0, row_y, w - 40.0, code_h, 14.0, BORDER);
+            ui.rounded(x + 20.0, row_y, w - 40.0, code_h, 14.0, login_surface_high());
+            ui.border(x + 20.0, row_y, w - 40.0, code_h, 14.0, login_border());
             ui.text(
                 Face::Regular,
                 11.0,
                 x + 34.0,
                 row_y + 12.0,
-                MUTED,
+                login_muted(),
                 "SIGN-IN CODE",
             );
             ui.text(
@@ -691,7 +705,7 @@ impl Login {
                 28.0,
                 x + 34.0,
                 row_y + 30.0,
-                TEXT,
+                login_text(),
                 &code.user_code,
             );
             row_y += code_h + 10.0;
@@ -719,7 +733,7 @@ impl Login {
             } else {
                 "You sign in inside Microsoft's browser; this app never sees your password."
             };
-            row_y = paragraph(ui, x + 20.0, row_y, w - 40.0, text, MUTED, 2) + 8.0;
+            row_y = paragraph(ui, x + 20.0, row_y, w - 40.0, text, login_muted(), 2) + 8.0;
         }
         let message = if matches!(&self.state, Some(SignInState::Starting)) {
             "Requesting a sign-in code..."
@@ -727,7 +741,7 @@ impl Login {
             self.message.as_str()
         };
         if !message.is_empty() {
-            row_y = paragraph(ui, x + 20.0, row_y, w - 40.0, message, TEXT, 2) + 4.0;
+            row_y = paragraph(ui, x + 20.0, row_y, w - 40.0, message, login_text(), 2) + 4.0;
         }
         if self.message.contains("not approved by Mojang") && row_y + 30.0 < footer_y - 54.0 {
             button(
