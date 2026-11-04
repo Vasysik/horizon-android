@@ -1452,7 +1452,7 @@ mod tests {
     fn test_aes_128_gcm_and_udp_framing_roundtrip() {
         let key = [7u8; 16];
         let cipher = SvcCipher::new(&key);
-        let conn_id = 0xFEEDBEEF_CAFE_BABE_0123_4567_89AB_CDEF;
+        let conn_id = 0xFEED_BEEF_CAFE_BABE_0123_4567_89AB_CDEF;
 
         let mic_body = MicPacket {
             opus_data: vec![0xDE, 0xAD, 0xBE, 0xEF],

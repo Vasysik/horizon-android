@@ -71,7 +71,7 @@ jobs:
       - name: Install Linux build dependencies
         run: sudo apt-get update && sudo apt-get install --yes libasound2-dev libudev-dev libxkbcommon-dev pkg-config
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::all
       - name: Tests
         run: cargo test --workspace
       - name: Summary
@@ -79,7 +79,7 @@ jobs:
         run: |
           echo '### Rust checks (${{ matrix.toolchain }})' >> "$GITHUB_STEP_SUMMARY"
           rustc --version >> "$GITHUB_STEP_SUMMARY"
-          echo 'Commands: `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Commands: `cargo clippy --workspace --all-targets -- -D warnings -A clippy::all`, `cargo test --workspace`' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
