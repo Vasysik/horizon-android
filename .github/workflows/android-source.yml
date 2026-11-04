@@ -1,4 +1,4 @@
-# The source exporter installs this as the fork's only active workflow.
+# The source exporter restores the Android checks and dev APK workflows.
 name: Android source checks
 on:
   push:
@@ -31,8 +31,11 @@ jobs:
       - run: python3 tools/test_android_diagnostics.py
       - run: python3 tools/test_android_performance.py
       - run: python3 tools/test_android_content.py
+      - run: python3 tools/test_android_appearance.py
       - name: Check workflow export matches the active workflow
-        run: cmp .github/workflows/android-source.yml packaging/android/source-checks.yml
+        run: |
+          cmp .github/workflows/android-source.yml packaging/android/source-checks.yml
+          cmp .github/workflows/android-dev.yml packaging/android/dev-builds.yml
   native:
     if: github.event_name == 'workflow_dispatch' && inputs.native_checks
     needs: source
@@ -61,7 +64,12 @@ jobs:
           persist-credentials: false
       - name: Install Android toolchain
         run: |
-          sdkmanager "ndk;28.2.13676358" "build-tools;35.0.0"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then
+            sdkmanager=$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)
+          fi
+          test -x "$sdkmanager"
+          "$sdkmanager" --sdk_root="$ANDROID_HOME" "ndk;28.2.13676358" "build-tools;35.0.0"
           rustup target add "${{ matrix.target }}"
       - name: Check Android Rust code without building an APK
-        run: python3 tools/android_build.py --abi "${{ matrix.abi }}" --check --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64"
+        run: python3 tools/android_build.py --abi "${{ matrix.abi }}" --check --public --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" --ndk-version 28.2.13676358 --build-tools-version 35.0.0

@@ -32,6 +32,15 @@ compatibility. Legacy GPU testing remains in progress. When a shared atlas canno
 fit the adapter, Android reduces static atlas sprites while retaining font pixels,
 dynamic slots and the separate terrain texture arrays.
 
+## Skins, capes and Ely.by
+
+Open **Skins** to import PNG skins/capes, keep a local gallery and preview them
+on a rotating Classic/Slim model. Local choices affect your own view; explicit
+cloud actions change a supported provider's profile. **Accounts > Sign in with
+Ely.by** adds an Ely.by account; **Saved accounts** switches between saved accounts
+and Offline. See [appearance and account capabilities](android-appearance.md)
+for cloud restrictions and the frontend-independent game contract.
+
 ## Launcher
 
 - **Play:** install resources and launch a world or server.

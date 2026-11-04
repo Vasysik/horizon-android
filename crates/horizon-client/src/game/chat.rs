@@ -134,6 +134,17 @@ pub(super) enum ChatExit {
 fn should_discard_draft(reason: ChatExit, save_chat_drafts: bool) -> bool {
     reason != ChatExit::Interrupted && (reason != ChatExit::Intentional || !save_chat_drafts)
 }
+
+/// Convert an Android visible-window bottom (renderer pixels, as returned by
+/// `native_ime::viewport_bottom()`) to the GUI height the chat may use, never
+/// exceeding the full height. A zero bottom (no bounds read yet) leaves the
+/// height unchanged, so chat never collapses.
+fn clamp_gui_height(full_height: f32, visible_bottom: u32, gui_scale: f32) -> f32 {
+    if visible_bottom == 0 || gui_scale <= 0.0 {
+        return full_height;
+    }
+    full_height.min(visible_bottom as f32 / gui_scale)
+}
 /// UI and command state that lives beside the game.
 #[derive(Default)]
 pub struct UiState {
@@ -1095,15 +1106,42 @@ impl Game<'_> {
             self.run_command(command);
         }
     }
+    /// The GUI height the chat may use on this frame. On Android this is the
+    /// visible window bottom reported by the IME layer, converted from
+    /// renderer pixels to GUI pixels; everywhere else, and while the keyboard
+    /// is closed or floating, it is the full batch height, so nothing moves.
+    /// `viewport_bottom()` enqueues a fresh bounds read when none is pending,
+    /// so calling this every frame while chat is open keeps the value fresh.
+    #[cfg(target_os = "android")]
+    fn visible_chat_height(batch: &HudBatch) -> f32 {
+        let Some(bottom) = crate::native_ime::viewport_bottom() else {
+            return batch.height;
+        };
+        clamp_gui_height(batch.height, bottom, batch.scale)
+    }
+    #[cfg(not(target_os = "android"))]
+    fn visible_chat_height(batch: &HudBatch) -> f32 {
+        batch.height
+    }
+
     /// Chat lines over the HUD (focused while the chat screen is open).
     pub(super) fn draw_chat(&mut self, batch: &mut HudBatch) {
         let focused = self.screen == Screen::Chat;
         if self.ui.hide_gui && !focused {
             return;
         }
+        // While the chat screen is open on Android, the on-screen keyboard
+        // overlays the bottom of the window instead of resizing it (immersive
+        // mode), so the history must move up with the input below. Clamp the
+        // batch height for this draw only; it is restored before returning.
+        let original_height = batch.height;
+        if focused {
+            batch.height = Self::visible_chat_height(batch);
+        }
         self.ui
             .chat
             .draw(batch, &self.gui.atlas, self.ticks, focused);
+        batch.height = original_height;
     }
     /// `HoverEvent.EntityTooltipInfo.getTooltipLines`: the name when the
     /// event has one, the entity type and the UUID.
@@ -1144,6 +1182,12 @@ impl Game<'_> {
         let Some(mut screen) = self.ui.chat_screen.take() else {
             return;
         };
+        // Same clamp as draw_chat: while a non-floating keyboard is up, the
+        // visible height is the keyboard's top, so the input (at height - 12)
+        // moves above it. Restored at the end so later HUD draws in this
+        // frame keep the full height.
+        let original_height = batch.height;
+        batch.height = Self::visible_chat_height(batch);
         // ChatScreen.updateNarrationState: the restricted prompt is
         // `displayMode.showRestrictedPrompt`, the abilities' restrictions.
         let in_bed = self.ui.in_bed_chat && self.sleeping.is_some();
@@ -1238,6 +1282,7 @@ impl Game<'_> {
             let lines = self.wrapped_rows(tag, 210);
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
+        batch.height = original_height;
     }
     /// `Font.split`: a tooltip text wrapped at `width`, one white row per line.
     pub(super) fn wrapped_rows(&self, text: &Text, width: i32) -> Vec<(Text, u32)> {
@@ -1541,6 +1586,20 @@ mod tests {
         assert!(should_discard_draft(ChatExit::Intentional, false));
         assert!(!should_discard_draft(ChatExit::Intentional, true));
         assert!(should_discard_draft(ChatExit::Done, true));
+    }
+
+    /// Issue #70: the keyboard's top, in renderer pixels, becomes the chat's
+    /// GUI height, and nothing else moves.
+    #[test]
+    fn keyboard_top_clamps_chat_height() {
+        // Non-floating keyboard: visible bottom well above the full height.
+        assert_eq!(clamp_gui_height(360.0, 400, 2.0), 200.0);
+        // Keyboard closed / floating: visible bottom at or beyond full height.
+        assert_eq!(clamp_gui_height(360.0, 720, 2.0), 360.0);
+        assert_eq!(clamp_gui_height(360.0, 2000, 2.0), 360.0);
+        // No bounds read yet: leave the height unchanged, never collapse.
+        assert_eq!(clamp_gui_height(360.0, 0, 2.0), 360.0);
+        assert_eq!(clamp_gui_height(360.0, 400, 0.0), 360.0);
     }
 
     #[test]

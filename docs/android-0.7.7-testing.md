@@ -105,6 +105,10 @@ render/simulation distance, enabled mods/shaders and whether diagnostics are on.
 ### Rendering, worlds and performance
 
 - Vulkan Compatibility and Batching separately; GLES where supported. In-game API selector follows launcher and cannot contradict it.
+- In Batching, stay still for at least 30 seconds, turn through every direction,
+  walk across chunk boundaries and alternate open/occluded views. Foliage, ground
+  and cutout surfaces must remain present as GPU culling probes or changes paths.
+  Repeat with shader packs and at distances below/above the batching threshold.
 - Legacy Adreno: opaque terrain, glass, water, leaves, cutouts, torches/emissive blocks, chunk edges, fog and moving camera; no transparent blocks or stripes.
 - Compare dawn/sunset/sky, HDR emission and texture filtering; no quality downgrade accepted.
 - Test spawn stationary for 60 seconds, walk, water/coast, vegetation, mountains, inventory and blurred options. Compare like-for-like 0.7.6 with diagnostics off.
@@ -115,6 +119,13 @@ render/simulation distance, enabled mods/shaders and whether diagnostics are on.
 - Performance recording plus GPU profiling: readable reports, bounded recording, export available through Files; inspect privacy before sharing.
 
 ## Release gates
+
+For the optional dynamic joystick, test both joystick schemes with the option
+off and on. With it on, touch inside and outside the configured width/height,
+drag and release, then repeat with the left-handed layout. The frame should stay
+at the initial touch, movement should stop on release, and a second finger should
+still turn the camera. Other buttons retain priority. Hide the movement control
+and confirm the area no longer starts movement. D-pad behavior must stay unchanged.
 
 ARM64 compilation alone is insufficient. Require clean merge markers, formatting, lockfile,
 public-tree/license audit, Android checks, targeted host/GPU tests and a final device smoke test.

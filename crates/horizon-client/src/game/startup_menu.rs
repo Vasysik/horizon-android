@@ -70,6 +70,10 @@ pub(super) struct StartupMenu {
 }
 
 impl StartupMenu {
+    pub(super) fn needs_world_renderer(&self) -> bool {
+        self.pending.is_some() || self.title.as_ref().is_some_and(Title::preparing)
+    }
+
     pub fn new(options: &Options, pack_error: Option<&str>) -> Result<Self> {
         let pending = if let Some(address) = &options.server {
             Some(PendingWorldEntry::Server {
@@ -1298,6 +1302,9 @@ impl Loading {
                 }
                 return Ok(());
             }
+            if touch.phase == TouchPhase::Started && self.menu.options_open {
+                self.menu.options.touch_start();
+            }
             self.menu_event(
                 event_loop,
                 WindowEvent::CursorMoved {
@@ -1351,6 +1358,14 @@ impl Loading {
                             .unwrap_or_default();
                         crate::platform::show(&initial);
                     }
+                }
+                Gesture::Scroll(y) if self.menu.options_open => {
+                    self.menu.options.touch_scroll(
+                        &self.settings,
+                        (b.width, b.height),
+                        (p[0], p[1]),
+                        y,
+                    );
                 }
                 Gesture::Scroll(y) => self.menu_event(
                     event_loop,

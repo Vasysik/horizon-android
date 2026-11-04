@@ -244,6 +244,7 @@ fn the_whole_chain() {
     assert_eq!(
         account,
         Account {
+            provider: Default::default(),
             uuid: UUID.into(),
             name: "Notch".into(),
             skin: Some((
@@ -381,6 +382,7 @@ fn login_with_xbox_signs_in_when_launcher_login_refuses() {
 
 fn notch() -> Account {
     Account {
+        provider: Default::default(),
         uuid: UUID.into(),
         name: "Notch".into(),
         skin: None,
@@ -391,6 +393,7 @@ fn notch() -> Account {
 /// A signed-in account's secrets: a token good for two hours, and the last ownership answer.
 fn secrets(token: &str, owns: bool) -> Secrets {
     Secrets {
+        provider: Provider::Microsoft,
         refresh_token: "ms-refresh-1".into(),
         sign_in_required: false,
         minecraft_token: token.into(),
@@ -441,6 +444,7 @@ fn refresh_only_when_the_token_runs_out() {
     );
     assert!(renewed_account.skin.is_some());
     let revoked = Secrets {
+        provider: Provider::Microsoft,
         refresh_token: "revoked".into(),
         minecraft_expires_at: 0,
         ..kept
@@ -588,6 +592,7 @@ fn any_owner_opens_the_gate_and_the_one_who_plays_brings_the_session() {
     let mut accounts = signed_in(&store, &secrets("mc-token", true));
     // A second account, no longer in the keychain, plays.
     accounts.accounts.push(Account {
+        provider: Default::default(),
         uuid: "other".into(),
         name: "Alex".into(),
         skin: None,
@@ -735,12 +740,14 @@ fn accounts_keep_secrets_in_the_store_only() {
     let store = MemoryStore::default();
     let mut accounts = Accounts::default();
     let account = Account {
+        provider: Default::default(),
         uuid: UUID.into(),
         name: "Notch".into(),
         skin: None,
         cape: None,
     };
     let secrets = Secrets {
+        provider: Provider::Microsoft,
         refresh_token: "r".into(),
         sign_in_required: false,
         minecraft_token: "mc-secret".into(),
@@ -971,6 +978,7 @@ fn has_owner_asks_the_selected_account_first() {
         .add(
             &store,
             Account {
+                provider: Default::default(),
                 uuid: "other".into(),
                 name: "Other".into(),
                 skin: None,
@@ -1037,12 +1045,14 @@ fn only_the_typed_macos_removed_executable_failure_gets_the_restart_message() {
 fn session_files_are_private_and_complete() {
     let dir = std::env::temp_dir().join(format!("horizon-launcher-session-{}", std::process::id()));
     let account = Account {
+        provider: Default::default(),
         uuid: UUID.into(),
         name: "Notch".into(),
         skin: None,
         cape: None,
     };
     let secrets = Secrets {
+        provider: Provider::Microsoft,
         refresh_token: "r".into(),
         sign_in_required: false,
         minecraft_token: "mc-token".into(),
@@ -1097,6 +1107,7 @@ fn offline_names_switch_with_accounts() {
         .unwrap();
     let mut a = Accounts {
         accounts: vec![Account {
+            provider: Default::default(),
             uuid: "abc".into(),
             name: "Ludo".into(),
             skin: None,
@@ -1246,6 +1257,7 @@ fn a_running_game_gets_a_renewed_session_only_when_ready() {
     signed_in(
         &store,
         &Secrets {
+            provider: Provider::Microsoft,
             refresh_token: "revoked".into(),
             ..secrets("old-minecraft", true)
         },
@@ -1264,6 +1276,7 @@ fn revoked_refresh_is_remembered_until_a_successful_sign_in() {
     let mut accounts = signed_in(
         &store,
         &Secrets {
+            provider: Provider::Microsoft,
             refresh_token: "revoked".into(),
             ..secrets("old-minecraft", true)
         },
@@ -1572,6 +1585,7 @@ fn a_launch_as_another_account_leaves_the_selected_one() {
     let mut accounts = signed_in(&store, &secrets("mc-token", true));
     let alex = "0f22b7ed5e3d4a2c9bfe2f6f8f1f6a01";
     accounts.accounts.push(Account {
+        provider: Default::default(),
         uuid: alex.into(),
         name: "Alex".into(),
         skin: None,
@@ -1683,4 +1697,64 @@ fn cancelled_and_expired_flows_stop_without_polling() {
             .count(),
         0
     );
+}
+
+#[test]
+fn a_late_selected_session_does_not_restore_an_account_the_ui_switched_away_from() {
+    struct SwitchOnRead {
+        inner: MemoryStore,
+        path: std::path::PathBuf,
+    }
+    impl SecretStore for SwitchOnRead {
+        fn persistent(&self) -> bool {
+            false
+        }
+        fn get(&self, key: &str) -> Result<Option<String>, String> {
+            let mut accounts = Accounts::load_from(&self.path);
+            accounts.selected = None;
+            accounts.save_to(&self.path)?;
+            self.inner.get(key)
+        }
+        fn set(&self, key: &str, secret: &str) -> Result<(), String> {
+            self.inner.set(key, secret)
+        }
+        fn delete(&self, key: &str) -> Result<(), String> {
+            self.inner.delete(key)
+        }
+    }
+    let root =
+        std::env::temp_dir().join(format!("horizon-selected-session-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("accounts.json");
+    let inner = MemoryStore::default();
+    let accounts = signed_in(&inner, &secrets("kept-token", true));
+    accounts.save_to(&path).unwrap();
+    let before = inner.get(UUID).unwrap();
+    let store = SwitchOnRead {
+        inner,
+        path: path.clone(),
+    };
+    let (_, ep) = mock(|_| {});
+    assert!(
+        session::selected_session_with(&ep, "test-client", &store, &path)
+            .unwrap_err()
+            .contains("account changed")
+    );
+    assert!(Accounts::load_from(&path).selected().is_none());
+    assert_eq!(store.inner.get(UUID).unwrap(), before);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_sign_out_reports_busy_without_blocking_or_forgetting_the_account() {
+    let store = MemoryStore::default();
+    let mut accounts = signed_in(&store, &secrets("kept", true));
+    let guard = session::lock(&store).unwrap();
+    assert!(accounts.remove_when_idle(&store, UUID).is_err());
+    assert!(accounts.selected().is_some());
+    assert!(store.get(UUID).unwrap().is_some());
+    drop(guard);
+    accounts.remove_when_idle(&store, UUID).unwrap();
+    assert!(accounts.selected().is_none());
+    assert!(store.get(UUID).unwrap().is_none());
 }

@@ -11,6 +11,8 @@
 //!
 //! The Azure app (client ID) is Horizon's own and is configuration: `HORIZON_MSA_CLIENT_ID` at
 //! build time, or at run time to override it. Without one, sign-in says it is not configured.
+#[path = "account/ely.rs"]
+pub mod ely;
 #[path = "account/session.rs"]
 pub mod session;
 
@@ -24,7 +26,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const SERVICE: &str = "dev.playhorizon.launcher";
 const SCOPE: &str = "XboxLive.signin offline_access";
 #[cfg(target_os = "android")]
-pub const NOT_CONFIGURED: &str = "Microsoft sign-in is coming soon. Until then the game plays offline: single player, \
+pub const NOT_CONFIGURED: &str =
+    "Microsoft sign-in is coming soon. Until then the game plays offline: single player, \
      LAN and servers in offline mode work.";
 #[cfg(not(target_os = "android"))]
 pub const NOT_CONFIGURED: &str = "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.";
@@ -85,7 +88,7 @@ impl Endpoints {
 
 /// A request to `url`: the launcher's user agent, a 20 s timeout, and the player's proxy when one
 /// is set (`proxy`), since a sign-in has to get out the way downloads do.
-fn request_to(method: &str, url: &str) -> ureq::Request {
+pub(crate) fn request_to(method: &str, url: &str) -> ureq::Request {
     crate::proxy::agent(
         ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(20))
@@ -572,6 +575,8 @@ fn owns_game(ep: &Endpoints, token: &str) -> Result<bool, String> {
 /// A Minecraft profile, as the launcher shows and remembers it (no secrets).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Account {
+    #[serde(default)]
+    pub provider: Provider,
     /// The profile UUID without dashes.
     pub uuid: String,
     pub name: String,
@@ -580,6 +585,23 @@ pub struct Account {
     pub skin: Option<(String, String)>,
     #[serde(default)]
     pub cape: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    #[default]
+    Microsoft,
+    Ely,
+}
+impl Account {
+    /// Provider-qualified identity; legacy Microsoft keychain keys stay unchanged.
+    pub fn key(&self) -> String {
+        match self.provider {
+            Provider::Microsoft => self.uuid.clone(),
+            Provider::Ely => format!("ely-{}", self.uuid),
+        }
+    }
 }
 
 /// The profile; none when the account has none (it doesn't own the game, or never made one).
@@ -608,6 +630,7 @@ fn profile(ep: &Endpoints, token: &str) -> Result<Option<Account>, String> {
             .cloned()
     };
     Ok(Some(Account {
+        provider: Default::default(),
         uuid: uuid.replace('-', "").to_lowercase(),
         name,
         skin: active("skins").and_then(|s| {
@@ -625,6 +648,8 @@ fn profile(ep: &Endpoints, token: &str) -> Result<Option<Account>, String> {
 /// What the keychain keeps for one account.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Secrets {
+    #[serde(default)]
+    provider: Provider,
     refresh_token: String,
     #[serde(default)]
     sign_in_required: bool,
@@ -668,8 +693,15 @@ pub fn finish_sign_in_with_progress(
 }
 
 impl Secrets {
+    pub(crate) fn provider(&self) -> Provider {
+        self.provider
+    }
+    pub(crate) fn game_token(&self) -> &str {
+        &self.minecraft_token
+    }
     fn new(refresh_token: String, mc: Minecraft) -> Self {
         Self {
+            provider: Provider::Microsoft,
             refresh_token,
             sign_in_required: false,
             minecraft_token: mc.token,
@@ -704,6 +736,24 @@ fn check_with(
     force: bool,
     progress: &dyn Fn(session::Phase),
 ) -> Check {
+    if account.provider != secrets.provider {
+        return Check::NoAnswer(
+            "The saved account provider does not match this session. Sign in again.".into(),
+            secrets,
+        );
+    }
+    if secrets.sign_in_required {
+        return Check::NoAnswer(SIGN_IN_AGAIN.into(), secrets);
+    }
+    if account.provider == Provider::Ely {
+        return match ely::refresh(account, &secrets) {
+            Ok((account, secrets)) => Check::Owns(account, secrets),
+            Err(error) => {
+                secrets.sign_in_required = error == ely::REFUSED;
+                Check::NoAnswer(error, secrets)
+            }
+        };
+    }
     if secrets.sign_in_required {
         return Check::NoAnswer(SIGN_IN_AGAIN.into(), secrets);
     }
@@ -771,6 +821,12 @@ pub fn fresh(
     account: &Account,
     secrets: Secrets,
 ) -> Result<(Account, Secrets), String> {
+    if account.provider != secrets.provider {
+        return Err("Account and session providers do not match.".into());
+    }
+    if secrets.sign_in_required {
+        return Err(SIGN_IN_AGAIN.into());
+    }
     if secrets.minecraft_expires_at > now() + RENEW_BEFORE {
         return Ok((account.clone(), secrets));
     }
@@ -1309,14 +1365,16 @@ impl Accounts {
     }
     pub fn selected(&self) -> Option<&Account> {
         let uuid = self.selected.as_ref()?;
-        self.accounts.iter().find(|a| &a.uuid == uuid)
+        self.accounts.iter().find(|a| &a.key() == uuid)
     }
     /// Find an account by name (any case) or UUID (with or without dashes).
     pub fn find(&self, who: &str) -> Option<&Account> {
         let undashed = who.replace('-', "").to_lowercase();
-        self.accounts
-            .iter()
-            .find(|a| a.name.eq_ignore_ascii_case(who) || a.uuid == undashed)
+        self.accounts.iter().find(|a| a.key() == who).or_else(|| {
+            self.accounts
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(who) || a.uuid == undashed)
+        })
     }
     /// Keep a new or renewed account, its secrets in the store, and select it.
     pub fn add(
@@ -1335,12 +1393,15 @@ impl Accounts {
         account: Account,
         secrets: &Secrets,
     ) -> Result<(), String> {
+        if account.provider != secrets.provider {
+            return Err("Account and session providers do not match.".into());
+        }
         store.set(
-            &account.uuid,
+            &account.key(),
             &serde_json::to_string(secrets).map_err(|e| e.to_string())?,
         )?;
-        self.selected = Some(account.uuid.clone());
-        match self.accounts.iter_mut().find(|a| a.uuid == account.uuid) {
+        self.selected = Some(account.key());
+        match self.accounts.iter_mut().find(|a| a.key() == account.key()) {
             Some(a) => *a = account,
             None => self.accounts.push(account),
         }
@@ -1354,13 +1415,17 @@ impl Accounts {
         self.selected()
             .into_iter()
             .chain(self.accounts.iter().filter(|a| Some(*a) != self.selected()))
-            .any(|a| secrets_in(store, &a.uuid).is_some_and(|s| s.owns))
+            .any(|a| {
+                a.provider == Provider::Microsoft
+                    && secrets_in(store, &a.key())
+                        .is_some_and(|s| s.owns && s.provider == Provider::Microsoft)
+            })
     }
 
     /// Who plays now.
     pub fn player(&self) -> Player {
         match (self.selected(), &self.offline_selected) {
-            (Some(a), _) => Player::Microsoft(a.uuid.clone()),
+            (Some(a), _) => Player::Microsoft(a.key()),
             (None, Some(name)) => Player::Offline(name.clone()),
             (None, None) => Player::GameName,
         }
@@ -1383,7 +1448,7 @@ impl Accounts {
     ) -> Result<(), String> {
         match who {
             Player::Microsoft(uuid) => {
-                if !self.accounts.iter().any(|a| a.uuid == uuid) {
+                if !self.accounts.iter().any(|a| a.key() == uuid) {
                     return Err("That account isn't signed in.".into());
                 }
                 self.selected = Some(uuid);
@@ -1465,7 +1530,7 @@ impl Accounts {
 
     /// A renewed profile (its name or skin changed) in place of the old one; who plays stays.
     fn update(&mut self, account: Account) {
-        if let Some(a) = self.accounts.iter_mut().find(|a| a.uuid == account.uuid) {
+        if let Some(a) = self.accounts.iter_mut().find(|a| a.key() == account.key()) {
             *a = account;
         }
     }
@@ -1474,8 +1539,16 @@ impl Accounts {
     /// play only once an account that owns the game is back.
     pub fn remove(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
         let _operation = session::lock(store)?;
+        self.forget_sign_in(store, uuid)
+    }
+    /// Native UI actions must not wait on a background network renewal.
+    pub fn remove_when_idle(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
+        let _operation = session::lock_within(store, Some(Duration::ZERO))?;
+        self.forget_sign_in(store, uuid)
+    }
+    fn forget_sign_in(&mut self, store: &dyn SecretStore, uuid: &str) -> Result<(), String> {
         store.delete(uuid)?;
-        self.accounts.retain(|a| a.uuid != uuid);
+        self.accounts.retain(|a| a.key() != uuid);
         if self.selected.as_deref() == Some(uuid) {
             self.selected = None;
         }
@@ -1529,16 +1602,16 @@ pub fn launch(
 ) -> Result<Launch, NoOwner> {
     let selected = accounts.selected.clone();
     let mut order = accounts.accounts.clone();
-    order.sort_by_key(|a| Some(&a.uuid) != selected.as_ref());
+    order.sort_by_key(|a| Some(&a.key()) != selected.as_ref());
     let mut pass = Launch::default();
     let mut owned = false;
     for account in order {
         if owned {
             break;
         }
-        let plays = Some(&account.uuid) == selected.as_ref();
+        let plays = Some(&account.key()) == selected.as_ref();
         let operation = session::lock(store);
-        let Some(secrets) = secrets_in(store, &account.uuid) else {
+        let Some(secrets) = secrets_in(store, &account.key()) else {
             if plays {
                 pass.offline = Some(format!(
                     "{} is no longer signed in on this computer. Sign in again.",
@@ -1558,13 +1631,18 @@ pub fn launch(
                 if plays {
                     pass.session = Some((renewed.clone(), secrets.clone()));
                 }
-                pass.owner = Some((renewed, secrets.clone()));
+                if renewed.provider == Provider::Microsoft {
+                    pass.owner = Some((renewed, secrets.clone()));
+                }
                 (None, secrets)
             }
             Check::DoesNot(secrets) => (Some(DOES_NOT_OWN.to_string()), secrets),
             Check::NoAnswer(e, secrets) => (Some(e), secrets),
         };
-        owned = secrets.owns;
+        owned = (secrets.provider == Provider::Microsoft
+            && account.provider == Provider::Microsoft
+            && secrets.owns)
+            || (plays && account.provider == Provider::Ely && pass.session.is_some());
         if plays {
             pass.offline = said;
         }
@@ -1573,7 +1651,7 @@ pub fn launch(
             && let Some(text) = after
         {
             // The game still starts; the player hears why the next launch may ask again.
-            if let Err(e) = store.set(&account.uuid, &text) {
+            if let Err(e) = store.set(&account.key(), &text) {
                 let said = format!(
                     "{}'s renewed sign-in couldn't be saved in the keychain ({e}): you may \
                          have to sign in again next time.",
@@ -1586,7 +1664,11 @@ pub fn launch(
             }
         }
     }
-    if owned { Ok(pass) } else { Err(NoOwner) }
+    if owned {
+        Ok(pass)
+    } else {
+        Err(NoOwner)
+    }
 }
 
 /// The owner gate before the game starts. With the window's hidden developer option
@@ -1613,6 +1695,9 @@ pub fn write_session_file(
     account: &Account,
     secrets: &Secrets,
 ) -> Result<PathBuf, String> {
+    if account.provider != secrets.provider {
+        return Err("Account and session providers do not match.".into());
+    }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     // Leftovers of games that never started (refused by the game after two minutes anyway).
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -1641,7 +1726,7 @@ pub fn write_session_file(
         "name": account.name,
         "uuid": account.uuid,
         "access_token": secrets.minecraft_token,
-        "user_type": "msa",
+        "user_type": if account.provider == Provider::Ely { "ely" } else { "msa" },
         "xuid": secrets.xuid,
     });
     std::io::Write::write_all(&mut file, body.to_string().as_bytes()).map_err(|e| e.to_string())?;
@@ -1663,13 +1748,13 @@ fn accept_sign_in(
         return Err("Sign-in cancelled.".into());
     }
     if let Some(expected) = expected {
-        if expected.uuid != account.uuid {
+        if expected.key() != account.key() {
             return Err(format!(
                 "Signed in as {} instead of {}. Use the Microsoft account for {} and try again.",
                 account.name, expected.name, expected.name
             ));
         }
-        if accounts.find(&expected.uuid).is_none() {
+        if accounts.find(&expected.key()).is_none() {
             return Err("That account was signed out while sign-in was in progress. Add it again to continue.".into());
         }
     }
@@ -1699,6 +1784,33 @@ pub struct SignIn {
 }
 
 impl SignIn {
+    pub fn start_ely(username: String, password: String, otp: String) -> Self {
+        use std::sync::atomic::Ordering;
+        let state = std::sync::Arc::new(Mutex::new(SignInState::Starting));
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (thread_state, thread_cancel) = (state.clone(), cancel.clone());
+        std::thread::spawn(move || {
+            let result = (|| {
+                let (account, secrets) = ely::authenticate(&username, &password, &otp)?;
+                let store = store();
+                let _operation = session::lock(store)?;
+                let mut accounts = Accounts::load();
+                accept_sign_in(
+                    &mut accounts,
+                    store,
+                    None,
+                    account.clone(),
+                    &secrets,
+                    &|| thread_cancel.load(Ordering::Relaxed),
+                    &|_| {},
+                )?;
+                accounts.save()?;
+                Ok(account)
+            })();
+            *thread_state.lock().unwrap() = SignInState::Done(result);
+        });
+        Self { state, cancel }
+    }
     pub fn start() -> Self {
         Self::start_with_client_id(client_id())
     }
@@ -1856,9 +1968,13 @@ fn java_player_with(
     let pass = launch(ep, client_id, store, accounts).map_err(|e| e.to_string())?;
     let kept = || {
         let order = accounts.selected().into_iter().chain(&accounts.accounts);
-        order
-            .into_iter()
-            .find_map(|a| Some((a.clone(), secrets_in(store, &a.uuid).filter(|s| s.owns)?)))
+        order.into_iter().find_map(|a| {
+            Some((
+                a.clone(),
+                secrets_in(store, &a.key())
+                    .filter(|s| s.owns && s.provider == Provider::Microsoft)?,
+            ))
+        })
     };
     let (account, secrets) = pass
         .session

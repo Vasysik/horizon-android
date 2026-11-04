@@ -507,6 +507,7 @@ impl Game<'_> {
                 "wait_ms":r.last_wait.as_secs_f32()*1000.0,
                 "gpu_profiling_requested":crate::device_runtime::preferences().gpu_profile,
                 "gpu_encoder_timestamps_supported":r.device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+                "terrain_pass_draws": r.terrain_pass_draws,
                 "gpu_stage_distributions":r.gpu_stage_distributions().into_iter().map(|(stage,p50,p95,p99,n)|serde_json::json!({"stage":stage,"p50_ms":p50,"p95_ms":p95,"p99_ms":p99,"samples":n})).collect::<Vec<_>>(),
                 "gpu_stages":r.gpu_stage_times().into_iter().map(|(stage, median_ms, max_ms, samples)|
                     serde_json::json!({"stage":stage,"median_ms":median_ms,"max_ms":max_ms,"samples":samples})).collect::<Vec<_>>(),
@@ -597,6 +598,9 @@ impl Game<'_> {
             return;
         };
         let p = [t.location.x as f32 / b.scale, t.location.y as f32 / b.scale];
+        if t.phase == TouchPhase::Started && self.screen == Screen::Options {
+            self.ui.options.touch_start();
+        }
         let direct = self.pad.touch_ui.direct_pointer(t.id, p, t.phase);
         self.handle_window_event(
             events,
@@ -645,6 +649,11 @@ impl Game<'_> {
                 if field || self.sign_edit.is_some() {
                     self.android_show_keyboard();
                 }
+            }
+            Gesture::Scroll(y) if self.screen == Screen::Options => {
+                self.ui
+                    .options
+                    .touch_scroll(&self.settings, (b.width, b.height), (p[0], p[1]), y);
             }
             Gesture::Scroll(y) => self.handle_window_event(
                 events,

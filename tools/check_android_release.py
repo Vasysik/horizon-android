@@ -83,10 +83,10 @@ def inspect_payload(path, public=False):
     return {**totals, 'findings': findings}
 
 
-def audit(path, aapt2, public=False):
+def audit(path, aapt2, public=False, app_id='dev.horizon.android'):
     report = inspect_payload(path, public)
     badging = subprocess.check_output([str(aapt2), 'dump', 'badging', str(path)], text=True)
-    if "package: name='dev.horizon.android'" not in badging:
+    if f"package: name='{app_id}'" not in badging:
         raise ValueError('Unexpected Android package identity')
     report['debuggable'] = 'application-debuggable' in badging
     if report['debuggable']:
@@ -107,8 +107,9 @@ def main():
     parser.add_argument('--aapt2', required=True, type=Path)
     parser.add_argument('--report', type=Path)
     parser.add_argument('--public', action='store_true')
+    parser.add_argument('--app-id', choices=['dev.horizon.android', 'dev.horizon.android.dev'], default='dev.horizon.android')
     args = parser.parse_args()
-    report = audit(args.apk, args.aapt2, args.public)
+    report = audit(args.apk, args.aapt2, args.public, args.app_id)
     if args.report:
         args.report.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(report, indent=2))

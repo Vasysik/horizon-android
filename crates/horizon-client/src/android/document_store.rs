@@ -9,17 +9,23 @@ use std::{
 pub const ROOT: &str = "horizon";
 const DIRECTORY: &str = "vnd.android.document/directory";
 const MAX_CHILDREN: usize = 32768;
+const CONFIG_FILES: &[&str] = &[
+    "options.txt",
+    "horizon-graphics.txt",
+    "horizon-touch.json",
+    "horizon-keypad.json",
+];
 static GAME_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub fn set_game_active(active: bool) {
     GAME_ACTIVE.store(active, std::sync::atomic::Ordering::Release);
 }
 fn world_access(id: &str) -> io::Result<()> {
-    if id.split('/').nth(1) == Some("worlds")
+    if matches!(id.split('/').nth(1), Some("worlds" | "configuration"))
         && GAME_ACTIVE.load(std::sync::atomic::Ordering::Acquire)
     {
         return Err(io::Error::new(
             ErrorKind::PermissionDenied,
-            "Return to the launcher before copying or editing worlds",
+            "Return to the launcher before accessing worlds or configuration",
         ));
     }
     Ok(())
@@ -60,6 +66,7 @@ struct Document {
     path: PathBuf,
     label: Option<&'static str>,
     reports: bool,
+    configuration: bool,
 }
 fn shareable_report(name: &str) -> bool {
     (name.starts_with("horizon-diagnostics-") && name.ends_with(".zip")) || name.ends_with(".jsonl")
@@ -86,11 +93,16 @@ fn resolve(home: &Path, id: &str) -> io::Result<Document> {
             Some("packs") => ("resourcepacks", "Resource Packs"),
             Some("shaders") => ("shaderpacks", "Shader Packs"),
             Some("worlds") => ("saves", "Worlds"),
+            Some("configuration") => ("", "Configuration"),
             _ => return Err(invalid()),
         };
         (root.join(folder), label, false)
     };
     let tail: Vec<_> = parts.collect();
+    let configuration = label == "Configuration";
+    if configuration && !tail.is_empty() && (tail.len() != 1 || !CONFIG_FILES.contains(&tail[0])) {
+        return Err(invalid());
+    }
     for name in &tail {
         component(name)?;
     }
@@ -123,6 +135,7 @@ fn resolve(home: &Path, id: &str) -> io::Result<Document> {
         path,
         label: tail.is_empty().then_some(label),
         reports,
+        configuration,
     })
 }
 fn row(home: &Path, id: &str) -> io::Result<Value> {
@@ -157,7 +170,9 @@ fn row(home: &Path, id: &str) -> io::Result<Value> {
         }
     };
     // Android DocumentsContract.Document flags. Fixed roots cannot be removed.
-    let flags = if doc.reports {
+    let flags = if doc.configuration {
+        if meta.is_file() { 2 } else { 0 }
+    } else if doc.reports {
         0
     } else if meta.is_dir() {
         8
@@ -165,7 +180,7 @@ fn row(home: &Path, id: &str) -> io::Result<Value> {
         2
     };
     let flags = flags
-        | if doc.label.is_none() && !doc.reports {
+        | if doc.label.is_none() && !doc.reports && !doc.configuration {
             4 | if meta.is_file() { 64 } else { 0 }
         } else {
             0
@@ -179,10 +194,17 @@ fn row(home: &Path, id: &str) -> io::Result<Value> {
 }
 pub fn children(home: &Path, id: &str) -> io::Result<Vec<Value>> {
     if id == ROOT {
-        return ["mods", "packs", "shaders", "worlds", "reports"]
-            .iter()
-            .map(|folder| row(home, &folder_id(profile(home), folder)))
-            .collect();
+        return [
+            "mods",
+            "packs",
+            "shaders",
+            "worlds",
+            "configuration",
+            "reports",
+        ]
+        .iter()
+        .map(|folder| row(home, &folder_id(profile(home), folder)))
+        .collect();
     }
     world_access(id)?;
     let doc = resolve(home, id)?;
@@ -197,6 +219,9 @@ pub fn children(home: &Path, id: &str) -> io::Result<Vec<Value>> {
         let entry = entry?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
+        if doc.configuration && !CONFIG_FILES.contains(&name) {
+            continue;
+        }
         if component(name).is_err() || entry.file_type()?.is_symlink() {
             continue;
         }
@@ -286,7 +311,7 @@ pub fn call(home: &Path, op: &str, id: &str, arg: &str) -> io::Result<Value> {
         "create" | "mkdir" => {
             component(arg)?;
             let parent = resolve(home, id)?;
-            if parent.reports || !parent.path.is_dir() {
+            if parent.reports || !parent.path.is_dir() || (parent.configuration && op == "mkdir") {
                 return Err(invalid());
             }
             // create_new never overwrites a name. Let DocumentsUI request another name.
@@ -304,7 +329,7 @@ pub fn call(home: &Path, op: &str, id: &str, arg: &str) -> io::Result<Value> {
         }
         "rename" | "delete" => {
             let doc = resolve(home, id)?;
-            if doc.label.is_some() || doc.reports {
+            if doc.label.is_some() || doc.reports || doc.configuration {
                 return Err(invalid());
             }
             if op == "delete" {
@@ -373,7 +398,7 @@ mod tests {
         ));
         fs::create_dir_all(&home).unwrap();
         let roots = children(&home, ROOT).unwrap();
-        assert_eq!(roots.len(), 5);
+        assert_eq!(roots.len(), 6);
         assert_eq!(roots[0]["document_id"], "p0/mods");
         for id in [
             "../tokens",
@@ -447,12 +472,42 @@ mod world_tests {
             .read_to_end(&mut data)
             .unwrap();
         assert_eq!(data, b"fixture");
+        fs::write(home.join("options.txt"), b"renderDistance:16\n").unwrap();
+        fs::write(home.join("account.json"), b"private").unwrap();
+        fs::write(home.join("android-launcher.json"), br#"{"profile":0}"#).unwrap();
+        let config = children(&home, "p0/configuration").unwrap();
+        assert_eq!(config.len(), 1);
+        assert_eq!(config[0]["_display_name"], "options.txt");
+        assert_eq!(config[0]["flags"], 2);
+        assert!(open(&home, "p0/configuration/account.json", "r").is_err());
+        assert!(open(&home, "p0/configuration/android-launcher.json", "r").is_err());
+        assert!(open(&home, "p0/configuration/../account.json", "r").is_err());
+        assert!(call(&home, "mkdir", "p0/configuration", "options.txt").is_err());
+        assert!(call(&home, "delete", "p0/configuration/options.txt", "").is_err());
+        open(&home, "p0/configuration/options.txt", "wt")
+            .unwrap()
+            .write_all(b"renderDistance:12\n")
+            .unwrap();
+        assert_eq!(
+            fs::read(home.join("options.txt")).unwrap(),
+            b"renderDistance:12\n"
+        );
+        fs::create_dir_all(home.join("profiles/profile-7")).unwrap();
+        fs::write(
+            home.join("profiles/profile-7/options.txt"),
+            b"renderDistance:8\n",
+        )
+        .unwrap();
+        assert_eq!(children(&home, "p7/configuration").unwrap().len(), 1);
         set_game_active(true);
         let blocked = open(&home, "p0/worlds/Example/level.dat", "r").is_err()
             && call(&home, "delete", "p0/worlds/Example/level.dat", "").is_err()
             && children(&home, "p0/worlds").is_err();
+        let config_blocked = open(&home, "p0/configuration/options.txt", "r").is_err()
+            && children(&home, "p0/configuration").is_err();
         set_game_active(false);
         assert!(blocked);
+        assert!(config_blocked);
         assert!(open(&home, "p0/worlds/Example/level.dat", "r").is_ok());
         fs::remove_dir_all(home).unwrap();
     }
