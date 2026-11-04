@@ -201,6 +201,9 @@ impl Game<'_> {
                 &crate::backend::game_home(),
             );
             self.pad.touch.inventory_mode = self.android_inventory_controls();
+            if !self.pad.touch.inventory_mode {
+                self.pad.touch.inventory_shift = false;
+            }
             self.android_virtual_mouse_clicks(event_loop);
             let active = horizon_client::android_runtime::active_input();
             if self.pad.last_input_mode.replace(active).is_some_and(|old| {
