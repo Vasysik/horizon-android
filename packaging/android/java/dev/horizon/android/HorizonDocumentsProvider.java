@@ -30,7 +30,7 @@ public final class HorizonDocumentsProvider extends DocumentsProvider {
         return true;
     }
     private String call(String operation, String id, String arg) throws FileNotFoundException {
-        return nativeCall(getContext().getFilesDir().getAbsolutePath(), operation, id, arg);
+        return nativeCall(HorizonHome.dir(getContext()).getAbsolutePath(), operation, id, arg);
     }
     private Cursor query(String operation, String id, String[] projection, String[] defaults)
             throws FileNotFoundException {
@@ -95,7 +95,7 @@ public final class HorizonDocumentsProvider extends DocumentsProvider {
             throws FileNotFoundException {
         if (signal != null) signal.throwIfCanceled();
         return ParcelFileDescriptor.adoptFd(nativeOpen(
-                getContext().getFilesDir().getAbsolutePath(), id, mode));
+                HorizonHome.dir(getContext()).getAbsolutePath(), id, mode));
     }
     @Override public String createDocument(String parent, String mime, String name)
             throws FileNotFoundException {
