@@ -9,6 +9,7 @@ may only start, stop and read that one VM. Python's standard library only.
     BUILD_VM       the VM's Azure resource id
     GATEWAY_PORT   default 8788
 """
+import hashlib
 import http.client
 import http.server
 import json
@@ -35,7 +36,9 @@ START_SECONDS = 20 * 60
 # Between asks to start it, while it boots.
 START_AGAIN_SECONDS = 90
 # Builds a day, so one player or everyone together can't run the bill up.
-PER_ADDRESS = 8
+PER_ADDRESS = 16
+# A build that failed gives its place back, but it took the machine's time, so failing has its own limit.
+FAILED_PER_ADDRESS = 24
 PER_DAY = 80
 DAY = 24 * 3600
 
@@ -132,20 +135,41 @@ def sleeper():
                 started_at = None
 
 
-def within_quota(address, job):
-    """Whether this build counts within the day's. A job already counted costs nothing."""
+def within_quota(address, request):
+    """Whether this build counts within the day's, asked before it reaches the line: refused after, it
+    would still be built. The same request again costs nothing, unless it failed and would build again."""
     now = time.time()
     with lock:
-        accepted[:] = [a for a in accepted if now - a[0] < DAY]
-        if any(a[1] == address and a[2] == job for a in accepted):
+        accepted[:] = [a for a in accepted if now - a["at"] < DAY]
+        own = [a for a in accepted if a["address"] == address]
+        if any(a["request"] == request and not a["failed"] for a in own):
             return True
         if (
-            sum(a[1] == address for a in accepted) >= PER_ADDRESS
+            sum(not a["failed"] for a in own) >= PER_ADDRESS
+            or sum(a["failed"] for a in own) >= FAILED_PER_ADDRESS
             or len(accepted) >= PER_DAY
         ):
             return False
-        accepted.append((now, address, job))
+        accepted.append(
+            {"at": now, "address": address, "request": request, "job": None, "failed": False}
+        )
     return True
+
+
+def note_job(address, request, job):
+    """Ties a counted request to its job. With no job nothing will build, and its place comes back."""
+    with lock:
+        for a in accepted:
+            if a["address"] == address and a["request"] == request and not a["failed"]:
+                a["job"] = job
+                a["failed"] = job is None
+
+
+def job_failed(job):
+    with lock:
+        for a in accepted:
+            if a["job"] == job:
+                a["failed"] = True
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -178,6 +202,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if size <= 0 or size > MAX_BODY:
             return self.answer(413, {"error": "That is too big to compile."})
         body = self.rfile.read(size)
+        request = hashlib.sha256(self.path.encode() + body).hexdigest()
+        if not within_quota(self.address(), request):
+            return self.answer(
+                429, {"error": "That is enough builds for today. Try again tomorrow."}
+            )
         if not wake():
             return self.answer(200, {"starting": True})
         try:
@@ -192,12 +221,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data = response.read()
         except (OSError, http.client.HTTPException):
             return self.answer(200, {"starting": True})
-        if response.status == 200:
-            job = json.loads(data).get("job", "")
-            if not within_quota(self.address(), job):
-                return self.answer(
-                    429, {"error": "That is enough builds for today. Try again tomorrow."}
-                )
+        job = json.loads(data).get("job") if response.status == 200 else None
+        note_job(self.address(), request, job)
         self.send_response(response.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -227,10 +252,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if value:
                 self.send_header(name, value)
         self.end_headers()
-        shutil.copyfileobj(response, self.wfile, 256 * 1024)
+        if path.endswith("/lib"):
+            shutil.copyfileobj(response, self.wfile, 256 * 1024)
+            return
+        data = response.read()
+        self.wfile.write(data)
+        try:
+            if json.loads(data).get("state") == "failed":
+                job_failed(path.rsplit("/", 1)[-1])
+        except ValueError:
+            pass
 
 
 def main():
+    global started_at
+    # What was on when this restarted is looked after as if this had started it: forgotten, it would stay on.
+    if backend_status() is not None:
+        started_at = time.time()
     threading.Thread(target=sleeper, daemon=True).start()
     http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 
