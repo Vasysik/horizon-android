@@ -11,7 +11,7 @@ on:
       - 'clippy.toml'
       - '.github/workflows/rust-ci.yml'
   push:
-    branches: [android]
+    branches: [android, 'feat/experimental-svc*']
     paths: *rust_paths
   workflow_dispatch:
     inputs:

@@ -109,6 +109,14 @@ jobs:
 
       - name: Prepare engine data tables
         run: |
+          mkdir -p .local/minecraft/26.3 .local/android/minecraft/versions/26.3
+          curl -fsSL https://piston-meta.mojang.com/v1/packages/11f1aefe473eefba0af62e3286c33b692807b2eb/26.3.json -o .local/minecraft/26.3/manifest.json
+          python3 - << 'PY'
+          p = "tools/android_prepare.py"
+          t = open(p).read()
+          t = t.replace("lab.download(entry['url'], manifest_path, entry['sha1'])", "import shutil; manifest_path.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile('.local/minecraft/26.3/manifest.json', manifest_path)")
+          open(p, "w").write(t)
+          PY
           python3 tools/android_prepare.py
 
       - name: Build Android APK
