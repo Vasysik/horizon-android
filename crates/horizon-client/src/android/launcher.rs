@@ -249,12 +249,17 @@ impl Launcher {
         crate::diagnostics::heartbeat(
             "play_requested",
             || {
-                serde_json::json!({"renderer":self.catalog.config.renderer.label(),"resolution_percent":self.catalog.config.render_scale.percent(),"copper":copper})
+                serde_json::json!({"renderer":self.catalog.config.renderer.label(),"resolution_percent":self.catalog.config.render_scale.percent(),"copper":copper,"fps_uncapped":self.catalog.config.fps_uncapped})
             },
         );
         crate::configure_input_mode(self.catalog.config.input_host);
         crate::device_runtime::configure(self.catalog.config.device);
         if horizon_client::official_install::ready(&self.home) {
+            // The launcher's frame-rate choice wins at every launch, so the
+            // Settings toggle is the one place players have to look at.
+            self.catalog
+                .config
+                .apply_frame_rate(&self.catalog.config.game_home(&self.home));
             horizon_client::android_resources::repair_structure_transforms(
                 &self.home.join("engine-data.zip"),
                 &self

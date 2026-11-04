@@ -57,6 +57,7 @@ pub(super) enum Action {
     ChooseDisplayHz(u16),
     PerformanceHints,
     GpuProfile,
+    FpsCap,
 }
 
 /// Is `point` (dp) inside `rect`?
@@ -348,6 +349,16 @@ impl Launcher {
                 color::MUTED,
                 &format!("Minecraft 26.3  /  Profile {}", self.catalog.config.profile),
             );
+            if !installing && self.catalog.copper_on {
+                ui.text(
+                    Face::Regular,
+                    15.0,
+                    32.0,
+                    top + 72.0,
+                    color::GREEN_TEXT,
+                    "Copper performance suite: on",
+                );
+            }
             if installing {
                 let current = InstallStage::ALL
                     .iter()
@@ -881,11 +892,11 @@ impl Launcher {
             self.catalog.scroll = self
                 .catalog
                 .scroll
-                .clamp(0.0, (15.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
+                .clamp(0.0, (16.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
             self.list_view = Some([
                 195.0,
                 h - 130.0,
-                (15.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
+                (16.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
             ]);
             for (i, (title, value, action)) in [
                 ("Rendering", c.renderer.label().to_owned(), Action::Renderer),
@@ -924,6 +935,16 @@ impl Launcher {
                     "Display refresh rate",
                     c.device.display_label(),
                     Action::DisplayHz,
+                ),
+                (
+                    "Frame rate",
+                    if c.fps_uncapped {
+                        "Uncapped / VSync off"
+                    } else {
+                        "VSync / display rate"
+                    }
+                    .into(),
+                    Action::FpsCap,
                 ),
                 (
                     "Performance hints",
@@ -1001,7 +1022,7 @@ impl Launcher {
                 );
                 if matches!(
                     action,
-                    Action::PerformanceHints | Action::Immersive | Action::Cutout
+                    Action::PerformanceHints | Action::Immersive | Action::Cutout | Action::FpsCap
                 ) {
                     toggle(
                         &mut ui,
@@ -1016,6 +1037,7 @@ impl Launcher {
                             Action::PerformanceHints => c.device.performance_hints,
                             Action::Immersive => c.screen.immersive,
                             Action::Cutout => c.screen.avoid_cutout,
+                            Action::FpsCap => c.fps_uncapped,
                             _ => c.device.gpu_profile,
                         },
                         action,
@@ -1288,6 +1310,18 @@ impl Launcher {
                 self.catalog.status="Detailed GPU profiling records diagnostics and has overhead. Reports remain on this device.".into();
                 self.catalog.config.save(&self.home)?;
                 crate::device_runtime::configure(self.catalog.config.device);
+            }
+            Some(Action::FpsCap) => {
+                self.catalog.config.fps_uncapped ^= true;
+                self.catalog.config.save(&self.home)?;
+                let game = self.catalog.config.game_home(&self.home);
+                self.catalog.config.apply_frame_rate(&game);
+                self.catalog.status = if self.catalog.config.fps_uncapped {
+                    "Frame rate uncapped: VSync off from the next launch. A 60 Hz screen still shows at most 60 fps."
+                } else {
+                    "VSync on from the next launch: frames pace with the display."
+                }
+                .into();
             }
 
             Some(Action::ModSource(origin)) => {

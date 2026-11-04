@@ -33,18 +33,21 @@ described in [modpacks.md](modpacks.md); to write behaviour, build a sandboxed `
 
 ## Copper: Oxide's mobile performance mod
 
-Copper is Oxide's own mod, downloadable from the launcher's Mods page under the **Oxide** source (Android).
-The package is content-only: the performance suite itself is native client code, and installing plus enabling
-the mod is what turns it on for a play session. With Copper enabled, Oxide:
+Copper is Oxide's own mod, listed on the launcher's Mods page, which opens on the **Oxide** source by
+default (Android). The package is content-only: the performance suite itself is native client code, and
+installing plus enabling the mod is what turns it on for a play session. The package also ships inside the
+app, so Copper installs and enables with no network at all. With Copper enabled, Oxide:
 
 - caps how many chunk columns generate at once, so the closest columns finish first and half-built columns
   churn less memory and CPU;
-- leaves the phone one more core for the render thread and the GPU driver while chunks stream;
+- leaves the phone one more core for the render thread and the GPU driver while chunks stream — never on
+  four-core boards, where two builders is already the floor;
 - skips the occlusion-culling depth passes on Android, which tiled phone GPUs pay more for than the hidden
   sections save on a phone screen.
 
-Copper is off by default (parity first): install it from the Oxide source, enable it in Installed, then Play.
-Its state is recorded in the `play_requested` diagnostic heartbeat.
+Copper is off by default (parity first): install it from the Oxide source, enable it in Installed, then
+Play. The Play page shows "Copper performance suite: on" while it is enabled, and its state is recorded in
+the `play_requested` diagnostic heartbeat.
 
 Android builds never link the mod runtime (wasmtime): sandboxed **code** mods are inert there on both ABIs,
 while content mods and Copper install, toggle and work on 32-bit and 64-bit alike.

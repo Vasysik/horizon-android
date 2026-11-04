@@ -617,8 +617,12 @@ impl Graphics {
         // Copper leaves the phone one more core: with fewer builders in
         // flight, close columns still finish first and the render thread
         // and the GPU driver keep a core to themselves while chunks stream.
-        let auto = if cfg!(target_os = "android") && crate::android_runtime::copper() {
-            auto.saturating_sub(1).max(1)
+        // Never below two builders, though: on a four-core board (Helio A22
+        // class) `auto` is already 2, and halving it would make chunk
+        // generation crawl — slower than without the mod.
+        let auto = if cfg!(target_os = "android") && crate::android_runtime::copper() && auto >= 3
+        {
+            auto - 1
         } else {
             auto
         };

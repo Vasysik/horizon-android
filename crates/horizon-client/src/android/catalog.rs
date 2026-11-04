@@ -33,6 +33,11 @@ impl RendererMode {
     }
 }
 
+/// The `fps_uncapped` default: no artificial frame ceiling on phones.
+fn default_uncapped() -> bool {
+    true
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -58,6 +63,12 @@ pub struct Config {
     pub input_host: InputHost,
     pub keypad_controls: bool,
     pub record_performance: bool,
+    /// The frame-rate choice applied to the game at every launch: on, VSync
+    /// is off and the framerate limit lifted (uncapped); off, VSync paces
+    /// frames with the display. Default on: phones cap to their panel rate
+    /// anyway, and players asked for no artificial ceiling.
+    #[serde(default = "default_uncapped")]
+    pub fps_uncapped: bool,
     #[serde(flatten)]
     pub device: crate::device_preferences::Settings,
     pub shader_source: crate::shader_catalog::Origin,
@@ -133,6 +144,16 @@ impl Config {
         // Ignore saved app registrations while this dev build uses the fixed ID.
         config.microsoft_client_id =
             crate::account::client_id().unwrap_or_else(|| MICROSOFT_CLIENT_ID.into());
+        // First-run defaults: the Mods page opens on Oxide's own source, so
+        // Copper is front and centre instead of hidden behind a source chip,
+        // and the Shaders page opens on Modrinth, where the Java
+        // (Iris/OptiFine-style) shader packs live. Saved choices win.
+        if value.get("mod_source").is_none() {
+            config.mod_source = crate::shader_catalog::Origin::Oxide;
+        }
+        if value.get("shader_source").is_none() {
+            config.shader_source = crate::shader_catalog::Origin::Modrinth;
+        }
         if value.get("renderer").is_none() && value["gpu_batching"].as_bool() == Some(true) {
             config.renderer = RendererMode::Vulkan;
         }
@@ -166,6 +187,24 @@ impl Config {
         )
         .map_err(|e| e.to_string())?;
         std::fs::rename(part, home.join("android-launcher.json")).map_err(|e| e.to_string())
+    }
+    /// Writes the frame-rate choice into the game's `options.txt` at launch:
+    /// uncapped turns VSync off and sets vanilla's unlimited frame rate
+    /// (260); capped restores VSync and the 120 fps ceiling.
+    pub fn apply_frame_rate(&self, game: &Path) {
+        let path = game.join("options.txt");
+        let (vsync, max) = if self.fps_uncapped {
+            ("false", "260")
+        } else {
+            ("true", "120")
+        };
+        let settings = horizon_client::settings::Settings::load(&path);
+        if let Ok(settings) = settings
+            .with_option("enableVsync", vsync)
+            .and_then(|s| s.with_option("maxFps", max))
+        {
+            settings.save(&path);
+        }
     }
     pub fn profile_home(&self, home: &Path) -> PathBuf {
         if self.profile == 0 {
@@ -232,6 +271,9 @@ pub struct Catalog {
     pub config: Config,
     pub editing: Option<&'static str>,
     pub render_scale_text: String,
+    /// Copper is installed and switched on (`horizon-mods.txt`): the Play
+    /// page says so, and launching turns the native suite on.
+    pub copper_on: bool,
     worker: Option<mpsc::Receiver<Result<Reply, String>>>,
     search_worker: Option<mpsc::Receiver<Result<Vec<Project>, String>>>,
     searches: crate::search_queue::Queue<(Page, browser::SourceId, String, usize), Vec<Project>>,
@@ -331,6 +373,28 @@ fn toml_field(text: &str, key: &str) -> Option<String> {
 /// performance suite): an index plus the validated `.hmod` packages.
 const OXIDE_RELEASE_BASE: &str =
     "https://raw.githubusercontent.com/kushaladhikari982648-lgtm/Oxide/copper-v1/";
+
+/// The manifest of the hosted `copper.hmod`, byte for byte. The package is
+/// a zip of this one file, so the app can rebuild it on the device and
+/// Copper installs even with no network at all.
+const COPPER_MANIFEST: &str = "id = \"copper\"\nname = \"Copper\"\nversion = \"1.0.0\"\ndescription = \"Oxide's mobile performance suite: caps in-flight chunk generation so close chunks land first, leaves the render thread an extra core on phones, and skips the occlusion-culling passes that tiled phone GPUs pay more for than they save. The suite is native to the client; this package is the toggle that turns it on.\"\nauthors = [\"Oxide\"]\napi = \"0.2\"\n";
+
+/// Repacks [`COPPER_MANIFEST`] into the same `.hmod` zip the release hosts.
+fn bundled_copper_hmod() -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut out = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut out);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("horizon-mod.toml", options)
+            .map_err(|e| e.to_string())?;
+        zip.write_all(COPPER_MANIFEST.as_bytes())
+            .map_err(|e| e.to_string())?;
+        zip.finish().map_err(|e| e.to_string())?;
+    }
+    Ok(out.into_inner())
+}
 
 /// The Oxide source's catalogue: first-party mods from this repository's
 /// release assets. The download URL rides in `Project::icon` because these
@@ -471,6 +535,7 @@ impl Catalog {
             config,
             editing: None,
             render_scale_text: String::new(),
+            copper_on: false,
             worker: None,
             search_worker: None,
             searches: crate::search_queue::Queue::new(),
@@ -501,6 +566,7 @@ impl Catalog {
             .map(|e| (e.source, e.project.clone()))
             .collect();
         let on = horizon_client::mod_list::ModList::load(&game);
+        self.copper_on = on.enabled.contains("copper");
         let settings = horizon_client::settings::Settings::load(&game.join("options.txt"));
         self.local.clear();
         for kind in horizon_client::content_files::Kind::ALL {
@@ -770,11 +836,26 @@ impl Catalog {
         let game = self.config.game_home(home);
         self.job("Downloading Oxide mod over HTTPS...", move || {
             use std::io::Read;
-            let mut bytes = Vec::new();
-            ureq::AgentBuilder::new().https_only(true).timeout_connect(std::time::Duration::from_secs(20)).timeout_read(std::time::Duration::from_secs(90)).build().get(&url).call().map_err(|e|e.to_string())?.into_reader().take(32*1024*1024+1).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
-            if bytes.len() > 32 * 1024 * 1024 {
-                return Err("Oxide mod exceeds 32 MiB".into());
-            }
+            let fetch = (|| -> Result<Vec<u8>, String> {
+                let mut bytes = Vec::new();
+                ureq::AgentBuilder::new().https_only(true).timeout_connect(std::time::Duration::from_secs(20)).timeout_read(std::time::Duration::from_secs(90)).build().get(&url).call().map_err(|e|e.to_string())?.into_reader().take(32*1024*1024+1).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+                if bytes.len() > 32 * 1024 * 1024 {
+                    return Err("Oxide mod exceeds 32 MiB".into());
+                }
+                Ok(bytes)
+            })();
+            // Offline fallback: the Copper package rides inside the app, so
+            // it installs and enables even with no network at all. Other
+            // Oxide mods must download.
+            let bytes = match fetch {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    if !url.ends_with("copper.hmod") {
+                        return Err(e);
+                    }
+                    bundled_copper_hmod()?
+                }
+            };
             let dir = game.join("horizon-mods");
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let stage = dir.join("import.partial");
