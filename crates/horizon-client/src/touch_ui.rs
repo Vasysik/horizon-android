@@ -208,9 +208,9 @@ pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) 
     let (x, y) = (cursor.0, cursor.1);
     let pt = |dx: f32, dy: f32| -> [f32; 2] { [x + dx * s, y + dy * s] };
 
-    const SHADOW: u32 = rgba(0, 0, 0, 64);
-    const OUTLINE: u32 = rgba(18, 18, 22, 248);
-    const FILL: u32 = rgba(255, 255, 255, 255);
+    let shadow: u32 = rgba(0, 0, 0, 64);
+    let outline: u32 = rgba(18, 18, 22, 248);
+    let fill: u32 = rgba(255, 255, 255, 255);
 
     // 1. Subtle contact drop shadow (+0.65, +0.90) for contrast over bright surfaces
     let sx = 0.65;
@@ -223,7 +223,7 @@ pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) 
             pt(sx, 14.8 + sy),
             pt(sx, sy),
         ],
-        SHADOW,
+        shadow,
     );
     batch.fill_quad(
         atlas,
@@ -233,7 +233,7 @@ pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) 
             pt(6.2 + sx, 10.6 + sy),
             pt(4.1 + sx, 11.4 + sy),
         ],
-        SHADOW,
+        shadow,
     );
     batch.fill_quad(
         atlas,
@@ -243,24 +243,24 @@ pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) 
             pt(8.6 + sx, 15.3 + sy),
             pt(6.0 + sx, 16.4 + sy),
         ],
-        SHADOW,
+        shadow,
     );
 
     // 2. Crisp Windows 11 outer dark silhouette (exact tip at (0.0, 0.0))
     batch.fill_quad(
         atlas,
         [pt(0.0, 0.0), pt(4.1, 11.4), pt(0.0, 14.8), pt(0.0, 0.0)],
-        OUTLINE,
+        outline,
     );
     batch.fill_quad(
         atlas,
         [pt(0.0, 0.0), pt(10.6, 10.6), pt(6.2, 10.6), pt(4.1, 11.4)],
-        OUTLINE,
+        outline,
     );
     batch.fill_quad(
         atlas,
         [pt(3.8, 11.0), pt(6.3, 10.0), pt(8.6, 15.3), pt(6.0, 16.4)],
-        OUTLINE,
+        outline,
     );
 
     // 3. Pure white interior fill inset cleanly inside the silhouette
@@ -272,7 +272,7 @@ pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) 
             pt(0.85, 12.85),
             pt(0.85, 1.90),
         ],
-        FILL,
+        fill,
     );
     batch.fill_quad(
         atlas,
@@ -282,7 +282,7 @@ pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) 
             pt(5.75, 9.70),
             pt(4.05, 10.35),
         ],
-        FILL,
+        fill,
     );
     batch.fill_quad(
         atlas,
@@ -292,7 +292,7 @@ pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) 
             pt(7.60, 14.65),
             pt(6.20, 15.25),
         ],
-        FILL,
+        fill,
     );
 }
 
