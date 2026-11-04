@@ -15078,6 +15078,7 @@ impl Game<'_> {
             shadow_cache: self.settings.horizon.shadow_cache,
             distance,
             detail_distance: (self.streaming.radius * 16) as f32,
+            distant_terrain: self.lod.is_some(),
             depth_far,
             underwater,
             water_plane: if title
@@ -19584,6 +19585,7 @@ pub(crate) fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         shadow_cache: false,
         distance: 12.0,
         detail_distance: 12.0,
+        distant_terrain: false,
         depth_far: 1000.0,
         underwater: false,
         water_plane: None,
