@@ -821,6 +821,16 @@ impl<'a> Ui<'a> {
         });
     }
 
+    /// Runs `draw` with the clip narrowed to `rect` (dp), restoring the outer clip afterwards.
+    pub fn clipped(&mut self, rect: [f32; 4], draw: impl FnOnce(&mut Self)) {
+        let previous = self.clip;
+        if let Some(narrowed) = self.clip_rect(rect) {
+            self.set_clip(Some(narrowed));
+        }
+        draw(self);
+        self.clip = previous;
+    }
+
     pub fn clip_rect(&self, rect: [f32; 4]) -> Option<[f32; 4]> {
         let [x, y, w, h] = rect;
         if let Some([cx0, cy0, cx1, cy1]) = self.clip {
