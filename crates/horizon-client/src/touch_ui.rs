@@ -440,6 +440,7 @@ impl TouchUi {
         self.relative = None;
         self.relative_click = None;
         self.sensitivity_dragging = false;
+        self.pointer_size_dragging = false;
         self.hub_scroll_drag = None;
     }
     pub fn cancel_relative(&mut self) {
@@ -1079,6 +1080,7 @@ impl TouchUi {
                                 self.presets_modal_open = false;
                                 self.preset_dialog = None;
                                 self.sensitivity_dragging = false;
+                                self.pointer_size_dragging = false;
                                 self.hub_scroll_drag = None;
                             }
                         }
@@ -1282,6 +1284,8 @@ impl TouchUi {
         if phase == TouchPhase::Started {
             if !inside([dx, dy, dw, dh]) || inside([dx + dw - 76.0, dy + 10.0, 64.0, 30.0]) {
                 self.floating_menu = false;
+                self.sensitivity_dragging = false;
+                self.pointer_size_dragging = false;
                 self.hub_scroll_drag = None;
                 return Some(InGameMenuAction::Close);
             }
