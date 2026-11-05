@@ -538,37 +538,73 @@ impl HudAtlas {
             match Self::layout(&dimensions, limit) {
                 Ok(_) => return Ok(()),
                 Err(error) => {
-                    let mut changed = false;
-                    for (name, w, h, rgba) in images.iter_mut() {
-                        if name.starts_with("font/")
+                    // Shrink in rounds: everything else before the `entity/`
+                    // skins and models, and inside a round only the biggest
+                    // size class. Halving one 512px painting frees more area
+                    // than halving every 64px mob skin, so villagers and the
+                    // other mobs keep full detail on small-limit adapters
+                    // whenever the atlas can afford it.
+                    let candidate = |name: &str, w: u32, h: u32| {
+                        !(name.starts_with("font/")
                             || name.starts_with("gui/")
                             || name.starts_with("ui/")
-                            || name.starts_with("horizon/")
-                            || (*w <= 32 && *h <= 32)
+                            || name.starts_with("horizon/"))
+                            && (w > 32 || h > 32)
+                    };
+                    let tier = |name: &str| u8::from(name.starts_with("entity/"));
+                    let Some((best_tier, biggest)) = images
+                        .iter()
+                        .filter(|(name, w, h, _)| candidate(name, *w, *h))
+                        .map(|(name, w, h, _)| {
+                            (tier(name), std::cmp::Reverse((*w).max(*h)))
+                        })
+                        .min_by_key(|&(t, s)| (t, s))
+                        .map(|(t, s)| (t, s.0))
+                    else {
+                        return Err(error);
+                    };
+                    for (name, w, h, rgba) in images.iter_mut() {
+                        if !candidate(name, *w, *h)
+                            || tier(name) != best_tier
+                            || (*w).max(*h) != biggest
                         {
                             continue;
                         }
-                        // Keep original GUI units and normalized UVs. Runtime patches
-                        // retain their full-size slots, so no coordinate remapping occurs.
+                        // Keep original GUI units and normalized UVs. Runtime
+                        // patches retain their full-size slots, so no
+                        // coordinate remapping occurs.
                         gui_sizes.entry(name.clone()).or_insert((*w, *h));
                         let (old_w, old_h) = (*w, *h);
-                        *w = (*w / 2).max(1);
-                        *h = (*h / 2).max(1);
+                        *w = (old_w / 2).max(1);
+                        *h = (old_h / 2).max(1);
+                        // Box-average every dropped pixel: point sampling
+                        // kept one pixel in four and left the shrunken mob
+                        // faces noisy, which reads as a texture glitch.
                         let mut smaller = Vec::with_capacity((*w * *h * 4) as usize);
                         for y in 0..*h {
+                            let y0 = y * old_h / *h;
+                            let y1 = (((y + 1) * old_h / *h).max(y0 + 1)).min(old_h);
                             for x in 0..*w {
-                                let at = ((y * old_h / *h * old_w + x * old_w / *w) * 4) as usize;
-                                smaller.extend_from_slice(&rgba[at..at + 4]);
+                                let x0 = x * old_w / *w;
+                                let x1 = (((x + 1) * old_w / *w).max(x0 + 1)).min(old_w);
+                                let (mut sum, mut n) = ([0u32; 4], 0u32);
+                                for sy in y0..y1 {
+                                    for sx in x0..x1 {
+                                        let at = ((sy * old_w + sx) * 4) as usize;
+                                        for k in 0..4 {
+                                            sum[k] += u32::from(rgba[at + k]);
+                                        }
+                                        n += 1;
+                                    }
+                                }
+                                smaller.extend(sum.map(|s| (s / n) as u8));
                             }
                         }
                         *rgba = smaller;
-                        changed = true;
-                    }
-                    if !changed {
-                        return Err(error);
                     }
                     log::info!(
-                        "Reduced non-UI atlas sprites to fit the adapter's {limit}px texture limit"
+                        "Halved the {biggest}px {}atlas sprites to fit the adapter's {limit}px texture limit",
+                        if best_tier == 1 { "entity " } else { "" },
                     );
                 }
             }
