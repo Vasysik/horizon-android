@@ -139,6 +139,7 @@ fn should_discard_draft(reason: ChatExit, save_chat_drafts: bool) -> bool {
 /// `native_ime::viewport_bottom()`) to the GUI height the chat may use, never
 /// exceeding the full height. A zero bottom (no bounds read yet) leaves the
 /// height unchanged, so chat never collapses.
+#[allow(dead_code)]
 fn clamp_gui_height(full_height: f32, visible_bottom: u32, gui_scale: f32) -> f32 {
     if visible_bottom == 0 || gui_scale <= 0.0 {
         return full_height;

@@ -383,6 +383,7 @@ fn register_menu_types(mods: &[horizon_client::mod_content::ContentMod]) {
 }
 
 /// What the launcher writes beside a game it built with native mods: their ids under `mods`.
+#[allow(dead_code)]
 const BUILD_INFO: &str = "native-mods.json";
 
 #[cfg(feature = "mods")]

@@ -27,6 +27,7 @@ fn steering_item(species: Species, main: Option<&str>, offhand: Option<&str>) ->
 }
 
 /// `passengerAttachments` minus the player's 0.6 vehicle attachment.
+#[allow(dead_code)]
 fn seat(s: Species) -> f64 {
     let attach = match s {
         Species::Pig => 0.86875,
