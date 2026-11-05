@@ -197,6 +197,10 @@ impl VoiceMixer {
         true
     }
 
+    pub fn check_and_touch_sender(&mut self, _sender_uuid: u128) -> bool {
+        true
+    }
+
     pub fn touch_culled_sender(&mut self, uuid: u128, kind: VoiceSourceKind) {
         let stream = self
             .streams
@@ -214,17 +218,28 @@ impl VoiceMixer {
         }
     }
 
-    /// Snapshot of every sender, its voice kind, and last known 3D position (for the game tick).
-    pub fn sources(&self) -> Vec<(u128, VoiceSourceKind, Option<[f32; 3]>)> {
+    /// Snapshot of every sender, its voice kind, last known 3D position, and whether it was active in the last 1s.
+    pub fn sources(&self) -> Vec<(u128, VoiceSourceKind, Option<[f32; 3]>, bool)> {
+        let now = Instant::now();
         self.streams
             .iter()
-            .map(|(u, s)| (*u, s.kind, s.last_known_pos))
+            .map(|(u, s)| {
+                let active = now.duration_since(s.last_push) <= Duration::from_secs(1);
+                (*u, s.kind, s.last_known_pos, active)
+            })
             .collect()
     }
 
     /// Sets the 3D gain targets computed by the game tick (smoothed per sample),
-    /// and updates last known 3D position if provided.
+    /// updates last known 3D position if provided, and removes senders idle for >1.2s with empty buffer.
     pub fn apply_gains(&mut self, gains: &[(u128, (f32, f32), Option<[f32; 3]>)]) {
+        let now = Instant::now();
+        self.streams.retain(|_, s| {
+            !(s.buf.is_empty()
+                && !s.playing
+                && now.duration_since(s.last_push) > Duration::from_millis(1200))
+        });
+
         for (uuid, (left, right), pos) in gains {
             if let Some(stream) = self.streams.get_mut(uuid) {
                 stream.target_l = *left;
@@ -236,10 +251,16 @@ impl VoiceMixer {
         }
     }
 
-    /// Removes silent senders that have not pushed audio for `max_idle`.
+    /// Removes silent senders that have not pushed audio for `max_idle` and have empty buffers.
     pub fn prune_idle(&mut self, max_idle: Duration) {
-        self.streams
-            .retain(|_, s| s.playing || s.last_push.elapsed() <= max_idle);
+        let now = Instant::now();
+        self.streams.retain(|_, s| {
+            if s.buf.is_empty() && !s.playing && now.duration_since(s.last_push) > max_idle {
+                false
+            } else {
+                s.playing || now.duration_since(s.last_push) <= max_idle
+            }
+        });
     }
 
     /// Returns and resets the counters when `every` has elapsed and there was activity.

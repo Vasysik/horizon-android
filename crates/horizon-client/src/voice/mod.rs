@@ -226,6 +226,18 @@ impl VoiceChatClient {
 
     pub fn toggle_disable(&mut self) -> (String, Vec<u8>) {
         self.config.disabled = !self.config.disabled;
+        self.hardware_io.drop_output_stream();
+        let _ = self.config.save_to_dir(&self.config_dir);
+        let pkt = UpdateStatePacket {
+            muted: self.config.muted,
+            disabled: self.config.disabled,
+        };
+        (CHANNEL_CLIENT_STATE.to_string(), pkt.to_bytes())
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) -> (String, Vec<u8>) {
+        self.config.disabled = disabled;
+        self.hardware_io.drop_output_stream();
         let _ = self.config.save_to_dir(&self.config_dir);
         let pkt = UpdateStatePacket {
             muted: self.config.muted,
@@ -322,9 +334,9 @@ impl VoiceChatClient {
             Err(_) => return,
         };
 
-        const SPEAKER_MAKEUP_BOOST: f32 = 2.6;
+        const SPEAKER_MAKEUP_BOOST: f32 = 3.2;
         let mic_active_compensation = if self.hardware_io.is_input_stream_open() {
-            1.25
+            1.30
         } else {
             1.0
         };
@@ -337,7 +349,7 @@ impl VoiceChatClient {
         let mut gains: Vec<(u128, (f32, f32), Option<[f32; 3]>)> =
             Vec::with_capacity(sources.len());
 
-        for (uuid, kind, last_known_pos) in sources {
+        for (uuid, kind, last_known_pos, active_recently) in sources {
             self.register_known_player(uuid, String::new());
 
             if self.config.is_player_muted(uuid) || self.config.disabled {
@@ -345,12 +357,11 @@ impl VoiceChatClient {
                 continue;
             }
 
-            let player_vol = self.config.player_volume(uuid);
             let combined_gain = (self.config.output_volume.clamp(0.0, 3.0)
-                * player_vol
+                * self.config.player_volume(uuid)
                 * SPEAKER_MAKEUP_BOOST
                 * mic_active_compensation)
-                .clamp(0.0, 8.0);
+                .clamp(0.0, 10.0);
 
             let (base_l, base_r, updated_pos) = match kind {
                 VoiceSourceKind::Group => (1.0, 1.0, None),
@@ -379,7 +390,7 @@ impl VoiceChatClient {
                             max_dist,
                         );
                         (l, r, Some(pos))
-                    } else if let Some(last_pos) = last_known_pos {
+                    } else if let Some(last_pos) = last_known_pos.filter(|_| active_recently) {
                         let (l, r) = VoicePlaybackPipeline::compute_spatial_gains(
                             listener_pos,
                             listener_yaw,
@@ -388,13 +399,13 @@ impl VoiceChatClient {
                         );
                         (l, r, None)
                     } else {
-                        (0.20, 0.20, None)
+                        (0.50, 0.50, None)
                     }
                 }
             };
 
-            let gain_l = (base_l * combined_gain).clamp(0.0, 8.0);
-            let gain_r = (base_r * combined_gain).clamp(0.0, 8.0);
+            let gain_l = (base_l * combined_gain).clamp(0.0, 10.0);
+            let gain_r = (base_r * combined_gain).clamp(0.0, 10.0);
             gains.push((uuid, (gain_l, gain_r), updated_pos));
         }
 

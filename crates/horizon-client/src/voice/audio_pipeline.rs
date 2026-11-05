@@ -35,6 +35,7 @@ pub struct VoiceCapturePipeline {
     encoder: OpusEncoder,
     sequence_number: i64,
     last_vad_probability: f32,
+    pub agc_gain: f32,
 }
 
 impl Default for VoiceCapturePipeline {
@@ -47,6 +48,7 @@ impl Default for VoiceCapturePipeline {
             encoder,
             sequence_number: 0,
             last_vad_probability: 0.0,
+            agc_gain: 1.5,
         }
     }
 }
@@ -72,15 +74,16 @@ impl VoiceCapturePipeline {
         }
     }
 
-    /// Resets the internal Opus encoder state (e.g., when speech stops).
+    /// Resets the internal Opus encoder state and AGC (e.g., when speech stops).
     pub fn reset_encoder(&mut self) {
         let _ = self.encoder.reset_state();
+        self.agc_gain = 1.5;
     }
 
     /// Process a 960-sample PCM frame (-1.0 .. 1.0).
     ///
     /// Runs 2 sub-frames of 480 samples through RNNoise scaled to [-32768.0, 32767.0],
-    /// extracts VAD probability, applies mic gain, and encodes with Opus.
+    /// extracts VAD probability, and applies Voice-Gated AGC only if speech is detected.
     pub fn process_frame(
         &mut self,
         pcm_in: &[f32; FRAME_SIZE],
@@ -96,13 +99,12 @@ impl VoiceCapturePipeline {
 
         let mut denoised_pcm = [0.0f32; FRAME_SIZE];
 
-        const MIC_BASE_BOOST: f32 = 1.75;
-        let effective_gain = (mic_gain * MIC_BASE_BOOST).clamp(0.0, 6.0);
+        let base_gain = (mic_gain.clamp(0.0, 4.0) * 1.8).clamp(0.0, 7.2);
         let vad_max = if rnnoise_enabled {
             let mut sub1_in = [0.0f32; SUBFRAME_SIZE];
             let mut sub1_out = [0.0f32; SUBFRAME_SIZE];
             for i in 0..SUBFRAME_SIZE {
-                sub1_in[i] = (pcm_in[i] * effective_gain * 32768.0).clamp(-32768.0, 32767.0);
+                sub1_in[i] = (pcm_in[i] * base_gain * 32768.0).clamp(-32768.0, 32767.0);
             }
             let vad1 = self.denoiser.process_frame(&mut sub1_out, &sub1_in);
 
@@ -110,19 +112,18 @@ impl VoiceCapturePipeline {
             let mut sub2_out = [0.0f32; SUBFRAME_SIZE];
             for i in 0..SUBFRAME_SIZE {
                 sub2_in[i] =
-                    (pcm_in[SUBFRAME_SIZE + i] * effective_gain * 32768.0).clamp(-32768.0, 32767.0);
+                    (pcm_in[SUBFRAME_SIZE + i] * base_gain * 32768.0).clamp(-32768.0, 32767.0);
             }
             let vad2 = self.denoiser.process_frame(&mut sub2_out, &sub2_in);
 
             for i in 0..SUBFRAME_SIZE {
-                denoised_pcm[i] = soft_clip_mic((sub1_out[i] / 32768.0) * 1.25).clamp(-1.0, 1.0);
-                denoised_pcm[SUBFRAME_SIZE + i] =
-                    soft_clip_mic((sub2_out[i] / 32768.0) * 1.25).clamp(-1.0, 1.0);
+                denoised_pcm[i] = (sub1_out[i] / 32768.0).clamp(-1.0, 1.0);
+                denoised_pcm[SUBFRAME_SIZE + i] = (sub2_out[i] / 32768.0).clamp(-1.0, 1.0);
             }
             vad1.max(vad2)
         } else {
             for i in 0..FRAME_SIZE {
-                denoised_pcm[i] = soft_clip_mic(pcm_in[i] * effective_gain).clamp(-1.0, 1.0);
+                denoised_pcm[i] = (pcm_in[i] * base_gain).clamp(-1.0, 1.0);
             }
             let sum_sq: f32 = denoised_pcm.iter().map(|s| s * s).sum();
             let rms = (sum_sq / (FRAME_SIZE as f32)).sqrt();
@@ -131,8 +132,31 @@ impl VoiceCapturePipeline {
 
         self.last_vad_probability = vad_max;
 
-        if voice_activation && vad_max < vad_threshold {
+        let vad_passed = !voice_activation || vad_max >= vad_threshold;
+        if !vad_passed {
+            self.agc_gain = self.agc_gain * 0.95 + 1.5 * 0.05;
             return None;
+        }
+
+        // Step 2: Voice-Gated AGC — only runs on voice-confirmed frames
+        let mut frame_peak = 0.0f32;
+        for &s in denoised_pcm.iter() {
+            frame_peak = frame_peak.max(s.abs());
+        }
+
+        if frame_peak >= 0.02 {
+            let desired_agc = (0.65 / frame_peak).clamp(1.0, 4.0);
+            if desired_agc < self.agc_gain {
+                // Fast attack to prevent clipping when suddenly speaking loudly
+                self.agc_gain = self.agc_gain * 0.50 + desired_agc * 0.50;
+            } else {
+                // Smooth release to elevate quieter speech
+                self.agc_gain = self.agc_gain * 0.85 + desired_agc * 0.15;
+            }
+        }
+
+        for sample in denoised_pcm.iter_mut() {
+            *sample = soft_clip_mic(*sample * self.agc_gain).clamp(-1.0, 1.0);
         }
 
         let opus_data = self.encode_frame(&denoised_pcm)?;
@@ -301,7 +325,7 @@ impl VoicePlaybackPipeline {
         uuids
     }
 
-    /// Calculate distance attenuation and stereo panning using continuous quadratic (1 - norm)^2 falloff.
+    /// Calculate distance attenuation and stereo panning using vanilla Simple Voice Chat distance curve.
     pub fn compute_spatial_gains(
         listener_pos: [f64; 3],
         listener_yaw: f32,
@@ -311,21 +335,22 @@ impl VoicePlaybackPipeline {
         let dx = source_pos[0] - listener_pos[0] as f32;
         let dy = source_pos[1] - listener_pos[1] as f32;
         let dz = source_pos[2] - listener_pos[2] as f32;
-        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+        let distance = (dx * dx + dy * dy + dz * dz).sqrt();
 
-        if dist >= max_distance || dist <= 0.001 {
-            if dist <= 0.001 {
+        if distance >= max_distance || distance <= 0.001 {
+            if distance <= 0.001 {
                 return (1.0, 1.0);
             }
             return (0.0, 0.0);
         }
 
-        let near = (max_distance * 0.15).clamp(2.0, 6.0);
-        let attenuation = if dist <= near {
+        let fade_distance = (max_distance * 0.32).max(8.0).min(max_distance * 0.8);
+        let attenuation = if distance <= fade_distance {
             1.0
         } else {
-            let norm = ((dist - near) / (max_distance - near).max(0.001)).clamp(0.0, 1.0);
-            (1.0 - norm) * (1.0 - norm)
+            let norm = ((distance - fade_distance) / (max_distance - fade_distance).max(0.001))
+                .clamp(0.0, 1.0);
+            (1.0 - norm).max(0.0)
         };
 
         let yaw_rad = -listener_yaw.to_radians();
@@ -333,7 +358,7 @@ impl VoicePlaybackPipeline {
         let sin_y = yaw_rad.sin();
         let local_x = dx * cos_y - dz * sin_y;
 
-        let pan = (local_x / dist).clamp(-1.0, 1.0);
+        let pan = (local_x / distance).clamp(-1.0, 1.0);
         // Constant-Power Panning: center pan (0.0) gives full 1.0 gain in both channels
         let left_pan = (1.0 - pan.max(0.0) * 0.7).clamp(0.2, 1.0);
         let right_pan = (1.0 + pan.min(0.0) * 0.7).clamp(0.2, 1.0);
@@ -398,7 +423,7 @@ mod tests {
         let sound_ahead = [0.0, 64.0, 24.0];
         let (left, right) =
             VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_ahead, 48.0);
-        assert!((left - 0.326).abs() < 0.05);
+        assert!((left - 0.735).abs() < 0.05);
         assert_eq!(left, right);
 
         let sound_far = [0.0, 64.0, 100.0];

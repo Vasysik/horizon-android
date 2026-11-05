@@ -23,7 +23,6 @@ pub struct VoiceHardwareIo {
     input_initialized: bool,
     output_initialized: bool,
     last_mic_frame_at: Option<Instant>,
-    last_valid_mic_sample_at: Option<Instant>,
 }
 
 impl Default for VoiceHardwareIo {
@@ -44,7 +43,6 @@ impl VoiceHardwareIo {
             input_initialized: false,
             output_initialized: false,
             last_mic_frame_at: None,
-            last_valid_mic_sample_at: None,
         }
     }
 
@@ -56,10 +54,18 @@ impl VoiceHardwareIo {
         }
         self.input_initialized = false;
         self.last_mic_frame_at = None;
-        self.last_valid_mic_sample_at = None;
         if let Ok(mut g) = self.mic_buffer.lock() {
             g.clear();
         }
+    }
+
+    /// Drops the current speaker output stream and resets initialized flag so next tick reopens it cleanly.
+    pub fn drop_output_stream(&mut self) {
+        #[cfg(feature = "audio")]
+        {
+            self._output_stream = None;
+        }
+        self.output_initialized = false;
     }
 
     /// Stops microphone capture and releases audio focus.
@@ -194,7 +200,7 @@ impl VoiceHardwareIo {
                     device.build_input_stream(
                         &config,
                         move |data: &[f32], _| {
-                            // 1B. Avoid 50% cut & phase cancellation between ch0 (bottom mic) and ch1 (top mic)
+                            // In-phase stereo-to-mono: retain clarity and avoid phase cancellation
                             let mono: Vec<f32> = data
                                 .chunks(in_channels)
                                 .map(|frame| {
@@ -203,10 +209,11 @@ impl VoiceHardwareIo {
                                     } else {
                                         let ch0 = frame[0];
                                         let ch1 = frame.get(1).copied().unwrap_or(0.0);
-                                        if ch0.abs() >= ch1.abs() * 0.7 {
-                                            ch0
+                                        let peak = if ch0.abs() >= ch1.abs() { ch0 } else { ch1 };
+                                        if ch0 * ch1 > 0.0 {
+                                            (peak + (ch0 + ch1) * 0.25).clamp(-1.0, 1.0)
                                         } else {
-                                            ch1
+                                            peak
                                         }
                                     }
                                 })
@@ -222,7 +229,7 @@ impl VoiceHardwareIo {
                     device.build_input_stream(
                         &config,
                         move |data: &[i16], _| {
-                            // 1B. Avoid 50% cut & phase cancellation between ch0 (bottom mic) and ch1 (top mic)
+                            // In-phase stereo-to-mono: retain clarity and avoid phase cancellation
                             let mono: Vec<f32> = data
                                 .chunks(in_channels)
                                 .map(|frame| {
@@ -234,10 +241,11 @@ impl VoiceHardwareIo {
                                             .get(1)
                                             .map(|&s| s as f32 / 32768.0)
                                             .unwrap_or(0.0);
-                                        if ch0.abs() >= ch1.abs() * 0.7 {
-                                            ch0
+                                        let peak = if ch0.abs() >= ch1.abs() { ch0 } else { ch1 };
+                                        if ch0 * ch1 > 0.0 {
+                                            (peak + (ch0 + ch1) * 0.25).clamp(-1.0, 1.0)
                                         } else {
-                                            ch1
+                                            peak
                                         }
                                     }
                                 })
@@ -266,7 +274,6 @@ impl VoiceHardwareIo {
                         );
                         self._input_stream = Some(stream);
                         self.last_mic_frame_at = Some(Instant::now());
-                        self.last_valid_mic_sample_at = Some(Instant::now());
                     }
                 }
                 Err(e) => log::warn!("SVC: Failed to build microphone stream: {e}"),
@@ -353,20 +360,15 @@ impl VoiceHardwareIo {
 
         let now = Instant::now();
 
-        // 1C. Watchdog: check if microphone stream has stalled (>1.5s) or silenced by ScreenRecorder (>3.0s)
+        // Watchdog: only restart if microphone stream has stalled (>6.0s without any callbacks)
         #[cfg(feature = "audio")]
         if self._input_stream.is_some() {
             let stalled = self
                 .last_mic_frame_at
-                .is_some_and(|t| now.duration_since(t) > std::time::Duration::from_millis(1500));
-            let silenced = self
-                .last_valid_mic_sample_at
-                .is_some_and(|t| now.duration_since(t) > std::time::Duration::from_secs(3));
+                .is_some_and(|t| now.duration_since(t) > std::time::Duration::from_secs(6));
 
-            if stalled || silenced {
-                log::warn!(
-                    "SVC: Microphone stream stalled or silenced by OS/ScreenRecorder, re-initializing..."
-                );
+            if stalled {
+                log::warn!("SVC: Microphone stream stalled for > 6s, re-initializing...");
                 self.drop_input_stream();
                 self.ensure_input_started();
                 return None;
@@ -381,15 +383,8 @@ impl VoiceHardwareIo {
         self.last_mic_frame_at = Some(now);
 
         let mut frame = [0.0f32; FRAME_SIZE];
-        let mut max_abs = 0.0f32;
         for sample in &mut frame {
-            let s = guard.pop_front().unwrap_or(0.0);
-            *sample = s;
-            max_abs = max_abs.max(s.abs());
-        }
-
-        if max_abs > 1e-5 {
-            self.last_valid_mic_sample_at = Some(now);
+            *sample = guard.pop_front().unwrap_or(0.0);
         }
 
         Some(frame)
@@ -409,7 +404,6 @@ impl VoiceHardwareIo {
         self.input_initialized = false;
         self.output_initialized = false;
         self.last_mic_frame_at = None;
-        self.last_valid_mic_sample_at = None;
         if let Ok(mut g) = self.mic_buffer.lock() {
             g.clear();
         }

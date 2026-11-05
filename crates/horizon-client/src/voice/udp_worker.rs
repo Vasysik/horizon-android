@@ -76,7 +76,7 @@ impl VoiceRx {
         self.last_maintain = Instant::now();
         self.pipeline.prune_idle_decoders();
         if let Ok(mut m) = self.mixer.lock() {
-            m.prune_idle(Duration::from_secs(5));
+            m.prune_idle(Duration::from_millis(1200));
         }
     }
 
