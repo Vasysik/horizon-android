@@ -7,7 +7,7 @@
 use super::audio_pipeline::VoicePlaybackPipeline;
 use super::mixer::{GainSource, VoiceMixer};
 use super::protocol::*;
-use std::net::{ToSocketAddrs, UdpSocket};
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, RwLock};
