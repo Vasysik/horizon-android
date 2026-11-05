@@ -146,19 +146,25 @@ impl VoiceChatClient {
                     state_pkt.to_bytes(),
                 )));
             }
-            CHANNEL_PLAYER_STATE => {
+            CHANNEL_PLAYER_STATE | "voicechat:player_state" => {
                 if let Ok(pkt) = PlayerStatePacket::from_bytes(data) {
+                    if pkt.state.uuid != 0 && Some(pkt.state.uuid) != self.local_player_uuid {
+                        self.register_known_player(pkt.state.uuid, pkt.state.name.clone());
+                    }
                     self.player_states.insert(pkt.state.uuid, pkt.state);
                 }
             }
-            CHANNEL_PLAYER_STATES => {
+            CHANNEL_PLAYER_STATES | "voicechat:player_states" => {
                 if let Ok(pkt) = PlayerStatesPacket::from_bytes(data) {
                     for s in pkt.states {
+                        if s.uuid != 0 && Some(s.uuid) != self.local_player_uuid {
+                            self.register_known_player(s.uuid, s.name.clone());
+                        }
                         self.player_states.insert(s.uuid, s);
                     }
                 }
             }
-            CHANNEL_REMOVE_STATE => {
+            CHANNEL_REMOVE_STATE | "voicechat:remove_player_state" | "voicechat:remove_state" => {
                 if let Ok(pkt) = RemovePlayerStatePacket::from_bytes(data) {
                     self.player_states.remove(&pkt.player_uuid);
                 }
@@ -306,7 +312,7 @@ impl VoiceChatClient {
         }
 
         // 2. Playback: decoding and jitter buffering run on the UDP thread and the audio callback.
-        //    The game tick only refreshes the 3D gain targets (listener/source positions) and priority voice culling.
+        //    The game tick only refreshes the 3D gain targets (listener/source positions).
         self.hardware_io.ensure_output_started();
         let mixer = self.hardware_io.mixer();
         let sources = match mixer.lock() {
@@ -314,136 +320,80 @@ impl VoiceChatClient {
             Err(_) => return,
         };
 
-        const MAX_ACTIVE_SPATIAL_VOICES: usize = 8;
         const SPEAKER_MAKEUP_BOOST: f32 = 2.6;
         let mic_active_compensation = if self.hardware_io.is_input_stream_open() {
             1.25
         } else {
             1.0
         };
+        let default_max_dist = self
+            .secret
+            .as_ref()
+            .map(|s| s.voice_chat_distance as f32)
+            .unwrap_or(48.0);
 
-        struct Candidate {
-            uuid: u128,
-            base_l: f32,
-            base_r: f32,
-            is_group: bool,
-            signal_strength: f32,
-            player_vol: f32,
-        }
+        let mut gains: Vec<(u128, (f32, f32), Option<[f32; 3]>)> =
+            Vec::with_capacity(sources.len());
 
-        let crowd_size = sources.len();
-        let mut candidates = Vec::with_capacity(crowd_size);
-        let mut culled_gains: Vec<(u128, (f32, f32), bool)> = Vec::new();
-
-        for (uuid, source) in sources {
+        for (uuid, kind, last_known_pos) in sources {
             self.register_known_player(uuid, String::new());
 
             if self.config.is_player_muted(uuid) || self.config.disabled {
-                culled_gains.push((uuid, (0.0, 0.0), true));
+                gains.push((uuid, (0.0, 0.0), None));
                 continue;
             }
 
             let player_vol = self.config.player_volume(uuid);
-            match source {
-                GainSource::Group => {
-                    candidates.push(Candidate {
-                        uuid,
-                        base_l: 1.0,
-                        base_r: 1.0,
-                        is_group: true,
-                        signal_strength: 1.0 * player_vol,
-                        player_vol,
-                    });
-                }
-                GainSource::Player { max_dist } => {
-                    let (base_l, base_r) = match resolve_player_pos(uuid) {
-                        Some(src_pos) => VoicePlaybackPipeline::compute_spatial_gains(
-                            listener_pos,
-                            listener_yaw,
-                            src_pos,
-                            max_dist,
-                            crowd_size,
-                        ),
-                        None => (0.8, 0.8),
-                    };
-                    if base_l == 0.0 && base_r == 0.0 {
-                        culled_gains.push((uuid, (0.0, 0.0), true));
+            let combined_gain = (self.config.output_volume.clamp(0.0, 3.0)
+                * player_vol
+                * SPEAKER_MAKEUP_BOOST
+                * mic_active_compensation)
+                .clamp(0.0, 8.0);
+
+            let (base_l, base_r, updated_pos) = match kind {
+                VoiceSourceKind::Group => (1.0, 1.0, None),
+                VoiceSourceKind::Location { pos, max_distance } => {
+                    let max_dist = if max_distance > 0.0 {
+                        max_distance
                     } else {
-                        let strength = base_l.max(base_r) * player_vol;
-                        candidates.push(Candidate {
-                            uuid,
-                            base_l,
-                            base_r,
-                            is_group: false,
-                            signal_strength: strength,
-                            player_vol,
-                        });
-                    }
-                }
-                GainSource::Location { pos, max_dist } => {
-                    let (base_l, base_r) = VoicePlaybackPipeline::compute_spatial_gains(
+                        default_max_dist
+                    };
+                    let (l, r) = VoicePlaybackPipeline::compute_spatial_gains(
                         listener_pos,
                         listener_yaw,
                         pos,
                         max_dist,
-                        crowd_size,
                     );
-                    if base_l == 0.0 && base_r == 0.0 {
-                        culled_gains.push((uuid, (0.0, 0.0), true));
+                    (l, r, None)
+                }
+                VoiceSourceKind::Player { max_distance } => {
+                    let max_dist = max_distance.unwrap_or(default_max_dist);
+                    if let Some(pos64) = resolve_player_pos(uuid) {
+                        let pos = [pos64[0] as f32, pos64[1] as f32, pos64[2] as f32];
+                        let (l, r) = VoicePlaybackPipeline::compute_spatial_gains(
+                            listener_pos,
+                            listener_yaw,
+                            pos,
+                            max_dist,
+                        );
+                        (l, r, Some(pos))
+                    } else if let Some(last_pos) = last_known_pos {
+                        let (l, r) = VoicePlaybackPipeline::compute_spatial_gains(
+                            listener_pos,
+                            listener_yaw,
+                            last_pos,
+                            max_dist,
+                        );
+                        (l, r, None)
                     } else {
-                        let strength = base_l.max(base_r) * player_vol;
-                        candidates.push(Candidate {
-                            uuid,
-                            base_l,
-                            base_r,
-                            is_group: false,
-                            signal_strength: strength,
-                            player_vol,
-                        });
+                        (0.20, 0.20, None)
                     }
                 }
-            }
-        }
+            };
 
-        // Separate group vs spatial candidates
-        let (group_candidates, mut spatial_candidates): (Vec<_>, Vec<_>) =
-            candidates.into_iter().partition(|c| c.is_group);
-
-        // Sort spatial candidates descending by signal strength
-        spatial_candidates.sort_by(|a, b| {
-            b.signal_strength
-                .partial_cmp(&a.signal_strength)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Cull spatial voices beyond top 8
-        if spatial_candidates.len() > MAX_ACTIVE_SPATIAL_VOICES {
-            for excess in spatial_candidates.drain(MAX_ACTIVE_SPATIAL_VOICES..) {
-                culled_gains.push((excess.uuid, (0.0, 0.0), true));
-            }
-        }
-
-        let audible_count = group_candidates.len() + spatial_candidates.len();
-        let crowd_norm = if audible_count <= 1 {
-            1.0
-        } else {
-            1.0 / (audible_count as f32).powf(0.32)
-        };
-
-        let mut gains: Vec<(u128, (f32, f32), bool)> = culled_gains;
-        for c in group_candidates
-            .into_iter()
-            .chain(spatial_candidates.into_iter())
-        {
-            let combined_gain = (self.config.output_volume.clamp(0.0, 3.0)
-                * c.player_vol
-                * SPEAKER_MAKEUP_BOOST
-                * mic_active_compensation
-                * crowd_norm)
-                .clamp(0.0, 8.0);
-            let gain_l = (c.base_l * combined_gain).clamp(0.0, 8.0);
-            let gain_r = (c.base_r * combined_gain).clamp(0.0, 8.0);
-            gains.push((c.uuid, (gain_l, gain_r), false));
+            let gain_l = (base_l * combined_gain).clamp(0.0, 8.0);
+            let gain_r = (base_r * combined_gain).clamp(0.0, 8.0);
+            gains.push((uuid, (gain_l, gain_r), updated_pos));
         }
 
         if let Ok(mut m) = mixer.lock() {
@@ -465,12 +415,14 @@ impl VoiceChatClient {
             return;
         }
         if let Some(entry) = self.known_players.iter_mut().find(|(id, _)| *id == uuid) {
-            if !name.is_empty() && entry.1 != name {
+            if !name.is_empty()
+                && (entry.1.is_empty() || entry.1.starts_with("Player ") || entry.1 != name)
+            {
                 entry.1 = name;
             }
             return;
         }
-        if self.known_players.len() >= 64 {
+        if self.known_players.len() >= 128 {
             self.known_players.remove(0);
         }
         let display = if name.is_empty() {

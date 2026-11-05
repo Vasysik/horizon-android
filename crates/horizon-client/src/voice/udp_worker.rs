@@ -85,21 +85,8 @@ impl VoiceRx {
         sender_uuid: u128,
         sequence_number: i64,
         opus_data: &[u8],
-        source: GainSource,
+        source: VoiceSourceKind,
     ) {
-        if !opus_data.is_empty() {
-            let should_decode = self
-                .mixer
-                .lock()
-                .map(|m| m.should_decode_sender(sender_uuid))
-                .unwrap_or(true);
-            if !should_decode {
-                if let Ok(mut m) = self.mixer.lock() {
-                    m.touch_culled_sender(sender_uuid, source);
-                }
-                return;
-            }
-        }
         let pcm = self
             .pipeline
             .decode_sender_frame(sender_uuid, sequence_number, opus_data);
@@ -115,15 +102,17 @@ impl VoiceRx {
 
     fn on_player(&mut self, pkt: PlayerSoundPacket) {
         let max_dist = if pkt.distance > 0.0 {
-            pkt.distance
+            Some(pkt.distance)
         } else {
-            self.default_max_dist
+            None
         };
         self.deliver(
             pkt.sender_uuid,
             pkt.sequence_number,
             &pkt.opus_data,
-            GainSource::Player { max_dist },
+            VoiceSourceKind::Player {
+                max_distance: max_dist,
+            },
         );
     }
 
@@ -132,7 +121,7 @@ impl VoiceRx {
             pkt.sender_uuid,
             pkt.sequence_number,
             &pkt.opus_data,
-            GainSource::Group,
+            VoiceSourceKind::Group,
         );
     }
 
@@ -142,13 +131,18 @@ impl VoiceRx {
         } else {
             self.default_max_dist
         };
+        let pos = [
+            pkt.location[0] as f32,
+            pkt.location[1] as f32,
+            pkt.location[2] as f32,
+        ];
         self.deliver(
             pkt.sender_uuid,
             pkt.sequence_number,
             &pkt.opus_data,
-            GainSource::Location {
-                pos: pkt.location,
-                max_dist,
+            VoiceSourceKind::Location {
+                pos,
+                max_distance: max_dist,
             },
         );
     }

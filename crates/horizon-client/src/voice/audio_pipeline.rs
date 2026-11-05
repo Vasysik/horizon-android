@@ -301,17 +301,16 @@ impl VoicePlaybackPipeline {
         uuids
     }
 
-    /// Calculate distance attenuation and stereo panning with crowd focus adaptivity.
+    /// Calculate distance attenuation and stereo panning using continuous quadratic (1 - norm)^2 falloff.
     pub fn compute_spatial_gains(
         listener_pos: [f64; 3],
         listener_yaw: f32,
-        source_pos: [f64; 3],
+        source_pos: [f32; 3],
         max_distance: f32,
-        crowd_size: usize,
     ) -> (f32, f32) {
-        let dx = (source_pos[0] - listener_pos[0]) as f32;
-        let dy = (source_pos[1] - listener_pos[1]) as f32;
-        let dz = (source_pos[2] - listener_pos[2]) as f32;
+        let dx = source_pos[0] - listener_pos[0] as f32;
+        let dy = source_pos[1] - listener_pos[1] as f32;
+        let dz = source_pos[2] - listener_pos[2] as f32;
         let dist = (dx * dx + dy * dy + dz * dz).sqrt();
 
         if dist >= max_distance || dist <= 0.001 {
@@ -321,22 +320,12 @@ impl VoicePlaybackPipeline {
             return (0.0, 0.0);
         }
 
-        let attenuation = if crowd_size >= 4 {
-            let fade_dist = (max_distance * 0.12).min(5.0);
-            if dist <= fade_dist {
-                1.0
-            } else {
-                let norm = ((dist - fade_dist) / (max_distance - fade_dist)).clamp(0.0, 1.0);
-                (1.0 - norm).powf(1.65)
-            }
+        let near = (max_distance * 0.15).clamp(2.0, 6.0);
+        let attenuation = if dist <= near {
+            1.0
         } else {
-            let near = (max_distance * 0.25).max(1.0);
-            if dist <= near {
-                1.0
-            } else {
-                let norm = ((dist - near) / (max_distance - near)).clamp(0.0, 1.0);
-                (1.0 - norm * norm).max(0.15)
-            }
+            let norm = ((dist - near) / (max_distance - near).max(0.001)).clamp(0.0, 1.0);
+            (1.0 - norm) * (1.0 - norm)
         };
 
         let yaw_rad = -listener_yaw.to_radians();
@@ -362,7 +351,16 @@ impl VoicePlaybackPipeline {
         source_pos: [f64; 3],
         max_distance: f32,
     ) -> (f32, f32) {
-        Self::compute_spatial_gains(listener_pos, listener_yaw, source_pos, max_distance, 1)
+        Self::compute_spatial_gains(
+            listener_pos,
+            listener_yaw,
+            [
+                source_pos[0] as f32,
+                source_pos[1] as f32,
+                source_pos[2] as f32,
+            ],
+            max_distance,
+        )
     }
 }
 
@@ -400,7 +398,7 @@ mod tests {
         let sound_ahead = [0.0, 64.0, 24.0];
         let (left, right) =
             VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_ahead, 48.0);
-        assert!((left - 0.888).abs() < 0.05);
+        assert!((left - 0.326).abs() < 0.05);
         assert_eq!(left, right);
 
         let sound_far = [0.0, 64.0, 100.0];

@@ -5119,6 +5119,81 @@ impl Game<'_> {
     pub(super) fn face_skin(&mut self, uuid: u128, skin: &str) -> String {
         self.drawn_skin(uuid, (skin.to_owned(), false)).0
     }
+
+    /// Resolves real player Gamertag and custom skin texture for Voice Chat UI.
+    /// Handles Offline-Mode servers and SkinsRestorer via UUID and name fallback.
+    pub(crate) fn voice_player_name_and_skin(
+        &mut self,
+        uuid_u128: u128,
+        known_name: &str,
+    ) -> (String, (String, bool)) {
+        let mut matched_uuid = uuid_u128;
+        let mut resolved_name: Option<String> = None;
+        let mut custom_skin: Option<(String, bool)> = None;
+
+        if let Some(r) = self.remote.as_ref() {
+            // Step 1: Look up by UUID in tab_players and players
+            if let Some(tp) = r.tab_players.get(&uuid_u128) {
+                resolved_name = Some(tp.name.clone());
+                if let Some(s) = r.skins.get(&uuid_u128) {
+                    custom_skin = Some(s.clone());
+                }
+            } else if let Some(pname) = r.players.get(&uuid_u128) {
+                resolved_name = Some(pname.clone());
+                if let Some(s) = r.skins.get(&uuid_u128) {
+                    custom_skin = Some(s.clone());
+                }
+            }
+
+            // Step 2: Fallback for Offline Mode / SkinsRestorer
+            // If custom skin is missing or name is placeholder, search by Gamertag
+            let should_fallback = custom_skin.is_none()
+                || resolved_name
+                    .as_ref()
+                    .is_some_and(|n| n.starts_with("Player "));
+            if should_fallback && !known_name.is_empty() && !known_name.starts_with("Player ") {
+                if let Some((&u, tp)) = r
+                    .tab_players
+                    .iter()
+                    .find(|(_, tp)| tp.name.eq_ignore_ascii_case(known_name))
+                {
+                    matched_uuid = u;
+                    resolved_name = Some(tp.name.clone());
+                    if let Some(s) = r.skins.get(&u) {
+                        custom_skin = Some(s.clone());
+                    }
+                } else if let Some((&u, pname)) = r
+                    .players
+                    .iter()
+                    .find(|(_, n)| n.eq_ignore_ascii_case(known_name))
+                {
+                    matched_uuid = u;
+                    resolved_name = Some(pname.clone());
+                    if let Some(s) = r.skins.get(&u) {
+                        custom_skin = Some(s.clone());
+                    }
+                }
+            }
+        }
+
+        let final_name = resolved_name
+            .filter(|n| !n.is_empty() && !n.starts_with("Player "))
+            .unwrap_or_else(|| {
+                if !known_name.is_empty() {
+                    known_name.to_string()
+                } else {
+                    format!("Player {:04x}", (uuid_u128 & 0xFFFF) as u16)
+                }
+            });
+
+        let raw_skin = custom_skin.unwrap_or_else(|| {
+            let def = horizon_client::tab_list::default_skin(matched_uuid);
+            (def.to_owned(), def.contains("/slim/"))
+        });
+
+        let drawn = self.drawn_skin(matched_uuid, raw_skin);
+        (final_name, drawn)
+    }
     /// ChatType.Bound.decorate (`Decoration::Chat`) and `decorateNarration`
     /// (`Decoration::Narration`): the chat type's decoration from the
     /// server's registry, applied to `content`.

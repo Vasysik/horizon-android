@@ -24,11 +24,13 @@ const DEFAULT_GAIN: f32 = 0.8;
 
 /// Where the 3D gain of a sender comes from.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum GainSource {
-    Player { max_dist: f32 },
+pub enum VoiceSourceKind {
+    Player { max_distance: Option<f32> },
     Group,
-    Location { pos: [f64; 3], max_dist: f32 },
+    Location { pos: [f32; 3], max_distance: f32 },
 }
+
+pub type GainSource = VoiceSourceKind;
 
 /// Counters for diagnostics (reset every time they are taken).
 #[derive(Debug, Clone, Copy, Default)]
@@ -50,13 +52,13 @@ struct SenderStream {
     gain_r: f32,
     target_l: f32,
     target_r: f32,
-    culled: bool,
-    source: GainSource,
+    pub kind: VoiceSourceKind,
+    pub last_known_pos: Option<[f32; 3]>,
     last_push: Instant,
 }
 
 impl SenderStream {
-    fn new(source: GainSource) -> Self {
+    fn new(kind: VoiceSourceKind) -> Self {
         Self {
             buf: VecDeque::with_capacity(FRAME_SIZE * 8),
             playing: false,
@@ -68,8 +70,11 @@ impl SenderStream {
             gain_r: DEFAULT_GAIN,
             target_l: DEFAULT_GAIN,
             target_r: DEFAULT_GAIN,
-            culled: false,
-            source,
+            kind,
+            last_known_pos: match kind {
+                VoiceSourceKind::Location { pos, .. } => Some(pos),
+                _ => None,
+            },
             last_push: Instant::now(),
         }
     }
@@ -159,20 +164,17 @@ impl VoiceMixer {
     }
 
     /// Queues decoded 48 kHz mono samples of `uuid` (called from the UDP thread).
-    pub fn push(&mut self, uuid: u128, source: GainSource, pcm: &[f32]) {
+    pub fn push(&mut self, uuid: u128, kind: VoiceSourceKind, pcm: &[f32]) {
         if pcm.is_empty() {
             return;
         }
         let stream = self
             .streams
             .entry(uuid)
-            .or_insert_with(|| SenderStream::new(source));
-        stream.source = source;
+            .or_insert_with(|| SenderStream::new(kind));
+        stream.kind = kind;
         stream.ending = false;
         stream.last_push = Instant::now();
-        if stream.culled {
-            return;
-        }
         stream.buf.extend(pcm.iter().copied());
         if stream.buf.len() > MAX_BUFFER_SAMPLES {
             let drop_count = FRAME_SIZE.min(stream.buf.len());
@@ -186,22 +188,21 @@ impl VoiceMixer {
         }
     }
 
-    /// Checks if incoming audio packets from `sender_uuid` should be decoded.
-    /// Returns false if the sender is currently culled (muted, out of range, or beyond top-8).
-    pub fn should_decode_sender(&self, sender_uuid: u128) -> bool {
-        match self.streams.get(&sender_uuid) {
-            Some(stream) => !stream.culled,
-            None => true,
-        }
+    /// Alias for push to support push_samples naming.
+    pub fn push_samples(&mut self, uuid: u128, kind: VoiceSourceKind, pcm: &[f32]) {
+        self.push(uuid, kind, pcm);
     }
 
-    /// Updates active timestamp and source for a culled sender without decoding or buffering audio.
-    pub fn touch_culled_sender(&mut self, uuid: u128, source: GainSource) {
+    pub fn should_decode_sender(&self, _sender_uuid: u128) -> bool {
+        true
+    }
+
+    pub fn touch_culled_sender(&mut self, uuid: u128, kind: VoiceSourceKind) {
         let stream = self
             .streams
             .entry(uuid)
-            .or_insert_with(|| SenderStream::new(source));
-        stream.source = source;
+            .or_insert_with(|| SenderStream::new(kind));
+        stream.kind = kind;
         stream.ending = false;
         stream.last_push = Instant::now();
     }
@@ -213,21 +214,23 @@ impl VoiceMixer {
         }
     }
 
-    /// Snapshot of every sender and where its 3D gain comes from (for the game tick).
-    pub fn sources(&self) -> Vec<(u128, GainSource)> {
-        self.streams.iter().map(|(u, s)| (*u, s.source)).collect()
+    /// Snapshot of every sender, its voice kind, and last known 3D position (for the game tick).
+    pub fn sources(&self) -> Vec<(u128, VoiceSourceKind, Option<[f32; 3]>)> {
+        self.streams
+            .iter()
+            .map(|(u, s)| (*u, s.kind, s.last_known_pos))
+            .collect()
     }
 
-    /// Sets the 3D gain targets and culling state computed by the game tick (smoothed per sample).
-    pub fn apply_gains(&mut self, gains: &[(u128, (f32, f32), bool)]) {
-        for (uuid, (left, right), culled) in gains {
+    /// Sets the 3D gain targets computed by the game tick (smoothed per sample),
+    /// and updates last known 3D position if provided.
+    pub fn apply_gains(&mut self, gains: &[(u128, (f32, f32), Option<[f32; 3]>)]) {
+        for (uuid, (left, right), pos) in gains {
             if let Some(stream) = self.streams.get_mut(uuid) {
                 stream.target_l = *left;
                 stream.target_r = *right;
-                stream.culled = *culled;
-                if *culled {
-                    stream.buf.clear();
-                    stream.playing = false;
+                if let Some(p) = pos {
+                    stream.last_known_pos = Some(*p);
                 }
             }
         }
@@ -446,7 +449,7 @@ mod tests {
     fn gain_follows_target_smoothly() {
         let mut mixer = VoiceMixer::new();
         mixer.push(A, GainSource::Group, &constant(0.5, 50));
-        mixer.apply_gains(&[(A, (0.0, 0.0), false)]);
+        mixer.apply_gains(&[(A, (0.0, 0.0), None)]);
         let mut prev = 0.0f32;
         let mut max_step = 0.0f32;
         let mut last = 1.0f32;
@@ -463,22 +466,27 @@ mod tests {
     }
 
     #[test]
-    fn test_culling_clears_buffer_and_drops_samples() {
+    fn test_voice_source_kind_and_last_known_pos() {
         let mut mixer = VoiceMixer::new();
-        mixer.push(A, GainSource::Group, &constant(0.5, 4));
-        assert!(mixer.should_decode_sender(A));
+        let pos = [10.0f32, 64.0, 5.0];
+        mixer.push(
+            A,
+            VoiceSourceKind::Location {
+                pos,
+                max_distance: 48.0,
+            },
+            &constant(0.5, 4),
+        );
+        let sources = mixer.sources();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].0, A);
+        assert_eq!(sources[0].2, Some(pos));
 
-        // Cull sender A
-        mixer.apply_gains(&[(A, (0.0, 0.0), true)]);
-        assert!(!mixer.should_decode_sender(A));
-
-        // Pushing samples to culled sender should not buffer audio
-        mixer.push(A, GainSource::Group, &constant(0.5, 4));
-        assert_eq!(mixer.next_frame(), (0.0, 0.0));
-
-        // Touching culled sender keeps it active
-        mixer.touch_culled_sender(A, GainSource::Group);
-        assert!(!mixer.should_decode_sender(A));
+        // Update last known position via apply_gains
+        let new_pos = [12.0f32, 65.0, 7.0];
+        mixer.apply_gains(&[(A, (0.5, 0.5), Some(new_pos))]);
+        let sources2 = mixer.sources();
+        assert_eq!(sources2[0].2, Some(new_pos));
     }
 
     #[test]

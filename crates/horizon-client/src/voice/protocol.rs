@@ -546,43 +546,38 @@ impl UpdateStatePacket {
 /// Substructure for player states in PlayerStatePacket & PlayerStatesPacket
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerState {
-    pub flags: u8,
+    pub disabled: bool,
+    pub disconnected: bool,
     pub uuid: u128,
     pub name: String,
     pub group: Option<u128>,
 }
 
 impl PlayerState {
-    pub fn is_muted(&self) -> bool {
-        (self.flags & 0b0000_0001) != 0
-    }
-    pub fn is_force_muted(&self) -> bool {
-        (self.flags & 0b0000_0010) != 0
-    }
     pub fn is_disabled(&self) -> bool {
-        (self.flags & 0b0000_0100) != 0
-    }
-    pub fn is_force_disabled(&self) -> bool {
-        (self.flags & 0b0000_1000) != 0
+        self.disabled
     }
     pub fn is_disconnected(&self) -> bool {
-        (self.flags & 0b0001_0000) != 0
+        self.disconnected
     }
     pub fn has_group(&self) -> bool {
-        (self.flags & 0b0010_0000) != 0
+        self.group.is_some()
     }
 
     pub fn read_from(r: &mut ByteBufReader<'_>) -> Result<Self, std::io::Error> {
-        let flags = r.read_u8()?;
+        let disabled = r.read_bool()?;
+        let disconnected = r.read_bool()?;
         let uuid = r.read_uuid()?;
         let name = r.read_string()?;
-        let group = if (flags & 0b0010_0000) != 0 {
+        let has_group = r.read_bool()?;
+        let group = if has_group {
             Some(r.read_uuid()?)
         } else {
             None
         };
         Ok(Self {
-            flags,
+            disabled,
+            disconnected,
             uuid,
             name,
             group,
@@ -590,15 +585,11 @@ impl PlayerState {
     }
 
     pub fn write_to(&self, w: &mut ByteBufWriter) {
-        let mut flags = self.flags;
-        if self.group.is_some() {
-            flags |= 0b0010_0000;
-        } else {
-            flags &= !0b0010_0000;
-        }
-        w.write_u8(flags);
+        w.write_bool(self.disabled);
+        w.write_bool(self.disconnected);
         w.write_uuid(self.uuid);
         w.write_string(&self.name);
+        w.write_bool(self.group.is_some());
         if let Some(gid) = self.group {
             w.write_uuid(gid);
         }
@@ -1492,13 +1483,14 @@ mod tests {
     #[test]
     fn test_player_state_packet_serialization() {
         let state = PlayerState {
-            flags: 0b0010_0001, // muted + hasGroup
+            disabled: false,
+            disconnected: false,
             uuid: 0x9999_8888_7777_6666_5555_4444_3333_2222,
             name: "Alex".to_string(),
             group: Some(0xAAAA_BBBB_CCCC_DDDD_EEEE_FFFF_0000_1111),
         };
-        assert!(state.is_muted());
         assert!(!state.is_disabled());
+        assert!(!state.is_disconnected());
         assert!(state.has_group());
 
         let pkt = PlayerStatePacket { state };

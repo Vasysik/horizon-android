@@ -205,17 +205,12 @@ impl<'a> Game<'a> {
                     batch.fill(&self.gui.atlas, x + 12.0, ry, 336.0, 27.0, 0x2A2A2A2A);
                     batch.fill(&self.gui.atlas, x + 12.0, ry + 26.0, 336.0, 1.0, 0xFF3A3A3A);
 
-                    // 1. 2D Player Head (16x16)
+                    // 1. 2D Player Head (16x16) & Gamertag from SkinsRestorer / Tab List hook
                     let head_x = x + 16.0;
                     let head_y = ry + 5.0;
-                    let skin_str = self
-                        .remote
-                        .as_ref()
-                        .and_then(|r| r.tab_players.get(&uuid))
-                        .map(|p| p.skin.as_str())
-                        .unwrap_or_else(|| horizon_client::tab_list::default_skin(uuid))
-                        .to_string();
-                    let skin_id = self.face_skin(uuid, &skin_str);
+                    let (real_name, (skin_texture, _slim)) =
+                        self.voice_player_name_and_skin(uuid, &name);
+                    let skin_id = self.face_skin(uuid, &skin_texture);
                     let mut face_draws = Vec::with_capacity(2);
                     horizon_client::tab_list::face(
                         &mut face_draws,
@@ -232,7 +227,7 @@ impl<'a> Game<'a> {
                     // 2. Gamertag & volume status
                     let label = format!(
                         "{}: {:.0}%{}",
-                        name,
+                        real_name,
                         vol * 100.0,
                         if muted { " [MUTED]" } else { "" }
                     );
@@ -368,7 +363,7 @@ impl<'a> Game<'a> {
                 UdpConnectionState::Authenticating => "Status: Authenticating...".to_string(),
                 UdpConnectionState::Connected { ping_ms } => {
                     format!(
-                        "Connected ({}ms) | v{}",
+                        "Connected ({} ms) · v{}",
                         ping_ms, self.voice.config.compatibility_version
                     )
                 }
