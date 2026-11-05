@@ -737,22 +737,104 @@ impl TouchControls {
         }
         true
     }
+    pub fn char_to_key_token(ch: char) -> Option<&'static str> {
+        match ch.to_ascii_lowercase() {
+            'a' => Some("key.keyboard.a"),
+            'b' => Some("key.keyboard.b"),
+            'c' => Some("key.keyboard.c"),
+            'd' => Some("key.keyboard.d"),
+            'e' => Some("key.keyboard.e"),
+            'f' => Some("key.keyboard.f"),
+            'g' => Some("key.keyboard.g"),
+            'h' => Some("key.keyboard.h"),
+            'i' => Some("key.keyboard.i"),
+            'j' => Some("key.keyboard.j"),
+            'k' => Some("key.keyboard.k"),
+            'l' => Some("key.keyboard.l"),
+            'm' => Some("key.keyboard.m"),
+            'n' => Some("key.keyboard.n"),
+            'o' => Some("key.keyboard.o"),
+            'p' => Some("key.keyboard.p"),
+            'q' => Some("key.keyboard.q"),
+            'r' => Some("key.keyboard.r"),
+            's' => Some("key.keyboard.s"),
+            't' => Some("key.keyboard.t"),
+            'u' => Some("key.keyboard.u"),
+            'v' => Some("key.keyboard.v"),
+            'w' => Some("key.keyboard.w"),
+            'x' => Some("key.keyboard.x"),
+            'y' => Some("key.keyboard.y"),
+            'z' => Some("key.keyboard.z"),
+            '0' | ')' => Some("key.keyboard.0"),
+            '1' | '!' => Some("key.keyboard.1"),
+            '2' | '@' => Some("key.keyboard.2"),
+            '3' | '#' => Some("key.keyboard.3"),
+            '4' | '$' => Some("key.keyboard.4"),
+            '5' | '%' => Some("key.keyboard.5"),
+            '6' | '^' => Some("key.keyboard.6"),
+            '7' | '&' => Some("key.keyboard.7"),
+            '8' | '*' => Some("key.keyboard.8"),
+            '9' | '(' => Some("key.keyboard.9"),
+            ' ' => Some("key.keyboard.space"),
+            '/' | '?' => Some("key.keyboard.slash"),
+            '.' | '>' => Some("key.keyboard.period"),
+            ',' | '<' => Some("key.keyboard.comma"),
+            ';' | ':' => Some("key.keyboard.semicolon"),
+            '\'' | '"' => Some("key.keyboard.apostrophe"),
+            '[' | '{' => Some("key.keyboard.left.bracket"),
+            ']' | '}' => Some("key.keyboard.right.bracket"),
+            '-' | '_' => Some("key.keyboard.minus"),
+            '=' | '+' => Some("key.keyboard.equal"),
+            '\\' | '|' => Some("key.keyboard.backslash"),
+            '`' | '~' => Some("key.keyboard.grave.accent"),
+            _ => None,
+        }
+    }
+    pub fn capture_custom_key_code(&mut self, code: winit::keyboard::KeyCode) -> bool {
+        let Some(name) = crate::keybinds::key_name(code) else {
+            return false;
+        };
+        self.capture_custom_key(name)
+    }
+    pub fn capture_custom_text(&mut self, text: &str) -> bool {
+        let Some(ch) = text.chars().find(|c| !c.is_control()) else {
+            return false;
+        };
+        let Some(token) = Self::char_to_key_token(ch) else {
+            return false;
+        };
+        self.capture_custom_key(token)
+    }
     pub fn capture_custom_key(&mut self, name: &str) -> bool {
         if crate::keybinds::key_code(name).is_none() {
             return false;
         }
         let is_mcpe = self.settings.control_style == ControlStyle::Mcpe;
         if let Some(e) = &mut self.editor
-            && e.key_picker
+            && (e.key_picker || e.picker_step != PickerStep::None)
             && let Some(i) = e.selected_custom
             && let Some(btn) = self.settings.custom_buttons.get_mut(i)
         {
+            let slot = match e.picker_step {
+                PickerStep::AskInputType { event_slot }
+                | PickerStep::Keyboard { event_slot }
+                | PickerStep::MouseAndActions { event_slot } => event_slot,
+                _ => 0,
+            };
+            let lbl = super::custom::friendly_token_name(name);
             if is_mcpe {
                 btn.set_exclusive_binding(name.into());
+                btn.custom_label = lbl.clone();
             } else {
-                btn.key = name.into();
+                btn.set_event_slot(slot, name.into());
+                if slot == 0 && (btn.custom_label.is_empty() || btn.custom_label == "BTN") {
+                    btn.custom_label = lbl.clone();
+                }
             }
             e.key_picker = false;
+            e.picker_step = PickerStep::None;
+            e.status_msg = Some(format!("Captured key '{lbl}'."));
+            let _ = self.settings.save();
             true
         } else {
             false

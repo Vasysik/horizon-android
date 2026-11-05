@@ -14,7 +14,7 @@ use crate::{
 use horizon_client::{
     hud::rgba,
     skin_head::{self, HeadSkin},
-    ui_theme::{Face, Ui, color},
+    ui_theme::{Face, Ui},
 };
 use std::{
     path::{Path, PathBuf},

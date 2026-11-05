@@ -68,9 +68,33 @@ impl CustomButton {
     }
     pub fn set_event_slot(&mut self, slot: usize, token: String) {
         match slot {
-            0 => self.key = token,
-            1 => self.second_key = token,
-            _ => self.third_key = token,
+            0 => {
+                self.key = if token.is_empty() {
+                    "key.keyboard.unknown".into()
+                } else {
+                    token
+                };
+            }
+            1 => {
+                if (self.key.is_empty() || self.key == "key.keyboard.unknown")
+                    && !token.is_empty()
+                    && token != "key.keyboard.unknown"
+                {
+                    self.key = token;
+                } else {
+                    self.second_key = token;
+                }
+            }
+            _ => {
+                if (self.key.is_empty() || self.key == "key.keyboard.unknown")
+                    && !token.is_empty()
+                    && token != "key.keyboard.unknown"
+                {
+                    self.key = token;
+                } else {
+                    self.third_key = token;
+                }
+            }
         }
     }
     pub fn active_tokens(&self) -> Vec<String> {
@@ -208,8 +232,6 @@ impl TouchControls {
     /// Handles touch input for `visible_in_menu` GoyControl buttons & auxiliary controls while any
     /// menu (Main Title Menu, Inventory, Container, Pause, Options) is open.
     pub fn menu_update(&mut self, id: u64, point: [f32; 2], started: bool, ended: bool) -> bool {
-        let prev = self.in_menu;
-        self.in_menu = true;
         let handled = if self.custom_fingers.contains_key(&id)
             || (started && self.custom_at(point).is_some())
         {
@@ -217,7 +239,6 @@ impl TouchControls {
         } else {
             self.inventory_update(id, point, started, ended)
         };
-        self.in_menu = prev;
         handled
     }
     pub fn fit_placement(&self, mut p: Placement) -> Placement {
@@ -300,14 +321,16 @@ impl TouchControls {
                         self.custom_events.push((extra, false));
                     }
                 }
-                return !was_passthrough;
+                let _ = was_passthrough;
+                return true;
             }
-            // If this custom button has Pass-through enabled, let TouchControls::update
+            // If this custom button has Pass-through enabled in gameplay, let TouchControls::update
             // also compute camera look delta for this finger!
-            if self
-                .fingers
-                .get(&id)
-                .is_some_and(|(r, _)| matches!(r, Role::Look { .. }))
+            if !self.in_menu
+                && self
+                    .fingers
+                    .get(&id)
+                    .is_some_and(|(r, _)| matches!(r, Role::Look { .. }))
             {
                 return false;
             }
@@ -346,13 +369,12 @@ impl TouchControls {
             && let Some(index) = self.custom_at(point)
             && let Some(btn) = self.settings.custom_buttons.get(index)
         {
-            let key = btn.key.clone();
-            let second_key = btn.second_key.clone();
-            let third_key = btn.third_key.clone();
-            let placement = self.custom_placement(index);
-            if key == "key.keyboard.unknown" || key.is_empty() {
+            let active = btn.active_tokens();
+            let Some(key) = active.first().cloned() else {
                 return false;
-            }
+            };
+            let extras: Vec<String> = active.into_iter().skip(1).collect();
+            let placement = self.custom_placement(index);
             self.clicked = true;
             if placement.toggleable && key != "mouse.virtual.toggle" {
                 let now_on = !self.latched_custom.remove(&key);
@@ -360,20 +382,15 @@ impl TouchControls {
                     self.latched_custom.insert(key.clone());
                 }
                 self.custom_events.push((key, now_on));
-                for extra in [second_key, third_key] {
-                    if !extra.is_empty()
-                        && CustomButton::valid_token(&extra)
-                        && extra != "key.keyboard.unknown"
-                    {
-                        if now_on {
-                            self.latched_custom.insert(extra.clone());
-                        } else {
-                            self.latched_custom.remove(&extra);
-                        }
-                        self.custom_events.push((extra, now_on));
+                for extra in extras {
+                    if now_on {
+                        self.latched_custom.insert(extra.clone());
+                    } else {
+                        self.latched_custom.remove(&extra);
                     }
+                    self.custom_events.push((extra, now_on));
                 }
-                if !placement.passthrough {
+                if !placement.passthrough || self.in_menu {
                     self.fingers.insert(id, (Role::Ignore, point));
                     return true;
                 }
@@ -384,16 +401,11 @@ impl TouchControls {
             self.custom_fingers.insert(id, key.clone());
             if pressed {
                 self.custom_events.push((key, true));
-                for extra in [second_key, third_key] {
-                    if !extra.is_empty()
-                        && CustomButton::valid_token(&extra)
-                        && extra != "key.keyboard.unknown"
-                    {
-                        self.custom_events.push((extra, true));
-                    }
+                for extra in extras {
+                    self.custom_events.push((extra, true));
                 }
             }
-            if placement.passthrough {
+            if placement.passthrough && !self.in_menu {
                 self.fingers.insert(
                     id,
                     (
@@ -415,10 +427,25 @@ impl TouchControls {
         false
     }
     pub fn held_custom_tokens(&self) -> impl Iterator<Item = &str> {
+        let extra_tokens = self
+            .settings
+            .custom_buttons
+            .iter()
+            .filter(|btn| {
+                !btn.key.is_empty()
+                    && btn.key != "key.keyboard.unknown"
+                    && (self.custom_fingers.values().any(|k| *k == btn.key)
+                        || self.latched_custom.contains(&btn.key))
+            })
+            .flat_map(|btn| [btn.second_key.as_str(), btn.third_key.as_str()])
+            .filter(|t| {
+                !t.is_empty() && *t != "key.keyboard.unknown" && CustomButton::valid_token(t)
+            });
         self.custom_fingers
             .values()
             .chain(self.latched_custom.iter())
             .map(String::as_str)
+            .chain(extra_tokens)
     }
     pub fn has_pending_key_events(&self) -> bool {
         !self.custom_events.is_empty()

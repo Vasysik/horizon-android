@@ -123,158 +123,133 @@ impl Game<'_> {
     }
 
     pub(super) fn android_custom_key_held(&self, key: KeyCode) -> bool {
-        self.pad.touch.held_custom_tokens().any(|token| {
-            if let Some(mapping) = token.strip_prefix("action:") {
-                horizon_client::keybinds::key_code(horizon_client::keybinds::KeyBinds::default_of(
-                    mapping,
-                )) == Some(key)
-            } else {
-                horizon_client::keybinds::key_code(token).is_some_and(|physical| {
-                    self.settings
-                        .keys
-                        .translate_all(physical)
-                        .contains(&Ok(key))
-                })
-            }
-        })
+        self.pad
+            .touch
+            .held_custom_tokens()
+            .chain(self.pad.late_custom_releases.iter().map(String::as_str))
+            .any(|token| {
+                if let Some(mapping) = token.strip_prefix("action:") {
+                    horizon_client::keybinds::key_code(
+                        horizon_client::keybinds::KeyBinds::default_of(mapping),
+                    ) == Some(key)
+                } else {
+                    horizon_client::keybinds::key_code(token).is_some_and(|physical| {
+                        physical == key
+                            || self
+                                .settings
+                                .keys
+                                .translate_all(physical)
+                                .contains(&Ok(key))
+                    })
+                }
+            })
     }
     pub(super) fn android_custom_mouse_held(&self, button: MouseButton) -> bool {
-        self.pad.touch.held_custom_tokens().any(|token| {
-            token.strip_prefix("action:").is_some_and(|mapping| {
-                horizon_client::keybinds::mouse_button(
-                    horizon_client::keybinds::KeyBinds::default_of(mapping),
-                ) == Some(button)
+        self.pad
+            .touch
+            .held_custom_tokens()
+            .chain(self.pad.late_custom_releases.iter().map(String::as_str))
+            .any(|token| {
+                if let Some(mapping) = token.strip_prefix("action:") {
+                    horizon_client::keybinds::mouse_button(
+                        horizon_client::keybinds::KeyBinds::default_of(mapping),
+                    ) == Some(button)
+                } else if horizon_client::keybinds::mouse_button(token) == Some(button) {
+                    true
+                } else {
+                    horizon_client::keybinds::key_code(token).is_some_and(|physical| {
+                        self.settings
+                            .keys
+                            .translate_all(physical)
+                            .contains(&Err(button))
+                    })
+                }
             })
-        })
     }
     pub(super) fn android_custom_events(&mut self) {
         for (name, down) in self.pad.touch.key_events() {
-            self.android_dispatch_custom_token(&name, down);
+            self.android_custom_token_edge(&name, down);
+        }
+    }
+
+    pub(super) fn android_custom_token_edge(&mut self, token: &str, down: bool) {
+        let ticking = self.title.is_none()
+            && self.screen == Screen::Playing
+            && !self.pause
+            && !self.pad_in_menu();
+        if down {
+            if let Some(i) = self
+                .pad
+                .late_custom_releases
+                .iter()
+                .position(|t| t == token)
+            {
+                let prev = self.pad.late_custom_releases.remove(i);
+                self.android_dispatch_custom_token(&prev, false);
+            }
+            self.pad
+                .custom_pressed_at
+                .insert(token.to_owned(), self.ticks);
+        } else if ticking && self.pad.custom_pressed_at.get(token) == Some(&self.ticks) {
+            if !self.pad.late_custom_releases.iter().any(|t| t == token) {
+                self.pad.late_custom_releases.push(token.to_owned());
+            }
+            return;
+        }
+        self.android_dispatch_custom_token(token, down);
+    }
+
+    pub(super) fn android_custom_token_tap(&mut self, token: &str) {
+        self.android_custom_token_edge(token, true);
+        if token != "mouse.virtual.toggle"
+            && token != "mouse.scroll.up"
+            && token != "mouse.scroll.down"
+        {
+            self.android_custom_token_edge(token, false);
         }
     }
 
     pub(super) fn android_dispatch_custom_token(&mut self, name: &str, down: bool) {
-        {
+        self.last_input = Instant::now();
+        self.pad.in_use = true;
+        if down && !self.pad_in_menu() && !self.captured && self.focused {
+            self.capture(true);
+        }
+        if self.screen == Screen::Options && self.options_waiting_for_key() {
+            if !down {
+                return;
+            }
             if let Some(mapping) = name.strip_prefix("action:") {
-                if mapping == "key.sneak" || mapping == "key.sprint" {
-                    let slot = usize::from(mapping == "key.sprint");
-                    let key = [KeyCode::ShiftLeft, KeyCode::ControlLeft][slot];
-                    if down {
-                        self.pad.custom_keys.insert(key);
-                        self.physical_keys.insert(key);
-                    } else {
-                        self.pad.custom_keys.remove(&key);
-                        self.physical_keys.remove(&key);
-                    }
-                    self.toggles.0[slot].set_down(down, false);
-                    self.sync_toggle(slot);
-                    if slot == 1 && !down {
-                        if let Some(player) = &mut self.player {
-                            player.sprinting = false;
-                        }
-                    }
-                    return;
-                }
-                if self.pad_in_menu()
-                    && down
-                    && mapping == "key.inventory"
-                    && matches!(self.screen, Screen::Inventory | Screen::Creative)
-                {
-                    let _ = self.pad_back();
-                    return;
-                }
                 let default = horizon_client::keybinds::KeyBinds::default_of(mapping);
-                let result = if let Some(key) = horizon_client::keybinds::key_code(default) {
-                    self.mapped_key(key, down, false)
+                if let Some(key) = horizon_client::keybinds::key_code(default) {
+                    let _ = self.options_key(key, None);
                 } else if let Some(button) = horizon_client::keybinds::mouse_button(default) {
-                    self.android_custom_mouse(button, down)
-                } else {
-                    Ok(())
-                };
-                if let Err(error) = result {
-                    log::warn!("Custom touch action: {error}");
-                }
-                if down && self.screen == Screen::Chat {
-                    self.android_show_keyboard();
+                    let _ = self.options_bind_mouse(button);
                 }
                 return;
             }
             if let Some(button) = horizon_client::keybinds::mouse_button(name) {
-                if let Err(error) = self.android_custom_mouse(button, down) {
-                    log::warn!("Custom mouse button: {error}");
-                }
+                let _ = self.options_bind_mouse(button);
                 return;
             }
-            if name == "mouse.scroll.up" || name == "mouse.scroll.down" {
+            if let Some(key) = horizon_client::keybinds::key_code(name) {
+                let _ = self.options_key(key, None);
+                return;
+            }
+        }
+        if let Some(mapping) = name.strip_prefix("action:") {
+            if mapping == "key.sneak" || mapping == "key.sprint" {
+                let slot = usize::from(mapping == "key.sprint");
+                let key = [KeyCode::ShiftLeft, KeyCode::ControlLeft][slot];
                 if down {
-                    let delta = if name == "mouse.scroll.up" { 8.0 } else { 1.0 };
-                    let next = horizon_client::mouse::ScrollWheelHandler::next_selection(
-                        delta,
-                        self.selected as i32,
-                        9,
-                    );
-                    self.selected = next as usize;
+                    self.pad.custom_keys.insert(key);
+                    self.physical_keys.insert(key);
+                    self.keys.insert(key);
+                } else {
+                    self.pad.custom_keys.remove(&key);
+                    self.physical_keys.remove(&key);
+                    self.keys.remove(&key);
                 }
-                return;
-            }
-            if name == "mouse.look" {
-                return;
-            }
-            if name == "mouse.virtual.toggle" {
-                if down {
-                    if self.pad_in_menu() || !self.pad.touch.settings.virtual_mouse_enabled {
-                        self.pad.touch.settings.virtual_mouse_enabled =
-                            !self.pad.touch.settings.virtual_mouse_enabled;
-                        self.pad.touch_ui.pointer_off =
-                            !self.pad.touch.settings.virtual_mouse_enabled;
-                        if self.pad.touch.settings.virtual_mouse_enabled && !self.pad_in_menu() {
-                            self.pad.touch_ui.goy_in_game_mouse = true;
-                        } else {
-                            self.pad.touch_ui.goy_in_game_mouse = false;
-                        }
-                        let _ = self.pad.touch.settings.save();
-                        self.settings.touch = self.pad.touch.settings.clone();
-                    } else {
-                        self.pad.touch_ui.goy_in_game_mouse = !self.pad.touch_ui.goy_in_game_mouse;
-                    }
-                    self.android_sync_pointer();
-                    self.android_touch_haptic(14);
-                }
-                return;
-            }
-            let Some(key) = horizon_client::keybinds::key_code(name) else {
-                return;
-            };
-            if down {
-                self.pad.custom_keys.insert(key);
-            } else {
-                self.pad.custom_keys.remove(&key);
-            }
-            if self.pad.hardware_keys.contains(&key) {
-                return;
-            }
-            if (!self.pad_in_menu() || !down)
-                && horizon_client::android_runtime::keypad_key(key, down)
-            {
-                return;
-            }
-            if down {
-                self.physical_keys.insert(key);
-            } else {
-                self.physical_keys.remove(&key);
-            }
-            self.mod_key(key, down, false);
-            self.native_key_event(key, down, false);
-            // Raw Shift and Control are the touch Sneak and Sprint buttons:
-            // set their toggle state directly so both Hold and Toggle modes work reliably.
-            if matches!(
-                key,
-                KeyCode::ShiftLeft
-                    | KeyCode::ShiftRight
-                    | KeyCode::ControlLeft
-                    | KeyCode::ControlRight
-            ) {
-                let slot = usize::from(matches!(key, KeyCode::ControlLeft | KeyCode::ControlRight));
                 self.toggles.0[slot].set_down(down, false);
                 self.sync_toggle(slot);
                 if slot == 1 && !down {
@@ -284,27 +259,207 @@ impl Game<'_> {
                 }
                 return;
             }
-            if self.pad_in_menu() && down {
-                if key == KeyCode::Escape {
-                    let _ = self.pad_back();
-                    return;
-                }
-                if key == KeyCode::KeyE
-                    && matches!(self.screen, Screen::Inventory | Screen::Creative)
-                {
-                    let _ = self.pad_back();
-                    return;
-                }
-            }
-            let action = if down {
-                KeyAction::Press
-            } else {
-                KeyAction::Release
-            };
-            if self.debug_key(key, action) {
+            if self.pad_in_menu()
+                && down
+                && mapping == "key.inventory"
+                && matches!(self.screen, Screen::Inventory | Screen::Creative)
+            {
+                let _ = self.pad_back();
                 return;
             }
+            let default = horizon_client::keybinds::KeyBinds::default_of(mapping);
+            let result = if let Some(key) = horizon_client::keybinds::key_code(default) {
+                self.mapped_key(key, down, false)
+            } else if let Some(button) = horizon_client::keybinds::mouse_button(default) {
+                self.android_custom_mouse(button, down)
+            } else {
+                Ok(())
+            };
+            if let Err(error) = result {
+                log::warn!("Custom touch action: {error}");
+            }
+            if down && self.screen == Screen::Chat {
+                self.android_show_keyboard();
+            }
+            return;
+        }
+        if let Some(button) = horizon_client::keybinds::mouse_button(name) {
+            if let Err(error) = self.android_custom_mouse(button, down) {
+                log::warn!("Custom mouse button: {error}");
+            }
+            return;
+        }
+        if name == "mouse.scroll.up" || name == "mouse.scroll.down" {
+            if down {
+                let delta = if name == "mouse.scroll.up" { 8.0 } else { 1.0 };
+                let next = horizon_client::mouse::ScrollWheelHandler::next_selection(
+                    delta,
+                    self.selected as i32,
+                    9,
+                );
+                self.selected = next as usize;
+            }
+            return;
+        }
+        if name == "mouse.look" {
+            return;
+        }
+        if name == "mouse.virtual.toggle" {
+            if down {
+                if self.pad_in_menu() || !self.pad.touch.settings.virtual_mouse_enabled {
+                    self.pad.touch.settings.virtual_mouse_enabled =
+                        !self.pad.touch.settings.virtual_mouse_enabled;
+                    self.pad.touch_ui.pointer_off = !self.pad.touch.settings.virtual_mouse_enabled;
+                    if self.pad.touch.settings.virtual_mouse_enabled && !self.pad_in_menu() {
+                        self.pad.touch_ui.goy_in_game_mouse = true;
+                    } else {
+                        self.pad.touch_ui.goy_in_game_mouse = false;
+                    }
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                } else {
+                    self.pad.touch_ui.goy_in_game_mouse = !self.pad.touch_ui.goy_in_game_mouse;
+                }
+                self.android_sync_pointer();
+                self.android_touch_haptic(14);
+            }
+            return;
+        }
+        let Some(key) = horizon_client::keybinds::key_code(name) else {
+            return;
+        };
+        if down {
+            self.pad.custom_keys.insert(key);
+            self.physical_keys.insert(key);
+        } else {
+            self.pad.custom_keys.remove(&key);
+            self.physical_keys.remove(&key);
+        }
+        if down
+            && horizon_client::keybinds::key_name(key)
+                == Some(self.settings.keys.get("key.fullscreen"))
+        {
+            self.toggle_fullscreen();
+            return;
+        }
+        if down && self.screenshot_shortcut(key, false) {
+            return;
+        }
+        let action = if down {
+            KeyAction::Press
+        } else {
+            KeyAction::Release
+        };
+        if self.debug_key(key, action) {
+            return;
+        }
+        self.mod_key(key, down, false);
+        self.native_key_event(key, down, false);
+        if self.screen == Screen::Options {
+            if down {
+                let _ = self.options_key(key, None);
+            }
+            return;
+        }
+        // Raw Shift and Control are the touch Sneak and Sprint buttons:
+        // set their toggle state directly so both Hold and Toggle modes work reliably,
+        // and also update `self.keys` so inventory Shift-click works.
+        if matches!(
+            key,
+            KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::ControlLeft | KeyCode::ControlRight
+        ) {
+            if down {
+                self.keys.insert(key);
+            } else {
+                self.keys.remove(&key);
+            }
+            let slot = usize::from(matches!(key, KeyCode::ControlLeft | KeyCode::ControlRight));
+            self.toggles.0[slot].set_down(down, false);
+            self.sync_toggle(slot);
+            if slot == 1 && !down {
+                if let Some(player) = &mut self.player {
+                    player.sprinting = false;
+                }
+            }
             for mapped in self.settings.keys.translate_all(key) {
+                match mapped {
+                    Ok(code)
+                        if !matches!(
+                            code,
+                            KeyCode::ShiftLeft
+                                | KeyCode::ShiftRight
+                                | KeyCode::ControlLeft
+                                | KeyCode::ControlRight
+                        ) =>
+                    {
+                        let _ = self.mapped_key(code, down, false);
+                    }
+                    Err(button) => {
+                        let _ = self.android_custom_mouse(button, down);
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
+        if self.pad_in_menu() && down {
+            if key == KeyCode::Escape {
+                let _ = self.pad_back();
+                return;
+            }
+            if key == KeyCode::KeyE && matches!(self.screen, Screen::Inventory | Screen::Creative) {
+                let _ = self.pad_back();
+                return;
+            }
+            if self.screen == Screen::Inventory
+                && (self.merchant_key(key) || self.recipe_book_key(key))
+            {
+                return;
+            }
+            if self.screen == Screen::Chat && self.title.is_none() {
+                self.keys.insert(key);
+                self.chat_key_code(key, None);
+                return;
+            }
+            if self.title.is_some() {
+                let (w, h) = self.gui_size();
+                let shift = self.has_shift_down();
+                if let Some(t) = self.title.as_mut() {
+                    match key {
+                        KeyCode::Escape => {
+                            t.escape();
+                            self.save_title_options();
+                        }
+                        KeyCode::F5 => t.refresh_servers(),
+                        KeyCode::Tab => t.tab_dir(shift, (w, h)),
+                        KeyCode::ArrowLeft
+                        | KeyCode::ArrowRight
+                        | KeyCode::ArrowUp
+                        | KeyCode::ArrowDown => t.arrow_key(key, (w, h)),
+                        KeyCode::Backspace => self.title_edit(None, true),
+                        _ => {}
+                    }
+                }
+                return;
+            }
+        }
+        if !down && self.screen == Screen::Chat && self.title.is_none() {
+            self.keys.remove(&key);
+        }
+        if self.screen == Screen::Playing
+            && down
+            && horizon_client::keybinds::key_name(key)
+                .is_some_and(|n| self.settings.keys.get("key.smoothCamera") == n)
+        {
+            self.smooth_camera = !self.smooth_camera;
+        }
+        let translated = self.settings.keys.translate_all(key);
+        if translated.is_empty() {
+            if down && matches!(self.screen, Screen::Inventory | Screen::Creative) {
+                let _ = self.key_pressed(key);
+            }
+        } else {
+            for mapped in translated {
                 let result = match mapped {
                     Ok(code) => self.mapped_key(code, down, false),
                     Err(button) => self.android_custom_mouse(button, down),
@@ -313,10 +468,9 @@ impl Game<'_> {
                     log::warn!("Custom touch key: {error}");
                 }
             }
-            if down && matches!(key, KeyCode::KeyT | KeyCode::Slash) && self.screen == Screen::Chat
-            {
-                self.android_show_keyboard();
-            }
+        }
+        if down && matches!(key, KeyCode::KeyT | KeyCode::Slash) && self.screen == Screen::Chat {
+            self.android_show_keyboard();
         }
     }
 
@@ -374,23 +528,68 @@ impl Game<'_> {
     }
 
     fn android_custom_mouse(&mut self, button: MouseButton, down: bool) -> Result<()> {
+        if self.screen == Screen::Options && self.options_waiting_for_key() {
+            if down {
+                return self.options_bind_mouse(button);
+            }
+            return Ok(());
+        }
         if self.pad_in_menu() && !matches!(self.screen, Screen::Inventory | Screen::Creative) {
             let right = button == MouseButton::Right;
             if matches!(button, MouseButton::Left | MouseButton::Right) {
-                return self.android_menu_mouse(
-                    &super::event_loop::Noop,
-                    WindowId::dummy(),
-                    right,
-                    down,
-                );
+                let id = self.window.as_ref().map_or(WindowId::dummy(), |w| w.id());
+                return self.android_menu_mouse(&super::event_loop::Noop, id, right, down);
             }
             return Ok(());
         }
         if !matches!(self.screen, Screen::Inventory | Screen::Creative) {
-            return self.play_mouse(button, down);
+            if down && !self.captured && self.focused {
+                self.capture(true);
+            }
+            self.extras_mouse(button, down);
+            self.mod_mouse_key(button, down);
+            if down
+                && self.settings.keys.get("key.smoothCamera")
+                    == horizon_client::keybinds::mouse_name(button)
+            {
+                self.smooth_camera = !self.smooth_camera;
+            }
+            let mapped = self.settings.keys.translate_mouse_all(button);
+            if mapped.is_empty() {
+                return self.play_mouse(button, down);
+            }
+            for item in mapped {
+                match item {
+                    Err(b) => self.play_mouse(b, down)?,
+                    Ok(k) => self.mapped_key(k, down, false)?,
+                }
+            }
+            return Ok(());
+        }
+        if let Some(key) = self
+            .settings
+            .keys
+            .container_mouse_key(button, self.creative)
+        {
+            if down && self.carried.is_none() {
+                self.inventory_hotkey(key);
+            }
+            return Ok(());
         }
         let right = button == MouseButton::Right;
         if !matches!(button, MouseButton::Left | MouseButton::Right) {
+            if self.settings.keys.get("key.pickItem")
+                == horizon_client::keybinds::mouse_name(button)
+            {
+                if down {
+                    self.inventory_pick_press();
+                } else {
+                    self.inventory_pick_release();
+                }
+                if let Some(container) = self.container {
+                    self.container_changed(container);
+                }
+            }
             return Ok(());
         }
         if down {
@@ -407,6 +606,8 @@ impl Game<'_> {
             if self.screen == Screen::Creative && !right {
                 self.creative_screen.release();
             }
+            self.station_release();
+            self.recipe_book_release();
             self.loom_release();
         }
         Ok(())
@@ -427,7 +628,12 @@ impl Game<'_> {
         if matches!(self.screen, Screen::Inventory | Screen::Creative) {
             self.android_custom_mouse(button, down)
         } else {
-            self.handle_window_event(
+            let id = if id == WindowId::dummy() {
+                self.window.as_ref().map_or(WindowId::dummy(), |w| w.id())
+            } else {
+                id
+            };
+            self.pad_synthetic_event(
                 events,
                 id,
                 WindowEvent::MouseInput {
@@ -756,13 +962,7 @@ impl Game<'_> {
                 }
                 InGameMenuAction::SendCustomInput(token) => {
                     self.android_sync_pointer();
-                    self.android_dispatch_custom_token(&token, true);
-                    if token != "mouse.virtual.toggle"
-                        && token != "mouse.scroll.up"
-                        && token != "mouse.scroll.down"
-                    {
-                        self.android_dispatch_custom_token(&token, false);
-                    }
+                    self.android_custom_token_tap(&token);
                 }
             }
             return Ok(true);
@@ -948,11 +1148,15 @@ impl Game<'_> {
     /// Both naming dialogs (the editor's save-as and the hub's copy) type here
     /// instead of showing a keyboard inside the dialog.
     fn android_preset_typing(&mut self, out: &Output) -> bool {
-        horizon_client::touch_ui::apply_editor_or_preset_output(
+        let handled = horizon_client::touch_ui::apply_editor_or_preset_output(
             self.pad.touch.editor.as_mut(),
             self.pad.touch_ui.preset_dialog.as_mut(),
             out,
-        )
+        );
+        if handled && horizon_client::touch_ui::output_dismisses(out) {
+            crate::platform::hide();
+        }
+        handled
     }
 
     pub(super) fn android_poll_keyboard(&mut self) {
@@ -982,6 +1186,38 @@ impl Game<'_> {
             ));
         }
         for out in crate::platform::poll() {
+            if self.pad.touch.editor.is_some() {
+                let captured = match &out {
+                    Output::Text(t) => self.pad.touch.capture_custom_text(t),
+                    Output::Key(code) => self.pad.touch.capture_custom_key_code(*code),
+                    Output::Backspace => self.pad.touch.capture_custom_key_code(KeyCode::Backspace),
+                    Output::Enter => self.pad.touch.capture_custom_key_code(KeyCode::Enter),
+                    Output::Close => false,
+                };
+                if captured {
+                    self.settings.touch = self.pad.touch.settings.clone();
+                    crate::platform::hide();
+                    continue;
+                }
+            }
+            if self.pad.touch_ui.custom_input_picker != horizon_client::touch::PickerStep::None {
+                let captured = match &out {
+                    Output::Text(t) => self.pad.touch_ui.capture_custom_input_text(t),
+                    Output::Key(code) => self.pad.touch_ui.capture_custom_input_key(*code),
+                    Output::Backspace => self
+                        .pad
+                        .touch_ui
+                        .capture_custom_input_key(KeyCode::Backspace),
+                    Output::Enter => self.pad.touch_ui.capture_custom_input_key(KeyCode::Enter),
+                    Output::Close => None,
+                };
+                if let Some(token) = captured {
+                    crate::platform::hide();
+                    self.android_sync_pointer();
+                    self.android_custom_token_tap(&token);
+                    continue;
+                }
+            }
             if self.android_preset_typing(&out) {
                 continue;
             }
@@ -997,7 +1233,11 @@ impl Game<'_> {
         }
         // Title screens also use Playing: their focused text fields must keep
         // the IME until the user confirms or closes the editor.
-        if !self.pad_in_menu() && crate::platform::active() {
+        if !self.pad_in_menu()
+            && self.pad.touch.editor.is_none()
+            && self.pad.touch_ui.custom_input_picker == horizon_client::touch::PickerStep::None
+            && crate::platform::active()
+        {
             crate::platform::hide();
         }
     }

@@ -155,6 +155,62 @@ pub enum InGameMenuAction {
     SendCustomInput(String),
 }
 
+fn key_code_to_char(code: KeyCode) -> Option<char> {
+    match code {
+        KeyCode::KeyA => Some('a'),
+        KeyCode::KeyB => Some('b'),
+        KeyCode::KeyC => Some('c'),
+        KeyCode::KeyD => Some('d'),
+        KeyCode::KeyE => Some('e'),
+        KeyCode::KeyF => Some('f'),
+        KeyCode::KeyG => Some('g'),
+        KeyCode::KeyH => Some('h'),
+        KeyCode::KeyI => Some('i'),
+        KeyCode::KeyJ => Some('j'),
+        KeyCode::KeyK => Some('k'),
+        KeyCode::KeyL => Some('l'),
+        KeyCode::KeyM => Some('m'),
+        KeyCode::KeyN => Some('n'),
+        KeyCode::KeyO => Some('o'),
+        KeyCode::KeyP => Some('p'),
+        KeyCode::KeyQ => Some('q'),
+        KeyCode::KeyR => Some('r'),
+        KeyCode::KeyS => Some('s'),
+        KeyCode::KeyT => Some('t'),
+        KeyCode::KeyU => Some('u'),
+        KeyCode::KeyV => Some('v'),
+        KeyCode::KeyW => Some('w'),
+        KeyCode::KeyX => Some('x'),
+        KeyCode::KeyY => Some('y'),
+        KeyCode::KeyZ => Some('z'),
+        KeyCode::Digit0 | KeyCode::Numpad0 => Some('0'),
+        KeyCode::Digit1 | KeyCode::Numpad1 => Some('1'),
+        KeyCode::Digit2 | KeyCode::Numpad2 => Some('2'),
+        KeyCode::Digit3 | KeyCode::Numpad3 => Some('3'),
+        KeyCode::Digit4 | KeyCode::Numpad4 => Some('4'),
+        KeyCode::Digit5 | KeyCode::Numpad5 => Some('5'),
+        KeyCode::Digit6 | KeyCode::Numpad6 => Some('6'),
+        KeyCode::Digit7 | KeyCode::Numpad7 => Some('7'),
+        KeyCode::Digit8 | KeyCode::Numpad8 => Some('8'),
+        KeyCode::Digit9 | KeyCode::Numpad9 => Some('9'),
+        KeyCode::Space => Some(' '),
+        KeyCode::Minus | KeyCode::NumpadSubtract => Some('-'),
+        KeyCode::Period | KeyCode::NumpadDecimal => Some('.'),
+        KeyCode::Comma => Some(','),
+        KeyCode::Slash | KeyCode::NumpadDivide => Some('/'),
+        _ => None,
+    }
+}
+
+/// Whether a dialog consumed an output that confirms or dismisses it. The
+/// library only edits dialog state; the Android host hides its soft keyboard.
+pub fn output_dismisses(out: &Output) -> bool {
+    matches!(
+        out,
+        Output::Enter | Output::Close | Output::Key(KeyCode::Enter | KeyCode::Escape)
+    )
+}
+
 /// Applies an on-screen or hardware keyboard `Output` event to an active Control Editor
 /// Save Preset dialog or Floating Menu Copy/Edit Preset dialog.
 pub fn apply_editor_or_preset_output(
@@ -179,10 +235,17 @@ pub fn apply_editor_or_preset_output(
                     }
                 }
             }
-            Output::Backspace => {
+            Output::Backspace | Output::Key(KeyCode::Backspace) => {
                 target.pop();
             }
-            Output::Enter | Output::Close => {}
+            Output::Enter | Output::Close | Output::Key(KeyCode::Enter | KeyCode::Escape) => {}
+            Output::Key(code) => {
+                if let Some(ch) = key_code_to_char(*code)
+                    && target.chars().count() < max_len
+                {
+                    target.push(ch);
+                }
+            }
         }
         return true;
     }
@@ -201,10 +264,17 @@ pub fn apply_editor_or_preset_output(
                     }
                 }
             }
-            Output::Backspace => {
+            Output::Backspace | Output::Key(KeyCode::Backspace) => {
                 target.pop();
             }
-            Output::Enter | Output::Close => {}
+            Output::Enter | Output::Close | Output::Key(KeyCode::Enter | KeyCode::Escape) => {}
+            Output::Key(code) => {
+                if let Some(ch) = key_code_to_char(*code)
+                    && target.chars().count() < max_len
+                {
+                    target.push(ch);
+                }
+            }
         }
         return true;
     }
@@ -437,22 +507,51 @@ impl TouchUi {
         if controls.editor.is_some() {
             return false;
         }
+        if self.floating_menu
+            || self.preset_dialog.is_some()
+            || self.presets_modal_open
+            || self.custom_input_picker != crate::touch::PickerStep::None
+        {
+            return false;
+        }
         if !controls.settings.virtual_mouse_enabled {
             self.goy_in_game_mouse = false;
             return false;
-        }
-        if self.floating_menu {
-            return true;
         }
         match controls.settings.control_style {
             crate::touch::ControlStyle::Mcpe => {
                 let mcpe_visible = controls.mcpe_controls_visible(in_menu, hide_gui, touch_active);
                 !mcpe_visible && (in_menu || !captured || !mcpe_visible)
             }
-            crate::touch::ControlStyle::GoyControl => {
-                in_menu || !captured || self.goy_in_game_mouse
-            }
+            crate::touch::ControlStyle::GoyControl => in_menu || self.goy_in_game_mouse,
         }
+    }
+
+    /// Captures a physical or soft-keyboard `KeyCode` when the `Send Custom Input` picker modal is open.
+    pub fn capture_custom_input_key(&mut self, code: KeyCode) -> Option<String> {
+        if self.custom_input_picker == crate::touch::PickerStep::None {
+            return None;
+        }
+        if code == KeyCode::Escape {
+            self.custom_input_picker = crate::touch::PickerStep::None;
+            return None;
+        }
+        let token = crate::keybinds::key_name(code)?.to_owned();
+        self.custom_input_picker = crate::touch::PickerStep::None;
+        self.floating_menu = false;
+        Some(token)
+    }
+
+    /// Captures a typed character from the Android soft keyboard when `Send Custom Input` is open.
+    pub fn capture_custom_input_text(&mut self, text: &str) -> Option<String> {
+        if self.custom_input_picker == crate::touch::PickerStep::None {
+            return None;
+        }
+        let ch = text.chars().find(|c| !c.is_control())?;
+        let tok = crate::touch::TouchControls::char_to_key_token(ch)?;
+        self.custom_input_picker = crate::touch::PickerStep::None;
+        self.floating_menu = false;
+        Some(tok.to_owned())
     }
 
     pub fn refresh_presets_cache(&mut self, style: crate::touch::ControlStyle) {
@@ -966,9 +1065,10 @@ fn draw_input_picker_modal(
     match step {
         PickerStep::AskInputType { event_slot } => {
             let dw = (w - 36.0).clamp(270.0, 440.0);
-            let dh = 210.0;
+            let dh = 236.0;
             let dx = (w - dw) * 0.5;
             let dy = (h - dh) * 0.5;
+            ui.rounded(dx + 2.0, dy + 5.0, dw, dh, 18.0, rgba(0, 0, 0, 150));
             ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
             ui.border(dx, dy, dw, dh, 18.0, accent);
             let title_str = if for_custom_send {
@@ -979,7 +1079,7 @@ fn draw_input_picker_modal(
                 format!("Assign Event Slot #{} — Choose Input Type", event_slot + 1)
             };
             let sub_str = if for_custom_send {
-                "Select a keyboard key, mouse click/scroll, or game action to send immediately."
+                "Tap any physical key, use System Keyboard, or pick from the PC layout below."
             } else if mcpe_exclusive {
                 "Exclusive binding: Keyboard OR Mouse (selecting one clears the other)."
             } else {
@@ -989,14 +1089,14 @@ fn draw_input_picker_modal(
                 Face::SemiBold,
                 13.5,
                 dx + 16.0,
-                dy + 14.0,
+                dy + 12.0,
                 text_c,
                 &title_str,
             );
-            ui.text(Face::Regular, 10.2, dx + 16.0, dy + 34.0, muted_c, sub_str);
+            ui.text(Face::Regular, 10.0, dx + 16.0, dy + 31.0, muted_c, sub_str);
             let cw = (dw - 40.0) * 0.5;
-            let r_kb = [dx + 16.0, dy + 62.0, cw, 82.0];
-            let r_ms = [dx + 24.0 + cw, dy + 62.0, cw, 82.0];
+            let r_kb = [dx + 16.0, dy + 54.0, cw, 76.0];
+            let r_ms = [dx + 24.0 + cw, dy + 54.0, cw, 76.0];
             for (r, title, sub) in [
                 (
                     r_kb,
@@ -1022,26 +1122,36 @@ fn draw_input_picker_modal(
                 ui.centered_fit(
                     Face::SemiBold,
                     13.0,
-                    [r[0] + 6.0, r[1] + 16.0, r[2] - 12.0, 24.0],
+                    [r[0] + 6.0, r[1] + 14.0, r[2] - 12.0, 24.0],
                     text_c,
                     title,
                 );
                 ui.centered_fit(
                     Face::Regular,
                     10.0,
-                    [r[0] + 6.0, r[1] + 44.0, r[2] - 12.0, 22.0],
+                    [r[0] + 6.0, r[1] + 40.0, r[2] - 12.0, 22.0],
                     muted_c,
                     sub,
                 );
             }
+            let r_sys = [dx + 16.0, dy + 138.0, dw - 32.0, 34.0];
+            ui.rounded(r_sys[0], r_sys[1], r_sys[2], r_sys[3], 10.0, bg_hi);
+            ui.border(r_sys[0], r_sys[1], r_sys[2], r_sys[3], 10.0, accent);
+            ui.centered_fit(
+                Face::SemiBold,
+                10.8,
+                r_sys,
+                accent,
+                "⌨ Type / Capture Key (System / Physical Keyboard)",
+            );
             if for_custom_send {
-                let r_can = [dx + 16.0, dy + 156.0, dw - 32.0, 36.0];
+                let r_can = [dx + 16.0, dy + 180.0, dw - 32.0, 36.0];
                 ui.rounded(r_can[0], r_can[1], r_can[2], r_can[3], 10.0, bg_hi);
                 ui.border(r_can[0], r_can[1], r_can[2], r_can[3], 10.0, border_c);
                 ui.centered_fit(Face::Medium, 11.0, r_can, text_c, "Cancel");
             } else {
-                let r_clr = [dx + 16.0, dy + 156.0, cw, 36.0];
-                let r_can = [dx + 24.0 + cw, dy + 156.0, cw, 36.0];
+                let r_clr = [dx + 16.0, dy + 180.0, cw, 36.0];
+                let r_can = [dx + 24.0 + cw, dy + 180.0, cw, 36.0];
                 ui.rounded(r_clr[0], r_clr[1], r_clr[2], r_clr[3], 10.0, bg_hi);
                 ui.border(r_clr[0], r_clr[1], r_clr[2], r_clr[3], 10.0, danger_c);
                 ui.centered_fit(
@@ -1061,30 +1171,38 @@ fn draw_input_picker_modal(
             let dh = (h - 20.0).clamp(235.0, 340.0);
             let dx = (w - dw) * 0.5;
             let dy = (h - dh) * 0.5;
+            ui.rounded(dx + 2.0, dy + 5.0, dw, dh, 18.0, rgba(0, 0, 0, 150));
             ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
             ui.border(dx, dy, dw, dh, 18.0, accent);
             let title_str = if for_custom_send {
-                "Send Custom Input — Full PC Keyboard (Swipe Horizontally)".to_owned()
+                "Send Custom Input — Full PC Keyboard (Tap or Swipe)".to_owned()
             } else if mcpe_exclusive {
-                "MCPE Exclusive Keyboard Binding (Clears Mouse Binding)".to_owned()
+                "MCPE Exclusive Keyboard Binding (Clears Mouse)".to_owned()
             } else {
                 format!(
-                    "Event Slot #{} — Full PC Keyboard (Swipe Horizontally)",
+                    "Event Slot #{} — Full PC Keyboard (Tap or Swipe)",
                     event_slot + 1
                 )
             };
-            ui.text(
+            ui.text_clipped(
                 Face::SemiBold,
-                13.0,
+                12.5,
                 dx + 14.0,
                 dy + 11.0,
+                (dw - 290.0).max(80.0),
                 text_c,
                 &title_str,
             );
+            let b_ime = [dx + dw - 266.0, dy + 8.0, 64.0, 26.0];
             let b_left = [dx + dw - 196.0, dy + 8.0, 56.0, 26.0];
             let b_right = [dx + dw - 134.0, dy + 8.0, 56.0, 26.0];
             let b_back = [dx + dw - 72.0, dy + 8.0, 58.0, 26.0];
-            for (r, lbl) in [(b_left, "◀ Left"), (b_right, "Right ▶"), (b_back, "Back")] {
+            for (r, lbl) in [
+                (b_ime, "⌨ Sys Key"),
+                (b_left, "◀ Left"),
+                (b_right, "Right ▶"),
+                (b_back, "Back"),
+            ] {
                 ui.rounded(r[0], r[1], r[2], r[3], 8.0, bg_hi);
                 ui.border(r[0], r[1], r[2], r[3], 8.0, border_c);
                 ui.centered_fit(Face::SemiBold, 10.0, r, text_c, lbl);
@@ -1530,7 +1648,7 @@ impl TouchUi {
                     match phase {
                         TouchPhase::Moved => {
                             let dx_k = p[0] - last_x;
-                            if dx_k.abs() > 2.0 {
+                            if dx_k.abs() > 3.5 {
                                 moved = true;
                             }
                             let mdw = (w - 20.0).clamp(300.0, 620.0);
@@ -1540,7 +1658,43 @@ impl TouchUi {
                             self.custom_kb_drag = Some((drag_id, p[0], moved));
                             return Some(InGameMenuAction::Close);
                         }
-                        TouchPhase::Ended | TouchPhase::Cancelled => {
+                        TouchPhase::Ended => {
+                            self.custom_kb_drag = None;
+                            if !moved
+                                && matches!(self.custom_input_picker, PickerStep::Keyboard { .. })
+                            {
+                                let mdw = (w - 20.0).clamp(300.0, 620.0);
+                                let mdh = (h - 20.0).clamp(235.0, 340.0);
+                                let mdx = (w - mdw) * 0.5;
+                                let mdy = (h - mdh) * 0.5;
+                                let kb_top = mdy + 40.0;
+                                let kb_h = mdh - 56.0;
+                                let row_h = ((kb_h - 25.0) / 6.0).clamp(24.0, 38.0);
+                                let key_unit = 38.0;
+                                let gap = 4.0;
+                                for (r_idx, row) in KB_ROWS.iter().enumerate() {
+                                    let ry = kb_top + r_idx as f32 * (row_h + 4.0);
+                                    let mut kx = mdx + 14.0 - self.custom_kb_scroll_x;
+                                    for (_lbl, tok, width_mult) in *row {
+                                        let kw = key_unit * (*width_mult)
+                                            + (*width_mult - 1.0).max(0.0) * gap;
+                                        if inside([kx, ry, kw, row_h])
+                                            && p[0] >= mdx + 10.0
+                                            && p[0] <= mdx + mdw - 10.0
+                                        {
+                                            self.custom_input_picker = PickerStep::None;
+                                            self.floating_menu = false;
+                                            return Some(InGameMenuAction::SendCustomInput(
+                                                (*tok).to_owned(),
+                                            ));
+                                        }
+                                        kx += kw + gap;
+                                    }
+                                }
+                            }
+                            return Some(InGameMenuAction::Close);
+                        }
+                        TouchPhase::Cancelled => {
                             self.custom_kb_drag = None;
                             return Some(InGameMenuAction::Close);
                         }
@@ -1554,19 +1708,22 @@ impl TouchUi {
             match self.custom_input_picker {
                 PickerStep::AskInputType { event_slot } => {
                     let mdw = (w - 36.0).clamp(270.0, 440.0);
-                    let mdh = 210.0;
+                    let mdh = 236.0;
                     let mdx = (w - mdw) * 0.5;
                     let mdy = (h - mdh) * 0.5;
                     let mcw = (mdw - 40.0) * 0.5;
-                    if inside([mdx + 16.0, mdy + 62.0, mcw, 82.0]) {
+                    if inside([mdx + 16.0, mdy + 54.0, mcw, 76.0]) {
                         self.custom_input_picker = PickerStep::Keyboard { event_slot };
                         return Some(InGameMenuAction::Close);
                     }
-                    if inside([mdx + 24.0 + mcw, mdy + 62.0, mcw, 82.0]) {
+                    if inside([mdx + 24.0 + mcw, mdy + 54.0, mcw, 76.0]) {
                         self.custom_input_picker = PickerStep::MouseAndActions { event_slot };
                         return Some(InGameMenuAction::Close);
                     }
-                    if inside([mdx + 16.0, mdy + 156.0, mdw - 32.0, 36.0])
+                    if inside([mdx + 16.0, mdy + 138.0, mdw - 32.0, 34.0]) {
+                        return Some(InGameMenuAction::OpenKeyboard);
+                    }
+                    if inside([mdx + 16.0, mdy + 180.0, mdw - 32.0, 36.0])
                         || !inside([mdx, mdy, mdw, mdh])
                     {
                         self.custom_input_picker = PickerStep::None;
@@ -1580,6 +1737,9 @@ impl TouchUi {
                     let mdx = (w - mdw) * 0.5;
                     let mdy = (h - mdh) * 0.5;
                     let max_kb_scroll = (880.0 - (mdw - 28.0)).max(0.0);
+                    if inside([mdx + mdw - 266.0, mdy + 8.0, 64.0, 26.0]) {
+                        return Some(InGameMenuAction::OpenKeyboard);
+                    }
                     if inside([mdx + mdw - 196.0, mdy + 8.0, 56.0, 26.0]) {
                         self.custom_kb_scroll_x =
                             (self.custom_kb_scroll_x - 140.0).clamp(0.0, max_kb_scroll);
@@ -1595,27 +1755,6 @@ impl TouchUi {
                     {
                         self.custom_input_picker = PickerStep::AskInputType { event_slot };
                         return Some(InGameMenuAction::Close);
-                    }
-                    let kb_top = mdy + 40.0;
-                    let kb_h = mdh - 56.0;
-                    let row_h = ((kb_h - 25.0) / 6.0).clamp(24.0, 38.0);
-                    let key_unit = 38.0;
-                    let gap = 4.0;
-                    for (r_idx, row) in KB_ROWS.iter().enumerate() {
-                        let ry = kb_top + r_idx as f32 * (row_h + 4.0);
-                        let mut kx = mdx + 14.0 - self.custom_kb_scroll_x;
-                        for (_lbl, tok, width_mult) in *row {
-                            let kw = key_unit * (*width_mult) + (*width_mult - 1.0).max(0.0) * gap;
-                            if inside([kx, ry, kw, row_h])
-                                && p[0] >= mdx + 10.0
-                                && p[0] <= mdx + mdw - 10.0
-                            {
-                                self.custom_input_picker = PickerStep::None;
-                                self.floating_menu = false;
-                                return Some(InGameMenuAction::SendCustomInput((*tok).to_owned()));
-                            }
-                            kx += kw + gap;
-                        }
                     }
                     self.custom_kb_drag = Some((id, p[0], false));
                     return Some(InGameMenuAction::Close);
@@ -3711,18 +3850,46 @@ pub fn draw_hud_editor(
                 "Configure control appearance & behavior",
             )
         };
+        let cur_pl = if let Some(idx) = ed.selected_custom {
+            tc.custom_placement(idx)
+        } else if let Some(c) = ed.selected {
+            tc.placement(c)
+        } else {
+            crate::touch::Placement::new(0.5, 0.5, 0.12)
+        };
+        let telem = format!(
+            "X:{:.0}% Y:{:.0}% • Sz:{:.0}% • α:{:.0}%",
+            cur_pl.center[0] * 100.0,
+            cur_pl.center[1] * 100.0,
+            cur_pl.size * 100.0,
+            cur_pl.opacity * 100.0
+        );
         ui.rounded(dx + 14.0, dy + 9.0, 28.0, 28.0, 9.0, accent_soft);
         ui.border(dx + 14.0, dy + 9.0, 28.0, 28.0, 9.0, accent);
         ui.icon(Icon::Gear, dx + 20.0, dy + 15.0, 16.0, accent);
-        ui.text(
+        ui.text_clipped(
             Face::SemiBold,
-            13.0,
+            12.8,
             dx + 48.0,
-            dy + 8.0,
+            dy + 7.0,
+            (dw - 260.0).max(90.0),
             text_c,
             &header_txt,
         );
-        ui.text(Face::Regular, 9.0, dx + 48.0, dy + 24.0, muted_c, sub_txt);
+        ui.text_clipped(
+            Face::Regular,
+            9.0,
+            dx + 48.0,
+            dy + 24.0,
+            (dw - 260.0).max(90.0),
+            muted_c,
+            sub_txt,
+        );
+        let pill_w = 132.0;
+        let pill_r = [dx + dw - 78.0 - pill_w, dy + 10.0, pill_w, 26.0];
+        ui.rounded(pill_r[0], pill_r[1], pill_r[2], pill_r[3], 8.0, bg_hi);
+        ui.border(pill_r[0], pill_r[1], pill_r[2], pill_r[3], 8.0, border_c);
+        ui.centered_fit(Face::Mono, 8.8, pill_r, accent, &telem);
 
         let close_r = [dx + dw - 74.0, dy + 9.0, 60.0, 28.0];
         ui.rounded(close_r[0], close_r[1], close_r[2], close_r[3], 9.0, accent);
@@ -5082,15 +5249,79 @@ pub fn touch_hud_editor(
                             }
                         }
                         EditorDragKind::KeyboardScroll { last_x, mut moved } => {
-                            let dx = p[0] - last_x;
-                            if dx.abs() > 2.0 {
+                            let dx_k = p[0] - last_x;
+                            if dx_k.abs() > 3.5 {
                                 moved = true;
                             }
                             let dw = (w - 20.0).clamp(300.0, 620.0);
                             let max_kb_scroll = (880.0 - (dw - 28.0)).max(0.0);
-                            ed.kb_scroll_x = (ed.kb_scroll_x - dx).clamp(0.0, max_kb_scroll);
+                            ed.kb_scroll_x = (ed.kb_scroll_x - dx_k).clamp(0.0, max_kb_scroll);
                             if ended {
                                 ed.active_drag = None;
+                                if !moved
+                                    && let PickerStep::Keyboard { event_slot } = ed.picker_step
+                                {
+                                    let is_mcpe = tc.settings.control_style == ControlStyle::Mcpe;
+                                    let dh = (h - 20.0).clamp(235.0, 340.0);
+                                    let dx = (w - dw) * 0.5;
+                                    let dy = (h - dh) * 0.5;
+                                    let kb_top = dy + 40.0;
+                                    let kb_h = dh - 56.0;
+                                    let row_h = ((kb_h - 25.0) / 6.0).clamp(24.0, 38.0);
+                                    let key_unit = 38.0;
+                                    let gap = 4.0;
+                                    for (r_idx, row) in KB_ROWS.iter().enumerate() {
+                                        let ry = kb_top + r_idx as f32 * (row_h + 4.0);
+                                        let mut kx = dx + 14.0 - ed.kb_scroll_x;
+                                        for (lbl, tok, width_mult) in *row {
+                                            let kw = key_unit * (*width_mult)
+                                                + (*width_mult - 1.0).max(0.0) * gap;
+                                            if inside([kx, ry, kw, row_h])
+                                                && p[0] >= dx + 10.0
+                                                && p[0] <= dx + dw - 10.0
+                                            {
+                                                push_undo_snapshot(&mut ed, &tc.settings);
+                                                if let Some(idx) = ed.selected_custom
+                                                    && let Some(btn) =
+                                                        tc.settings.custom_buttons.get_mut(idx)
+                                                {
+                                                    if is_mcpe {
+                                                        btn.set_exclusive_binding(
+                                                            (*tok).to_owned(),
+                                                        );
+                                                        btn.custom_label = (*lbl).to_owned();
+                                                    } else {
+                                                        btn.set_event_slot(
+                                                            event_slot,
+                                                            (*tok).to_owned(),
+                                                        );
+                                                        if event_slot == 0
+                                                            && (btn.custom_label.is_empty()
+                                                                || btn.custom_label == "BTN")
+                                                        {
+                                                            btn.custom_label = (*lbl).to_owned();
+                                                        }
+                                                    }
+                                                    let _ = tc.settings.save();
+                                                }
+                                                ed.picker_step = PickerStep::None;
+                                                ed.status_msg = Some(if is_mcpe {
+                                                    format!(
+                                                        "Bound key '{lbl}' (exclusive — mouse binding cleared)."
+                                                    )
+                                                } else {
+                                                    format!(
+                                                        "Assigned key '{lbl}' to Event Slot #{}.",
+                                                        event_slot + 1
+                                                    )
+                                                });
+                                                tc.clicked = true;
+                                                break;
+                                            }
+                                            kx += kw + gap;
+                                        }
+                                    }
+                                }
                             } else {
                                 ed.active_drag = Some((
                                     drag_id,
@@ -5307,21 +5538,28 @@ pub fn touch_hud_editor(
             match ed.picker_step {
                 PickerStep::AskInputType { event_slot } => {
                     let dw = (w - 36.0).clamp(270.0, 440.0);
-                    let dh = 210.0;
+                    let dh = 236.0;
                     let dx = (w - dw) * 0.5;
                     let dy = (h - dh) * 0.5;
                     let cw = (dw - 40.0) * 0.5;
-                    if inside([dx + 16.0, dy + 62.0, cw, 82.0]) {
+                    if inside([dx + 16.0, dy + 54.0, cw, 76.0]) {
                         ed.picker_step = PickerStep::Keyboard { event_slot };
                         tc.clicked = true;
                         return false;
                     }
-                    if inside([dx + 24.0 + cw, dy + 62.0, cw, 82.0]) {
+                    if inside([dx + 24.0 + cw, dy + 54.0, cw, 76.0]) {
                         ed.picker_step = PickerStep::MouseAndActions { event_slot };
                         tc.clicked = true;
                         return false;
                     }
-                    if inside([dx + 16.0, dy + 156.0, cw, 36.0]) {
+                    if inside([dx + 16.0, dy + 138.0, dw - 32.0, 34.0]) {
+                        ed.keyboard_request = true;
+                        ed.status_msg =
+                            Some("Press any key on your keyboard to bind it to this slot.".into());
+                        tc.clicked = true;
+                        return false;
+                    }
+                    if inside([dx + 16.0, dy + 180.0, cw, 36.0]) {
                         push_undo_snapshot(&mut ed, &tc.settings);
                         if let Some(idx) = ed.selected_custom
                             && let Some(btn) = tc.settings.custom_buttons.get_mut(idx)
@@ -5337,7 +5575,7 @@ pub fn touch_hud_editor(
                         tc.clicked = true;
                         return false;
                     }
-                    if inside([dx + 24.0 + cw, dy + 156.0, cw, 36.0]) || !inside([dx, dy, dw, dh]) {
+                    if inside([dx + 24.0 + cw, dy + 180.0, cw, 36.0]) || !inside([dx, dy, dw, dh]) {
                         ed.picker_step = PickerStep::None;
                         tc.clicked = true;
                         return false;
@@ -5350,6 +5588,11 @@ pub fn touch_hud_editor(
                     let dx = (w - dw) * 0.5;
                     let dy = (h - dh) * 0.5;
                     let max_kb_scroll = (880.0 - (dw - 28.0)).max(0.0);
+                    if inside([dx + dw - 266.0, dy + 8.0, 64.0, 26.0]) {
+                        ed.keyboard_request = true;
+                        tc.clicked = true;
+                        return false;
+                    }
                     if inside([dx + dw - 196.0, dy + 8.0, 56.0, 26.0]) {
                         ed.kb_scroll_x = (ed.kb_scroll_x - 140.0).clamp(0.0, max_kb_scroll);
                         tc.clicked = true;
@@ -5364,57 +5607,6 @@ pub fn touch_hud_editor(
                         ed.picker_step = PickerStep::AskInputType { event_slot };
                         tc.clicked = true;
                         return false;
-                    }
-                    let kb_top = dy + 40.0;
-                    let kb_h = dh - 56.0;
-                    let row_h = ((kb_h - 25.0) / 6.0).clamp(24.0, 38.0);
-                    let key_unit = 38.0;
-                    let gap = 4.0;
-                    for (r_idx, row) in KB_ROWS.iter().enumerate() {
-                        let ry = kb_top + r_idx as f32 * (row_h + 4.0);
-                        let mut kx = dx + 14.0 - ed.kb_scroll_x;
-                        for (lbl, tok, width_mult) in *row {
-                            let kw = key_unit * (*width_mult) + (*width_mult - 1.0).max(0.0) * gap;
-                            if inside([kx, ry, kw, row_h])
-                                && p[0] >= dx + 10.0
-                                && p[0] <= dx + dw - 10.0
-                            {
-                                push_undo_snapshot(&mut ed, &tc.settings);
-                                if let Some(idx) = ed.selected_custom
-                                    && let Some(btn) = tc.settings.custom_buttons.get_mut(idx)
-                                {
-                                    if is_mcpe {
-                                        // Strict single-binding exclusivity in MCPE mode:
-                                        // selecting a keyboard binding clears any mouse binding.
-                                        btn.set_exclusive_binding((*tok).to_owned());
-                                        btn.custom_label = (*lbl).to_owned();
-                                    } else {
-                                        btn.set_event_slot(event_slot, (*tok).to_owned());
-                                        if event_slot == 0
-                                            && (btn.custom_label.is_empty()
-                                                || btn.custom_label == "BTN")
-                                        {
-                                            btn.custom_label = (*lbl).to_owned();
-                                        }
-                                    }
-                                    let _ = tc.settings.save();
-                                }
-                                ed.picker_step = PickerStep::None;
-                                ed.status_msg = Some(if is_mcpe {
-                                    format!(
-                                        "Bound key '{lbl}' (exclusive — mouse binding cleared)."
-                                    )
-                                } else {
-                                    format!(
-                                        "Assigned key '{lbl}' to Event Slot #{}.",
-                                        event_slot + 1
-                                    )
-                                });
-                                tc.clicked = true;
-                                return false;
-                            }
-                            kx += kw + gap;
-                        }
                     }
                     ed.active_drag = Some((
                         id,
@@ -5493,6 +5685,22 @@ pub fn touch_hud_editor(
             let dy = (h - dh) * 0.5;
             if inside([dx + dw - 74.0, dy + 9.0, 60.0, 28.0]) || !inside([dx, dy, dw, dh]) {
                 ed.props_open = false;
+                let _ = tc.settings.save();
+                tc.clicked = true;
+                return false;
+            }
+            if inside([dx + dw - 210.0, dy + 10.0, 132.0, 26.0]) {
+                push_undo_snapshot(&mut ed, &tc.settings);
+                let mode_idx = tc.settings.mode.index();
+                if let Some(idx) = ed.selected_custom {
+                    if let Some(btn) = tc.settings.custom_buttons.get_mut(idx) {
+                        btn.layouts[mode_idx].center[0] = 0.5;
+                    }
+                } else if let Some(c) = ed.selected {
+                    let slot = tc.settings.slot(c);
+                    tc.settings.layouts[mode_idx][slot].center[0] = 0.5;
+                }
+                ed.status_msg = Some("Centered component horizontally (X = 50%).".into());
                 let _ = tc.settings.save();
                 tc.clicked = true;
                 return false;

@@ -13539,7 +13539,9 @@ impl Game<'_> {
                 self.settings.touch.toggle_sprint = s;
                 self.settings.toggle_sprint = s;
             }
-            self.pad.touch.settings = self.settings.touch.clone();
+            if self.pad.touch.editor.is_none() {
+                self.pad.touch.settings = self.settings.touch.clone();
+            }
             self.pad.touch.force_crosshair =
                 !crate::touch_visible() || self.settings.keypad.enabled;
             let changed =
@@ -15031,12 +15033,25 @@ impl Game<'_> {
         } else {
             #[cfg(target_os = "android")]
             self.android_sync_pointer();
+            // Draw the virtual mouse pointer directly above the vanilla game/menu GUI layer
+            // and strictly underneath our touch controls and floating menu overlays.
+            #[cfg(target_os = "android")]
+            if self.pad.touch_ui.virtual_mouse {
+                horizon_client::touch_ui::draw_pointer(
+                    &mut hud,
+                    &self.gui.atlas,
+                    self.cursor,
+                    self.pad.touch.settings.virtual_mouse_pointer_scale,
+                );
+            }
             let in_menu = self.pad_in_menu();
-            self.pad.touch.in_menu = in_menu;
+            let waiting_for_key = self.screen == Screen::Options && self.options_waiting_for_key();
+            let hud_in_menu = in_menu && !waiting_for_key;
+            self.pad.touch.in_menu = hud_in_menu;
             self.pad.touch.goy_rendered_by_ui = true;
             if (in_menu || !self.ui.hide_gui)
                 && (self.player.is_some() || self.settings.keypad.enabled)
-                && (!in_menu
+                && (!hud_in_menu
                     || self.android_inventory_controls()
                     || self.pad.touch.settings.layouts[self.pad.touch.settings.mode.index()]
                         .iter()
@@ -15057,16 +15072,13 @@ impl Game<'_> {
                     &self.pad.touch,
                     &mut hud,
                     &self.gui.atlas,
-                    in_menu,
+                    hud_in_menu,
                     self.pad.touch_ui.virtual_mouse,
                 );
             }
         }
         #[cfg(target_os = "android")]
         {
-            // The touch pointer follows the mouse lock: free in menus, gone in
-            // play. One helper owns the state, so a "Mouse ON" label can never
-            // disagree with the pointer that is drawn.
             self.android_sync_pointer();
             if self.pad.touch.editor.is_none() {
                 self.pad.touch_ui.goy_mode = self.pad.touch.settings.control_style
@@ -15078,16 +15090,6 @@ impl Game<'_> {
                     &mut hud,
                     &self.gui.atlas,
                     &self.pad.touch.settings,
-                );
-            }
-            // Above every overlay, including the control editor and the floating
-            // menu: that is where the pointer is needed most.
-            if self.pad.touch_ui.virtual_mouse {
-                horizon_client::touch_ui::draw_pointer(
-                    &mut hud,
-                    &self.gui.atlas,
-                    self.cursor,
-                    self.pad.touch.settings.virtual_mouse_pointer_scale,
                 );
             }
         }
@@ -16257,9 +16259,10 @@ impl Game<'_> {
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && event.state == ElementState::Pressed
             && let PhysicalKey::Code(key) = event.physical_key
-            && let Some(name) = horizon_client::keybinds::key_name(key)
-            && self.pad.touch.capture_custom_key(name)
+            && self.pad.touch.capture_custom_key_code(key)
         {
+            self.settings.touch = self.pad.touch.settings.clone();
+            crate::platform::hide();
             return;
         }
         #[cfg(target_os = "android")]
@@ -16395,6 +16398,43 @@ impl Game<'_> {
         #[cfg(target_os = "android")]
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && event.state == ElementState::Pressed
+        {
+            if self.pad.touch.editor.is_some() {
+                if let PhysicalKey::Code(code) = event.physical_key
+                    && self.pad.touch.capture_custom_key_code(code)
+                {
+                    self.settings.touch = self.pad.touch.settings.clone();
+                    crate::platform::hide();
+                    return;
+                }
+                if let Some(txt) = event.text.as_deref()
+                    && self.pad.touch.capture_custom_text(txt)
+                {
+                    self.settings.touch = self.pad.touch.settings.clone();
+                    crate::platform::hide();
+                    return;
+                }
+            }
+            if self.pad.touch_ui.custom_input_picker != horizon_client::touch::PickerStep::None {
+                if let PhysicalKey::Code(code) = event.physical_key
+                    && let Some(token) = self.pad.touch_ui.capture_custom_input_key(code)
+                {
+                    crate::platform::hide();
+                    self.android_custom_token_tap(&token);
+                    return;
+                }
+                if let Some(txt) = event.text.as_deref()
+                    && let Some(token) = self.pad.touch_ui.capture_custom_input_text(txt)
+                {
+                    crate::platform::hide();
+                    self.android_custom_token_tap(&token);
+                    return;
+                }
+            }
+        }
+        #[cfg(target_os = "android")]
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && event.state == ElementState::Pressed
             && (self
                 .pad
                 .touch
@@ -16405,26 +16445,30 @@ impl Game<'_> {
         {
             if let PhysicalKey::Code(code) = event.physical_key {
                 if matches!(code, KeyCode::Backspace | KeyCode::Enter | KeyCode::Escape) {
+                    let out = horizon_client::osk::Output::Key(code);
                     horizon_client::touch_ui::apply_editor_or_preset_output(
                         self.pad.touch.editor.as_mut(),
                         self.pad.touch_ui.preset_dialog.as_mut(),
-                        &match code {
-                            KeyCode::Backspace => horizon_client::osk::Output::Backspace,
-                            KeyCode::Enter => horizon_client::osk::Output::Enter,
-                            _ => horizon_client::osk::Output::Close,
-                        },
+                        &out,
                     );
+                    if horizon_client::touch_ui::output_dismisses(&out) {
+                        crate::platform::hide();
+                    }
                     return;
                 }
             }
             if let Some(txt) = event.text.as_deref()
                 && !txt.is_empty()
             {
+                let out = horizon_client::osk::Output::Text(txt.to_owned());
                 horizon_client::touch_ui::apply_editor_or_preset_output(
                     self.pad.touch.editor.as_mut(),
                     self.pad.touch_ui.preset_dialog.as_mut(),
-                    &horizon_client::osk::Output::Text(txt.to_owned()),
+                    &out,
                 );
+                if horizon_client::touch_ui::output_dismisses(&out) {
+                    crate::platform::hide();
+                }
                 return;
             }
         }
@@ -16462,9 +16506,7 @@ impl Game<'_> {
                         self.pause = false;
                     }
                 }
-                if self.pad.touch.editor.is_none() {
-                    self.settings.touch = self.pad.touch.settings.clone();
-                }
+                self.settings.touch = self.pad.touch.settings.clone();
                 if std::mem::take(&mut self.pad.touch.clicked) {
                     self.audio.play_button_click();
                     self.android_touch_haptic(10);
@@ -16488,7 +16530,8 @@ impl Game<'_> {
                 touch.location.y as f32 / size.height.max(1) as f32,
             ];
             let in_menu = self.pad_in_menu();
-            self.pad.touch.in_menu = in_menu;
+            let waiting_for_key = self.screen == Screen::Options && self.options_waiting_for_key();
+            self.pad.touch.in_menu = in_menu && !waiting_for_key;
             let touch_controls_hidden = !crate::touch_visible()
                 && self.pad.touch.hud_opacity_scale <= 0.01
                 && self.pad.touch.editor.is_none();
@@ -16546,6 +16589,9 @@ impl Game<'_> {
                     return;
                 }
                 self.pad.in_use = true;
+                if !self.pad_in_menu() && !self.captured && self.focused {
+                    self.capture(true);
+                }
                 if touch.phase == TouchPhase::Started {
                     let batch = HudBatch::new([size.width, size.height]);
                     let point = [
@@ -20204,7 +20250,7 @@ impl Loading {
             self.prepared_renderer = Some(job.join().map_err(|_| "renderer worker panicked")??);
             return Ok(());
         }
-        if !cfg!(target_os = "android") || self.prepared_renderer.is_some() {
+        if !cfg!(target_os = "android") || !self.shown || self.prepared_renderer.is_some() {
             return Ok(());
         }
         let Some(Ok(loaded)) = &mut self.loaded else {
@@ -20214,9 +20260,13 @@ impl Loading {
             return Ok(());
         };
         let options = self.options.as_ref().ok_or("loading already finished")?;
-        if options.offscreen || previous.info.backend != wgpu::Backend::Vulkan {
+        if options.offscreen
+            || previous.info.backend != wgpu::Backend::Vulkan
+            || previous.matches_sprite_layout(loaded.pack.render.texture_layers)
+        {
             return Ok(());
         }
+        let _ = previous.device.poll(wgpu::PollType::wait_indefinitely());
         let gui = self.gui.as_ref().ok_or("missing menu bundle")?;
         let window = self.window.clone().ok_or("window closed")?;
         let context = previous.background_context();
@@ -20252,6 +20302,9 @@ impl Loading {
                         api,
                     ))
                     .map_err(|error| error.to_string());
+                    if let Ok(r) = &result {
+                        let _ = r.device.poll(wgpu::PollType::wait_indefinitely());
+                    }
                     log::info!(
                         "Horizon: background renderer prepared in {} ms",
                         started.elapsed().as_millis()
@@ -20437,6 +20490,24 @@ impl Loading {
             crate::game::exit_app(event_loop);
             return;
         }
+        #[cfg(target_os = "android")]
+        if self.shown
+            && self
+                .renderer_job
+                .as_ref()
+                .is_some_and(|job| !job.is_finished())
+        {
+            // Never submit or present on the shared Vulkan Queue from android_main
+            // while the background worker is uploading textures or compiling pipelines.
+            crate::diagnostics::heartbeat(
+                "game_resource_loading",
+                || serde_json::json!({"gpu":self.renderer.as_ref().map(|r| &r.info.name)}),
+            );
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(16),
+            ));
+            return;
+        }
         if let Some(w) = &self.window {
             if self.options.as_ref().is_some_and(|o| o.offscreen) {
                 self.draw();
@@ -20444,19 +20515,22 @@ impl Loading {
                 w.request_redraw();
             }
         }
-        #[cfg(target_os = "android")]
-        if self.renderer_job.is_some() {
-            // Pace the loading screen while the background worker compiles
-            // world Vulkan pipelines and uploads sprite arrays on the shared
-            // Device/Queue so Mali drivers do not stall under queue contention.
-            event_loop.set_control_flow(ControlFlow::WaitUntil(
-                Instant::now() + Duration::from_millis(33),
-            ));
-            return;
-        }
         event_loop.set_control_flow(ControlFlow::Poll);
     }
     fn draw(&mut self) {
+        #[cfg(target_os = "android")]
+        if self.shown
+            && self
+                .renderer_job
+                .as_ref()
+                .is_some_and(|job| !job.is_finished())
+        {
+            crate::diagnostics::heartbeat(
+                "game_resource_loading",
+                || serde_json::json!({"gpu":self.renderer.as_ref().map(|r| &r.info.name)}),
+            );
+            return;
+        }
         let Some(size) = self
             .renderer
             .as_ref()
@@ -20537,6 +20611,35 @@ impl Loading {
                 .iter()
                 .map(|(rect, animation)| (*rect, animation.clone(), (usize::MAX, 0, 0)))
                 .collect();
+            renderer
+                .hud
+                .set_text_shader(&renderer.device, gui.atlas.text_shader.as_deref());
+            renderer
+        } else if let Some(mut renderer) = self
+            .renderer
+            .take()
+            .filter(|r| r.matches_sprite_layout(loaded.pack.render.texture_layers))
+        {
+            let assets = &loaded.pack.render;
+            renderer.set_world_assets(
+                &assets.pixels,
+                assets.sprite_size,
+                assets.sprite_minimum_size,
+                assets.texture_layers,
+                &assets.sprite_mips,
+                &assets.animations,
+                (&loaded.pack.forcefield.2, loaded.pack.forcefield.0),
+                loaded.renderer_cpu,
+            )?;
+            renderer.hud.sprite_animations = gui
+                .atlas
+                .sprite_animations
+                .iter()
+                .map(|(rect, animation)| (*rect, animation.clone(), (usize::MAX, 0, 0)))
+                .collect();
+            renderer
+                .hud
+                .set_text_shader(&renderer.device, gui.atlas.text_shader.as_deref());
             renderer
         } else {
             if let Some(renderer) = &mut self.renderer {

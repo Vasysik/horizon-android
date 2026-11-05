@@ -696,26 +696,18 @@ impl Settings {
                 s.button_visibility[c as usize] = if c == Control::Move { 1 } else { 2 };
             }
         }
-        // Ensure SNEAK and SPRINT buttons use clean primary tokens without overriding user's toggleable choice.
+        // Migrate legacy action:key.sneak / action:key.sprint tokens without overwriting user custom keybinds.
         for button in &mut s.custom_buttons {
-            let label = button.custom_label.trim().to_ascii_uppercase();
-            if label == "SNEAK"
-                || button.key == "key.keyboard.left.shift"
-                || button.key == "action:key.sneak"
-            {
+            if button.key == "action:key.sneak" {
                 button.key = "key.keyboard.left.shift".into();
                 if button.second_key == "action:key.sneak"
                     || button.second_key == "key.keyboard.left.shift"
                 {
                     button.second_key.clear();
                 }
-            } else if label == "SPRINT"
-                || button.key == "key.keyboard.left.control"
-                || button.key == "action:key.sprint"
-            {
+            } else if button.key == "action:key.sprint" {
                 button.key = "key.keyboard.left.control".into();
-                if button.second_key == "key.keyboard.w"
-                    || button.second_key == "action:key.sprint"
+                if button.second_key == "action:key.sprint"
                     || button.second_key == "key.keyboard.left.control"
                 {
                     button.second_key.clear();
@@ -823,8 +815,13 @@ impl Settings {
             32.0
         };
         self.custom_buttons.truncate(32);
+        for button in &mut self.custom_buttons {
+            if button.key.is_empty() {
+                button.key = "key.keyboard.unknown".into();
+            }
+        }
         self.custom_buttons
-            .retain(|b| super::CustomButton::valid_token(&b.key));
+            .retain(|b| super::CustomButton::valid_token(&b.key) || !b.active_tokens().is_empty());
         let is_mcpe = self.control_style == ControlStyle::Mcpe;
         for button in &mut self.custom_buttons {
             if is_mcpe {

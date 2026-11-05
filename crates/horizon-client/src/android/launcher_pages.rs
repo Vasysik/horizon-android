@@ -75,7 +75,7 @@ fn my3_muted() -> u32 {
 
 /// Smooth 60fps UI animation state across navigation, pages, accordions, theme previews, progress bars, and modals.
 /// Automatically respects `motion::reduced_motion()` on low-end Android hardware.
-pub(super) struct AnimState {
+pub(crate) struct AnimState {
     pub last_tick: std::time::Instant,
     pub last_page: Page,
     pub last_category: SettingsCategory,
@@ -348,6 +348,13 @@ pub(super) enum Action {
     ToggleLeftHanded,
     ToggleInvertY,
     ToggleGyro,
+    GyroSensDelta(f32),
+    ToggleVirtualMouseEnabled,
+    PointerSizeDelta(f32),
+    CycleJoystickZone,
+    ToggleTouchVibrate,
+    ToggleAutoJump,
+    ToggleInventoryControls,
     // Theme customization actions (Settings -> Launcher Settings -> Theme)
     SelectThemePreset(horizon_client::ui_theme::ThemePreset),
     SetThemeAppearance(horizon_client::ui_theme::ThemeAppearance),
@@ -500,8 +507,33 @@ fn draw_setting_card(
     subtitle: &str,
     right_control: SettingControl<'_>,
 ) {
+    let is_active_card = matches!(
+        right_control,
+        SettingControl::Toggle(true, _) | SettingControl::Button(_, _, true)
+    );
     ui.rounded(x, y, w, h, 14.0, my3_card_bg());
-    ui.border(x, y, w, h, 14.0, my3_card_border());
+    ui.border(
+        x,
+        y,
+        w,
+        h,
+        14.0,
+        if is_active_card {
+            color::with_alpha(my3_accent(), 0.55)
+        } else {
+            my3_card_border()
+        },
+    );
+    if is_active_card {
+        ui.rounded(
+            x + 4.0,
+            y + 10.0,
+            3.5,
+            (h - 20.0).max(12.0),
+            1.8,
+            my3_accent(),
+        );
+    }
 
     let text_max = (w - 220.0).max(90.0);
     let fitted_title = ui.fit_text(Face::SemiBold, 15.0, title, text_max);
@@ -4243,7 +4275,7 @@ impl Launcher {
                 ui.set_clip(None);
             }
             SettingsCategory::Controls => {
-                let count = 13;
+                let count = 22;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
@@ -4314,10 +4346,14 @@ impl Launcher {
                 let mouse_sens = format!("{:.0}%", opts.sensitivity * 200.0);
                 let touch_sens = format!("{:.0}%", touch_cfg.sensitivity * 100.0);
                 let btn_scale = format!("{:.0}%", touch_cfg.button_scale * 100.0);
+                let ptr_size = format!("{:.0}%", touch_cfg.virtual_mouse_pointer_scale * 100.0);
+                let gyro_sens = format!("{:.0}%", touch_cfg.gyro_sensitivity * 100.0);
                 let scheme_str = touch_cfg.mode.label();
+                let zone_str = touch_cfg.joystick_style.move_area.label();
                 let invert_y_active = opts.invert_y || touch_cfg.invert_y;
+                let sprint_latch_active = opts.toggle_sprint || touch_cfg.sprint_toggle;
 
-                let rows: [(&str, &str, SettingControl<'_>); 12] = [
+                let rows: [(&str, &str, SettingControl<'_>); 21] = [
                     (
                         &editor_title,
                         editor_sub,
@@ -4400,14 +4436,68 @@ impl Launcher {
                         SettingControl::Button(scheme_str, Action::ToggleControlScheme, false),
                     ),
                     (
+                        "Joystick Active Touch Zone",
+                        "Choose Follow Finger, Mid-Bottom Left, Right Side, or Fixed origin",
+                        SettingControl::Button(zone_str, Action::CycleJoystickZone, false),
+                    ),
+                    (
                         "Left-Handed HUD Mirroring",
                         "Mirrors movement controls to the right side of the screen",
                         SettingControl::Toggle(touch_cfg.left_handed, Action::ToggleLeftHanded),
                     ),
                     (
+                        "Toggle Sprint Mode",
+                        "Latch sprint on a single tap instead of holding the sprint button",
+                        SettingControl::Toggle(sprint_latch_active, Action::ToggleSprintLatch),
+                    ),
+                    (
+                        "Inventory Walk Controls",
+                        "Keep movement controls active while inventory or chest screens are open",
+                        SettingControl::Toggle(
+                            touch_cfg.inventory_controls,
+                            Action::ToggleInventoryControls,
+                        ),
+                    ),
+                    (
+                        "Auto-Jump",
+                        "Automatically jump when walking up 1-block terrain steps",
+                        SettingControl::Toggle(opts.auto_jump, Action::ToggleAutoJump),
+                    ),
+                    (
+                        "Haptic Touch Vibration",
+                        "Tactile vibration feedback when pressing HUD buttons and breaking blocks",
+                        SettingControl::Toggle(touch_cfg.vibrate, Action::ToggleTouchVibrate),
+                    ),
+                    (
+                        "Authoritative Virtual Mouse",
+                        "Enable virtual mouse pointer in menus and on-demand in GoyControl",
+                        SettingControl::Toggle(
+                            touch_cfg.virtual_mouse_enabled,
+                            Action::ToggleVirtualMouseEnabled,
+                        ),
+                    ),
+                    (
+                        "Virtual Cursor Scale",
+                        "Adjust size of the Windows 11 virtual mouse arrow in menus",
+                        SettingControl::Stepper(
+                            &ptr_size,
+                            Action::PointerSizeDelta(-0.10),
+                            Action::PointerSizeDelta(0.10),
+                        ),
+                    ),
+                    (
                         "Gyroscope Aiming",
                         "Tilt your phone for fine bow and crosshair aiming adjustments",
                         SettingControl::Toggle(touch_cfg.gyroscope, Action::ToggleGyro),
+                    ),
+                    (
+                        "Gyroscope Sensitivity",
+                        "Fine-tune motion tilt speed when Gyroscope Aiming is enabled",
+                        SettingControl::Stepper(
+                            &gyro_sens,
+                            Action::GyroSensDelta(-0.10),
+                            Action::GyroSensDelta(0.10),
+                        ),
                     ),
                     (
                         "3D Camera Base Sensitivity",
@@ -4417,6 +4507,11 @@ impl Launcher {
                             Action::MouseSensDelta(-0.05),
                             Action::MouseSensDelta(0.05),
                         ),
+                    ),
+                    (
+                        "Export Active Control Preset",
+                        "Export current layout JSON to Horizon Reports & controls folder",
+                        SettingControl::Button("Export JSON", Action::ExportControlProfile, false),
                     ),
                 ];
 
@@ -5152,6 +5247,36 @@ impl Launcher {
             }
             Some(Action::ToggleGyro) => {
                 self.modify_touch_settings(|t| t.gyroscope = !t.gyroscope);
+            }
+            Some(Action::GyroSensDelta(delta)) => {
+                self.modify_touch_settings(|t| {
+                    t.gyro_sensitivity = (t.gyro_sensitivity + delta).clamp(0.10, 3.0);
+                });
+            }
+            Some(Action::ToggleVirtualMouseEnabled) => {
+                self.modify_touch_settings(|t| {
+                    t.virtual_mouse_enabled = !t.virtual_mouse_enabled;
+                });
+            }
+            Some(Action::PointerSizeDelta(delta)) => {
+                self.modify_touch_settings(|t| {
+                    t.virtual_mouse_pointer_scale =
+                        (t.virtual_mouse_pointer_scale + delta).clamp(0.50, 2.00);
+                });
+            }
+            Some(Action::CycleJoystickZone) => {
+                self.modify_touch_settings(|t| {
+                    t.joystick_style.move_area = t.joystick_style.move_area.next();
+                });
+            }
+            Some(Action::ToggleTouchVibrate) => {
+                self.modify_touch_settings(|t| t.vibrate = !t.vibrate);
+            }
+            Some(Action::ToggleAutoJump) => {
+                self.modify_game_settings(|s| s.auto_jump = !s.auto_jump);
+            }
+            Some(Action::ToggleInventoryControls) => {
+                self.modify_touch_settings(|t| t.inventory_controls = !t.inventory_controls);
             }
             Some(Action::Immersive) => {
                 self.catalog.config.screen.immersive ^= true;

@@ -1858,6 +1858,7 @@ impl Catalog {
                     self.config.touch_name_changed();
                 }
             }
+            Output::Key(_) => {}
             Output::Enter | Output::Close => {
                 if self.editing == Some("fm_rename") {
                     if matches!(out, Output::Enter) {

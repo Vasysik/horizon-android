@@ -642,6 +642,7 @@ pub struct Renderer {
     panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
     border_pipeline: wgpu::RenderPipeline,
+    border_bindings: wgpu::BindGroupLayout,
     border_group: wgpu::BindGroup,
     border_uniform: wgpu::Buffer,
     border_vertices: wgpu::Buffer,
@@ -3581,7 +3582,7 @@ impl Renderer {
             device,
             queue,
             device_lost,
-            config: config.clone(),
+            config,
             solid,
             opaque_terrain,
             opaque_terrain_on: true,
@@ -3639,6 +3640,7 @@ impl Renderer {
             entity_outline,
             panorama,
             border_pipeline,
+            border_bindings,
             border_group,
             border_uniform,
             border_vertices,
@@ -3834,6 +3836,8 @@ impl Renderer {
         if previous.suspended {
             return Err("cannot attach a renderer while the window is suspended".into());
         }
+        let _ = previous.device.poll(wgpu::PollType::wait_indefinitely());
+        previous.in_flight.clear();
         previous.release_surface();
         self.surface = previous
             .spare_surface
@@ -4109,6 +4113,225 @@ impl Renderer {
             self.config.format.remove_srgb_suffix(),
             panorama_faces,
         );
+        Ok(())
+    }
+    /// Returns true if `layers` uses the same `(SPRITE_ARRAYS, SPRITE_SPLIT)` specialization
+    /// constants as the terrain pipelines already compiled on `self`.
+    pub fn matches_sprite_layout(&self, layers: u32) -> bool {
+        let Ok(split) = check_layers(&self.adapter, layers) else {
+            return false;
+        };
+        let sprite_arrays = layers.div_ceil(split).max(1);
+        self.terrain_sprites == [f64::from(sprite_arrays), f64::from(split)]
+    }
+    /// Upgrade a loading/menu renderer in place with the world's block sprites, LabPBR maps,
+    /// sprite animator, and world border texture without recompiling pipelines, spawning a
+    /// competing GPU worker thread, or detaching the live Android swapchain surface.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_world_assets(
+        &mut self,
+        sprite_pixels: &[u8],
+        sprite_size: u32,
+        sprite_minimum_size: u32,
+        layers: u32,
+        sprite_mips: &[crate::mipmap::Settings],
+        animations: &[SpriteAnimation],
+        forcefield: (&[u8], u32),
+        prepared: Option<PreparedTextures>,
+    ) -> Result<()> {
+        let split = check_layers(&self.adapter, layers)?;
+        let prepared = match prepared {
+            Some(prepared) => prepared.resplit(layers, split),
+            None => PreparedTextures::with_split(
+                sprite_pixels,
+                sprite_size,
+                layers,
+                sprite_mips,
+                forcefield,
+                split,
+            ),
+        };
+        let mut mip_levels = 1;
+        let sprite_compute = animate::SpriteAnimator::compute(&self.adapter, &self.device);
+        let sprite_storage = if sprite_compute {
+            wgpu::TextureUsages::STORAGE_BINDING
+        } else {
+            wgpu::TextureUsages::empty()
+        };
+        let gl = self.info.backend == wgpu::Backend::Gl;
+        let pbr_maps = prepared
+            .pbr
+            .map(|(normals, specular, levels, pbr_layers, size)| {
+                let kept = pbr_layers.min(self.device.limits().max_texture_array_layers);
+                let count = array_layers(kept, gl);
+                [("LabPBR normals", normals), ("LabPBR specular", specular)].map(
+                    |(label, mut data)| {
+                        let layer_bytes = data.len() / pbr_layers as usize;
+                        data.resize(layer_bytes * count as usize, 0);
+                        self.device.create_texture_with_data(
+                            &self.queue,
+                            &wgpu::TextureDescriptor {
+                                label: Some(label),
+                                size: wgpu::Extent3d {
+                                    width: size,
+                                    height: size,
+                                    depth_or_array_layers: count,
+                                },
+                                mip_level_count: levels,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                                view_formats: &[],
+                            },
+                            wgpu::util::TextureDataOrder::LayerMajor,
+                            &data,
+                        )
+                    },
+                )
+            });
+        let sprite_textures: Vec<wgpu::Texture> = prepared
+            .sprites
+            .into_iter()
+            .enumerate()
+            .map(|(array, (mut mips, levels))| {
+                let first = array as u32 * split;
+                let used = layers.saturating_sub(first).clamp(1, split);
+                let count = array_layers(used, gl);
+                mips.resize(mips.len() / used as usize * count as usize, 0);
+                mip_levels = levels;
+                self.device.create_texture_with_data(
+                    &self.queue,
+                    &wgpu::TextureDescriptor {
+                        label: Some("Block sprites"),
+                        size: wgpu::Extent3d {
+                            width: sprite_size,
+                            height: sprite_size,
+                            depth_or_array_layers: count,
+                        },
+                        mip_level_count: levels,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_DST
+                            | wgpu::TextureUsages::COPY_SRC
+                            | sprite_storage,
+                        view_formats: &[],
+                    },
+                    wgpu::util::TextureDataOrder::LayerMajor,
+                    &mips,
+                )
+            })
+            .collect();
+        let animations = animate::SpriteAnimator::new(
+            &self.device,
+            animations,
+            sprite_size,
+            sprite_mips,
+            &sprite_textures,
+            split,
+            sprite_compute,
+        );
+        let active_layer_words = animations.active_layer_words();
+        let sprite_views = sprite_views(&sprite_textures, &self.sprite_unused, None);
+        let emission_stats =
+            hdr_stats::EmissionStats::new(&self.device, split, sprite_textures.len() as u32, gl);
+        self.group = terrain_group(
+            &self.device,
+            "Horizon terrain resources",
+            &self.terrain_layout,
+            &self.globals,
+            &sprite_views,
+            &self.sprite_sampler,
+            &self.lightmap_view,
+            &self.lightmap_sampler,
+            &emission_stats.view,
+        );
+        self.crosshair_group = terrain_group(
+            &self.device,
+            "Debug crosshair resources",
+            &self.terrain_layout,
+            &self.crosshair_globals,
+            &sprite_views,
+            &self.sprite_sampler,
+            &self.lightmap_view,
+            &self.lightmap_sampler,
+            &emission_stats.view,
+        );
+        self.mirror_group = terrain_group(
+            &self.device,
+            "Water mirror resources",
+            &self.terrain_layout,
+            &self.mirror_globals,
+            &sprite_views,
+            &self.sprite_sampler,
+            &self.lightmap_view,
+            &self.lightmap_sampler,
+            &emission_stats.view,
+        );
+        let forcefield_size = forcefield.1;
+        let (forcefield_mips, forcefield_levels) = prepared.forcefield;
+        let forcefield_texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Forcefield"),
+                size: wgpu::Extent3d {
+                    width: forcefield_size,
+                    height: forcefield_size,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: forcefield_levels,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &forcefield_mips,
+        );
+        let forcefield_view = forcefield_texture.create_view(&Default::default());
+        let forcefield_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Forcefield"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        self.border_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("World border resources"),
+            layout: &self.border_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&forcefield_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&forcefield_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.border_uniform.as_entire_binding(),
+                },
+            ],
+        });
+        self.pbr_maps = pbr_maps;
+        self.sprite_textures = sprite_textures;
+        self.mip_levels = mip_levels;
+        self.mipmaps = mip_levels - 1;
+        self.sprite_split = split;
+        self.animations = animations;
+        self.active_animated_layers = vec![0; active_layer_words];
+        self.sprite_minimum_size = sprite_minimum_size;
+        self.emission_stats = emission_stats;
         Ok(())
     }
     /// The world's depth, which occlusion culling's test and post effects may read.

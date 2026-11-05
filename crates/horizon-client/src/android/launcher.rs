@@ -95,6 +95,9 @@ impl Launcher {
         {
             let game_home = self.catalog.config.game_home(&self.home);
             let _ = tc.settings.save_to(&game_home.join("horizon-touch.json"));
+            if horizon_client::touch_ui::output_dismisses(&output) {
+                crate::platform::hide();
+            }
             return;
         }
         if self.login.edit(self.catalog.editing, &output) {

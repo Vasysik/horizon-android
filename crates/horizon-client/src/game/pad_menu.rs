@@ -120,8 +120,10 @@ impl Game<'_> {
     /// it instead of the player.
     pub(super) fn pad_in_menu(&self) -> bool {
         #[cfg(target_os = "android")]
-        let android_hub_open =
-            self.pad.touch_ui.floating_menu || self.pad.touch_ui.preset_dialog.is_some();
+        let android_hub_open = self.pad.touch_ui.floating_menu
+            || self.pad.touch_ui.preset_dialog.is_some()
+            || self.pad.touch_ui.presets_modal_open
+            || self.pad.touch_ui.custom_input_picker != horizon_client::touch::PickerStep::None;
         #[cfg(not(target_os = "android"))]
         let android_hub_open = false;
         self.title.is_some()
@@ -344,7 +346,7 @@ impl Game<'_> {
     /// A click (press and release) at a point, the pointer staying there.
     /// A pointer event of the pad's or the keyboard's, as the window would
     /// send it (marked, so it isn't taken for the real mouse).
-    fn pad_synthetic_event(
+    pub(super) fn pad_synthetic_event(
         &mut self,
         event_loop: &dyn EventLoopCtl,
         id: WindowId,
@@ -1391,6 +1393,7 @@ impl Game<'_> {
             Output::Text(t) => (None, Some(t.as_str())),
             Output::Backspace => (Some(KeyCode::Backspace), None),
             Output::Enter => (Some(KeyCode::Enter), None),
+            Output::Key(code) => (Some(*code), None),
             Output::Close => {
                 self.pad.menu.osk = None;
                 self.pad.menu.osk_dismissed = true;

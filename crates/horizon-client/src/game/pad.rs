@@ -29,6 +29,10 @@ pub(super) struct Pads {
     #[cfg(target_os = "android")]
     pub(super) custom_keys: std::collections::HashSet<KeyCode>,
     #[cfg(target_os = "android")]
+    pub(super) custom_pressed_at: std::collections::HashMap<String, u64>,
+    #[cfg(target_os = "android")]
+    pub(super) late_custom_releases: Vec<String>,
+    #[cfg(target_os = "android")]
     pub(super) hardware_keys: std::collections::HashSet<KeyCode>,
     #[cfg(target_os = "android")]
     last_input_mode: Option<horizon_client::android_gamepad::InputMode>,
@@ -167,26 +171,34 @@ impl Pads {
                 "key.sneak" => {
                     self.custom_keys.contains(&KeyCode::ShiftLeft)
                         || self.custom_keys.contains(&KeyCode::ShiftRight)
-                        || self.touch.held_custom_tokens().any(|t| {
-                            matches!(
-                                t,
-                                "key.keyboard.left.shift"
-                                    | "key.keyboard.right.shift"
-                                    | "action:key.sneak"
-                            )
-                        })
+                        || self
+                            .touch
+                            .held_custom_tokens()
+                            .chain(self.late_custom_releases.iter().map(String::as_str))
+                            .any(|t| {
+                                matches!(
+                                    t,
+                                    "key.keyboard.left.shift"
+                                        | "key.keyboard.right.shift"
+                                        | "action:key.sneak"
+                                )
+                            })
                 }
                 "key.sprint" => {
                     self.custom_keys.contains(&KeyCode::ControlLeft)
                         || self.custom_keys.contains(&KeyCode::ControlRight)
-                        || self.touch.held_custom_tokens().any(|t| {
-                            matches!(
-                                t,
-                                "key.keyboard.left.control"
-                                    | "key.keyboard.right.control"
-                                    | "action:key.sprint"
-                            )
-                        })
+                        || self
+                            .touch
+                            .held_custom_tokens()
+                            .chain(self.late_custom_releases.iter().map(String::as_str))
+                            .any(|t| {
+                                matches!(
+                                    t,
+                                    "key.keyboard.left.control"
+                                        | "key.keyboard.right.control"
+                                        | "action:key.sprint"
+                                )
+                            })
                 }
                 _ => false,
             };
@@ -365,6 +377,14 @@ impl Game<'_> {
                 self.pad_button_logged(event_loop, button, false);
             } else {
                 self.pad.late_releases.push(button);
+            }
+        }
+        #[cfg(target_os = "android")]
+        for token in std::mem::take(&mut self.pad.late_custom_releases) {
+            if !ticking || self.pad.custom_pressed_at.get(&token) != Some(&self.ticks) {
+                self.android_dispatch_custom_token(&token, false);
+            } else {
+                self.pad.late_custom_releases.push(token);
             }
         }
         for (button, down) in edges {

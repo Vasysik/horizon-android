@@ -441,5 +441,68 @@ class LauncherOverhaulTests(unittest.TestCase):
         self.assertIn("crate::android_runtime::gpu_batching()", budget_code)
 
 
+
+    def test_anr_fix_z_order_keybind_dispatch_and_controls_overhaul(self) -> None:
+        test_content = (ROOT / "tools/test_android_content.py").read_text(encoding="utf-8")
+        gfx = (ROOT / "crates/horizon-client-render/src/gfx.rs").read_text(encoding="utf-8")
+        game = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
+        touch_ui = (ROOT / "crates/horizon-client/src/touch_ui.rs").read_text(encoding="utf-8")
+        android_input = (
+            ROOT / "crates/horizon-client/src/game/android_input.rs"
+        ).read_text(encoding="utf-8")
+        startup_menu = (
+            ROOT / "crates/horizon-client/src/game/startup_menu.rs"
+        ).read_text(encoding="utf-8")
+        pad = (ROOT / "crates/horizon-client/src/game/pad.rs").read_text(encoding="utf-8")
+        custom = (ROOT / "crates/horizon-client-render/src/touch/custom.rs").read_text(
+            encoding="utf-8"
+        )
+        editor = (ROOT / "crates/horizon-client-render/src/touch/editor.rs").read_text(
+            encoding="utf-8"
+        )
+        launcher_pages = (
+            ROOT / "crates/horizon-client/src/android/launcher_pages.rs"
+        ).read_text(encoding="utf-8")
+        options_ui = (ROOT / "crates/horizon-client-render/src/options_ui.rs").read_text(
+            encoding="utf-8"
+        )
+        ui_theme = (ROOT / "crates/horizon-client/src/ui_theme.rs").read_text(encoding="utf-8")
+
+        # 1. tools/test_android_content.py supplies mod android_runtime stub
+        self.assertIn("mod android_runtime {", test_content)
+        self.assertIn("pub fn gpu_batching() -> bool", test_content)
+
+        # 2. In-place set_world_assets on Renderer eliminates concurrent VkQueue ANR
+        self.assertIn("pub fn matches_sprite_layout(&self, layers: u32) -> bool", gfx)
+        self.assertIn("pub fn set_world_assets(", gfx)
+        self.assertIn("renderer.set_world_assets(", game)
+
+        # 3. Mouse cursor z-order strictly below touch controls & floating menu, hidden when floating_menu is open
+        self.assertLess(
+            game.index("horizon_client::touch_ui::draw_pointer("),
+            game.index("self.pad.touch.draw("),
+        )
+        self.assertLess(
+            startup_menu.index("horizon_client::touch_ui::draw_pointer("),
+            startup_menu.index("horizon_client::touch_ui::draw_goy_hud("),
+        )
+        self.assertIn("if self.floating_menu", touch_ui)
+
+        # 4. GoyControls / PRI / SEC / SendCustomInput key & mouse dispatch + key capture
+        self.assertIn("fn android_custom_token_edge(", android_input)
+        self.assertIn("fn android_custom_token_tap(", android_input)
+        self.assertIn("pub(super) late_custom_releases: Vec<String>,", pad)
+        self.assertIn("pub fn capture_custom_input_key(", touch_ui)
+        self.assertIn("pub fn capture_custom_key_code(", editor)
+        self.assertIn("pub fn held_custom_tokens(&self)", custom)
+
+        # 5. Settings > Controls & Page::Touch & UI performance overhaul
+        self.assertIn("Action::CycleJoystickZone", launcher_pages)
+        self.assertIn("Action::ToggleTouchVibrate", launcher_pages)
+        self.assertIn('Row::Header("Movement & Look Sensitivity")', options_ui)
+        self.assertIn("glyph_scratch: Vec<(f32, f32, Rect)>,", ui_theme)
+
+
 if __name__ == "__main__":
+
     unittest.main()

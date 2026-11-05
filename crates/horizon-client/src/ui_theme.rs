@@ -195,6 +195,7 @@ struct Cache {
     images: HashMap<String, Rect>,
     shelf: (u32, u32, u32),
     pending: Vec<crate::font::Patch>,
+    glyph_scratch: Vec<(f32, f32, Rect)>,
     /// The atlas the entries were uploaded to (a new atlas starts over).
     atlas: usize,
 }
@@ -211,10 +212,11 @@ fn with_cache<R>(atlas: &HudAtlas, f: impl FnOnce(&mut Cache) -> R) -> R {
         let id = atlas as *const HudAtlas as usize;
         let cache = c.get_or_insert_with(|| Cache {
             fonts: Fonts::load(),
-            entries: HashMap::new(),
-            images: HashMap::new(),
+            entries: HashMap::with_capacity(512),
+            images: HashMap::with_capacity(64),
             shelf: (0, 0, 0),
-            pending: Vec::new(),
+            pending: Vec::with_capacity(64),
+            glyph_scratch: Vec::with_capacity(128),
             atlas: id,
         });
         if cache.atlas != id {
@@ -833,14 +835,28 @@ impl<'a> Ui<'a> {
     }
 
     pub fn fit_text(&self, face: Face, size: f32, text: &str, width: f32) -> String {
-        if self.measure(face, size, text) <= width {
-            return text.to_owned();
+        if text.is_empty() || width <= 0.0 {
+            return String::new();
         }
         let px = (size * self.density * 4.0).round() / 4.0;
+        let max_px = width * self.density;
         with_cache(self.atlas, |cache| {
             let font = cache.fonts.face(face);
             let scaled = font.as_scaled(cache.fonts.scale(face, px));
-            crate::ui_text::fit(text, width * self.density, |previous, ch| {
+            let mut total = 0.0;
+            let mut prev = None;
+            for ch in text.chars() {
+                let id = font.glyph_id(ch);
+                if let Some(p) = prev {
+                    total += scaled.kern(p, id);
+                }
+                total += scaled.h_advance(id);
+                prev = Some(id);
+            }
+            if total <= max_px {
+                return text.to_owned();
+            }
+            crate::ui_text::fit(text, max_px, |previous, ch| {
                 let id = font.glyph_id(ch);
                 previous.map_or(0.0, |p| scaled.kern(font.glyph_id(p), id)) + scaled.h_advance(id)
             })
@@ -1230,10 +1246,15 @@ impl<'a> Ui<'a> {
         if max_w <= 2.0 || text.is_empty() {
             return 0.0;
         }
-        let single_line: String = text
-            .chars()
-            .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
-            .collect();
+        let single_line: std::borrow::Cow<'_, str> = if text.contains(['\n', '\r']) {
+            std::borrow::Cow::Owned(
+                text.chars()
+                    .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+                    .collect(),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(text)
+        };
         let fitted = self.fit_text(face, size, &single_line, max_w);
         self.text(face, size, x, y, color, &fitted)
     }
@@ -1421,7 +1442,11 @@ impl<'a> Ui<'a> {
         let box_px = line * self.density;
         let atlas = self.atlas;
         let density = self.density;
-        let mut quads = Vec::new();
+        if text.is_empty() {
+            return 0.0;
+        }
+        let mut quads = with_cache(atlas, |c| std::mem::take(&mut c.glyph_scratch));
+        quads.clear();
         let width = with_cache(atlas, |c| {
             let scale = c.fonts.scale(face, px);
             let (ascent, descent) = {
@@ -1450,7 +1475,7 @@ impl<'a> Ui<'a> {
             }
             (pen - x0) / density
         });
-        for (gx, gy, rect) in quads {
+        for &(gx, gy, rect) in &quads {
             self.emit_clipped_uv(
                 gx,
                 gy,
@@ -1463,6 +1488,8 @@ impl<'a> Ui<'a> {
                 color,
             );
         }
+        quads.clear();
+        with_cache(atlas, |c| c.glyph_scratch = quads);
         width
     }
     /// Text in a `1.45 × size` line box whose top is `y`.
