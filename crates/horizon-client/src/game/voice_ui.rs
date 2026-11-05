@@ -20,24 +20,22 @@ impl<'a> Game<'a> {
             .known_players
             .iter()
             .map(|(u, n)| (*u, n.clone(), self.voice.player_svc_status(*u, n)))
-            .filter(|(u, _, status)| {
+            .filter(|(_, _, status)| {
                 if !self.voice.filter_svc_only {
                     true
                 } else {
                     *status != PlayerSvcStatus::NoSvc
-                        || self.voice.config.player_volumes.contains_key(u)
                 }
             })
             .collect();
 
         list.sort_by(|a, b| {
-            let rank = |s: PlayerSvcStatus| match s {
-                PlayerSvcStatus::Talking => 0,
-                PlayerSvcStatus::Connected => 1,
-                PlayerSvcStatus::Disabled => 2,
-                PlayerSvcStatus::NoSvc => 3,
-            };
-            rank(a.2).cmp(&rank(b.2)).then_with(|| a.1.cmp(&b.1))
+            let is_no_svc = |s: PlayerSvcStatus| s == PlayerSvcStatus::NoSvc;
+            (is_no_svc(a.2), a.1.to_ascii_lowercase(), a.0).cmp(&(
+                is_no_svc(b.2),
+                b.1.to_ascii_lowercase(),
+                b.0,
+            ))
         });
         list
     }

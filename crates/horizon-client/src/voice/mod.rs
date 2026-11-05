@@ -15,7 +15,7 @@ use config::SvcProtocolConfig;
 use hardware_io::VoiceHardwareIo;
 use mixer::VoiceSourceKind;
 use protocol::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use udp_worker::{UdpConnectionState, UdpWorker, UdpWorkerHandle};
 use ui::{VoiceChatScreenState, VoiceHudStatus};
@@ -48,6 +48,7 @@ pub struct VoiceChatClient {
     pub show_player_volumes: bool,
     pub player_list_page: usize,
     pub filter_svc_only: bool,
+    pub verified_svc_senders: HashSet<u128>,
 }
 
 impl VoiceChatClient {
@@ -74,6 +75,7 @@ impl VoiceChatClient {
             show_player_volumes: false,
             player_list_page: 0,
             filter_svc_only: true,
+            verified_svc_senders: HashSet::new(),
         }
     }
 
@@ -361,6 +363,9 @@ impl VoiceChatClient {
             Vec::with_capacity(sources.len());
 
         for (uuid, kind, last_known_pos, active_recently) in sources {
+            if uuid != 0 {
+                self.verified_svc_senders.insert(uuid);
+            }
             self.register_known_player(uuid, String::new());
 
             if self.config.is_player_muted(uuid) || self.config.disabled {
@@ -438,17 +443,66 @@ impl VoiceChatClient {
         if uuid == 0 {
             return;
         }
+
+        let is_valid_name = !name.is_empty() && !name.starts_with("Player ");
+
+        // Check if an entry with the same Gamertag already exists (offline-mode / proxy alias resolution)
+        if is_valid_name {
+            if let Some(entry) = self
+                .known_players
+                .iter_mut()
+                .find(|(_, n)| n.eq_ignore_ascii_case(&name))
+            {
+                if entry.0 == uuid {
+                    if entry.1 != name {
+                        entry.1 = name;
+                    }
+                    return;
+                } else {
+                    let new_is_svc = self.player_states.contains_key(&uuid)
+                        || self.verified_svc_senders.contains(&uuid);
+                    let old_is_svc = self.player_states.contains_key(&entry.0)
+                        || self.verified_svc_senders.contains(&entry.0);
+
+                    if new_is_svc {
+                        entry.0 = uuid;
+                        entry.1 = name;
+                        return;
+                    } else if old_is_svc {
+                        entry.1 = name;
+                        return;
+                    } else {
+                        entry.0 = uuid;
+                        entry.1 = name;
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Check if entry with same UUID already exists
         if let Some(entry) = self.known_players.iter_mut().find(|(id, _)| *id == uuid) {
-            if !name.is_empty()
+            if is_valid_name
                 && (entry.1.is_empty() || entry.1.starts_with("Player ") || entry.1 != name)
             {
                 entry.1 = name;
             }
             return;
         }
+
+        // Capacity pruning: prefer evicting non-SVC players first
         if self.known_players.len() >= 128 {
-            self.known_players.remove(0);
+            if let Some(pos) = self
+                .known_players
+                .iter()
+                .position(|(id, n)| self.player_svc_status(*id, n) == PlayerSvcStatus::NoSvc)
+            {
+                self.known_players.remove(pos);
+            } else {
+                self.known_players.remove(0);
+            }
         }
+
         let display = if name.is_empty() {
             format!("Player {:04x}", (uuid & 0xFFFF) as u16)
         } else {
@@ -495,10 +549,24 @@ impl VoiceChatClient {
         });
 
         match state {
-            Some(st) if st.disconnected => PlayerSvcStatus::NoSvc,
             Some(st) if st.disabled => PlayerSvcStatus::Disabled,
+            Some(st) if st.disconnected => {
+                if self.verified_svc_senders.contains(&uuid)
+                    || self.verified_svc_senders.contains(&st.uuid)
+                {
+                    PlayerSvcStatus::Connected
+                } else {
+                    PlayerSvcStatus::NoSvc
+                }
+            }
             Some(_) => PlayerSvcStatus::Connected,
-            None => PlayerSvcStatus::NoSvc,
+            None => {
+                if self.verified_svc_senders.contains(&uuid) {
+                    PlayerSvcStatus::Connected
+                } else {
+                    PlayerSvcStatus::NoSvc
+                }
+            }
         }
     }
 
@@ -557,6 +625,7 @@ impl VoiceChatClient {
         self.player_states.clear();
         self.groups.clear();
         self.known_players.clear();
+        self.verified_svc_senders.clear();
         self.show_player_volumes = false;
         self.player_list_page = 0;
         self.is_talking = false;
