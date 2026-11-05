@@ -5,7 +5,7 @@
 //! KeepAlive (0x08) & Ping (0x07) heartbeats, and encrypted audio I/O.
 
 use super::audio_pipeline::VoicePlaybackPipeline;
-use super::mixer::{GainSource, VoiceMixer};
+use super::mixer::{VoiceMixer, VoiceSourceKind};
 use super::protocol::*;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};

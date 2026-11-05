@@ -13,7 +13,7 @@ pub use protocol::parse_voice_host;
 use audio_pipeline::{FRAME_SIZE, VoiceCapturePipeline, VoicePlaybackPipeline};
 use config::SvcProtocolConfig;
 use hardware_io::VoiceHardwareIo;
-use mixer::GainSource;
+use mixer::VoiceSourceKind;
 use protocol::*;
 use std::collections::HashMap;
 use std::path::Path;
@@ -166,7 +166,7 @@ impl VoiceChatClient {
                     }
                 }
             }
-            CHANNEL_REMOVE_STATE | "voicechat:remove_player_state" | "voicechat:remove_state" => {
+            CHANNEL_REMOVE_STATE | "voicechat:remove_player_state" => {
                 if let Ok(pkt) = RemovePlayerStatePacket::from_bytes(data) {
                     self.player_states.remove(&pkt.player_uuid);
                 }
