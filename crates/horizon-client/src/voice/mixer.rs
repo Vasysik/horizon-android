@@ -125,13 +125,12 @@ impl SenderStream {
     }
 }
 
-fn soft_clip(x: f32) -> f32 {
-    const KNEE: f32 = 0.8;
-    let a = x.abs();
-    if a <= KNEE {
+#[inline]
+fn soft_limit(x: f32) -> f32 {
+    if x.abs() <= 0.75 {
         x
     } else {
-        x.signum() * (KNEE + (1.0 - KNEE) * ((a - KNEE) / (1.0 - KNEE)).tanh())
+        x.signum() * (0.75 + 0.25 * ((x.abs() - 0.75) * 2.0).tanh())
     }
 }
 
@@ -237,7 +236,10 @@ impl VoiceMixer {
             left += l;
             right += r;
         }
-        (soft_clip(left), soft_clip(right))
+        (
+            soft_limit(left).clamp(-1.0, 1.0),
+            soft_limit(right).clamp(-1.0, 1.0),
+        )
     }
 }
 
@@ -431,11 +433,11 @@ mod tests {
     }
 
     #[test]
-    fn soft_clip_is_identity_below_knee_and_bounded_above() {
-        assert_eq!(soft_clip(0.5), 0.5);
-        assert_eq!(soft_clip(-0.5), -0.5);
-        assert!(soft_clip(1.5) > 0.8 && soft_clip(1.5) < 1.0);
-        assert!(soft_clip(-1.5) < -0.8 && soft_clip(-1.5) > -1.0);
+    fn soft_limit_is_identity_below_knee_and_bounded_above() {
+        assert_eq!(soft_limit(0.5), 0.5);
+        assert_eq!(soft_limit(-0.5), -0.5);
+        assert!(soft_limit(1.5) > 0.75 && soft_limit(1.5) < 1.0);
+        assert!(soft_limit(-1.5) < -0.75 && soft_limit(-1.5) > -1.0);
     }
 
     #[test]

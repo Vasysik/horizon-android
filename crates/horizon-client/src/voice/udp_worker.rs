@@ -164,13 +164,23 @@ impl UdpWorker {
         let (host, port) =
             parse_voice_host(&secret.voice_host, fallback_host, secret.server_port as u16);
 
+        let fallback_str = fallback_host.to_string();
         let thread_state = Arc::clone(&state);
         let thread_stop = Arc::clone(&stop_signal);
 
         std::thread::Builder::new()
             .name("svc-udp-worker".to_string())
             .spawn(move || {
-                Self::run_loop(secret, host, port, thread_state, thread_stop, mic_rx, mixer);
+                Self::run_loop(
+                    secret,
+                    host,
+                    fallback_str,
+                    port,
+                    thread_state,
+                    thread_stop,
+                    mic_rx,
+                    mixer,
+                );
             })
             .map_err(|e| format!("Failed to spawn UDP worker thread: {e}"))?;
 
@@ -184,6 +194,7 @@ impl UdpWorker {
     fn run_loop(
         secret: SecretPacket,
         host: String,
+        fallback_host: String,
         port: u16,
         state: Arc<RwLock<UdpConnectionState>>,
         stop_signal: Arc<AtomicBool>,
@@ -197,21 +208,62 @@ impl UdpWorker {
         };
 
         log::info!("SVC: Resolving voice target address ({host}, {port})...");
-        let remote_addr = match (&host[..], port).to_socket_addrs() {
-            Ok(mut addrs) => match addrs.next() {
-                Some(addr) => {
-                    log::info!("SVC: Resolved voice UDP target address to {addr}");
-                    addr
+        let mut resolved: Option<SocketAddr> = None;
+        let mut last_err = String::new();
+
+        for attempt in 1..=3 {
+            if stop_signal.load(Ordering::Relaxed) {
+                return;
+            }
+            match (&host[..], port).to_socket_addrs() {
+                Ok(mut addrs) => {
+                    if let Some(addr) = addrs.next() {
+                        log::info!(
+                            "SVC: Resolved voice UDP target address to {addr} on attempt {attempt}"
+                        );
+                        resolved = Some(addr);
+                        break;
+                    }
                 }
-                None => {
-                    set_failed(format!(
-                        "Failed to resolve voice target address ({host}, {port})"
-                    ));
+                Err(e) => {
+                    last_err = format!("DNS resolution error: {e}");
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+            }
+        }
+
+        if resolved.is_none() && !fallback_host.is_empty() && fallback_host != host {
+            log::warn!(
+                "SVC: Primary host {host} resolution failed, trying fallback {fallback_host}..."
+            );
+            for attempt in 1..=3 {
+                if stop_signal.load(Ordering::Relaxed) {
                     return;
                 }
-            },
-            Err(e) => {
-                set_failed(format!("DNS resolution failed for ({host}, {port}): {e}"));
+                match (&fallback_host[..], port).to_socket_addrs() {
+                    Ok(mut addrs) => {
+                        if let Some(addr) = addrs.next() {
+                            log::info!(
+                                "SVC: Resolved fallback voice UDP target address to {addr} on attempt {attempt}"
+                            );
+                            resolved = Some(addr);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        last_err = format!("Fallback DNS resolution error: {e}");
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                }
+            }
+        }
+
+        let remote_addr = match resolved {
+            Some(addr) => addr,
+            None => {
+                set_failed(format!(
+                    "Failed to resolve voice target address ({host}, {port}): {last_err}"
+                ));
                 return;
             }
         };
@@ -272,7 +324,7 @@ impl UdpWorker {
 
         log::info!("SVC: Starting UDP 4-step handshake with remote {remote_addr}");
 
-        while handshake_start.elapsed() < Duration::from_secs(6) {
+        while handshake_start.elapsed() < Duration::from_secs(15) {
             if stop_signal.load(Ordering::Relaxed) {
                 log::info!("SVC: UDP handshake aborted by stop signal");
                 return;

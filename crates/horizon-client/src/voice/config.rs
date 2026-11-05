@@ -33,10 +33,10 @@ pub struct SvcProtocolConfig {
     pub vad_threshold: f32,
     /// Microphone gain multiplier (e.g. 1.0 = 100%)
     pub mic_gain: f32,
-    /// Master playback output volume multiplier (0.0 .. 2.0)
+    /// Master playback output volume multiplier (0.0 .. 3.0)
     #[serde(default = "default_output_volume")]
     pub output_volume: f32,
-    /// Per-player volume multipliers (UUID hex -> multiplier 0.0 .. 2.0)
+    /// Per-player volume multipliers (UUID hex -> multiplier 0.0 .. 3.0)
     #[serde(default)]
     pub player_volumes: HashMap<String, f32>,
     /// Set of individually muted player UUIDs (in hex)
@@ -84,12 +84,12 @@ impl SvcProtocolConfig {
             .get(&key)
             .copied()
             .unwrap_or(1.0)
-            .clamp(0.0, 2.0)
+            .clamp(0.0, 3.0)
     }
 
     pub fn set_player_volume(&mut self, uuid: u128, volume: f32) {
         let key = Self::uuid_key(uuid);
-        let clamped = (volume.clamp(0.0, 2.0) * 20.0).round() / 20.0; // step 5%
+        let clamped = (volume.clamp(0.0, 3.0) * 20.0).round() / 20.0; // step 5%
         if (clamped - 1.0).abs() < 0.001 {
             self.player_volumes.remove(&key);
         } else {
@@ -180,8 +180,8 @@ mod tests {
         assert!((config.player_volume(test_uuid) - 1.5).abs() < 0.001);
 
         // Clamping check
-        config.set_player_volume(test_uuid, 2.5);
-        assert!((config.player_volume(test_uuid) - 2.0).abs() < 0.001);
+        config.set_player_volume(test_uuid, 3.5);
+        assert!((config.player_volume(test_uuid) - 3.0).abs() < 0.001);
 
         // Removing 1.0 default
         config.set_player_volume(test_uuid, 1.0);

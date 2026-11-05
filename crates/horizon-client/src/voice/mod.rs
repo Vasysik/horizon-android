@@ -37,6 +37,8 @@ pub struct VoiceChatClient {
     pub fallback_timer: Option<std::time::Instant>,
     pub current_server_host: String,
     pub known_players: Vec<(u128, String)>,
+    pub show_player_volumes: bool,
+    pub player_list_page: usize,
 }
 
 impl VoiceChatClient {
@@ -60,6 +62,8 @@ impl VoiceChatClient {
             fallback_timer: None,
             current_server_host: String::new(),
             known_players: Vec::new(),
+            show_player_volumes: false,
+            player_list_page: 0,
         }
     }
 
@@ -76,7 +80,7 @@ impl VoiceChatClient {
     pub fn check_handshake_timeout(&mut self) -> Option<(String, Vec<u8>)> {
         if let Some(timer) = self.fallback_timer
             && self.secret.is_none()
-            && timer.elapsed() >= std::time::Duration::from_secs(4)
+            && timer.elapsed() >= std::time::Duration::from_secs(8)
         {
             let next_version = self.config.next_fallback_version();
             let _ = self.config.save_to_dir(&self.config_dir);
@@ -88,6 +92,12 @@ impl VoiceChatClient {
             return Some((CHANNEL_REQUEST_SECRET.to_string(), pkt.to_bytes()));
         }
         None
+    }
+
+    pub fn delay_handshake_timer(&mut self) {
+        if self.fallback_timer.is_some() && self.secret.is_none() {
+            self.fallback_timer = Some(std::time::Instant::now());
+        }
     }
 
     pub fn handle_custom_payload(
@@ -295,9 +305,13 @@ impl VoiceChatClient {
                 if self.config.is_player_muted(uuid) {
                     return (uuid, (0.0, 0.0));
                 }
-                let combined_gain = (self.config.output_volume.clamp(0.0, 2.0)
-                    * self.config.player_volume(uuid))
-                .clamp(0.0, 4.0);
+                const SPEAKER_MAKEUP_BOOST: f32 = 2.6;
+                let mic_active_compensation = if self.is_talking { 1.25 } else { 1.0 };
+                let combined_gain = (self.config.output_volume.clamp(0.0, 3.0)
+                    * self.config.player_volume(uuid)
+                    * SPEAKER_MAKEUP_BOOST
+                    * mic_active_compensation)
+                    .clamp(0.0, 8.0);
                 let (base_l, base_r) = match source {
                     GainSource::Group => (1.0, 1.0),
                     GainSource::Player { max_dist } => match resolve_player_pos(uuid) {
@@ -319,8 +333,8 @@ impl VoiceChatClient {
                     }
                 };
                 let gain = (
-                    (base_l * combined_gain).clamp(0.0, 2.0),
-                    (base_r * combined_gain).clamp(0.0, 2.0),
+                    (base_l * combined_gain).clamp(0.0, 8.0),
+                    (base_r * combined_gain).clamp(0.0, 8.0),
                 );
                 (uuid, gain)
             })
@@ -361,7 +375,7 @@ impl VoiceChatClient {
     }
 
     pub fn set_output_volume(&mut self, volume: f32) {
-        self.config.output_volume = (volume.clamp(0.0, 2.0) * 20.0).round() / 20.0;
+        self.config.output_volume = (volume.clamp(0.0, 3.0) * 20.0).round() / 20.0;
         let _ = self.config.save_to_dir(&self.config_dir);
     }
 
@@ -415,6 +429,8 @@ impl VoiceChatClient {
         self.player_states.clear();
         self.groups.clear();
         self.known_players.clear();
+        self.show_player_volumes = false;
+        self.player_list_page = 0;
         self.is_talking = false;
     }
 }

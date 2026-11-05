@@ -307,7 +307,15 @@ impl VoicePlaybackPipeline {
             return (0.0, 0.0);
         }
 
-        let linear_gain = (1.0 - (dist / max_distance)).clamp(0.0, 1.0);
+        // Close proximity (0-25% max distance) keeps 100% full volume.
+        // Mid-to-far distance follows a gentle quadratic falloff with a minimum floor of 0.15.
+        let near = (max_distance * 0.25).max(1.0);
+        let attenuation = if dist <= near {
+            1.0
+        } else {
+            let norm = ((dist - near) / (max_distance - near)).clamp(0.0, 1.0);
+            (1.0 - norm * norm).max(0.15)
+        };
 
         let yaw_rad = -listener_yaw.to_radians();
         let cos_y = yaw_rad.cos();
@@ -315,8 +323,12 @@ impl VoicePlaybackPipeline {
         let local_x = dx * cos_y - dz * sin_y;
 
         let pan = (local_x / dist).clamp(-1.0, 1.0);
-        let left_gain = linear_gain * (1.0 - pan * 0.5).clamp(0.0, 1.0);
-        let right_gain = linear_gain * (1.0 + pan * 0.5).clamp(0.0, 1.0);
+        // Constant-Power Panning: center pan (0.0) gives full 1.0 gain in both channels
+        let left_pan = (1.0 - pan.max(0.0) * 0.7).clamp(0.2, 1.0);
+        let right_pan = (1.0 + pan.min(0.0) * 0.7).clamp(0.2, 1.0);
+
+        let left_gain = (attenuation * left_pan).clamp(0.0, 1.0);
+        let right_gain = (attenuation * right_pan).clamp(0.0, 1.0);
 
         (left_gain, right_gain)
     }
@@ -356,8 +368,8 @@ mod tests {
         let sound_ahead = [0.0, 64.0, 24.0];
         let (left, right) =
             VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_ahead, 48.0);
-        assert!((left - 0.5).abs() < 0.05);
-        assert!((right - 0.5).abs() < 0.05);
+        assert!((left - 0.888).abs() < 0.05);
+        assert_eq!(left, right);
 
         let sound_far = [0.0, 64.0, 100.0];
         let (left_far, right_far) =

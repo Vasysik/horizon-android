@@ -9180,12 +9180,22 @@ impl Game<'_> {
     }
 
     pub(super) fn tick_voice_chat(&mut self) {
+        if self.server_packs.is_busy() || self.pack_reload.is_some() {
+            self.voice.delay_handshake_timer();
+        }
         if let Some((ch, data)) = self.voice.check_handshake_timeout() {
             self.send(S::CustomPayload(
                 horizon_protocol::packets::configuration::CustomPayload { channel: ch, data },
             ));
         }
         if let Some(r) = self.remote.as_ref() {
+            for (&u128_val, info) in r.tab_players.iter() {
+                self.voice
+                    .register_known_player(u128_val, info.name.clone());
+            }
+            for (&u128_val, name) in r.players.iter() {
+                self.voice.register_known_player(u128_val, name.clone());
+            }
             for (&_eid, &u) in self.persist.uuids.iter() {
                 let u128_val = horizon_client::lan::playerdata::ints_uuid(u);
                 let player_name = r

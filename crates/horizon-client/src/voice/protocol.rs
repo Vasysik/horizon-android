@@ -404,6 +404,27 @@ impl SecretPacket {
     }
 }
 
+fn sanitize_host_string(s: &str) -> &str {
+    let mut s = s.trim().trim_matches('"').trim_matches('\'').trim();
+    for scheme in &["udp://", "tcp://", "http://", "https://"] {
+        if let Some(stripped) = s.strip_prefix(scheme) {
+            s = stripped.trim();
+        }
+    }
+    s.trim_end_matches('/').trim()
+}
+
+fn strip_default_host_port(s: &str) -> &str {
+    let s = sanitize_host_string(s);
+    if let Some((ip6, _)) = s.strip_prefix('[').and_then(|r| r.split_once(']')) {
+        ip6.trim()
+    } else if s.chars().filter(|&c| c == ':').count() == 1 {
+        s.split_once(':').map(|(h, _)| h).unwrap_or(s).trim()
+    } else {
+        s
+    }
+}
+
 /// Parses voice host into `(host, port)`.
 ///
 /// Handles:
@@ -414,21 +435,25 @@ impl SecretPacket {
 /// - IPv6 without brackets (e.g. `"::1"`) -> `("::1", default_port)`
 /// - Host with port (e.g. `"edge.slimeskyes.id:8000"`) -> `("edge.slimeskyes.id", 8000)`
 /// - Host without port (e.g. `"edge.slimeskyes.id"`) -> `("edge.slimeskyes.id", default_port)`
+/// - Fallback substitution for invalid/unbound hosts (0.0.0.0, ::, localhost, 127.0.0.1)
 ///
 /// Port specified in `host` overrides `default_port`.
 pub fn parse_voice_host(host: &str, default_host: &str, default_port: u16) -> (String, u16) {
-    let trimmed = host.trim();
-    if trimmed.is_empty() {
-        return (default_host.trim().to_string(), default_port);
+    let clean_def = strip_default_host_port(default_host);
+    let fallback_is_local = matches!(clean_def, "localhost" | "127.0.0.1" | "::1");
+
+    let clean_host = sanitize_host_string(host);
+    if clean_host.is_empty() {
+        return (clean_def.to_string(), default_port);
     }
 
     // 1. Check if the string is just a numeric port (e.g. "8000")
-    if let Ok(p @ 1..) = trimmed.parse::<u16>() {
-        return (default_host.trim().to_string(), p);
+    if let Ok(p @ 1..) = clean_host.parse::<u16>() {
+        return (clean_def.to_string(), p);
     }
 
     // 2. Bracketed IPv6, e.g. "[::1]:8000" or "[::1]"
-    if let Some((ip_part, rest)) = trimmed.strip_prefix('[').and_then(|s| s.split_once(']')) {
+    if let Some((ip_part, rest)) = clean_host.strip_prefix('[').and_then(|s| s.split_once(']')) {
         let rest = rest.trim();
         let port = if let Some(port_str) = rest.strip_prefix(':') {
             port_str
@@ -440,23 +465,32 @@ pub fn parse_voice_host(host: &str, default_host: &str, default_port: u16) -> (S
         } else {
             default_port
         };
-        let final_host = if ip_part.is_empty() {
-            default_host.trim()
+        let raw_h = ip_part.trim();
+        let is_invalid = raw_h.is_empty() || matches!(raw_h, "::" | "[::]" | "0.0.0.0");
+        let is_local = matches!(raw_h, "localhost" | "127.0.0.1");
+        let final_h = if is_invalid || (is_local && !fallback_is_local) {
+            clean_def
         } else {
-            ip_part.trim()
+            raw_h
         };
-        return (final_host.to_string(), port);
+        return (final_h.to_string(), port);
     }
 
     // 3. Unbracketed IPv6 (contains multiple colons), e.g. "::1" or "2001:db8::1"
-    let colon_count = trimmed.chars().filter(|&c| c == ':').count();
+    let colon_count = clean_host.chars().filter(|&c| c == ':').count();
     if colon_count > 1 {
-        return (trimmed.to_string(), default_port);
+        let is_invalid = matches!(clean_host, "::" | "0:0:0:0:0:0:0:0");
+        let final_h = if is_invalid && !fallback_is_local {
+            clean_def
+        } else {
+            clean_host
+        };
+        return (final_h.to_string(), default_port);
     }
 
     // 4. Host with single port, e.g. "edge.slimeskyes.id:8000" or ":8000"
     if colon_count == 1 {
-        let mut parts = trimmed.splitn(2, ':');
+        let mut parts = clean_host.splitn(2, ':');
         let h = parts.next().unwrap_or("").trim();
         let p_str = parts.next().unwrap_or("").trim();
         let port = p_str
@@ -464,12 +498,25 @@ pub fn parse_voice_host(host: &str, default_host: &str, default_port: u16) -> (S
             .ok()
             .filter(|&p| (1..=65535).contains(&p))
             .unwrap_or(default_port);
-        let final_host = if h.is_empty() { default_host.trim() } else { h };
-        return (final_host.to_string(), port);
+        let is_invalid = h.is_empty() || matches!(h, "0.0.0.0" | "::");
+        let is_local = matches!(h, "localhost" | "127.0.0.1");
+        let final_h = if is_invalid || (is_local && !fallback_is_local) {
+            clean_def
+        } else {
+            h
+        };
+        return (final_h.to_string(), port);
     }
 
     // 5. Hostname or IPv4 without port, e.g. "edge.slimeskyes.id"
-    (trimmed.to_string(), default_port)
+    let is_invalid = clean_host.is_empty() || matches!(clean_host, "0.0.0.0" | "::");
+    let is_local = matches!(clean_host, "localhost" | "127.0.0.1");
+    let final_h = if is_invalid || (is_local && !fallback_is_local) {
+        clean_def
+    } else {
+        clean_host
+    };
+    (final_h.to_string(), default_port)
 }
 
 /// UpdateStatePacket (channel: voicechat:client_state)
@@ -1427,6 +1474,18 @@ mod tests {
         assert_eq!(
             parse_voice_host("192.168.1.100:8080", def_host, def_port),
             ("192.168.1.100".to_string(), 8080)
+        );
+        assert_eq!(
+            parse_voice_host("0.0.0.0:8000", "slimeskyes.id:25565", def_port),
+            ("slimeskyes.id".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("localhost:8000", "slimeskyes.id", def_port),
+            ("slimeskyes.id".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("\"udp://edge.slimeskyes.id:8000/\"", def_host, def_port),
+            ("edge.slimeskyes.id".to_string(), 8000)
         );
     }
 
