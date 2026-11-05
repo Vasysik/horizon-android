@@ -129,11 +129,31 @@ struct PreparedShaderPack {
 type ShaderWorkerResult =
     std::result::Result<std::result::Result<PreparedShaderPack, String>, String>;
 
+struct BuiltShaderPack {
+    folder: String,
+    built: horizon_client::gfx::PackPost,
+    ids: BlockIds,
+    items: HashMap<String, i32>,
+    missing_item: i32,
+    old_hand_light: bool,
+    old_lighting: bool,
+    entities: HashMap<String, i32>,
+    missing_entity: i32,
+    missing_block: i32,
+}
+
+type ShaderGpuWorkerResult = std::result::Result<BuiltShaderPack, String>;
+
+enum ShaderJobStage {
+    Cpu(std::sync::mpsc::Receiver<ShaderWorkerResult>),
+    Gpu(std::sync::mpsc::Receiver<ShaderGpuWorkerResult>),
+}
+
 struct PendingShaderJob {
     name: String,
     dimension: i32,
     started: std::time::Instant,
-    rx: std::sync::mpsc::Receiver<ShaderWorkerResult>,
+    stage: ShaderJobStage,
 }
 
 static PENDING_SHADER_JOB: std::sync::Mutex<Option<PendingShaderJob>> = std::sync::Mutex::new(None);
@@ -313,7 +333,9 @@ impl Game<'_> {
             .is_some_and(|r| r.shader_pack_dimension() != Some(dimension))
         {
             if cfg!(target_os = "android") {
-                let finished = {
+                let mut cpu_finished = None;
+                let mut gpu_finished = None;
+                {
                     let mut slot = PENDING_SHADER_JOB.lock().unwrap();
                     let matches_job = slot
                         .as_ref()
@@ -349,23 +371,127 @@ impl Game<'_> {
                             name: name.clone(),
                             dimension,
                             started,
-                            rx,
+                            stage: ShaderJobStage::Cpu(rx),
                         });
                     }
-                    match slot.as_ref().unwrap().rx.try_recv() {
-                        Ok(res) => {
-                            let job = slot.take().unwrap();
-                            Some((job.started, res))
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            let job = slot.take().unwrap();
-                            Some((job.started, Err("shader loader thread disconnected".into())))
+                    if let Some(job) = slot.as_ref() {
+                        match &job.stage {
+                            ShaderJobStage::Cpu(rx) => match rx.try_recv() {
+                                Ok(res) => {
+                                    let job = slot.take().unwrap();
+                                    cpu_finished = Some((job.started, res));
+                                }
+                                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                    let job = slot.take().unwrap();
+                                    cpu_finished = Some((
+                                        job.started,
+                                        Err("shader loader thread disconnected".into()),
+                                    ));
+                                }
+                            },
+                            ShaderJobStage::Gpu(rx) => match rx.try_recv() {
+                                Ok(res) => {
+                                    let job = slot.take().unwrap();
+                                    gpu_finished = Some((job.started, res));
+                                }
+                                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                    let job = slot.take().unwrap();
+                                    gpu_finished = Some((
+                                        job.started,
+                                        Err("shader GPU builder thread disconnected".into()),
+                                    ));
+                                }
+                            },
                         }
                     }
-                };
-                if let Some((started, loaded)) = finished {
-                    self.apply_prepared_shader_pack(&name, dimension, started, loaded);
+                }
+                if let Some((started, loaded)) = cpu_finished {
+                    match loaded {
+                        Ok(Ok(prepared)) => {
+                            let started_ids = std::time::Instant::now();
+                            let table = block_id_table(&self.pack, &prepared.ids);
+                            log::info!(
+                                "shader pack {name}: mc_Entity for {} of {} block sprites in {} ms",
+                                table.chunks(2).filter(|p| p[0] != -1).count(),
+                                table.len() / 2,
+                                started_ids.elapsed().as_millis()
+                            );
+                            if let Some(renderer) = &self.renderer {
+                                let ctx = renderer.shader_pack_build_context();
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                let _ = std::thread::Builder::new()
+                                    .name("shader-pack-gpu".into())
+                                    .spawn(move || {
+                                        let res = horizon_client::crash::contain(move || {
+                                            let built = ctx.build(prepared.post, &table);
+                                            BuiltShaderPack {
+                                                folder: prepared.folder,
+                                                built,
+                                                ids: prepared.ids,
+                                                items: prepared.items,
+                                                missing_item: prepared.missing_item,
+                                                old_hand_light: prepared.old_hand_light,
+                                                old_lighting: prepared.old_lighting,
+                                                entities: prepared.entities,
+                                                missing_entity: prepared.missing_entity,
+                                                missing_block: prepared.missing_block,
+                                            }
+                                        });
+                                        let _ = tx.send(res);
+                                    });
+                                let mut slot = PENDING_SHADER_JOB.lock().unwrap();
+                                *slot = Some(PendingShaderJob {
+                                    name: name.clone(),
+                                    dimension,
+                                    started,
+                                    stage: ShaderJobStage::Gpu(rx),
+                                });
+                            }
+                        }
+                        other => self.apply_prepared_shader_pack(&name, dimension, started, other),
+                    }
+                }
+                if let Some((started, gpu_res)) = gpu_finished {
+                    match gpu_res {
+                        Ok(built_pack) => {
+                            let mut active = false;
+                            if let Some(renderer) = &mut self.renderer {
+                                if let Some((programs, notes)) = renderer
+                                    .install_built_shader_pack(dimension, Some(built_pack.built))
+                                {
+                                    for note in notes {
+                                        log::warn!("shader pack {name}: {note}");
+                                    }
+                                    log::info!(
+                                        "shader pack {name}: folder `{}`, {} programs ({}) in {} ms",
+                                        built_pack.folder,
+                                        programs.len(),
+                                        programs.join(" "),
+                                        started.elapsed().as_millis()
+                                    );
+                                }
+                                active = renderer.has_active_shader_pack();
+                            }
+                            if active {
+                                self.pack_ids = Some(PackIds {
+                                    items: built_pack.items,
+                                    missing_item: built_pack.missing_item,
+                                    old_hand_light: built_pack.old_hand_light,
+                                    old_lighting: built_pack.old_lighting,
+                                    entities: built_pack.entities,
+                                    missing_entity: built_pack.missing_entity,
+                                    missing_block: built_pack.missing_block,
+                                    blocks: built_pack.ids,
+                                    block_states: RefCell::default(),
+                                });
+                            } else {
+                                self.pack_ids = None;
+                            }
+                        }
+                        Err(panic) => self.shader_pack_failed(&name, dimension, &panic),
+                    }
                 }
             } else {
                 let started = std::time::Instant::now();

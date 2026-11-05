@@ -960,6 +960,34 @@ impl Game<'_> {
                         });
                     }
                 }
+                InGameMenuAction::SetResolutionScale(pct) => {
+                    let clamped = pct.clamp(25, 100);
+                    self.pad.touch.settings.resolution_scale_percent = clamped;
+                    self.settings.horizon.resolution_scale = clamped;
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                    if let Some(r) = self.renderer.as_mut() {
+                        r.set_world_post(
+                            clamped as f32 / 100.0,
+                            self.settings.horizon.fxaa,
+                            self.settings.horizon.taa,
+                            self.settings.horizon.upscaling.ratio(),
+                        );
+                        r.invalidate_menu_blur();
+                    }
+                    self.settings.save(&Self::options_path());
+                }
+                InGameMenuAction::ToggleGameAnimations => {
+                    let next = !self.pad.touch.settings.disable_game_animations;
+                    self.pad.touch.settings.disable_game_animations = next;
+                    horizon_client::ui_theme::motion::set_game_animations_disabled(next);
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                    if let Some(r) = self.renderer.as_mut() {
+                        r.animated_textures = self.settings.horizon.animated_textures && !next;
+                        r.invalidate_menu_blur();
+                    }
+                }
                 InGameMenuAction::SendCustomInput(token) => {
                     self.android_sync_pointer();
                     self.android_custom_token_tap(&token);

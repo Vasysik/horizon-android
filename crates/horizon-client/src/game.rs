@@ -14776,10 +14776,29 @@ impl Game<'_> {
         // Load the profile's scheme before drawing the first frame or outline.
         #[cfg(target_os = "android")]
         self.pad.touch.viewport(size[0], size[1]);
-        let menu_blur = self.menu_blur();
-        let menu_blur_cache = (self.singleplayer_paused() || self.screen == Screen::Options)
+        let raw_menu_blur = self.menu_blur();
+        #[cfg(target_os = "android")]
+        let in_world_stationary_overlay = !self.shows_panorama()
+            && self.player.is_some()
+            && (self.singleplayer_paused()
+                || self.screen != Screen::Playing
+                || self.pad.touch_ui.floating_menu
+                || self.pad.touch.editor.is_some())
+            && (self.singleplayer_paused()
+                || self.pad.touch_ui.floating_menu
+                || self.pad.touch.editor.is_some()
+                || self.pad.touch.state().left == [0.0, 0.0]);
+        #[cfg(not(target_os = "android"))]
+        let in_world_stationary_overlay = false;
+        let menu_blur = if in_world_stationary_overlay {
+            raw_menu_blur.or(Some(0.0))
+        } else {
+            raw_menu_blur
+        };
+        let menu_blur_cache = ((self.singleplayer_paused() || self.screen == Screen::Options)
             && !self.shows_panorama()
-            && menu_blur.is_some();
+            && menu_blur.is_some())
+            || in_world_stationary_overlay;
         if !menu_blur_cache || !self.was_menu_blurred {
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.invalidate_menu_blur();
@@ -15370,7 +15389,11 @@ impl Game<'_> {
                     ..Default::default()
                 },
             },
-            chunk_fade: self.settings.chunk_fade,
+            chunk_fade: if horizon_client::ui_theme::motion::game_animations_disabled() {
+                0.0
+            } else {
+                self.settings.chunk_fade
+            },
         };
         let result = match self.renderer.as_mut() {
             Some(renderer) => {

@@ -101,6 +101,9 @@ impl StartupMenu {
         #[cfg(target_os = "android")]
         {
             menu.controls.settings = horizon_client::touch::Settings::load();
+            horizon_client::ui_theme::motion::set_game_animations_disabled(
+                menu.controls.settings.disable_game_animations,
+            );
             menu.controls.in_menu = true;
             menu.controls.goy_rendered_by_ui = true;
         }
@@ -157,6 +160,15 @@ impl StartupMenu {
         #[cfg(target_os = "android")]
         {
             game.pad.touch = std::mem::take(&mut self.controls);
+            horizon_client::ui_theme::motion::set_game_animations_disabled(
+                game.pad.touch.settings.disable_game_animations,
+            );
+            if game.pad.touch.settings.resolution_scale_percent >= 25
+                && game.pad.touch.settings.resolution_scale_percent <= 100
+            {
+                game.settings.horizon.resolution_scale =
+                    game.pad.touch.settings.resolution_scale_percent;
+            }
             game.pad.touch_ui.pointer_off = !game.pad.touch.settings.virtual_mouse_enabled;
             game.pad.touch_ui.cursor_initialized = self.touch.cursor_initialized;
             game.pad.touch_ui.last_viewport = self.touch.last_viewport;
@@ -1841,6 +1853,21 @@ impl Loading {
                     InGameMenuAction::OpenKeyboard => {
                         crate::platform::show("");
                     }
+                    InGameMenuAction::SetResolutionScale(pct) => {
+                        let clamped = pct.clamp(25, 100);
+                        self.menu.controls.settings.resolution_scale_percent = clamped;
+                        self.settings.horizon.resolution_scale = clamped;
+                        let _ = self.menu.controls.settings.save();
+                        self.settings.touch = self.menu.controls.settings.clone();
+                        self.save_menu_settings();
+                    }
+                    InGameMenuAction::ToggleGameAnimations => {
+                        let next = !self.menu.controls.settings.disable_game_animations;
+                        self.menu.controls.settings.disable_game_animations = next;
+                        horizon_client::ui_theme::motion::set_game_animations_disabled(next);
+                        let _ = self.menu.controls.settings.save();
+                        self.settings.touch = self.menu.controls.settings.clone();
+                    }
                     InGameMenuAction::SendCustomInput(token) => {
                         self.startup_dispatch_custom_token(event_loop, &token, true);
                         if token != "mouse.virtual.toggle"
@@ -2332,11 +2359,15 @@ impl Loading {
             );
             return;
         }
+        #[cfg(target_os = "android")]
+        let control_editor_open = self.menu.controls.editor.is_some();
+        #[cfg(not(target_os = "android"))]
+        let control_editor_open = false;
         let android_boot_loading = cfg!(target_os = "android")
             && self.window.is_some()
             && self.loaded.is_none()
             && !self.menu.options_open
-            && self.menu.controls.editor.is_none();
+            && !control_editor_open;
         if self.menu.pending.is_some() || android_boot_loading {
             horizon_client::level_loading::draw_loading_overlay(
                 batch,

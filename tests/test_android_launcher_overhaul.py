@@ -71,6 +71,14 @@ class LauncherOverhaulTests(unittest.TestCase):
             "crates/horizon-client-render/src/gfx/arena.rs",
             "crates/horizon-client-render/src/graphics.rs",
             "crates/horizon-client/src/game/shader_packs.rs",
+            "crates/horizon-shaders/src/custom.rs",
+            "crates/horizon-shaders/src/translate/scan.rs",
+            "crates/horizon-shaders/src/translate/rewrite.rs",
+            "crates/horizon-client-render/src/gfx/pack_sky.rs",
+            "crates/horizon-client-render/src/gfx/pack_shadow.rs",
+            "crates/horizon-client-render/src/gfx/pack_images.rs",
+            "crates/horizon-client-render/src/gfx/flat.rs",
+            "crates/horizon-client/src/game/fov.rs",
         ]
         for rel in modified_files:
             path = ROOT / rel
@@ -562,6 +570,70 @@ class LauncherOverhaulTests(unittest.TestCase):
         self.assertIn("SettingControl::Slider {", launcher_pages)
         self.assertIn("fn draw_m3_stepper_cell(", touch_ui)
         self.assertIn("fn draw_m3_swatch_chip(", touch_ui)
+
+
+    def test_studio_props_recommended_resolution_shaders_and_animations_revamp(self) -> None:
+        custom_rs = (ROOT / "crates/horizon-shaders/src/custom.rs").read_text(encoding="utf-8")
+        scan_rs = (ROOT / "crates/horizon-shaders/src/translate/scan.rs").read_text(encoding="utf-8")
+        rewrite_rs = (ROOT / "crates/horizon-shaders/src/translate/rewrite.rs").read_text(
+            encoding="utf-8"
+        )
+        pack_sky = (ROOT / "crates/horizon-client-render/src/gfx/pack_sky.rs").read_text(
+            encoding="utf-8"
+        )
+        pack_post = (ROOT / "crates/horizon-client-render/src/gfx/pack_post.rs").read_text(
+            encoding="utf-8"
+        )
+        pack_uniforms = (
+            ROOT / "crates/horizon-client-render/src/gfx/pack_uniforms.rs"
+        ).read_text(encoding="utf-8")
+        shader_packs = (ROOT / "crates/horizon-client/src/game/shader_packs.rs").read_text(
+            encoding="utf-8"
+        )
+        menu_blur = (ROOT / "crates/horizon-client-render/src/menu_blur.rs").read_text(
+            encoding="utf-8"
+        )
+        touch_ui = (ROOT / "crates/horizon-client/src/touch_ui.rs").read_text(encoding="utf-8")
+        layout = (ROOT / "crates/horizon-client-render/src/touch/layout.rs").read_text(
+            encoding="utf-8"
+        )
+        launcher_pages = (
+            ROOT / "crates/horizon-client/src/android/launcher_pages.rs"
+        ).read_text(encoding="utf-8")
+        ui_theme = (ROOT / "crates/horizon-client/src/ui_theme.rs").read_text(encoding="utf-8")
+
+        # 1. MakeUp & E-Lite gl_FogFragCoord + trailing semicolon shader fixes
+        self.assertIn("gl_FogFragCoord", scan_rs)
+        self.assertIn("hz_FogFragCoord", rewrite_rs)
+        self.assertIn('self.tokens.last().is_some_and(|t| t == ";")', custom_rs)
+
+        # 2. BSL subdivided sky dome, unified far plane & Mali-G52 4-bind-group / 4-color-attachment folding
+        self.assertIn("let rings = 6i32;", pack_sky)
+        self.assertIn("let slices = 24i32;", pack_sky)
+        self.assertIn("frame.depth_far.max(frame.detail_distance)", pack_uniforms)
+        self.assertIn("fn trim_fragment_outputs(", pack_post)
+        self.assertIn("160 + b", pack_post)
+        self.assertIn("shader_pack_build_context()", shader_packs)
+
+        # 3. Zero-lag menu backdrop cache & Virtual Mouse OFF by default
+        self.assertIn("if radius < 0.5 {", menu_blur)
+        self.assertIn("virtual_mouse_enabled: false,", layout)
+
+        # 4. Studio ButtonProperty Inspector (90511.png) + Icon badge + Recommended tab + Real-Time Resolution
+        self.assertIn("pub icon_id: u8,", layout)
+        self.assertIn("pub resolution_scale_percent: u32,", layout)
+        self.assertIn("pub fn control_icon_from_id(", touch_ui)
+        self.assertIn("fn draw_preview_brackets(", touch_ui)
+        self.assertIn("(Icon::HorizonLogo, \"Recommended\")", touch_ui)
+        self.assertIn("SetResolutionScale(u32),", touch_ui)
+        self.assertIn("ToggleGameAnimations,", touch_ui)
+
+        # 5. Disable Launcher / In-Game Animations & Diagnostics Summary Modal
+        self.assertIn("pub fn set_launcher_animations_disabled(", ui_theme)
+        self.assertIn("pub fn set_game_animations_disabled(", ui_theme)
+        self.assertIn("Action::ToggleLauncherAnimations", launcher_pages)
+        self.assertIn("Action::ToggleGameAnimations", launcher_pages)
+        self.assertIn("fn draw_diagnostics_summary_modal(", launcher_pages)
 
 
 if __name__ == "__main__":

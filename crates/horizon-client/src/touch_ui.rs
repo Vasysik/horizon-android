@@ -36,6 +36,8 @@ pub struct TouchUi {
     pub pointer_size_dragging: bool,
     /// The virtual-mouse-speed slider of the Aiming tab is being dragged.
     pub mouse_speed_dragging: bool,
+    /// The real-time 3D resolution scale slider of the Recommended tab is being dragged.
+    pub resolution_scale_dragging: bool,
     /// Step state for the Floating Menu "Send Custom Input" picker modal.
     pub custom_input_picker: crate::touch::PickerStep,
     /// Horizontal scroll offset for the Floating Menu custom keyboard picker.
@@ -82,6 +84,7 @@ impl Default for TouchUi {
             sensitivity_dragging: false,
             pointer_size_dragging: false,
             mouse_speed_dragging: false,
+            resolution_scale_dragging: false,
             custom_input_picker: crate::touch::PickerStep::None,
             custom_kb_scroll_x: 0.0,
             custom_kb_drag: None,
@@ -151,6 +154,10 @@ pub enum InGameMenuAction {
     OpenLogs,
     /// The naming field of a preset dialog was tapped: show the system keyboard.
     EditPresetField(bool),
+    /// Adjust real-time 3D world resolution scale percentage (25%..=100%) without recreating UI surface.
+    SetResolutionScale(u32),
+    /// Toggle in-game animations (animated textures, view bobbing, chunk fade, UI transitions).
+    ToggleGameAnimations,
     /// Send a custom keyboard key, mouse button/scroll, or gameplay action token immediately.
     SendCustomInput(String),
 }
@@ -620,6 +627,7 @@ impl TouchUi {
         self.sensitivity_dragging = false;
         self.pointer_size_dragging = false;
         self.mouse_speed_dragging = false;
+        self.resolution_scale_dragging = false;
         self.custom_kb_drag = None;
         self.hub_scroll_drag = None;
     }
@@ -1326,7 +1334,7 @@ pub fn draw_goy_hud(
     virtual_mouse: bool,
 ) {
     use crate::touch::{Control, ControlStyle};
-    use crate::ui_theme::{Face, Ui, color};
+    use crate::ui_theme::{Ui, color};
     crate::touch::set_current_hud_opacity_scale(if tc.editor.is_some() {
         1.0
     } else {
@@ -1443,13 +1451,8 @@ pub fn draw_goy_hud(
             p.shadow_size,
             shadow_c,
         );
-        ui.centered_fit(
-            Face::SemiBold,
-            (rh * 0.30).clamp(10.0, 15.0),
-            [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
-            color::with_alpha(text_c, (alpha.max(0.75) * hud_scale).clamp(0.0, 1.0)),
-            &label,
-        );
+        let fg_col = color::with_alpha(text_c, (alpha.max(0.75) * hud_scale).clamp(0.0, 1.0));
+        draw_button_icon_and_label(&mut ui, [rx, ry, rw, rh], p.icon_id, &label, fg_col);
     }
 
     ui.finish();
@@ -1470,6 +1473,14 @@ fn hub_metrics(w: f32, h: f32) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32) 
 
 impl TouchUi {
     fn step_animations(&self) -> (f32, f32) {
+        let open_target = if self.floating_menu { 1.0 } else { 0.0 };
+        if crate::ui_theme::motion::game_animations_disabled()
+            || crate::ui_theme::motion::reduced_motion()
+        {
+            self.open_anim.set(open_target);
+            self.tab_anim.set(1.0);
+            return (open_target, 1.0);
+        }
         let now = Instant::now();
         let dt = self
             .last_anim_tick
@@ -1588,7 +1599,25 @@ impl TouchUi {
         let (dw, dh, dx, dy, side_w, cx, cw, body_top, body_h) = hub_metrics(w, h);
         let content_pane = [cx - 4.0, body_top, cw + 8.0, body_h];
 
-        // Handle ongoing sensitivity slider drag on Tab 0
+        // Handle ongoing real-time 3D resolution scale slider drag on Tab 0 (Recommended)
+        if self.resolution_scale_dragging {
+            match phase {
+                TouchPhase::Moved => {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    let pct = (25.0 + t * 75.0).round() as u32;
+                    return Some(InGameMenuAction::SetResolutionScale(pct.clamp(25, 100)));
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    self.resolution_scale_dragging = false;
+                    return Some(InGameMenuAction::Close);
+                }
+                _ => {}
+            }
+        }
+
+        // Handle ongoing sensitivity slider drag on Tab 0 (Recommended) or Tab 1 (Controls)
         if self.sensitivity_dragging {
             match phase {
                 TouchPhase::Moved => {
@@ -1606,7 +1635,7 @@ impl TouchUi {
             }
         }
 
-        // Handle ongoing virtual-mouse-speed slider drag on Tab 1
+        // Handle ongoing virtual-mouse-speed slider drag on Tab 0 or Tab 2
         if self.mouse_speed_dragging {
             match phase {
                 TouchPhase::Moved => {
@@ -1950,11 +1979,11 @@ impl TouchUi {
                 return Some(InGameMenuAction::Close);
             }
 
-            // Left Sidebar Category Tabs (Controls, Aiming, Buttons, Advanced)
-            let tab_start_y = dy + 58.0;
-            for ti in 0..4u8 {
-                let ty = tab_start_y + ti as f32 * 44.0;
-                if inside([dx + 10.0, ty, side_w - 16.0, 38.0]) {
+            // Left Sidebar Category Tabs (Recommended, Controls, Aiming, Buttons, Advanced)
+            let tab_start_y = dy + 54.0;
+            for ti in 0..5u8 {
+                let ty = tab_start_y + ti as f32 * 39.0;
+                if inside([dx + 10.0, ty, side_w - 16.0, 35.0]) {
                     if self.hub_tab != ti {
                         self.hub_tab = ti;
                         self.hub_scroll = 0.0;
@@ -1965,8 +1994,39 @@ impl TouchUi {
                 }
             }
 
-            // Check if touch started on the Sensitivity slider track in Tab 0
+            // Check if touch started on sliders in Tab 0 (Recommended)
             if self.hub_tab == 0 && inside(content_pane) {
+                let body_y = body_top - self.hub_scroll;
+                let res_card_y = body_y + 18.0;
+                if inside([cx, res_card_y + 20.0, cw, 26.0]) {
+                    self.resolution_scale_dragging = true;
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    let pct = (25.0 + t * 75.0).round() as u32;
+                    return Some(InGameMenuAction::SetResolutionScale(pct.clamp(25, 100)));
+                }
+                let sens_card_y = body_y + 118.0;
+                if inside([cx, sens_card_y + 22.0, cw, 28.0]) {
+                    self.sensitivity_dragging = true;
+                    let sl_x = cx + 10.0;
+                    let sl_w = (cw - 20.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    let sens = (0.10 + t * 2.90).clamp(0.10, 3.00);
+                    return Some(InGameMenuAction::SetTouchSensitivity(sens));
+                }
+                let spd_card_y = body_y + 230.0;
+                if inside([cx, spd_card_y + 22.0, cw, 28.0]) {
+                    self.mouse_speed_dragging = true;
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetVirtualMouseSpeed(0.25 + t * 2.75));
+                }
+            }
+
+            // Check if touch started on the Sensitivity slider track in Tab 1 (Controls)
+            if self.hub_tab == 1 && inside(content_pane) {
                 let body_y = body_top - self.hub_scroll;
                 let sens_card_y = body_y + 138.0;
                 let track_r = [cx, sens_card_y + 22.0, cw, 28.0];
@@ -1980,8 +2040,8 @@ impl TouchUi {
                 }
             }
 
-            // Check if touch started on the Virtual Mouse Speed or Pointer Size slider tracks in Tab 1
-            if self.hub_tab == 1 && inside(content_pane) {
+            // Check if touch started on the Virtual Mouse Speed or Pointer Size slider tracks in Tab 2 (Aiming)
+            if self.hub_tab == 2 && inside(content_pane) {
                 let body_y = body_top - self.hub_scroll;
                 let spd_card_y = body_y + 180.0;
                 if inside([cx, spd_card_y, cw, 50.0]) {
@@ -2018,7 +2078,64 @@ impl TouchUi {
         let body_y = body_top - self.hub_scroll;
         match self.hub_tab {
             0 => {
-                // Tab 0: Controls
+                // Tab 0: Recommended (Real-Time Resolution, Fast Sensitivity, Virtual Mouse, Quick Controls & Animations)
+                let res_y = body_y + 18.0;
+                let chip_y = res_y + 48.0;
+                let chip_gap = 6.0;
+                let chip_w = (cw - 28.0 - chip_gap * 4.0) / 5.0;
+                for (ci, pct) in [50u32, 65, 75, 85, 100].into_iter().enumerate() {
+                    let rx = cx + 14.0 + ci as f32 * (chip_w + chip_gap);
+                    if inside([rx, chip_y, chip_w, 24.0]) {
+                        return Some(InGameMenuAction::SetResolutionScale(pct));
+                    }
+                }
+                if inside([cx, res_y, cw, 46.0]) {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    let pct = (25.0 + t * 75.0).round() as u32;
+                    return Some(InGameMenuAction::SetResolutionScale(pct.clamp(25, 100)));
+                }
+                let sens_y = body_y + 118.0;
+                if inside([cx, sens_y, cw, 50.0]) {
+                    let sl_x = cx + 10.0;
+                    let sl_w = (cw - 20.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    let sens = (0.10 + t * 2.90).clamp(0.10, 3.00);
+                    return Some(InGameMenuAction::SetTouchSensitivity(sens));
+                }
+                let vmouse_y = body_y + 176.0;
+                if inside([cx, vmouse_y, cw, 46.0]) {
+                    return Some(InGameMenuAction::ToggleVirtualMouse);
+                }
+                let spd_y = body_y + 230.0;
+                if inside([cx, spd_y, cw, 50.0]) {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetVirtualMouseSpeed(0.25 + t * 2.75));
+                }
+                let act_y = body_y + 288.0;
+                let half_w = (cw - 10.0) * 0.5;
+                if inside([cx, act_y, half_w, 44.0]) {
+                    let next_style = if settings.control_style == ControlStyle::Mcpe {
+                        ControlStyle::GoyControl
+                    } else {
+                        ControlStyle::Mcpe
+                    };
+                    return Some(InGameMenuAction::SetControlStyle(next_style));
+                }
+                if inside([cx + half_w + 10.0, act_y, half_w, 44.0]) {
+                    self.floating_menu = false;
+                    return Some(InGameMenuAction::OpenControlEditor);
+                }
+                let anim_y = body_y + 340.0;
+                if inside([cx, anim_y, cw, 46.0]) {
+                    return Some(InGameMenuAction::ToggleGameAnimations);
+                }
+            }
+            1 => {
+                // Tab 1: Controls
                 let mode_y = body_y + 18.0;
                 let half_w = (cw - 10.0) * 0.5;
                 if inside([cx, mode_y, half_w, 46.0]) {
@@ -2068,8 +2185,8 @@ impl TouchUi {
                     return Some(InGameMenuAction::ToggleSplitTouch);
                 }
             }
-            1 => {
-                // Tab 1: Aiming, Camera & Virtual Mouse
+            2 => {
+                // Tab 2: Aiming, Camera & Virtual Mouse
                 let row_h = 46.0;
                 let step = 54.0;
                 let r0 = [cx, body_y + 18.0, cw, row_h]; // Movement & Aim Mode
@@ -2111,8 +2228,8 @@ impl TouchUi {
                     };
                 }
             }
-            2 => {
-                // Tab 2: Buttons & Layout Options
+            3 => {
+                // Tab 3: Buttons & Layout Options
                 let row_h = 46.0;
                 let step = 54.0;
                 let scale_y = body_y + 18.0;
@@ -2409,29 +2526,30 @@ impl TouchUi {
         ui.border(done_r[0], done_r[1], done_r[2], done_r[3], 9.0, border_c);
         ui.centered_fit(Face::SemiBold, 11.0, done_r, text_c, "Done");
 
-        // Left Sidebar Navigation Tabs (Controls, Aiming, Buttons, Advanced)
-        let tabs: [(Icon, &str); 4] = [
+        // Left Sidebar Navigation Tabs (Recommended, Controls, Aiming, Buttons, Advanced)
+        let tabs: [(Icon, &str); 5] = [
+            (Icon::HorizonLogo, "Recommended"),
             (Icon::Gamepad, "Controls"),
             (Icon::Crosshair, "Aiming"),
             (Icon::MicrosoftGrid, "Buttons"),
             (Icon::Flask, "Advanced"),
         ];
-        let tab_start_y = dy + 58.0;
+        let tab_start_y = dy + 54.0;
         for (ti, (ic, lbl)) in tabs.into_iter().enumerate() {
-            let ty = tab_start_y + ti as f32 * 44.0;
+            let ty = tab_start_y + ti as f32 * 39.0;
             let active = self.hub_tab == ti as u8;
-            let tr = [dx + 10.0, ty, side_w - 18.0, 36.0];
+            let tr = [dx + 10.0, ty, side_w - 18.0, 34.0];
             if active {
                 ui.rounded(tr[0], tr[1], tr[2], tr[3], 10.0, accent);
-                ui.rounded(tr[0] - 4.0, tr[1] + 8.0, 3.0, 20.0, 1.5, accent_hi);
+                ui.rounded(tr[0] - 4.0, tr[1] + 7.0, 3.0, 20.0, 1.5, accent_hi);
             }
             let fg = if active { text_c } else { muted_c };
-            ui.icon(ic, tr[0] + 10.0, tr[1] + 10.0, 16.0, fg);
+            ui.icon(ic, tr[0] + 9.0, tr[1] + 9.0, 15.0, fg);
             ui.text(
                 if active { Face::SemiBold } else { Face::Medium },
-                11.2,
-                tr[0] + 32.0,
-                tr[1] + 9.0,
+                10.6,
+                tr[0] + 29.0,
+                tr[1] + 8.0,
                 fg,
                 lbl,
             );
@@ -2440,9 +2558,10 @@ impl TouchUi {
         // Scrollable Right Content Panel with scissor clip and tab transition slide
         let tab_slide = (1.0 - tab_ease) * 14.0;
         let content_height = match self.hub_tab {
-            0 => 368.0,
-            1 => 410.0,
-            2 => 242.0,
+            0 => 394.0,
+            1 => 368.0,
+            2 => 410.0,
+            3 => 242.0,
             _ => 340.0,
         };
         let max_scroll = (content_height - body_h).max(0.0);
@@ -2486,6 +2605,234 @@ impl TouchUi {
 
         match self.hub_tab {
             0 => {
+                // Tab 0: Recommended (Real-Time Resolution, Touch Sensitivity, Virtual Mouse, Quick Controls & Animations)
+                ui.text(
+                    Face::SemiBold,
+                    10.2,
+                    cx,
+                    body_y,
+                    muted_c,
+                    "REAL-TIME 3D RESOLUTION & PERFORMANCE",
+                );
+                let res_y = body_y + 18.0;
+                ui.rounded(cx, res_y, cw, 78.0, 11.0, card_bg);
+                ui.border(cx, res_y, cw, 78.0, 11.0, border_c);
+                ui.text(
+                    Face::SemiBold,
+                    10.8,
+                    cx + 14.0,
+                    res_y + 6.0,
+                    text_c,
+                    "Real-Time 3D Resolution Scale (Zero-Lag)",
+                );
+                let res_pct = settings.resolution_scale_percent.clamp(25, 100);
+                let res_txt = format!("{res_pct}%");
+                let res_pill_w = 52.0;
+                ui.rounded(
+                    cx + cw - res_pill_w - 12.0,
+                    res_y + 6.0,
+                    res_pill_w,
+                    18.0,
+                    6.0,
+                    card_sel,
+                );
+                ui.border(
+                    cx + cw - res_pill_w - 12.0,
+                    res_y + 6.0,
+                    res_pill_w,
+                    18.0,
+                    6.0,
+                    accent,
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    9.4,
+                    [cx + cw - res_pill_w - 12.0, res_y + 6.0, res_pill_w, 18.0],
+                    accent_hi,
+                    &res_txt,
+                );
+                let r_sl_x = cx + 14.0;
+                let r_sl_w = (cw - 28.0).max(40.0);
+                let r_sl_y = res_y + 32.0;
+                let r_frac = ((res_pct as f32 - 25.0) / 75.0).clamp(0.0, 1.0);
+                ui.rounded(r_sl_x, r_sl_y, r_sl_w, 6.0, 3.0, sidebar_bg);
+                ui.rounded(r_sl_x, r_sl_y, (r_sl_w * r_frac).max(6.0), 6.0, 3.0, accent);
+                let r_thumb_x = r_sl_x + r_sl_w * r_frac;
+                ui.rounded(r_thumb_x - 7.0, r_sl_y - 4.0, 14.0, 14.0, 7.0, accent_hi);
+                ui.border(r_thumb_x - 7.0, r_sl_y - 4.0, 14.0, 14.0, 7.0, text_c);
+
+                let chip_y = res_y + 48.0;
+                let chip_gap = 6.0;
+                let chip_w = (cw - 28.0 - chip_gap * 4.0) / 5.0;
+                for (ci, pct) in [50u32, 65, 75, 85, 100].into_iter().enumerate() {
+                    let rx = cx + 14.0 + ci as f32 * (chip_w + chip_gap);
+                    let on = (res_pct as i32 - pct as i32).abs() <= 2;
+                    ui.rounded(
+                        rx,
+                        chip_y,
+                        chip_w,
+                        22.0,
+                        7.0,
+                        if on { accent } else { sidebar_bg },
+                    );
+                    if !on {
+                        ui.border(rx, chip_y, chip_w, 22.0, 7.0, border_c);
+                    }
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        9.2,
+                        [rx + 2.0, chip_y, chip_w - 4.0, 22.0],
+                        if on { accent_fg } else { text_c },
+                        &format!("{pct}%"),
+                    );
+                }
+
+                ui.text(
+                    Face::SemiBold,
+                    10.2,
+                    cx,
+                    body_y + 102.0,
+                    muted_c,
+                    "FAST AIM, VIRTUAL MOUSE & CONTROLS",
+                );
+                let sens_y = body_y + 118.0;
+                ui.rounded(cx, sens_y, cw, 50.0, 11.0, card_bg);
+                ui.border(cx, sens_y, cw, 50.0, 11.0, border_c);
+                ui.text(
+                    Face::SemiBold,
+                    10.8,
+                    cx + 14.0,
+                    sens_y + 6.0,
+                    text_c,
+                    "Touch Look Sensitivity",
+                );
+                let pct_txt = format!("{:.0}%", settings.sensitivity * 100.0);
+                let pill_w = 48.0;
+                ui.rounded(
+                    cx + cw - pill_w - 12.0,
+                    sens_y + 6.0,
+                    pill_w,
+                    18.0,
+                    6.0,
+                    card_sel,
+                );
+                ui.border(
+                    cx + cw - pill_w - 12.0,
+                    sens_y + 6.0,
+                    pill_w,
+                    18.0,
+                    6.0,
+                    accent,
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    9.4,
+                    [cx + cw - pill_w - 12.0, sens_y + 6.0, pill_w, 18.0],
+                    accent_hi,
+                    &pct_txt,
+                );
+                let sl_x = cx + 14.0;
+                let sl_w = (cw - 28.0).max(40.0);
+                let sl_y = sens_y + 33.0;
+                let frac = ((settings.sensitivity - 0.10) / 2.90).clamp(0.0, 1.0);
+                ui.rounded(sl_x, sl_y, sl_w, 6.0, 3.0, sidebar_bg);
+                ui.rounded(sl_x, sl_y, (sl_w * frac).max(6.0), 6.0, 3.0, accent);
+                let thumb_x = sl_x + sl_w * frac;
+                ui.rounded(thumb_x - 7.0, sl_y - 4.0, 14.0, 14.0, 7.0, accent_hi);
+                ui.border(thumb_x - 7.0, sl_y - 4.0, 14.0, 14.0, 7.0, text_c);
+
+                draw_toggle_row(
+                    &mut ui,
+                    body_y + 176.0,
+                    "Virtual Mouse Pointer",
+                    "Off by default; enable for desktop pointer in menus & inventory",
+                    Some(settings.virtual_mouse_enabled),
+                    None,
+                );
+
+                let spd_y = body_y + 230.0;
+                ui.rounded(cx, spd_y, cw, 50.0, 11.0, card_bg);
+                ui.border(cx, spd_y, cw, 50.0, 11.0, border_c);
+                ui.text(
+                    Face::SemiBold,
+                    10.8,
+                    cx + 14.0,
+                    spd_y + 6.0,
+                    text_c,
+                    "Virtual Mouse Speed",
+                );
+                let spd_pct = format!("{:.0}%", settings.virtual_mouse_sensitivity * 100.0);
+                ui.rounded(
+                    cx + cw - pill_w - 12.0,
+                    spd_y + 6.0,
+                    pill_w,
+                    18.0,
+                    6.0,
+                    card_sel,
+                );
+                ui.border(
+                    cx + cw - pill_w - 12.0,
+                    spd_y + 6.0,
+                    pill_w,
+                    18.0,
+                    6.0,
+                    accent,
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    9.4,
+                    [cx + cw - pill_w - 12.0, spd_y + 6.0, pill_w, 18.0],
+                    accent_hi,
+                    &spd_pct,
+                );
+                let spd_sl_y = spd_y + 33.0;
+                let spd_frac = ((settings.virtual_mouse_sensitivity - 0.25) / 2.75).clamp(0.0, 1.0);
+                ui.rounded(sl_x, spd_sl_y, sl_w, 6.0, 3.0, sidebar_bg);
+                ui.rounded(sl_x, spd_sl_y, (sl_w * spd_frac).max(6.0), 6.0, 3.0, accent);
+                let spd_thumb_x = sl_x + sl_w * spd_frac;
+                ui.rounded(
+                    spd_thumb_x - 7.0,
+                    spd_sl_y - 4.0,
+                    14.0,
+                    14.0,
+                    7.0,
+                    accent_hi,
+                );
+                ui.border(spd_thumb_x - 7.0, spd_sl_y - 4.0, 14.0, 14.0, 7.0, text_c);
+
+                let act_y = body_y + 288.0;
+                let half_w = (cw - 10.0) * 0.5;
+                let sys_sub = format!("Active: {}", settings.control_style.label());
+                for (i, (ic, title, sub)) in [
+                    (Icon::Gamepad, "Switch Control System", sys_sub.as_str()),
+                    (
+                        Icon::MicrosoftGrid,
+                        "Customize Controls",
+                        "Open layout & property studio",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let rx = cx + i as f32 * (half_w + 10.0);
+                    ui.rounded(rx, act_y, half_w, 44.0, 11.0, card_bg);
+                    ui.border(rx, act_y, half_w, 44.0, 11.0, border_c);
+                    ui.rounded(rx + 10.0, act_y + 9.0, 26.0, 26.0, 8.0, card_sel);
+                    ui.icon(ic, rx + 15.0, act_y + 14.0, 16.0, accent_hi);
+                    ui.text(Face::SemiBold, 10.4, rx + 42.0, act_y + 6.0, text_c, title);
+                    ui.text(Face::Regular, 8.6, rx + 42.0, act_y + 23.0, muted_c, sub);
+                }
+
+                draw_toggle_row(
+                    &mut ui,
+                    body_y + 340.0,
+                    "In-Game Animations",
+                    "Animated block textures, view bobbing, FOV transitions & menu motion",
+                    Some(!settings.disable_game_animations),
+                    None,
+                );
+            }
+            1 => {
                 // 1. Control Mode Section
                 ui.text(Face::SemiBold, 10.2, cx, body_y, muted_c, "CONTROL MODE");
                 let mode_y = body_y + 18.0;
@@ -2658,8 +3005,8 @@ impl TouchUi {
                     None,
                 );
             }
-            1 => {
-                // Tab 1: Aiming, Camera & Virtual Mouse
+            2 => {
+                // Tab 2: Aiming, Camera & Virtual Mouse
                 ui.text(
                     Face::SemiBold,
                     10.2,
@@ -2849,8 +3196,8 @@ impl TouchUi {
                     Some("−   +"),
                 );
             }
-            2 => {
-                // Tab 2: Buttons & Layout Options
+            3 => {
+                // Tab 3: Buttons & Layout Options
                 ui.text(
                     Face::SemiBold,
                     10.2,
@@ -3306,12 +3653,111 @@ fn shape_name(shape: u8) -> &'static str {
     }
 }
 
-/// Renders the complete MCPE + GoyControl Editor with:
-/// - Real MCPE sprites/bevel buttons + MCPE custom buttons OR GoyControl Static Buttons
-/// - GoyControl Customizable Analog Joystick + JoystickMoveArea indicator
-/// - Interactive 8-point Corner & Edge Resize Handles
-/// - Moveable/Draggable Floating Menu Pod (No Top Toolbar!) with Undo, Redo, Props, Add & Save
-/// - Main Control Manager Dialog, Component Property Inspector, and Mouse/Keyboard Horizontal Picker
+pub fn control_icon_from_id(icon_id: u8) -> Option<(crate::ui_theme::Icon, &'static str)> {
+    use crate::ui_theme::Icon;
+    match icon_id {
+        1 => Some((Icon::Crosshair, "Crosshair")),
+        2 => Some((Icon::Gamepad, "Gamepad")),
+        3 => Some((Icon::Play, "Attack")),
+        4 => Some((Icon::Pause, "Pause")),
+        5 => Some((Icon::Settings, "Settings")),
+        6 => Some((Icon::Search, "Zoom")),
+        7 => Some((Icon::Check, "Confirm")),
+        8 => Some((Icon::Monitor, "Camera")),
+        9 => Some((Icon::Flask, "Use/Potion")),
+        10 => Some((Icon::Terminal, "Debug/Cmd")),
+        11 => Some((Icon::MicrosoftGrid, "Inventory")),
+        12 => Some((Icon::Share, "Swap/Drop")),
+        _ => None,
+    }
+}
+
+pub fn control_icon_label(icon_id: u8) -> &'static str {
+    control_icon_from_id(icon_id).map_or("Text Only", |(_, name)| name)
+}
+
+fn draw_button_icon_and_label(
+    ui: &mut crate::ui_theme::Ui,
+    rect: [f32; 4],
+    icon_id: u8,
+    label: &str,
+    fg_col: u32,
+) {
+    let [rx, ry, rw, rh] = rect;
+    if let Some((ic, _)) = control_icon_from_id(icon_id) {
+        if !label.is_empty() && rw > rh * 1.35 {
+            let ic_sz = (rh * 0.44).clamp(11.0, 18.0);
+            ui.icon(ic, rx + 6.0, ry + (rh - ic_sz) * 0.5, ic_sz, fg_col);
+            ui.centered_fit(
+                crate::ui_theme::Face::SemiBold,
+                (rh * 0.28).clamp(9.0, 14.0),
+                [
+                    rx + ic_sz + 8.0,
+                    ry + 2.0,
+                    (rw - ic_sz - 11.0).max(6.0),
+                    (rh - 4.0).max(6.0),
+                ],
+                fg_col,
+                label,
+            );
+        } else if !label.is_empty() && rh >= 34.0 {
+            let ic_sz = (rh * 0.40).clamp(11.0, 18.0);
+            ui.icon(
+                ic,
+                rx + (rw - ic_sz) * 0.5,
+                ry + (rh * 0.52 - ic_sz).max(3.0),
+                ic_sz,
+                fg_col,
+            );
+            ui.centered_fit(
+                crate::ui_theme::Face::SemiBold,
+                (rh * 0.22).clamp(8.0, 11.5),
+                [rx + 2.0, ry + rh * 0.52, (rw - 4.0).max(6.0), rh * 0.44],
+                fg_col,
+                label,
+            );
+        } else {
+            let ic_sz = (rh.min(rw) * 0.52).clamp(12.0, 22.0);
+            ui.icon(
+                ic,
+                rx + (rw - ic_sz) * 0.5,
+                ry + (rh - ic_sz) * 0.5,
+                ic_sz,
+                fg_col,
+            );
+        }
+    } else {
+        ui.centered_fit(
+            crate::ui_theme::Face::SemiBold,
+            (rh * 0.30).clamp(9.5, 14.5),
+            [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
+            fg_col,
+            label,
+        );
+    }
+}
+
+fn draw_preview_brackets(ui: &mut crate::ui_theme::Ui, rect: [f32; 4], col: u32) {
+    let [x, y, w, h] = rect;
+    let arm = 8.0;
+    let t = 1.6;
+    // Top-left ⌜
+    ui.fill(x + 6.0, y + 6.0, arm, t, col);
+    ui.fill(x + 6.0, y + 6.0, t, arm, col);
+    // Top-right ⌝
+    ui.fill(x + w - 6.0 - arm, y + 6.0, arm, t, col);
+    ui.fill(x + w - 6.0 - t, y + 6.0, t, arm, col);
+    // Bottom-left ⌞
+    ui.fill(x + 6.0, y + h - 6.0 - t, arm, t, col);
+    ui.fill(x + 6.0, y + h - 6.0 - arm, t, arm, col);
+    // Bottom-right ⌟
+    ui.fill(x + w - 6.0 - arm, y + h - 6.0 - t, arm, t, col);
+    ui.fill(x + w - 6.0 - t, y + h - 6.0 - arm, t, arm, col);
+}
+
+/// Studio Slider Card matching `90511.png`:
+/// Renders a rounded dark slate card with top-left icon + title, right value pill badge,
+/// and a bottom horizontal cyan slider track (`#1DB4F6`) with a white circular thumb knob.
 #[allow(clippy::too_many_arguments)]
 fn draw_m3_stepper_cell(
     ui: &mut crate::ui_theme::Ui,
@@ -3319,68 +3765,99 @@ fn draw_m3_stepper_cell(
     label: &str,
     fraction: f32,
     accent: u32,
-    accent_soft: u32,
+    _accent_soft: u32,
     bg_hi: u32,
     border_c: u32,
     text_c: u32,
 ) {
+    use crate::ui_theme::{Face, Icon};
     let [rx, ry, cw, ch] = rect;
-    let rad = (ch * 0.36).clamp(8.0, 12.0);
+    let rad = (ch * 0.20).clamp(9.0, 12.0);
     ui.rounded(rx, ry, cw, ch, rad, bg_hi);
     ui.border(rx, ry, cw, ch, rad, border_c);
 
-    // M3 Expressive horizontal progress fill strip along the bottom interior of the cell
+    // Split "Title|Value" or last whitespace token so both tall studio cards and compact cells look crisp
+    let (title_part, val_part) = if let Some((t_str, v_str)) = label.split_once('|') {
+        (t_str.trim(), v_str.trim())
+    } else if let Some((t_str, v_str)) = label.rsplit_once(' ') {
+        (t_str.trim(), v_str.trim())
+    } else {
+        (label, "")
+    };
+
     let t = fraction.clamp(0.0, 1.0);
-    let track_x = rx + 6.0;
-    let track_w = (cw - 12.0).max(16.0);
-    let track_y = ry + ch - 5.0;
-    ui.rounded(track_x, track_y, track_w, 3.0, 1.5, rgba(255, 255, 255, 22));
-    let fill_w = (track_w * t).max(4.0);
-    ui.rounded(track_x, track_y, fill_w, 3.0, 1.5, accent);
+    if ch >= 52.0 {
+        // Tall Studio Slider Card (90511.png style)
+        ui.icon(Icon::Settings, rx + 8.0, ry + 8.0, 12.0, accent);
+        ui.text_clipped(
+            Face::SemiBold,
+            9.6,
+            rx + 23.0,
+            ry + 6.0,
+            (cw - 28.0).max(24.0),
+            text_c,
+            title_part,
+        );
 
-    // Left (-) and Right (+) tactile M3 micro-capsules
-    let btn_s = (ch - 8.0).clamp(16.0, 22.0);
-    let btn_y = ry + (ch - btn_s) * 0.5 - 1.0;
-    let minus_x = rx + 3.0;
-    let plus_x = rx + cw - btn_s - 3.0;
-    ui.rounded(
-        minus_x,
-        btn_y,
-        btn_s,
-        btn_s,
-        btn_s * 0.5,
-        rgba(255, 255, 255, 14),
-    );
-    ui.centered_fit(
-        crate::ui_theme::Face::SemiBold,
-        10.5,
-        [minus_x, btn_y, btn_s, btn_s],
-        accent,
-        "-",
-    );
-    ui.rounded(plus_x, btn_y, btn_s, btn_s, btn_s * 0.5, accent_soft);
-    ui.centered_fit(
-        crate::ui_theme::Face::SemiBold,
-        10.5,
-        [plus_x, btn_y, btn_s, btn_s],
-        accent,
-        "+",
-    );
+        // Value Pill Badge on right-middle
+        let pill_w = (ui.measure(Face::SemiBold, 9.2, val_part) + 14.0).clamp(36.0, cw - 16.0);
+        let pill_x = rx + cw - pill_w - 8.0;
+        let pill_y = ry + 23.0;
+        ui.rounded(pill_x, pill_y, pill_w, 18.0, 7.0, rgba(9, 14, 24, 230));
+        ui.border(pill_x, pill_y, pill_w, 18.0, 7.0, border_c);
+        ui.centered_fit(
+            Face::SemiBold,
+            9.2,
+            [pill_x + 3.0, pill_y, pill_w - 6.0, 18.0],
+            text_c,
+            val_part,
+        );
 
-    ui.centered_fit(
-        crate::ui_theme::Face::Medium,
-        9.0,
-        [
-            rx + btn_s + 4.0,
-            ry,
-            (cw - (btn_s + 4.0) * 2.0).max(20.0),
-            ch - 3.0,
-        ],
-        text_c,
-        label,
-    );
+        // Horizontal Cyan Slider Track + White Circular Thumb Knob at bottom
+        let track_x = rx + 10.0;
+        let track_w = (cw - 20.0).max(20.0);
+        let track_y = ry + ch - 14.0;
+        ui.rounded(track_x, track_y, track_w, 5.0, 2.5, rgba(8, 12, 20, 235));
+        let fill_w = (track_w * t).max(5.0);
+        ui.rounded(track_x, track_y, fill_w, 5.0, 2.5, accent);
+        let thumb_x = (track_x + track_w * t - 6.0).clamp(track_x - 2.0, track_x + track_w - 10.0);
+        ui.rounded(
+            thumb_x,
+            track_y - 3.5,
+            12.0,
+            12.0,
+            6.0,
+            rgba(255, 255, 255, 255),
+        );
+        ui.stroke_rounded(thumb_x, track_y - 3.5, 12.0, 12.0, 6.0, 1.5, accent);
+    } else {
+        // Compact Studio Slider Cell
+        let track_x = rx + 8.0;
+        let track_w = (cw - 16.0).max(16.0);
+        let track_y = ry + ch - 7.0;
+        ui.rounded(track_x, track_y, track_w, 4.0, 2.0, rgba(8, 12, 20, 225));
+        let fill_w = (track_w * t).max(4.0);
+        ui.rounded(track_x, track_y, fill_w, 4.0, 2.0, accent);
+        let thumb_x = (track_x + track_w * t - 4.5).clamp(track_x - 1.0, track_x + track_w - 8.0);
+        ui.rounded(
+            thumb_x,
+            track_y - 2.5,
+            9.0,
+            9.0,
+            4.5,
+            rgba(255, 255, 255, 255),
+        );
+        ui.centered_fit(
+            Face::SemiBold,
+            9.0,
+            [rx + 4.0, ry + 1.0, (cw - 8.0).max(16.0), ch - 8.0],
+            text_c,
+            &format!("{title_part} {val_part}"),
+        );
+    }
 }
 
+/// Circular Swatch Chip matching `90511.png` with a crisp white outer selection ring.
 #[allow(clippy::too_many_arguments)]
 fn draw_m3_swatch_chip(
     ui: &mut crate::ui_theme::Ui,
@@ -3391,45 +3868,33 @@ fn draw_m3_swatch_chip(
     col: u32,
     selected: bool,
     accent: u32,
-    text_c: u32,
+    _text_c: u32,
 ) {
-    let rad = (sw_h * 0.38).clamp(6.0, 9.0);
+    let d = sw_w.min(sw_h);
+    let cx = sx + (sw_w - d) * 0.5;
+    let cy = sy + (sw_h - d) * 0.5;
+    let rad = d * 0.5;
     if selected {
         ui.rounded(
-            sx - 2.5,
-            sy - 2.5,
-            sw_w + 5.0,
-            sw_h + 5.0,
-            rad + 2.5,
-            crate::ui_theme::color::with_alpha(accent, 0.28),
+            cx - 3.0,
+            cy - 3.0,
+            d + 6.0,
+            d + 6.0,
+            rad + 3.0,
+            crate::ui_theme::color::with_alpha(accent, 0.32),
         );
     }
-    ui.rounded(sx, sy, sw_w, sw_h, rad, col);
-    ui.border(sx, sy, sw_w, sw_h, rad, rgba(255, 255, 255, 52));
+    ui.rounded(cx, cy, d, d, rad, col);
+    ui.border(cx, cy, d, d, rad, rgba(255, 255, 255, 64));
     if selected {
         ui.stroke_rounded(
-            sx - 1.5,
-            sy - 1.5,
-            sw_w + 3.0,
-            sw_h + 3.0,
-            rad + 1.5,
-            1.8,
-            accent,
-        );
-        ui.rounded(
-            sx + (sw_w - 12.0) * 0.5,
-            sy + (sw_h - 12.0) * 0.5,
-            12.0,
-            12.0,
-            6.0,
-            rgba(8, 10, 18, 185),
-        );
-        ui.centered_fit(
-            crate::ui_theme::Face::SemiBold,
-            8.5,
-            [sx, sy, sw_w, sw_h],
-            text_c,
-            "✓",
+            cx - 2.0,
+            cy - 2.0,
+            d + 4.0,
+            d + 4.0,
+            rad + 2.0,
+            2.0,
+            rgba(255, 255, 255, 255),
         );
     }
 }
@@ -3704,13 +4169,7 @@ pub fn draw_hud_editor(
                 rgba(28, 30, 36, (alpha * 215.0).round() as u8),
             );
         }
-        ui.centered_fit(
-            Face::SemiBold,
-            (rh * 0.30).clamp(9.5, 14.5),
-            [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
-            text_c,
-            &label,
-        );
+        draw_button_icon_and_label(&mut ui, [rx, ry, rw, rh], p.icon_id, &label, text_c);
 
         if is_sel {
             selected_rect_and_title = Some(([rx, ry, rw, rh], format!("Button: {label}")));
@@ -3925,26 +4384,28 @@ pub fn draw_hud_editor(
         return;
     }
 
-    // 8. Component Property Inspector Dialog — Material Design 3 Expressive Surface (when ed.props_open == true)
+    // 8. Component Property Inspector Dialog — Studio Layout matching `90511.png` (when ed.props_open == true)
     if ed.props_open {
-        ui.fill(0.0, 0.0, w, h, rgba(4, 6, 14, 196));
-        let dw = (w - 24.0).clamp(310.0, 548.0);
-        let dh = (h - 18.0).clamp(248.0, 368.0);
+        ui.fill(0.0, 0.0, w, h, rgba(4, 7, 15, 208));
+        let dw = (w - 16.0).clamp(350.0, 640.0);
+        let dh = (h - 12.0).clamp(256.0, 384.0);
         let dx = (w - dw) * 0.5;
         let dy = (h - dh) * 0.5;
-        // M3 Expressive multi-layered elevation shadow + surface-container-low card (24dp corner radius)
-        ui.rounded(dx + 3.0, dy + 8.0, dw, dh, 24.0, rgba(0, 0, 0, 165));
-        ui.rounded(
-            dx - 1.5,
-            dy - 1.5,
-            dw + 3.0,
-            dh + 3.0,
-            25.5,
-            color::with_alpha(accent, 0.22),
-        );
-        ui.rounded(dx, dy, dw, dh, 24.0, bg_card);
-        ui.rounded(dx + 2.0, dy + 2.0, dw - 4.0, 38.0, 22.0, bg_hi);
-        ui.stroke_rounded(dx, dy, dw, dh, 24.0, 1.5, border_c);
+
+        // Studio Slate-Navy Palette & Cyan Accent (#1DB4F6) from `90511.png`
+        let st_outer = rgba(11, 16, 28, 252);
+        let st_inner = rgba(16, 23, 38, 252);
+        let st_card = rgba(22, 32, 50, 252);
+        let st_border = rgba(33, 49, 74, 255);
+        let st_cyan = rgba(29, 180, 246, 255);
+        let st_cyan_soft = rgba(29, 180, 246, 42);
+        let st_cyan_fg = rgba(4, 18, 30, 255);
+        let st_text = rgba(241, 245, 249, 255);
+        let st_muted = rgba(148, 163, 184, 255);
+
+        ui.rounded(dx + 3.0, dy + 8.0, dw, dh, 22.0, rgba(0, 0, 0, 175));
+        ui.rounded(dx, dy, dw, dh, 22.0, st_outer);
+        ui.stroke_rounded(dx, dy, dw, dh, 22.0, 1.5, st_border);
 
         let is_joystick = ed.selected == Some(Control::Move) && ed.selected_custom.is_none();
         let is_mcpe_mode = tc.settings.control_style == ControlStyle::Mcpe;
@@ -3963,18 +4424,18 @@ pub fn draw_hud_editor(
             if is_mcpe_mode {
                 (
                     format!("MCPE Custom Button — {lbl}"),
-                    "Exclusive Binding (Keyboard OR Mouse — selecting one clears the other)",
+                    "Exclusive Binding (Keyboard OR Mouse) • Icon, style & geometry",
                 )
             } else {
                 (
                     format!("GoyControl Button — {lbl}"),
-                    "Customize visual style, geometry, stroke, key/mouse bindings & behavior",
+                    "Customize visual style, icon badge, geometry, stroke & events",
                 )
             }
         } else if let Some(c) = ed.selected {
             (
                 format!("MCPE Component — {}", c.name()),
-                "Customize style, opacity, shape, stroke & menu/game visibility",
+                "Customize style, icon, opacity, shape, stroke & visibility",
             )
         } else {
             (
@@ -3990,86 +4451,166 @@ pub fn draw_hud_editor(
             crate::touch::Placement::new(0.5, 0.5, 0.12)
         };
         let telem = format!(
-            "X:{:.0}% Y:{:.0}% • Sz:{:.0}% • α:{:.0}%",
+            "X:{:.0}% Y:{:.0}%  •  Sz:{:.0}%",
             cur_pl.center[0] * 100.0,
             cur_pl.center[1] * 100.0,
             cur_pl.size * 100.0,
-            cur_pl.opacity * 100.0
         );
 
-        // Live M3 Miniature Component Preview Badge in top-left header
-        ui.rounded(dx + 12.0, dy + 7.0, 30.0, 30.0, 10.0, accent_soft);
-        ui.border(dx + 12.0, dy + 7.0, 30.0, 30.0, 10.0, accent);
-        if is_joystick {
-            let js = &tc.settings.joystick_style;
-            let br = (js.base_roundness * 0.22).clamp(3.0, 11.0);
-            ui.rounded(dx + 16.0, dy + 11.0, 22.0, 22.0, br, js.base_color);
-            ui.border(dx + 16.0, dy + 11.0, 22.0, 22.0, br, js.base_stroke_color);
-            let ks = (js.stick_size * 14.0).clamp(6.0, 12.0);
-            ui.rounded(
-                dx + 27.0 - ks * 0.5,
-                dy + 22.0 - ks * 0.5,
-                ks,
-                ks,
-                ks * 0.5,
-                js.stick_color,
-            );
-        } else {
-            let pr = (cur_pl.roundness * 0.20).clamp(3.0, 10.0);
-            ui.rounded(dx + 16.0, dy + 11.0, 22.0, 22.0, pr, cur_pl.button_color);
-            ui.border(dx + 16.0, dy + 11.0, 22.0, 22.0, pr, cur_pl.stroke_color);
-            ui.icon(Icon::Gear, dx + 20.0, dy + 15.0, 14.0, accent);
-        }
+        // Top Header Bar: [X] Close Button + Circular Double-Ring Preview Badge + Title/Sub + Telemetry Pill + [⛶] Center Snap + Cyan [✓ Done]
+        let x_btn = [dx + 12.0, dy + 9.0, 26.0, 26.0];
+        ui.rounded(x_btn[0], x_btn[1], x_btn[2], x_btn[3], 8.0, st_card);
+        ui.border(x_btn[0], x_btn[1], x_btn[2], x_btn[3], 8.0, st_border);
+        ui.icon(Icon::Close, x_btn[0] + 6.0, x_btn[1] + 6.0, 14.0, st_muted);
+
+        // Circular double-ring live preview icon in header
+        ui.rounded(dx + 44.0, dy + 8.0, 28.0, 28.0, 14.0, rgba(24, 28, 48, 255));
+        ui.stroke_rounded(
+            dx + 44.0,
+            dy + 8.0,
+            28.0,
+            28.0,
+            14.0,
+            1.8,
+            if is_joystick {
+                tc.settings.joystick_style.base_stroke_color
+            } else {
+                cur_pl.stroke_color
+            },
+        );
+        ui.rounded(
+            dx + 51.0,
+            dy + 15.0,
+            14.0,
+            14.0,
+            7.0,
+            if is_joystick {
+                tc.settings.joystick_style.stick_color
+            } else {
+                cur_pl.button_color
+            },
+        );
+        ui.stroke_rounded(dx + 51.0, dy + 15.0, 14.0, 14.0, 7.0, 1.4, st_cyan);
 
         ui.text_clipped(
             Face::SemiBold,
-            13.0,
-            dx + 48.0,
+            12.8,
+            dx + 78.0,
             dy + 7.0,
-            (dw - 266.0).max(90.0),
-            text_c,
+            (dw - 332.0).max(90.0),
+            st_text,
             &header_txt,
         );
         ui.text_clipped(
             Face::Regular,
-            9.2,
-            dx + 48.0,
-            dy + 24.0,
-            (dw - 266.0).max(90.0),
-            muted_c,
+            8.8,
+            dx + 78.0,
+            dy + 23.0,
+            (dw - 332.0).max(90.0),
+            st_muted,
             sub_txt,
         );
-        // M3 Assist Chip for Telemetry + Horizontal Center Snap
+
+        // Telemetry Pill + Center-Snap [⛶] Button + Cyan [✓ Done] Button
         let pill_w = 132.0;
-        let pill_r = [dx + dw - 78.0 - pill_w, dy + 10.0, pill_w, 26.0];
-        ui.rounded(
-            pill_r[0],
-            pill_r[1],
-            pill_r[2],
-            pill_r[3],
-            13.0,
-            accent_soft,
-        );
-        ui.border(pill_r[0], pill_r[1], pill_r[2], pill_r[3], 13.0, accent);
-        ui.centered_fit(Face::Mono, 8.6, pill_r, accent, &telem);
+        let pill_r = [dx + dw - 244.0, dy + 9.0, pill_w, 26.0];
+        ui.rounded(pill_r[0], pill_r[1], pill_r[2], pill_r[3], 13.0, st_inner);
+        ui.border(pill_r[0], pill_r[1], pill_r[2], pill_r[3], 13.0, st_border);
+        ui.centered_fit(Face::Mono, 8.8, pill_r, st_text, &telem);
 
-        // M3 Filled Primary Pill Button for "Done"
-        let close_r = [dx + dw - 74.0, dy + 9.0, 60.0, 28.0];
-        ui.rounded(close_r[0], close_r[1], close_r[2], close_r[3], 14.0, accent);
-        ui.centered_fit(Face::SemiBold, 10.5, close_r, accent_fg, "✓ Done");
-
-        // M3 Expressive Segmented Pill Tab Bar
-        let tab_y = dy + 42.0;
-        let tab_w = (dw - 28.0 - 8.0) / 3.0;
-        ui.rounded(
-            dx + 12.0,
-            tab_y - 2.0,
-            dw - 24.0,
-            30.0,
-            15.0,
-            rgba(8, 10, 18, 155),
+        let snap_r = [dx + dw - 106.0, dy + 9.0, 26.0, 26.0];
+        ui.rounded(snap_r[0], snap_r[1], snap_r[2], snap_r[3], 8.0, st_card);
+        ui.border(snap_r[0], snap_r[1], snap_r[2], snap_r[3], 8.0, st_border);
+        ui.icon(
+            Icon::Crosshair,
+            snap_r[0] + 5.0,
+            snap_r[1] + 5.0,
+            16.0,
+            st_cyan,
         );
-        ui.border(dx + 12.0, tab_y - 2.0, dw - 24.0, 30.0, 15.0, border_c);
+
+        let close_r = [dx + dw - 74.0, dy + 9.0, 62.0, 26.0];
+        ui.rounded(
+            close_r[0], close_r[1], close_r[2], close_r[3], 13.0, st_cyan,
+        );
+        ui.centered_fit(Face::SemiBold, 10.2, close_r, st_cyan_fg, "✓ Done");
+
+        // Left Vertical 3-Card Navigation Rail (`90511.png`)
+        let rail_x = dx + 12.0;
+        let rail_y = dy + 46.0;
+        let rail_w = 60.0;
+        let rail_h = dh - 58.0;
+        let nav_card_h = (rail_h - 12.0) / 3.0;
+        let nav_items: [(Icon, &str, &str); 3] = if is_joystick {
+            [
+                (Icon::Gamepad, "Stick &", "Style"),
+                (Icon::Settings, "Analog", "Base"),
+                (Icon::Monitor, "Zone &", "Vis"),
+            ]
+        } else {
+            [
+                (Icon::Gamepad, "Style &", "Colors"),
+                (Icon::Settings, "Shape &", "Stroke"),
+                (Icon::Monitor, "Events &", "Behavior"),
+            ]
+        };
+        for (ni, (ic, l1, l2)) in nav_items.into_iter().enumerate() {
+            let ny = rail_y + ni as f32 * (nav_card_h + 6.0);
+            let active = ed.props_tab == ni;
+            ui.rounded(
+                rail_x,
+                ny,
+                rail_w,
+                nav_card_h,
+                12.0,
+                if active { st_cyan_soft } else { st_inner },
+            );
+            ui.stroke_rounded(
+                rail_x,
+                ny,
+                rail_w,
+                nav_card_h,
+                12.0,
+                if active { 1.6 } else { 1.0 },
+                if active { st_cyan } else { st_border },
+            );
+            if active {
+                ui.rounded(
+                    rail_x,
+                    ny + nav_card_h * 0.22,
+                    3.0,
+                    nav_card_h * 0.56,
+                    1.5,
+                    st_cyan,
+                );
+            }
+            let fg = if active { st_cyan } else { st_muted };
+            ui.icon(ic, rail_x + (rail_w - 18.0) * 0.5, ny + 10.0, 18.0, fg);
+            ui.centered_fit(
+                Face::SemiBold,
+                8.8,
+                [rail_x + 3.0, ny + 32.0, rail_w - 6.0, 13.0],
+                if active { st_text } else { st_muted },
+                l1,
+            );
+            ui.centered_fit(
+                Face::SemiBold,
+                8.8,
+                [rail_x + 3.0, ny + 44.0, rail_w - 6.0, 13.0],
+                if active { st_text } else { st_muted },
+                l2,
+            );
+        }
+
+        // Right Workspace Area (`wx..wx + ww`)
+        let wx = dx + 80.0;
+        let ww = dw - 92.0;
+
+        // Top 3-Segment Pill Bar synchronized with the Left Navigation Rail
+        let tab_y = dy + 46.0;
+        let tab_w = (ww - 8.0) / 3.0;
+        ui.rounded(wx, tab_y - 2.0, ww, 28.0, 14.0, st_inner);
+        ui.border(wx, tab_y - 2.0, ww, 28.0, 14.0, st_border);
         let tab_labels = if is_joystick {
             ["1. Stick & Style", "2. Analog Base", "3. Zone & Visibility"]
         } else {
@@ -4080,385 +4621,463 @@ pub fn draw_hud_editor(
             ]
         };
         for (ti, t_lbl) in tab_labels.into_iter().enumerate() {
-            let tx = dx + 14.0 + ti as f32 * (tab_w + 4.0);
+            let tx = wx + 2.0 + ti as f32 * (tab_w + 2.0);
             let on = ed.props_tab == ti;
-            ui.rounded(
-                tx,
-                tab_y,
-                tab_w,
-                26.0,
-                13.0,
-                if on { accent } else { rgba(255, 255, 255, 8) },
-            );
-            if !on {
-                ui.border(tx, tab_y, tab_w, 26.0, 13.0, border_c);
+            if on {
+                ui.rounded(tx, tab_y, tab_w, 24.0, 12.0, st_cyan);
             }
             ui.centered_fit(
                 Face::SemiBold,
-                10.0,
-                [tx + 4.0, tab_y, tab_w - 8.0, 26.0],
-                if on { accent_fg } else { text_c },
+                9.8,
+                [tx + 4.0, tab_y, tab_w - 8.0, 24.0],
+                if on { st_cyan_fg } else { st_muted },
                 t_lbl,
             );
         }
 
-        let body_y = tab_y + 34.0;
+        // Main Inner Studio Container Card (`[wx, dy + 80.0, ww, dh - 92.0]`)
+        let box_y = dy + 80.0;
+        let box_h = dh - 92.0;
+        ui.rounded(wx, box_y, ww, box_h, 16.0, st_inner);
+        ui.border(wx, box_y, ww, box_h, 16.0, st_border);
+
+        let body_y = box_y + 10.0;
         if is_joystick {
             let js = &tc.settings.joystick_style;
             let p_move = tc.placement(Control::Move);
-            let cw = (dw - 28.0 - 12.0) / 4.0;
-            let sw_w = 22.0;
-            let st_x = dx + 86.0 + 8.0 * (sw_w + 4.0) + 12.0;
-            let st_w = (dw - (st_x - dx) - 14.0).max(80.0);
+            let preview_w = 88.0;
+            let cards_area_w = ww - preview_w - 30.0;
+            let cw3 = (cards_area_w - 16.0) / 3.0;
 
             match ed.props_tab {
                 0 => {
-                    // Joystick Tab 0: Renderer Style, Active Zone, Stick Knob Sizing & Stick Colors
+                    // Section Header + Right Style Selector Pill
                     ui.text(
                         Face::SemiBold,
-                        9.4,
-                        dx + 14.0,
-                        body_y - 2.0,
-                        accent,
-                        "JOYSTICK STYLE & ACTIVE ZONE",
+                        9.6,
+                        wx + 12.0,
+                        body_y + 3.0,
+                        st_text,
+                        "STICK KNOB DIMENSIONS & STROKE",
                     );
-                    let y1 = body_y + 12.0;
-                    let hw = (dw - 28.0 - 8.0) * 0.5;
+                    let st_pill_w = 216.0f32.min(ww * 0.46);
+                    let st_pill_r = [wx + ww - st_pill_w - 12.0, body_y - 2.0, st_pill_w, 24.0];
+                    ui.rounded(
+                        st_pill_r[0],
+                        st_pill_r[1],
+                        st_pill_r[2],
+                        st_pill_r[3],
+                        12.0,
+                        st_card,
+                    );
+                    ui.border(
+                        st_pill_r[0],
+                        st_pill_r[1],
+                        st_pill_r[2],
+                        st_pill_r[3],
+                        12.0,
+                        st_cyan,
+                    );
                     let st_lbl = if tc.settings.control_style == ControlStyle::GoyControl
                         || p_move.use_goy_style
                     {
-                        "● Style: Custom GoyControl Stick"
+                        "● Style: Custom GoyControl Stick ⌄"
                     } else {
-                        "● Style: Default MCPE D-Pad/Stick"
+                        "● Style: Default MCPE Stick ⌄"
                     };
-                    ui.rounded(dx + 14.0, y1, hw, 30.0, 11.0, accent_soft);
-                    ui.border(dx + 14.0, y1, hw, 30.0, 11.0, accent);
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        10.0,
-                        [dx + 18.0, y1, hw - 8.0, 30.0],
-                        accent,
-                        st_lbl,
-                    );
+                    ui.centered_fit(Face::SemiBold, 8.8, st_pill_r, st_cyan, st_lbl);
 
-                    let area_txt = format!("Move Area: {}", js.move_area.label());
-                    ui.rounded(dx + 14.0 + hw + 8.0, y1, hw, 30.0, 11.0, bg_hi);
-                    ui.border(dx + 14.0 + hw + 8.0, y1, hw, 30.0, 11.0, border_c);
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        10.0,
-                        [dx + 18.0 + hw + 8.0, y1, hw - 8.0, 30.0],
-                        text_c,
-                        &area_txt,
-                    );
-
-                    ui.text(
-                        Face::SemiBold,
-                        9.4,
-                        dx + 14.0,
-                        y1 + 38.0,
-                        accent,
-                        "STICK KNOB DIMENSIONS & STROKE",
-                    );
-                    let y2 = y1 + 52.0;
+                    // 3 Studio Slider Cards + Right Live Component Preview Box with Corner Brackets
+                    let cards_y = body_y + 28.0;
+                    let card_h = 74.0;
                     for (i, (txt, frac)) in [
                         (
-                            format!("Stick Sz {:.0}%", js.stick_size * 100.0),
+                            format!("Stick Size|{:.0}%", js.stick_size * 100.0),
                             (js.stick_size - 0.20) / 0.65,
                         ),
                         (
-                            format!("Stick Alpha {:.0}%", js.stick_opacity * 100.0),
+                            format!("Stick Alpha|{:.0}%", js.stick_opacity * 100.0),
                             (js.stick_opacity - 0.15) / 0.85,
                         ),
                         (
-                            format!("Stick Strk {:.1}dp", js.stick_stroke),
+                            format!("Stick Stroke|{:.1}dp", js.stick_stroke),
                             js.stick_stroke / 8.0,
-                        ),
-                        (
-                            format!("Base Sz {:.0}%", p_move.size * 100.0),
-                            (p_move.size - 0.12) / 0.33,
                         ),
                     ]
                     .into_iter()
                     .enumerate()
                     {
-                        let rx = dx + 14.0 + i as f32 * (cw + 4.0);
+                        let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
                         draw_m3_stepper_cell(
                             &mut ui,
-                            [rx, y2, cw, 28.0],
+                            [rx, cards_y, cw3, card_h],
                             &txt,
                             frac,
-                            accent,
-                            accent_soft,
-                            bg_hi,
-                            border_c,
-                            text_c,
+                            st_cyan,
+                            st_cyan_soft,
+                            st_card,
+                            st_border,
+                            st_text,
                         );
                     }
 
-                    let y3 = y2 + 38.0;
+                    // Live Joystick Preview Box with Cyan Corner Framing Brackets
+                    let prev_r = [wx + ww - preview_w - 12.0, cards_y, preview_w, card_h];
                     ui.rounded(
-                        dx + 10.0,
-                        y3 - 4.0,
-                        dw - 20.0,
-                        30.0,
-                        10.0,
-                        rgba(255, 255, 255, 7),
+                        prev_r[0],
+                        prev_r[1],
+                        prev_r[2],
+                        prev_r[3],
+                        12.0,
+                        rgba(9, 14, 24, 250),
                     );
+                    ui.border(prev_r[0], prev_r[1], prev_r[2], prev_r[3], 12.0, st_border);
+                    draw_preview_brackets(&mut ui, prev_r, st_cyan);
+                    let b_side = 44.0;
+                    let bx = prev_r[0] + (prev_r[2] - b_side) * 0.5;
+                    let by = prev_r[1] + (prev_r[3] - b_side) * 0.5;
+                    let b_rad = (b_side * (js.base_roundness / 100.0)).clamp(4.0, b_side * 0.5);
+                    ui.rounded(bx, by, b_side, b_side, b_rad, js.base_color);
+                    ui.stroke_rounded(
+                        bx,
+                        by,
+                        b_side,
+                        b_side,
+                        b_rad,
+                        js.base_stroke.clamp(1.0, 3.0),
+                        js.base_stroke_color,
+                    );
+                    let k_side = (b_side * js.stick_size.clamp(0.25, 0.80)).clamp(14.0, 34.0);
+                    let kx = bx + (b_side - k_side) * 0.5;
+                    let ky = by + (b_side - k_side) * 0.5;
+                    ui.rounded(kx, ky, k_side, k_side, k_side * 0.5, js.stick_color);
+                    ui.stroke_rounded(
+                        kx,
+                        ky,
+                        k_side,
+                        k_side,
+                        k_side * 0.5,
+                        js.stick_stroke.clamp(1.0, 3.0),
+                        js.stick_stroke_color,
+                    );
+
+                    // Bottom Swatch Card ("STICK COLOR" + Circular Swatches + Right Cycle Stroke Button)
+                    let sw_y = cards_y + card_h + 8.0;
+                    let sw_card_h = (box_y + box_h - sw_y - 10.0).clamp(48.0, 62.0);
+                    ui.rounded(wx + 12.0, sw_y, ww - 24.0, sw_card_h, 12.0, st_card);
+                    ui.border(wx + 12.0, sw_y, ww - 24.0, sw_card_h, 12.0, st_border);
                     ui.text(
                         Face::SemiBold,
-                        9.5,
-                        dx + 16.0,
-                        y3 + 4.0,
-                        muted_c,
-                        "Stick Color:",
+                        8.8,
+                        wx + 22.0,
+                        sw_y + 6.0,
+                        st_muted,
+                        "STICK COLOR",
                     );
+                    let sw_d = 20.0;
+                    let sw_row_y = sw_y + sw_card_h - sw_d - 7.0;
                     for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                        let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
+                        let sx = wx + 22.0 + i as f32 * (sw_d + 6.0);
                         draw_m3_swatch_chip(
                             &mut ui,
                             sx,
-                            y3,
-                            sw_w,
-                            22.0,
+                            sw_row_y,
+                            sw_d,
+                            sw_d,
                             *col,
                             js.stick_color == *col,
-                            accent,
-                            text_c,
+                            st_cyan,
+                            st_text,
                         );
                     }
-                    ui.rounded(st_x, y3, st_w, 22.0, 8.0, bg_hi);
-                    ui.stroke_rounded(st_x, y3, st_w, 22.0, 8.0, 1.6, js.stick_stroke_color);
+                    let act_w = 152.0f32.min(ww * 0.34);
+                    let act_r = [
+                        wx + ww - act_w - 22.0,
+                        sw_y + (sw_card_h - 28.0) * 0.5,
+                        act_w,
+                        28.0,
+                    ];
+                    ui.rounded(act_r[0], act_r[1], act_r[2], act_r[3], 10.0, st_inner);
+                    ui.stroke_rounded(
+                        act_r[0],
+                        act_r[1],
+                        act_r[2],
+                        act_r[3],
+                        10.0,
+                        1.5,
+                        js.stick_stroke_color,
+                    );
                     ui.centered_fit(
                         Face::SemiBold,
-                        9.0,
-                        [st_x + 4.0, y3, st_w - 8.0, 22.0],
-                        text_c,
-                        "Cycle Stick Stroke Col",
+                        8.8,
+                        act_r,
+                        st_text,
+                        "● Cycle Stick Stroke Col",
                     );
                 }
                 1 => {
-                    // Joystick Tab 1: Analog Base Area Opacity, Stroke, Roundness, Mode & Colors
+                    // Joystick Tab 1: Analog Base Ring Geometry, Mode & Base Palette
                     ui.text(
                         Face::SemiBold,
-                        9.4,
-                        dx + 14.0,
-                        body_y - 2.0,
-                        accent,
+                        9.6,
+                        wx + 12.0,
+                        body_y + 3.0,
+                        st_text,
                         "ANALOG BASE RING GEOMETRY & INPUT MODE",
                     );
-                    let y4 = body_y + 14.0;
+                    let mode_pill_w = 186.0f32.min(ww * 0.42);
+                    let mode_pill_r = [
+                        wx + ww - mode_pill_w - 12.0,
+                        body_y - 2.0,
+                        mode_pill_w,
+                        24.0,
+                    ];
+                    ui.rounded(
+                        mode_pill_r[0],
+                        mode_pill_r[1],
+                        mode_pill_r[2],
+                        mode_pill_r[3],
+                        12.0,
+                        st_card,
+                    );
+                    ui.border(
+                        mode_pill_r[0],
+                        mode_pill_r[1],
+                        mode_pill_r[2],
+                        mode_pill_r[3],
+                        12.0,
+                        st_cyan,
+                    );
+                    let mode_txt = if tc.settings.mode == crate::touch::Mode::Dpad {
+                        "● Mode: D-Pad ⌄"
+                    } else {
+                        "● Mode: Analog Stick ⌄"
+                    };
+                    ui.centered_fit(Face::SemiBold, 8.8, mode_pill_r, st_cyan, mode_txt);
+
+                    let cards_y = body_y + 28.0;
+                    let card_h = 74.0;
                     for (i, (txt, frac)) in [
                         (
-                            format!("Base Alpha {:.0}%", js.base_opacity * 100.0),
+                            format!("Base Alpha|{:.0}%", js.base_opacity * 100.0),
                             (js.base_opacity - 0.15) / 0.85,
                         ),
                         (
-                            format!("Base Strk {:.1}dp", js.base_stroke),
+                            format!("Base Stroke|{:.1}dp", js.base_stroke),
                             js.base_stroke / 8.0,
                         ),
                         (
-                            format!("Base Round {:.0}", js.base_roundness),
+                            format!("Base Round|{:.0}", js.base_roundness),
                             js.base_roundness / 50.0,
-                        ),
-                        (
-                            if tc.settings.mode == crate::touch::Mode::Dpad {
-                                "Mode: D-Pad".into()
-                            } else {
-                                "Mode: Analog".into()
-                            },
-                            1.0,
                         ),
                     ]
                     .into_iter()
                     .enumerate()
                     {
-                        let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                        if i < 3 {
-                            draw_m3_stepper_cell(
-                                &mut ui,
-                                [rx, y4, cw, 30.0],
-                                &txt,
-                                frac,
-                                accent,
-                                accent_soft,
-                                bg_hi,
-                                border_c,
-                                text_c,
-                            );
-                        } else {
-                            ui.rounded(rx, y4, cw, 30.0, 10.0, accent_soft);
-                            ui.border(rx, y4, cw, 30.0, 10.0, accent);
-                            ui.centered_fit(
-                                Face::SemiBold,
-                                9.5,
-                                [rx + 4.0, y4, cw - 8.0, 30.0],
-                                accent,
-                                &txt,
-                            );
-                        }
+                        let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
+                        draw_m3_stepper_cell(
+                            &mut ui,
+                            [rx, cards_y, cw3, card_h],
+                            &txt,
+                            frac,
+                            st_cyan,
+                            st_cyan_soft,
+                            st_card,
+                            st_border,
+                            st_text,
+                        );
                     }
 
-                    ui.text(
-                        Face::SemiBold,
-                        9.4,
-                        dx + 14.0,
-                        y4 + 40.0,
-                        accent,
-                        "ANALOG BASE FILL & STROKE PALETTE",
-                    );
-                    let y5 = y4 + 56.0;
+                    let prev_r = [wx + ww - preview_w - 12.0, cards_y, preview_w, card_h];
                     ui.rounded(
-                        dx + 10.0,
-                        y5 - 4.0,
-                        dw - 20.0,
-                        30.0,
-                        10.0,
-                        rgba(255, 255, 255, 7),
+                        prev_r[0],
+                        prev_r[1],
+                        prev_r[2],
+                        prev_r[3],
+                        12.0,
+                        rgba(9, 14, 24, 250),
                     );
+                    ui.border(prev_r[0], prev_r[1], prev_r[2], prev_r[3], 12.0, st_border);
+                    draw_preview_brackets(&mut ui, prev_r, st_cyan);
+                    let b_side = 46.0;
+                    let bx = prev_r[0] + (prev_r[2] - b_side) * 0.5;
+                    let by = prev_r[1] + (prev_r[3] - b_side) * 0.5;
+                    let b_rad = (b_side * (js.base_roundness / 100.0)).clamp(2.0, b_side * 0.5);
+                    ui.rounded(bx, by, b_side, b_side, b_rad, js.base_color);
+                    ui.stroke_rounded(
+                        bx,
+                        by,
+                        b_side,
+                        b_side,
+                        b_rad,
+                        js.base_stroke.clamp(1.0, 3.5),
+                        js.base_stroke_color,
+                    );
+
+                    let sw_y = cards_y + card_h + 8.0;
+                    let sw_card_h = (box_y + box_h - sw_y - 10.0).clamp(48.0, 62.0);
+                    ui.rounded(wx + 12.0, sw_y, ww - 24.0, sw_card_h, 12.0, st_card);
+                    ui.border(wx + 12.0, sw_y, ww - 24.0, sw_card_h, 12.0, st_border);
                     ui.text(
                         Face::SemiBold,
-                        9.5,
-                        dx + 16.0,
-                        y5 + 4.0,
-                        muted_c,
-                        "Base Color:",
+                        8.8,
+                        wx + 22.0,
+                        sw_y + 6.0,
+                        st_muted,
+                        "BASE COLOR",
                     );
+                    let sw_d = 20.0;
+                    let sw_row_y = sw_y + sw_card_h - sw_d - 7.0;
                     for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                        let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
+                        let sx = wx + 22.0 + i as f32 * (sw_d + 6.0);
                         draw_m3_swatch_chip(
                             &mut ui,
                             sx,
-                            y5,
-                            sw_w,
-                            22.0,
+                            sw_row_y,
+                            sw_d,
+                            sw_d,
                             *col,
                             js.base_color == *col,
-                            accent,
-                            text_c,
+                            st_cyan,
+                            st_text,
                         );
                     }
-                    ui.rounded(st_x, y5, st_w, 22.0, 8.0, bg_hi);
-                    ui.stroke_rounded(st_x, y5, st_w, 22.0, 8.0, 1.6, js.base_stroke_color);
+                    let act_w = 152.0f32.min(ww * 0.34);
+                    let act_r = [
+                        wx + ww - act_w - 22.0,
+                        sw_y + (sw_card_h - 28.0) * 0.5,
+                        act_w,
+                        28.0,
+                    ];
+                    ui.rounded(act_r[0], act_r[1], act_r[2], act_r[3], 10.0, st_inner);
+                    ui.stroke_rounded(
+                        act_r[0],
+                        act_r[1],
+                        act_r[2],
+                        act_r[3],
+                        10.0,
+                        1.5,
+                        js.base_stroke_color,
+                    );
                     ui.centered_fit(
                         Face::SemiBold,
-                        9.0,
-                        [st_x + 4.0, y5, st_w - 8.0, 22.0],
-                        text_c,
-                        "Cycle Base Stroke Col",
+                        8.8,
+                        act_r,
+                        st_text,
+                        "● Cycle Base Stroke Col",
                     );
                 }
                 _ => {
-                    // Joystick Tab 2: Active Zone & Visibility Rules
+                    // Joystick Tab 2: Active Zone, Footprint Size & Visibility Rules
                     ui.text(
                         Face::SemiBold,
-                        9.4,
-                        dx + 14.0,
-                        body_y - 2.0,
-                        accent,
+                        9.6,
+                        wx + 12.0,
+                        body_y + 3.0,
+                        st_text,
                         "ACTIVE TOUCH ZONE & VISIBILITY RULES",
                     );
-                    let area_y = body_y + 14.0;
-                    let hw = (dw - 28.0 - 8.0) * 0.5;
+                    let area_y = body_y + 26.0;
+                    let hw = (ww - 24.0 - 8.0) * 0.5;
                     let area_txt = format!("Active Zone: {}", js.move_area.label());
-                    ui.rounded(dx + 14.0, area_y, hw, 32.0, 11.0, bg_hi);
-                    ui.border(dx + 14.0, area_y, hw, 32.0, 11.0, border_c);
+                    ui.rounded(wx + 12.0, area_y, hw, 38.0, 11.0, st_card);
+                    ui.border(wx + 12.0, area_y, hw, 38.0, 11.0, st_cyan);
                     ui.centered_fit(
                         Face::SemiBold,
-                        10.0,
-                        [dx + 18.0, area_y, hw - 8.0, 32.0],
-                        text_c,
+                        9.6,
+                        [wx + 16.0, area_y, hw - 8.0, 38.0],
+                        st_text,
                         &area_txt,
                     );
-                    let sz_txt = format!("Joystick Footprint: {:.0}%", p_move.size * 100.0);
-                    let sz_x = dx + 14.0 + hw + 8.0;
+                    let sz_txt = format!("Joystick Footprint|{:.0}%", p_move.size * 100.0);
+                    let sz_x = wx + 12.0 + hw + 8.0;
                     draw_m3_stepper_cell(
                         &mut ui,
-                        [sz_x, area_y, hw, 32.0],
+                        [sz_x, area_y, hw, 38.0],
                         &sz_txt,
                         (p_move.size - 0.12) / 0.33,
-                        accent,
-                        accent_soft,
-                        bg_hi,
-                        border_c,
-                        text_c,
+                        st_cyan,
+                        st_cyan_soft,
+                        st_card,
+                        st_border,
+                        st_text,
                     );
 
-                    let y6 = area_y + 44.0;
-                    let third = (dw - 28.0 - 8.0) / 3.0;
+                    let y6 = area_y + 48.0;
+                    let third = (ww - 24.0 - 8.0) / 3.0;
                     ui.rounded(
-                        dx + 14.0,
+                        wx + 12.0,
                         y6,
                         third,
-                        32.0,
+                        34.0,
                         11.0,
                         if p_move.visible_in_game {
-                            accent_soft
+                            st_cyan_soft
                         } else {
-                            bg_hi
+                            st_card
                         },
                     );
                     ui.border(
-                        dx + 14.0,
+                        wx + 12.0,
                         y6,
                         third,
-                        32.0,
+                        34.0,
                         11.0,
                         if p_move.visible_in_game {
-                            accent
+                            st_cyan
                         } else {
-                            border_c
+                            st_border
                         },
                     );
                     ui.m3_checkbox(
-                        dx + 20.0,
-                        y6 + 7.0,
+                        wx + 18.0,
+                        y6 + 8.0,
                         18.0,
                         p_move.visible_in_game,
                         "Visible in Game",
                     );
 
-                    let vm_x = dx + 14.0 + third + 4.0;
+                    let vm_x = wx + 12.0 + third + 4.0;
                     ui.rounded(
                         vm_x,
                         y6,
                         third,
-                        32.0,
+                        34.0,
                         11.0,
                         if p_move.visible_in_menu {
-                            accent_soft
+                            st_cyan_soft
                         } else {
-                            bg_hi
+                            st_card
                         },
                     );
                     ui.border(
                         vm_x,
                         y6,
                         third,
-                        32.0,
+                        34.0,
                         11.0,
                         if p_move.visible_in_menu {
-                            accent
+                            st_cyan
                         } else {
-                            border_c
+                            st_border
                         },
                     );
                     ui.m3_checkbox(
                         vm_x + 6.0,
-                        y6 + 7.0,
+                        y6 + 8.0,
                         18.0,
                         p_move.visible_in_menu,
                         "Visible in Menu",
                     );
 
-                    let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
-                    ui.rounded(pv_x, y6, third, 32.0, 11.0, accent_soft);
-                    ui.border(pv_x, y6, third, 32.0, 11.0, accent);
+                    let pv_x = wx + 12.0 + (third + 4.0) * 2.0;
+                    ui.rounded(pv_x, y6, third, 34.0, 11.0, st_cyan_soft);
+                    ui.border(pv_x, y6, third, 34.0, 11.0, st_cyan);
                     ui.centered_fit(
                         Face::SemiBold,
                         9.5,
-                        [pv_x + 4.0, y6, third - 8.0, 32.0],
-                        accent,
+                        [pv_x + 4.0, y6, third - 8.0, 34.0],
+                        st_cyan,
                         "Preset Vis for All",
                     );
                 }
@@ -4471,376 +5090,384 @@ pub fn draw_hud_editor(
             } else {
                 crate::touch::Placement::new(0.5, 0.5, 0.12)
             };
+            let cur_hint = if let Some(idx) = ed.selected_custom {
+                tc.settings
+                    .custom_buttons
+                    .get(idx)
+                    .map(|b| b.label())
+                    .unwrap_or_default()
+            } else if let Some(c) = ed.selected {
+                c.name().to_owned()
+            } else {
+                String::new()
+            };
+            let preview_w = 88.0;
+            let cards_area_w = ww - preview_w - 30.0;
+            let cw3 = (cards_area_w - 16.0) / 3.0;
 
             match ed.props_tab {
                 0 => {
-                    // Tab 0: Style Manager (MCPE Default vs GoyControl Static), Hint Text, Fill Color, Opacity, onClick & onToggle
-                    let hw = (dw - 28.0 - 8.0) * 0.5;
-                    let is_goy =
-                        tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style;
-                    ui.rounded(
-                        dx + 14.0,
-                        body_y,
-                        hw,
-                        28.0,
-                        10.0,
-                        if !is_goy { accent_soft } else { bg_hi },
-                    );
-                    ui.border(
-                        dx + 14.0,
-                        body_y,
-                        hw,
-                        28.0,
-                        10.0,
-                        if !is_goy { accent } else { border_c },
-                    );
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        10.0,
-                        [dx + 16.0, body_y, hw - 4.0, 28.0],
-                        if !is_goy { accent } else { text_c },
-                        if !is_goy {
-                            "● Style: Default (MCPE)"
-                        } else {
-                            "Style: Default (MCPE)"
-                        },
-                    );
-
-                    ui.rounded(
-                        dx + 14.0 + hw + 8.0,
-                        body_y,
-                        hw,
-                        28.0,
-                        10.0,
-                        if is_goy { accent_soft } else { bg_hi },
-                    );
-                    ui.border(
-                        dx + 14.0 + hw + 8.0,
-                        body_y,
-                        hw,
-                        28.0,
-                        10.0,
-                        if is_goy { accent } else { border_c },
-                    );
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        10.0,
-                        [dx + 16.0 + hw + 8.0, body_y, hw - 4.0, 28.0],
-                        if is_goy { accent } else { text_c },
-                        if is_goy {
-                            "● Style: Static (GoyControl)"
-                        } else {
-                            "Style: Static (GoyControl)"
-                        },
-                    );
-
-                    // Hint Text Row + M3 Opacity Stepper
-                    let hy = body_y + 36.0;
-                    let cur_hint = if let Some(idx) = ed.selected_custom {
-                        tc.settings
-                            .custom_buttons
-                            .get(idx)
-                            .map(|b| b.label())
-                            .unwrap_or_default()
-                    } else if let Some(c) = ed.selected {
-                        c.name().to_owned()
-                    } else {
-                        String::new()
-                    };
-                    let h_box_w = (dw - 28.0) * 0.54;
-                    ui.rounded(dx + 14.0, hy, h_box_w, 28.0, 10.0, bg_hi);
-                    ui.border(dx + 14.0, hy, h_box_w, 28.0, 10.0, accent);
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        10.0,
-                        [dx + 18.0, hy, h_box_w - 8.0, 28.0],
-                        text_c,
-                        &format!("Hint Text: \"{cur_hint}\" (Tap to Cycle)"),
-                    );
-
-                    let op_x = dx + 14.0 + h_box_w + 8.0;
-                    let op_w = dw - 28.0 - h_box_w - 8.0;
-                    draw_m3_stepper_cell(
-                        &mut ui,
-                        [op_x, hy, op_w, 28.0],
-                        &format!("Transparency {:.0}%", p.opacity * 100.0),
-                        (p.opacity - 0.15) / 0.85,
-                        accent,
-                        accent_soft,
-                        bg_hi,
-                        border_c,
-                        text_c,
-                    );
-
-                    // Button Fill Color Swatches inside M3 Tonal Strip
-                    let cy1 = hy + 36.0;
-                    ui.rounded(
-                        dx + 10.0,
-                        cy1 - 3.0,
-                        dw - 20.0,
-                        28.0,
-                        10.0,
-                        rgba(255, 255, 255, 7),
-                    );
+                    // Button Tab 0: Studio Style Header + 3 Cards (Transparency, Hint Text, Icon Badge) + Right Live Preview + Bottom Color Swatch Bar
                     ui.text(
                         Face::SemiBold,
-                        9.5,
-                        dx + 16.0,
-                        cy1 + 4.0,
-                        muted_c,
-                        "Button Color:",
+                        9.6,
+                        wx + 12.0,
+                        body_y + 3.0,
+                        st_text,
+                        "BUTTON STYLE, ICON BADGE & OPACITY",
                     );
-                    let sw_w = 24.0;
-                    for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                        let sx = dx + 98.0 + i as f32 * (sw_w + 5.0);
-                        draw_m3_swatch_chip(
-                            &mut ui,
-                            sx,
-                            cy1,
-                            sw_w,
-                            22.0,
-                            *col,
-                            p.button_color == *col,
-                            accent,
-                            text_c,
-                        );
-                    }
-
-                    // onClick & onToggle visual state color selectors
-                    let cy2 = cy1 + 32.0;
-                    let half = (dw - 28.0 - 8.0) * 0.5;
-                    ui.rounded(dx + 14.0, cy2, half, 28.0, 10.0, p.on_click_color);
-                    ui.stroke_rounded(
-                        dx + 14.0,
-                        cy2,
-                        half,
-                        28.0,
-                        10.0,
-                        1.5,
-                        p.on_click_stroke_color,
-                    );
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        10.0,
-                        [dx + 18.0, cy2, half - 8.0, 28.0],
-                        text_c,
-                        "onClick Style (Tap to Cycle)",
-                    );
-
+                    let is_goy =
+                        tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style;
+                    let st_pill_w = 216.0f32.min(ww * 0.46);
+                    let st_pill_r = [wx + ww - st_pill_w - 12.0, body_y - 2.0, st_pill_w, 24.0];
                     ui.rounded(
-                        dx + 14.0 + half + 8.0,
-                        cy2,
-                        half,
-                        28.0,
-                        10.0,
-                        p.on_toggle_color,
-                    );
-                    ui.stroke_rounded(
-                        dx + 14.0 + half + 8.0,
-                        cy2,
-                        half,
-                        28.0,
-                        10.0,
-                        1.5,
-                        p.on_toggle_stroke_color,
-                    );
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        10.0,
-                        [dx + 18.0 + half + 8.0, cy2, half - 8.0, 28.0],
-                        text_c,
-                        "onToggle Style (Tap to Cycle)",
-                    );
-
-                    // Row 4: Visible in Game [✓] | Visible in Menu [✓] | Preset Visibility for All
-                    let cy3 = cy2 + 34.0;
-                    let third = (dw - 28.0 - 8.0) / 3.0;
-                    ui.rounded(
-                        dx + 14.0,
-                        cy3,
-                        third,
-                        28.0,
-                        10.0,
-                        if p.visible_in_game {
-                            accent_soft
-                        } else {
-                            bg_hi
-                        },
+                        st_pill_r[0],
+                        st_pill_r[1],
+                        st_pill_r[2],
+                        st_pill_r[3],
+                        12.0,
+                        st_card,
                     );
                     ui.border(
-                        dx + 14.0,
-                        cy3,
-                        third,
-                        28.0,
-                        10.0,
-                        if p.visible_in_game { accent } else { border_c },
+                        st_pill_r[0],
+                        st_pill_r[1],
+                        st_pill_r[2],
+                        st_pill_r[3],
+                        12.0,
+                        st_cyan,
                     );
-                    ui.m3_checkbox(
-                        dx + 20.0,
-                        cy3 + 5.0,
-                        18.0,
-                        p.visible_in_game,
-                        "Visible in Game",
-                    );
+                    let st_lbl = if is_goy {
+                        "● Style: Static (GoyControl) ⌄"
+                    } else {
+                        "● Style: Default (MCPE) ⌄"
+                    };
+                    ui.centered_fit(Face::SemiBold, 8.8, st_pill_r, st_cyan, st_lbl);
 
-                    let vm_x = dx + 14.0 + third + 4.0;
-                    ui.rounded(
-                        vm_x,
-                        cy3,
-                        third,
-                        28.0,
-                        10.0,
-                        if p.visible_in_menu {
-                            accent_soft
-                        } else {
-                            bg_hi
-                        },
-                    );
-                    ui.border(
-                        vm_x,
-                        cy3,
-                        third,
-                        28.0,
-                        10.0,
-                        if p.visible_in_menu { accent } else { border_c },
-                    );
-                    ui.m3_checkbox(
-                        vm_x + 6.0,
-                        cy3 + 5.0,
-                        18.0,
-                        p.visible_in_menu,
-                        "Visible in Menu",
-                    );
-
-                    let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
-                    ui.rounded(pv_x, cy3, third, 28.0, 10.0, accent_soft);
-                    ui.border(pv_x, cy3, third, 28.0, 10.0, accent);
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        9.5,
-                        [pv_x + 4.0, cy3, third - 8.0, 28.0],
-                        accent,
-                        "Preset Vis for All",
-                    );
-                }
-                1 => {
-                    // Tab 1: Stroke Size, Stroke Margin, Stroke Roundness, Button Roundness
-                    let cw = (dw - 28.0 - 12.0) / 4.0;
+                    let cards_y = body_y + 28.0;
+                    let card_h = 74.0;
+                    let icon_lbl = control_icon_label(p.icon_id);
                     for (i, (txt, frac)) in [
                         (
-                            format!("Stroke {:.1}dp", p.stroke_size),
-                            p.stroke_size / 8.0,
+                            format!("Opacity|{:.0}%", p.opacity * 100.0),
+                            (p.opacity - 0.15) / 0.85,
                         ),
                         (
-                            format!("Margin {:.1}dp", p.stroke_margin),
-                            (p.stroke_margin + 4.0) / 12.0,
+                            format!("Icon Badge|{icon_lbl}"),
+                            f32::from(p.icon_id) / 12.0,
                         ),
-                        (
-                            format!("Strk Rnd {:.0}", p.stroke_roundness),
-                            p.stroke_roundness / 50.0,
-                        ),
-                        (format!("Btn Rnd {:.0}", p.roundness), p.roundness / 50.0),
+                        (format!("Hint Label|{cur_hint}"), 1.0),
                     ]
                     .into_iter()
                     .enumerate()
                     {
-                        let rx = dx + 14.0 + i as f32 * (cw + 4.0);
+                        let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
                         draw_m3_stepper_cell(
                             &mut ui,
-                            [rx, body_y, cw, 28.0],
+                            [rx, cards_y, cw3, card_h],
                             &txt,
                             frac,
-                            accent,
-                            accent_soft,
-                            bg_hi,
-                            border_c,
-                            text_c,
+                            st_cyan,
+                            st_cyan_soft,
+                            st_card,
+                            st_border,
+                            st_text,
                         );
                     }
 
-                    // Row 2: Shape (All 6 shapes), Shadow Size, Width Ratio, Height Ratio
-                    let r2_y = body_y + 36.0;
+                    // Live Button Preview Box with Cyan Corner Framing Brackets (`⌜ ⌝ ⌞ ⌟`)
+                    let prev_r = [wx + ww - preview_w - 12.0, cards_y, preview_w, card_h];
+                    ui.rounded(
+                        prev_r[0],
+                        prev_r[1],
+                        prev_r[2],
+                        prev_r[3],
+                        12.0,
+                        rgba(9, 14, 24, 250),
+                    );
+                    ui.border(prev_r[0], prev_r[1], prev_r[2], prev_r[3], 12.0, st_border);
+                    draw_preview_brackets(&mut ui, prev_r, st_cyan);
+                    let bw_p = (38.0 * p.width_ratio.clamp(0.6, 1.45)).clamp(26.0, 56.0);
+                    let bh_p = (38.0 * p.height_ratio.clamp(0.6, 1.35)).clamp(24.0, 48.0);
+                    let bx_p = prev_r[0] + (prev_r[2] - bw_p) * 0.5;
+                    let by_p = prev_r[1] + (prev_r[3] - bh_p) * 0.5;
+                    ui.goy_box(
+                        bx_p,
+                        by_p,
+                        bw_p,
+                        bh_p,
+                        p.shape,
+                        p.roundness,
+                        color::with_alpha(p.button_color, p.opacity.clamp(0.35, 1.0)),
+                        p.stroke_size.clamp(1.0, 3.5),
+                        0.0,
+                        p.stroke_roundness,
+                        p.stroke_color,
+                        2.0,
+                        p.shadow_color,
+                    );
+                    draw_button_icon_and_label(
+                        &mut ui,
+                        [bx_p, by_p, bw_p, bh_p],
+                        p.icon_id,
+                        &cur_hint,
+                        st_text,
+                    );
+
+                    // Bottom Swatch Card ("BUTTON COLOR" + Circular Swatches + onClick/onToggle Cycle Pills)
+                    let sw_y = cards_y + card_h + 8.0;
+                    let sw_card_h = (box_y + box_h - sw_y - 10.0).clamp(48.0, 62.0);
+                    ui.rounded(wx + 12.0, sw_y, ww - 24.0, sw_card_h, 12.0, st_card);
+                    ui.border(wx + 12.0, sw_y, ww - 24.0, sw_card_h, 12.0, st_border);
+                    ui.text(
+                        Face::SemiBold,
+                        8.8,
+                        wx + 22.0,
+                        sw_y + 6.0,
+                        st_muted,
+                        "BUTTON COLOR",
+                    );
+                    let sw_d = 20.0;
+                    let sw_row_y = sw_y + sw_card_h - sw_d - 7.0;
+                    for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
+                        let sx = wx + 22.0 + i as f32 * (sw_d + 6.0);
+                        draw_m3_swatch_chip(
+                            &mut ui,
+                            sx,
+                            sw_row_y,
+                            sw_d,
+                            sw_d,
+                            *col,
+                            p.button_color == *col,
+                            st_cyan,
+                            st_text,
+                        );
+                    }
+                    let act_w = 158.0f32.min(ww * 0.36);
+                    let act_x = wx + ww - act_w - 20.0;
+                    let half_h = (sw_card_h - 14.0) * 0.5;
+                    let clk_r = [act_x, sw_y + 5.0, act_w, half_h];
+                    let tog_r = [act_x, sw_y + 9.0 + half_h, act_w, half_h];
+                    ui.rounded(
+                        clk_r[0],
+                        clk_r[1],
+                        clk_r[2],
+                        clk_r[3],
+                        7.0,
+                        p.on_click_color,
+                    );
+                    ui.stroke_rounded(
+                        clk_r[0],
+                        clk_r[1],
+                        clk_r[2],
+                        clk_r[3],
+                        7.0,
+                        1.3,
+                        p.on_click_stroke_color,
+                    );
+                    ui.centered_fit(Face::SemiBold, 8.2, clk_r, st_text, "onClick Col (Cycle)");
+                    ui.rounded(
+                        tog_r[0],
+                        tog_r[1],
+                        tog_r[2],
+                        tog_r[3],
+                        7.0,
+                        p.on_toggle_color,
+                    );
+                    ui.stroke_rounded(
+                        tog_r[0],
+                        tog_r[1],
+                        tog_r[2],
+                        tog_r[3],
+                        7.0,
+                        1.3,
+                        p.on_toggle_stroke_color,
+                    );
+                    ui.centered_fit(Face::SemiBold, 8.2, tog_r, st_text, "onToggle Col (Cycle)");
+                }
+                1 => {
+                    // Button Tab 1: Shape, Stroke, Roundness & Aspect Ratios + Live Preview + Stroke Color Swatches
+                    ui.text(
+                        Face::SemiBold,
+                        9.6,
+                        wx + 12.0,
+                        body_y + 3.0,
+                        st_text,
+                        "SHAPE GEOMETRY, STROKE & ASPECT RATIO",
+                    );
+                    let sh_pill_w = 192.0f32.min(ww * 0.44);
+                    let sh_pill_r = [wx + ww - sh_pill_w - 12.0, body_y - 2.0, sh_pill_w, 24.0];
+                    ui.rounded(
+                        sh_pill_r[0],
+                        sh_pill_r[1],
+                        sh_pill_r[2],
+                        sh_pill_r[3],
+                        12.0,
+                        st_card,
+                    );
+                    ui.border(
+                        sh_pill_r[0],
+                        sh_pill_r[1],
+                        sh_pill_r[2],
+                        sh_pill_r[3],
+                        12.0,
+                        st_cyan,
+                    );
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        8.8,
+                        sh_pill_r,
+                        st_cyan,
+                        &format!("● Shape: {} ⌄", shape_name(p.shape)),
+                    );
+
+                    let cards_y = body_y + 28.0;
+                    let card_h = 35.0;
                     for (i, (txt, frac)) in [
-                        (format!("Shape: {}", shape_name(p.shape)), 1.0),
                         (
-                            format!("Shadow {:.1}dp", p.shadow_size),
-                            p.shadow_size / 14.0,
+                            format!("Stroke|{:.1}dp", p.stroke_size),
+                            p.stroke_size / 8.0,
+                        ),
+                        (format!("Roundness|{:.0}", p.roundness), p.roundness / 50.0),
+                        (
+                            format!("Shadow|{:.1}dp", p.shadow_size),
+                            p.shadow_size / 12.0,
+                        ),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
+                        draw_m3_stepper_cell(
+                            &mut ui,
+                            [rx, cards_y, cw3, card_h],
+                            &txt,
+                            frac,
+                            st_cyan,
+                            st_cyan_soft,
+                            st_card,
+                            st_border,
+                            st_text,
+                        );
+                    }
+                    let row2_y = cards_y + 39.0;
+                    for (i, (txt, frac)) in [
+                        (
+                            format!("Margin|{:.1}dp", p.stroke_margin),
+                            (p.stroke_margin + 4.0) / 12.0,
                         ),
                         (
-                            format!("Width {:.0}%", p.width_ratio * 100.0),
+                            format!("Width|{:.0}%", p.width_ratio * 100.0),
                             (p.width_ratio - 0.50) / 1.50,
                         ),
                         (
-                            format!("Height {:.0}%", p.height_ratio * 100.0),
+                            format!("Height|{:.0}%", p.height_ratio * 100.0),
                             (p.height_ratio - 0.50) / 1.50,
                         ),
                     ]
                     .into_iter()
                     .enumerate()
                     {
-                        let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                        if i == 0 {
-                            ui.rounded(rx, r2_y, cw, 28.0, 10.0, accent_soft);
-                            ui.border(rx, r2_y, cw, 28.0, 10.0, accent);
-                            ui.centered_fit(
-                                Face::SemiBold,
-                                9.5,
-                                [rx + 4.0, r2_y, cw - 8.0, 28.0],
-                                accent,
-                                &txt,
-                            );
-                        } else {
-                            draw_m3_stepper_cell(
-                                &mut ui,
-                                [rx, r2_y, cw, 28.0],
-                                &txt,
-                                frac,
-                                accent,
-                                accent_soft,
-                                bg_hi,
-                                border_c,
-                                text_c,
-                            );
-                        }
+                        let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
+                        draw_m3_stepper_cell(
+                            &mut ui,
+                            [rx, row2_y, cw3, card_h],
+                            &txt,
+                            frac,
+                            st_cyan,
+                            st_cyan_soft,
+                            st_card,
+                            st_border,
+                            st_text,
+                        );
                     }
 
-                    // Row 3: Stroke Color Swatches inside M3 Tonal Strip
-                    let r3_y = r2_y + 36.0;
+                    // Live Shape & Stroke Preview Box
+                    let prev_r = [wx + ww - preview_w - 12.0, cards_y, preview_w, 74.0];
                     ui.rounded(
-                        dx + 10.0,
-                        r3_y - 3.0,
-                        dw - 20.0,
-                        28.0,
-                        10.0,
-                        rgba(255, 255, 255, 7),
+                        prev_r[0],
+                        prev_r[1],
+                        prev_r[2],
+                        prev_r[3],
+                        12.0,
+                        rgba(9, 14, 24, 250),
                     );
+                    ui.border(prev_r[0], prev_r[1], prev_r[2], prev_r[3], 12.0, st_border);
+                    draw_preview_brackets(&mut ui, prev_r, st_cyan);
+                    let bw_p = (38.0 * p.width_ratio.clamp(0.6, 1.45)).clamp(26.0, 56.0);
+                    let bh_p = (38.0 * p.height_ratio.clamp(0.6, 1.35)).clamp(24.0, 48.0);
+                    let bx_p = prev_r[0] + (prev_r[2] - bw_p) * 0.5;
+                    let by_p = prev_r[1] + (prev_r[3] - bh_p) * 0.5;
+                    ui.goy_box(
+                        bx_p,
+                        by_p,
+                        bw_p,
+                        bh_p,
+                        p.shape,
+                        p.roundness,
+                        color::with_alpha(p.button_color, p.opacity.clamp(0.35, 1.0)),
+                        p.stroke_size.clamp(1.0, 3.5),
+                        0.0,
+                        p.stroke_roundness,
+                        p.stroke_color,
+                        2.0,
+                        p.shadow_color,
+                    );
+                    draw_button_icon_and_label(
+                        &mut ui,
+                        [bx_p, by_p, bw_p, bh_p],
+                        p.icon_id,
+                        &cur_hint,
+                        st_text,
+                    );
+
+                    // Bottom Stroke Color Swatch Strip
+                    let sw_y = cards_y + 74.0 + 8.0;
+                    let sw_card_h = (box_y + box_h - sw_y - 10.0).clamp(48.0, 62.0);
+                    ui.rounded(wx + 12.0, sw_y, ww - 24.0, sw_card_h, 12.0, st_card);
+                    ui.border(wx + 12.0, sw_y, ww - 24.0, sw_card_h, 12.0, st_border);
                     ui.text(
                         Face::SemiBold,
-                        9.5,
-                        dx + 16.0,
-                        r3_y + 4.0,
-                        muted_c,
-                        "Stroke Color:",
+                        8.8,
+                        wx + 22.0,
+                        sw_y + 6.0,
+                        st_muted,
+                        "STROKE COLOR",
                     );
-                    let sw_w = 24.0;
+                    let sw_d = 20.0;
+                    let sw_row_y = sw_y + sw_card_h - sw_d - 7.0;
                     for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                        let sx = dx + 98.0 + i as f32 * (sw_w + 5.0);
+                        let sx = wx + 22.0 + i as f32 * (sw_d + 6.0);
                         draw_m3_swatch_chip(
                             &mut ui,
                             sx,
-                            r3_y,
-                            sw_w,
-                            22.0,
+                            sw_row_y,
+                            sw_d,
+                            sw_d,
                             *col,
                             p.stroke_color == *col,
-                            accent,
-                            text_c,
+                            st_cyan,
+                            st_text,
                         );
                     }
+                    let act_w = 152.0f32.min(ww * 0.34);
+                    let act_r = [
+                        wx + ww - act_w - 22.0,
+                        sw_y + (sw_card_h - 28.0) * 0.5,
+                        act_w,
+                        28.0,
+                    ];
+                    ui.rounded(act_r[0], act_r[1], act_r[2], act_r[3], 10.0, st_inner);
+                    ui.stroke_rounded(act_r[0], act_r[1], act_r[2], act_r[3], 10.0, 1.5, st_cyan);
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        8.8,
+                        act_r,
+                        st_text,
+                        &format!("Cycle Icon: {}", control_icon_label(p.icon_id)),
+                    );
                 }
                 _ => {
-                    // Tab 2: In MCPE mode, show Exclusive Single Binding (Keyboard OR Mouse);
-                    // in GoyControl mode, show up to 3 Event Slots.
+                    // Button Tab 2: Events, Behavior Toggles & Visibility Checkboxes
                     if is_mcpe_mode && ed.selected_custom.is_some() {
                         let cur_tok = ed
                             .selected_custom
@@ -4865,7 +5492,7 @@ pub fn draw_hud_editor(
                         } else {
                             "Inactive (Cleared)".to_owned()
                         };
-                        let half_w = (dw - 28.0 - 8.0) * 0.5;
+                        let half_w = (ww - 24.0 - 8.0) * 0.5;
                         for (ci, (title, status, active)) in [
                             ("KEYBOARD BINDING (EXCLUSIVE)", kb_lbl.as_str(), is_kb),
                             ("MOUSE / ACTION BINDING (EXCLUSIVE)", ms_lbl.as_str(), is_ms),
@@ -4873,14 +5500,14 @@ pub fn draw_hud_editor(
                         .into_iter()
                         .enumerate()
                         {
-                            let ex = dx + 14.0 + ci as f32 * (half_w + 8.0);
+                            let ex = wx + 12.0 + ci as f32 * (half_w + 8.0);
                             ui.rounded(
                                 ex,
                                 body_y,
                                 half_w,
                                 42.0,
                                 12.0,
-                                if active { accent_soft } else { bg_hi },
+                                if active { st_cyan_soft } else { st_card },
                             );
                             ui.border(
                                 ex,
@@ -4888,27 +5515,27 @@ pub fn draw_hud_editor(
                                 half_w,
                                 42.0,
                                 12.0,
-                                if active { accent } else { border_c },
+                                if active { st_cyan } else { st_border },
                             );
                             ui.centered_fit(
                                 Face::SemiBold,
-                                9.0,
+                                8.8,
                                 [ex + 4.0, body_y + 4.0, half_w - 8.0, 16.0],
-                                if active { accent } else { muted_c },
+                                if active { st_cyan } else { st_muted },
                                 title,
                             );
                             ui.centered_fit(
                                 Face::SemiBold,
-                                10.5,
+                                10.2,
                                 [ex + 4.0, body_y + 20.0, half_w - 8.0, 18.0],
-                                if active { text_c } else { muted_c },
+                                if active { st_text } else { st_muted },
                                 status,
                             );
                         }
                     } else {
-                        let ew = (dw - 28.0 - 8.0) / 3.0;
+                        let ew = (ww - 24.0 - 8.0) / 3.0;
                         for slot in 0..3 {
-                            let ex = dx + 14.0 + slot as f32 * (ew + 4.0);
+                            let ex = wx + 12.0 + slot as f32 * (ew + 4.0);
                             let tok_name = if let Some(idx) = ed.selected_custom {
                                 tc.settings
                                     .custom_buttons
@@ -4935,7 +5562,7 @@ pub fn draw_hud_editor(
                                 ew,
                                 42.0,
                                 12.0,
-                                if has_binding { accent_soft } else { bg_hi },
+                                if has_binding { st_cyan_soft } else { st_card },
                             );
                             ui.border(
                                 ex,
@@ -4943,27 +5570,27 @@ pub fn draw_hud_editor(
                                 ew,
                                 42.0,
                                 12.0,
-                                if has_binding { accent } else { border_c },
+                                if has_binding { st_cyan } else { st_border },
                             );
                             ui.centered_fit(
                                 Face::SemiBold,
-                                9.0,
+                                8.8,
                                 [ex + 4.0, body_y + 4.0, ew - 8.0, 16.0],
-                                if has_binding { accent } else { muted_c },
+                                if has_binding { st_cyan } else { st_muted },
                                 &format!("EVENT SLOT #{}", slot + 1),
                             );
                             ui.centered_fit(
                                 Face::SemiBold,
-                                10.5,
+                                10.2,
                                 [ex + 4.0, body_y + 20.0, ew - 8.0, 18.0],
-                                text_c,
+                                st_text,
                                 &tok_name,
                             );
                         }
                     }
 
                     let by = body_y + 52.0;
-                    let bw = (dw - 28.0 - 12.0) / 4.0;
+                    let bw = (ww - 24.0 - 12.0) / 4.0;
                     let is_vis = if let Some(c) = ed.selected {
                         tc.visible(c)
                     } else {
@@ -5012,7 +5639,7 @@ pub fn draw_hud_editor(
                     .into_iter()
                     .enumerate()
                     {
-                        let rx = dx + 14.0 + i as f32 * (bw + 4.0);
+                        let rx = wx + 12.0 + i as f32 * (bw + 4.0);
                         ui.rounded(
                             rx,
                             by,
@@ -5022,9 +5649,9 @@ pub fn draw_hud_editor(
                             if danger {
                                 color::with_alpha(danger_c, 0.24)
                             } else if on {
-                                accent_soft
+                                st_cyan_soft
                             } else {
-                                bg_hi
+                                st_card
                             },
                         );
                         ui.border(
@@ -5036,58 +5663,61 @@ pub fn draw_hud_editor(
                             if danger {
                                 danger_c
                             } else if on {
-                                accent
+                                st_cyan
                             } else {
-                                border_c
+                                st_border
                             },
                         );
                         ui.centered_fit(
                             Face::SemiBold,
-                            9.8,
+                            9.4,
                             [rx + 3.0, by, bw - 6.0, 30.0],
                             if danger {
                                 danger_c
                             } else if on {
-                                accent
+                                st_cyan
                             } else {
-                                text_c
+                                st_text
                             },
                             lbl,
                         );
                     }
 
-                    // Row 3 in Tab 2: Visible in Game [✓] | Visible in Menu [✓] | Preset Vis for All
                     let vy = by + 38.0;
-                    let third = (dw - 28.0 - 8.0) / 3.0;
+                    let third = (ww - 24.0 - 8.0) / 3.0;
                     ui.rounded(
-                        dx + 14.0,
+                        wx + 12.0,
                         vy,
                         third,
                         28.0,
                         10.0,
                         if p.visible_in_game {
-                            accent_soft
+                            st_cyan_soft
                         } else {
-                            bg_hi
+                            st_card
                         },
                     );
                     ui.border(
-                        dx + 14.0,
+                        wx + 12.0,
                         vy,
                         third,
                         28.0,
                         10.0,
-                        if p.visible_in_game { accent } else { border_c },
+                        if p.visible_in_game {
+                            st_cyan
+                        } else {
+                            st_border
+                        },
                     );
                     ui.m3_checkbox(
-                        dx + 20.0,
+                        wx + 18.0,
                         vy + 5.0,
                         18.0,
                         p.visible_in_game,
                         "Visible in Game",
                     );
 
-                    let vm_x = dx + 14.0 + third + 4.0;
+                    let vm_x = wx + 12.0 + third + 4.0;
                     ui.rounded(
                         vm_x,
                         vy,
@@ -5095,9 +5725,9 @@ pub fn draw_hud_editor(
                         28.0,
                         10.0,
                         if p.visible_in_menu {
-                            accent_soft
+                            st_cyan_soft
                         } else {
-                            bg_hi
+                            st_card
                         },
                     );
                     ui.border(
@@ -5106,7 +5736,11 @@ pub fn draw_hud_editor(
                         third,
                         28.0,
                         10.0,
-                        if p.visible_in_menu { accent } else { border_c },
+                        if p.visible_in_menu {
+                            st_cyan
+                        } else {
+                            st_border
+                        },
                     );
                     ui.m3_checkbox(
                         vm_x + 6.0,
@@ -5116,14 +5750,14 @@ pub fn draw_hud_editor(
                         "Visible in Menu",
                     );
 
-                    let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
-                    ui.rounded(pv_x, vy, third, 28.0, 10.0, accent_soft);
-                    ui.border(pv_x, vy, third, 28.0, 10.0, accent);
+                    let pv_x = wx + 12.0 + (third + 4.0) * 2.0;
+                    ui.rounded(pv_x, vy, third, 28.0, 10.0, st_cyan_soft);
+                    ui.border(pv_x, vy, third, 28.0, 10.0, st_cyan);
                     ui.centered_fit(
                         Face::SemiBold,
-                        9.5,
+                        9.2,
                         [pv_x + 4.0, vy, third - 8.0, 28.0],
-                        accent,
+                        st_cyan,
                         "Preset Vis for All",
                     );
                 }
@@ -6020,19 +6654,25 @@ pub fn touch_hud_editor(
             }
         }
 
-        // 3. If Component Property Inspector Dialog is open:
+        // 3. If Component Property Inspector Dialog is open (Studio Layout matching `90511.png`):
         if ed.props_open {
-            let dw = (w - 24.0).clamp(310.0, 548.0);
-            let dh = (h - 18.0).clamp(248.0, 368.0);
+            let dw = (w - 16.0).clamp(350.0, 640.0);
+            let dh = (h - 12.0).clamp(256.0, 384.0);
             let dx = (w - dw) * 0.5;
             let dy = (h - dh) * 0.5;
-            if inside([dx + dw - 74.0, dy + 9.0, 60.0, 28.0]) || !inside([dx, dy, dw, dh]) {
+
+            // Close via top-left [X] button, top-right [✓ Done] button, or outside tap
+            if inside([dx + 12.0, dy + 9.0, 26.0, 26.0])
+                || inside([dx + dw - 74.0, dy + 9.0, 62.0, 26.0])
+                || !inside([dx, dy, dw, dh])
+            {
                 ed.props_open = false;
                 let _ = tc.settings.save();
                 tc.clicked = true;
                 return false;
             }
-            if inside([dx + dw - 210.0, dy + 10.0, 132.0, 26.0]) {
+            // Center-Snap via telemetry pill OR [⛶] button
+            if inside([dx + dw - 244.0, dy + 9.0, 164.0, 26.0]) {
                 push_undo_snapshot(&mut ed, &tc.settings);
                 let mode_idx = tc.settings.mode.index();
                 if let Some(idx) = ed.selected_custom {
@@ -6049,33 +6689,51 @@ pub fn touch_hud_editor(
                 return false;
             }
 
-            // Segmented 3-Tab Header clicks (shared by Joystick and Button inspectors)
-            let tab_y = dy + 42.0;
-            let tab_w = (dw - 28.0 - 8.0) / 3.0;
+            // Left Vertical 3-Card Navigation Rail clicks
+            let rail_x = dx + 12.0;
+            let rail_y = dy + 46.0;
+            let rail_w = 60.0;
+            let rail_h = dh - 58.0;
+            let nav_card_h = (rail_h - 12.0) / 3.0;
+            for ni in 0..3 {
+                let ny = rail_y + ni as f32 * (nav_card_h + 6.0);
+                if inside([rail_x, ny, rail_w, nav_card_h]) {
+                    ed.props_tab = ni;
+                    tc.clicked = true;
+                    return false;
+                }
+            }
+
+            // Right Workspace & Top 3-Segment Pill Bar clicks
+            let wx = dx + 80.0;
+            let ww = dw - 92.0;
+            let tab_y = dy + 46.0;
+            let tab_w = (ww - 8.0) / 3.0;
             for ti in 0..3 {
-                let tx = dx + 14.0 + ti as f32 * (tab_w + 4.0);
-                if inside([tx, tab_y, tab_w, 26.0]) {
+                let tx = wx + 2.0 + ti as f32 * (tab_w + 2.0);
+                if inside([tx, tab_y - 2.0, tab_w, 28.0]) {
                     ed.props_tab = ti;
                     tc.clicked = true;
                     return false;
                 }
             }
 
-            let body_y = tab_y + 34.0;
+            let box_y = dy + 80.0;
+            let box_h = dh - 92.0;
+            let body_y = box_y + 10.0;
+            let preview_w = 88.0;
+            let cards_area_w = ww - preview_w - 30.0;
+            let cw3 = (cards_area_w - 16.0) / 3.0;
+
             let is_joystick = ed.selected == Some(Control::Move) && ed.selected_custom.is_none();
             if is_joystick {
                 let mode_idx = tc.settings.mode.index();
                 let slot = tc.settings.slot(Control::Move);
-                let cw = (dw - 28.0 - 12.0) / 4.0;
-                let sw_w = 22.0;
-                let st_x = dx + 86.0 + 8.0 * (sw_w + 4.0) + 12.0;
-                let st_w = (dw - (st_x - dx) - 14.0).max(80.0);
 
                 match ed.props_tab {
                     0 => {
-                        let y1 = body_y + 12.0;
-                        let hw = (dw - 28.0 - 8.0) * 0.5;
-                        if inside([dx + 14.0, y1, hw, 30.0]) {
+                        let st_pill_w = 216.0f32.min(ww * 0.46);
+                        if inside([wx + ww - st_pill_w - 12.0, body_y - 2.0, st_pill_w, 24.0]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             tc.settings.layouts[mode_idx][slot].use_goy_style =
                                 !tc.settings.layouts[mode_idx][slot].use_goy_style;
@@ -6083,20 +6741,13 @@ pub fn touch_hud_editor(
                             tc.clicked = true;
                             return false;
                         }
-                        if inside([dx + 14.0 + hw + 8.0, y1, hw, 30.0]) {
-                            push_undo_snapshot(&mut ed, &tc.settings);
-                            tc.settings.joystick_style.move_area =
-                                tc.settings.joystick_style.move_area.next();
-                            let _ = tc.settings.save();
-                            tc.clicked = true;
-                            return false;
-                        }
-                        let y2 = y1 + 52.0;
-                        for i in 0..4 {
-                            let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                            if inside([rx, y2, cw, 28.0]) {
+                        let cards_y = body_y + 28.0;
+                        let card_h = 74.0;
+                        for i in 0..3 {
+                            let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
+                            if inside([rx, cards_y, cw3, card_h]) {
                                 push_undo_snapshot(&mut ed, &tc.settings);
-                                let sign = if p[0] < rx + cw * 0.5 { -1.0 } else { 1.0 };
+                                let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
                                 match i {
                                     0 => {
                                         tc.settings.joystick_style.stick_size =
@@ -6108,16 +6759,10 @@ pub fn touch_hud_editor(
                                             (tc.settings.joystick_style.stick_opacity + sign * 0.10)
                                                 .clamp(0.15, 1.0)
                                     }
-                                    2 => {
+                                    _ => {
                                         tc.settings.joystick_style.stick_stroke =
                                             (tc.settings.joystick_style.stick_stroke + sign * 0.5)
                                                 .clamp(0.0, 8.0)
-                                    }
-                                    _ => {
-                                        tc.settings.layouts[mode_idx][slot].size =
-                                            (tc.settings.layouts[mode_idx][slot].size
-                                                + sign * 0.025)
-                                                .clamp(0.12, 0.45)
                                     }
                                 }
                                 let _ = tc.settings.save();
@@ -6125,10 +6770,22 @@ pub fn touch_hud_editor(
                                 return false;
                             }
                         }
-                        let y3 = y2 + 38.0;
+                        let prev_r = [wx + ww - preview_w - 12.0, cards_y, preview_w, card_h];
+                        if inside(prev_r) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            tc.settings.joystick_style.move_area =
+                                tc.settings.joystick_style.move_area.next();
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                        let sw_y = cards_y + card_h + 8.0;
+                        let sw_card_h = (box_y + box_h - sw_y - 10.0).clamp(48.0, 62.0);
+                        let sw_d = 20.0;
+                        let sw_row_y = sw_y + sw_card_h - sw_d - 7.0;
                         for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                            let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
-                            if inside([sx, y3, sw_w, 22.0]) {
+                            let sx = wx + 22.0 + i as f32 * (sw_d + 6.0);
+                            if inside([sx, sw_row_y, sw_d, sw_d]) {
                                 push_undo_snapshot(&mut ed, &tc.settings);
                                 tc.settings.joystick_style.stick_color = *col;
                                 let _ = tc.settings.save();
@@ -6136,7 +6793,13 @@ pub fn touch_hud_editor(
                                 return false;
                             }
                         }
-                        if inside([st_x, y3, st_w, 22.0]) {
+                        let act_w = 152.0f32.min(ww * 0.34);
+                        if inside([
+                            wx + ww - act_w - 22.0,
+                            sw_y + (sw_card_h - 28.0) * 0.5,
+                            act_w,
+                            28.0,
+                        ]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             let cur = COLOR_SWATCHES
                                 .iter()
@@ -6152,12 +6815,30 @@ pub fn touch_hud_editor(
                         }
                     }
                     1 => {
-                        let y4 = body_y + 14.0;
-                        for i in 0..4 {
-                            let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                            if inside([rx, y4, cw, 30.0]) {
+                        let mode_pill_w = 186.0f32.min(ww * 0.42);
+                        if inside([
+                            wx + ww - mode_pill_w - 12.0,
+                            body_y - 2.0,
+                            mode_pill_w,
+                            24.0,
+                        ]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            tc.settings.mode = match tc.settings.mode {
+                                Mode::Dpad => Mode::Crosshair,
+                                Mode::Crosshair => Mode::Tap,
+                                Mode::Tap => Mode::Dpad,
+                            };
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                        let cards_y = body_y + 28.0;
+                        let card_h = 74.0;
+                        for i in 0..3 {
+                            let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
+                            if inside([rx, cards_y, cw3, card_h]) {
                                 push_undo_snapshot(&mut ed, &tc.settings);
-                                let sign = if p[0] < rx + cw * 0.5 { -1.0 } else { 1.0 };
+                                let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
                                 match i {
                                     0 => {
                                         tc.settings.joystick_style.base_opacity =
@@ -6169,17 +6850,10 @@ pub fn touch_hud_editor(
                                             (tc.settings.joystick_style.base_stroke + sign * 0.5)
                                                 .clamp(0.0, 8.0)
                                     }
-                                    2 => {
+                                    _ => {
                                         tc.settings.joystick_style.base_roundness =
                                             (tc.settings.joystick_style.base_roundness + sign * 5.0)
                                                 .clamp(0.0, 50.0)
-                                    }
-                                    _ => {
-                                        tc.settings.mode = match tc.settings.mode {
-                                            Mode::Dpad => Mode::Crosshair,
-                                            Mode::Crosshair => Mode::Tap,
-                                            Mode::Tap => Mode::Dpad,
-                                        };
                                     }
                                 }
                                 let _ = tc.settings.save();
@@ -6187,10 +6861,13 @@ pub fn touch_hud_editor(
                                 return false;
                             }
                         }
-                        let y5 = y4 + 56.0;
+                        let sw_y = cards_y + card_h + 8.0;
+                        let sw_card_h = (box_y + box_h - sw_y - 10.0).clamp(48.0, 62.0);
+                        let sw_d = 20.0;
+                        let sw_row_y = sw_y + sw_card_h - sw_d - 7.0;
                         for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                            let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
-                            if inside([sx, y5, sw_w, 22.0]) {
+                            let sx = wx + 22.0 + i as f32 * (sw_d + 6.0);
+                            if inside([sx, sw_row_y, sw_d, sw_d]) {
                                 push_undo_snapshot(&mut ed, &tc.settings);
                                 tc.settings.joystick_style.base_color = *col;
                                 let _ = tc.settings.save();
@@ -6198,7 +6875,13 @@ pub fn touch_hud_editor(
                                 return false;
                             }
                         }
-                        if inside([st_x, y5, st_w, 22.0]) {
+                        let act_w = 152.0f32.min(ww * 0.34);
+                        if inside([
+                            wx + ww - act_w - 22.0,
+                            sw_y + (sw_card_h - 28.0) * 0.5,
+                            act_w,
+                            28.0,
+                        ]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             let cur = COLOR_SWATCHES
                                 .iter()
@@ -6214,9 +6897,9 @@ pub fn touch_hud_editor(
                         }
                     }
                     _ => {
-                        let area_y = body_y + 14.0;
-                        let hw = (dw - 28.0 - 8.0) * 0.5;
-                        if inside([dx + 14.0, area_y, hw, 32.0]) {
+                        let area_y = body_y + 26.0;
+                        let hw = (ww - 24.0 - 8.0) * 0.5;
+                        if inside([wx + 12.0, area_y, hw, 38.0]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             tc.settings.joystick_style.move_area =
                                 tc.settings.joystick_style.move_area.next();
@@ -6224,8 +6907,8 @@ pub fn touch_hud_editor(
                             tc.clicked = true;
                             return false;
                         }
-                        let sz_x = dx + 14.0 + hw + 8.0;
-                        if inside([sz_x, area_y, hw, 32.0]) {
+                        let sz_x = wx + 12.0 + hw + 8.0;
+                        if inside([sz_x, area_y, hw, 38.0]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             let sign = if p[0] < sz_x + hw * 0.5 { -1.0 } else { 1.0 };
                             tc.settings.layouts[mode_idx][slot].size =
@@ -6235,23 +6918,23 @@ pub fn touch_hud_editor(
                             tc.clicked = true;
                             return false;
                         }
-                        let y6 = area_y + 44.0;
-                        let third = (dw - 28.0 - 8.0) / 3.0;
-                        if inside([dx + 14.0, y6, third, 32.0]) {
+                        let y6 = area_y + 48.0;
+                        let third = (ww - 24.0 - 8.0) / 3.0;
+                        if inside([wx + 12.0, y6, third, 34.0]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             tc.settings.layouts[mode_idx][slot].visible_in_game ^= true;
                             let _ = tc.settings.save();
                             tc.clicked = true;
                             return false;
                         }
-                        if inside([dx + 14.0 + third + 4.0, y6, third, 32.0]) {
+                        if inside([wx + 12.0 + third + 4.0, y6, third, 34.0]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             tc.settings.layouts[mode_idx][slot].visible_in_menu ^= true;
                             let _ = tc.settings.save();
                             tc.clicked = true;
                             return false;
                         }
-                        if inside([dx + 14.0 + (third + 4.0) * 2.0, y6, third, 32.0]) {
+                        if inside([wx + 12.0 + (third + 4.0) * 2.0, y6, third, 34.0]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             tc.settings.apply_visibility_preset_all();
                             let _ = tc.settings.save();
@@ -6265,7 +6948,6 @@ pub fn touch_hud_editor(
                 return false;
             }
 
-            let body_y = tab_y + 34.0;
             let mode_idx = tc.settings.mode.index();
             let mutate_placement =
                 |tc: &mut crate::touch::TouchControls,
@@ -6285,64 +6967,78 @@ pub fn touch_hud_editor(
 
             match ed.props_tab {
                 0 => {
-                    let hw = (dw - 28.0 - 8.0) * 0.5;
-                    if inside([dx + 14.0, body_y, hw, 28.0]) {
+                    let st_pill_w = 216.0f32.min(ww * 0.46);
+                    if inside([wx + ww - st_pill_w - 12.0, body_y - 2.0, st_pill_w, 24.0]) {
                         push_undo_snapshot(&mut ed, &tc.settings);
-                        mutate_placement(tc, &ed, &|pl| pl.use_goy_style = false);
+                        mutate_placement(tc, &ed, &|pl| pl.use_goy_style = !pl.use_goy_style);
                         let _ = tc.settings.save();
                         tc.clicked = true;
                         return false;
                     }
-                    if inside([dx + 14.0 + hw + 8.0, body_y, hw, 28.0]) {
-                        push_undo_snapshot(&mut ed, &tc.settings);
-                        mutate_placement(tc, &ed, &|pl| pl.use_goy_style = true);
-                        let _ = tc.settings.save();
-                        tc.clicked = true;
-                        return false;
-                    }
-                    let hy = body_y + 36.0;
-                    let h_box_w = (dw - 28.0) * 0.54;
-                    if inside([dx + 14.0, hy, h_box_w, 28.0]) {
-                        if let Some(idx) = ed.selected_custom {
+                    let cards_y = body_y + 28.0;
+                    let card_h = 74.0;
+                    for i in 0..3 {
+                        let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
+                        if inside([rx, cards_y, cw3, card_h]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
-                            let hints = [
-                                "PRI", "SEC", "JUMP", "SNEAK", "SPRINT", "INV", "SWAP", "DROP",
-                                "CHAT", "DEBUG", "3RD", "MOUSE", "MACRO", "CLICK",
-                            ];
-                            if let Some(btn) = tc.settings.custom_buttons.get_mut(idx) {
-                                let pos = hints
-                                    .iter()
-                                    .position(|h| *h == btn.custom_label)
-                                    .map(|i| (i + 1) % hints.len())
-                                    .unwrap_or(0);
-                                btn.custom_label = hints[pos].to_owned();
+                            let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
+                            match i {
+                                0 => {
+                                    let delta = sign * 0.10;
+                                    mutate_placement(tc, &ed, &move |pl| {
+                                        pl.opacity = (pl.opacity + delta).clamp(0.15, 1.0);
+                                    });
+                                }
+                                1 => {
+                                    mutate_placement(tc, &ed, &move |pl| {
+                                        pl.icon_id = if sign < 0.0 {
+                                            if pl.icon_id == 0 { 12 } else { pl.icon_id - 1 }
+                                        } else {
+                                            (pl.icon_id + 1) % 13
+                                        };
+                                    });
+                                }
+                                _ => {
+                                    if let Some(idx) = ed.selected_custom {
+                                        let hints = [
+                                            "PRI", "SEC", "JUMP", "SNEAK", "SPRINT", "INV", "SWAP",
+                                            "DROP", "CHAT", "DEBUG", "3RD", "MOUSE", "MACRO",
+                                            "CLICK",
+                                        ];
+                                        if let Some(btn) = tc.settings.custom_buttons.get_mut(idx) {
+                                            let pos = hints
+                                                .iter()
+                                                .position(|h| *h == btn.custom_label)
+                                                .map(|idx_h| (idx_h + 1) % hints.len())
+                                                .unwrap_or(0);
+                                            btn.custom_label = hints[pos].to_owned();
+                                        }
+                                    }
+                                }
                             }
                             let _ = tc.settings.save();
                             tc.clicked = true;
+                            return false;
                         }
-                        return false;
                     }
-                    let op_x = dx + 14.0 + h_box_w + 8.0;
-                    let op_w = dw - 28.0 - h_box_w - 8.0;
-                    if inside([op_x, hy, op_w, 28.0]) {
+                    // Tapping Live Preview Box also cycles Icon Badge
+                    let prev_r = [wx + ww - preview_w - 12.0, cards_y, preview_w, card_h];
+                    if inside(prev_r) {
                         push_undo_snapshot(&mut ed, &tc.settings);
-                        let delta = if p[0] < op_x + op_w * 0.5 {
-                            -0.10
-                        } else {
-                            0.10
-                        };
                         mutate_placement(tc, &ed, &|pl| {
-                            pl.opacity = (pl.opacity + delta).clamp(0.15, 1.0)
+                            pl.icon_id = (pl.icon_id + 1) % 13;
                         });
                         let _ = tc.settings.save();
                         tc.clicked = true;
                         return false;
                     }
-                    let cy1 = hy + 36.0;
-                    let sw_w = 24.0;
+                    let sw_y = cards_y + card_h + 8.0;
+                    let sw_card_h = (box_y + box_h - sw_y - 10.0).clamp(48.0, 62.0);
+                    let sw_d = 20.0;
+                    let sw_row_y = sw_y + sw_card_h - sw_d - 7.0;
                     for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                        let sx = dx + 98.0 + i as f32 * (sw_w + 5.0);
-                        if inside([sx, cy1, sw_w, 22.0]) {
+                        let sx = wx + 22.0 + i as f32 * (sw_d + 6.0);
+                        if inside([sx, sw_row_y, sw_d, sw_d]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             let c_val = *col;
                             mutate_placement(tc, &ed, &move |pl| pl.button_color = c_val);
@@ -6351,9 +7047,10 @@ pub fn touch_hud_editor(
                             return false;
                         }
                     }
-                    let cy2 = cy1 + 32.0;
-                    let half = (dw - 28.0 - 8.0) * 0.5;
-                    if inside([dx + 14.0, cy2, half, 28.0]) {
+                    let act_w = 158.0f32.min(ww * 0.36);
+                    let act_x = wx + ww - act_w - 20.0;
+                    let half_h = (sw_card_h - 14.0) * 0.5;
+                    if inside([act_x, sw_y + 5.0, act_w, half_h]) {
                         push_undo_snapshot(&mut ed, &tc.settings);
                         mutate_placement(tc, &ed, &|pl| {
                             let idx = COLOR_SWATCHES
@@ -6368,7 +7065,7 @@ pub fn touch_hud_editor(
                         tc.clicked = true;
                         return false;
                     }
-                    if inside([dx + 14.0 + half + 8.0, cy2, half, 28.0]) {
+                    if inside([act_x, sw_y + 9.0 + half_h, act_w, half_h]) {
                         push_undo_snapshot(&mut ed, &tc.settings);
                         mutate_placement(tc, &ed, &|pl| {
                             let idx = COLOR_SWATCHES
@@ -6383,67 +7080,50 @@ pub fn touch_hud_editor(
                         tc.clicked = true;
                         return false;
                     }
-                    let cy3 = cy2 + 34.0;
-                    let third = (dw - 28.0 - 8.0) / 3.0;
-                    if inside([dx + 14.0, cy3, third, 28.0]) {
-                        push_undo_snapshot(&mut ed, &tc.settings);
-                        mutate_placement(tc, &ed, &|pl| pl.visible_in_game = !pl.visible_in_game);
-                        let _ = tc.settings.save();
-                        tc.clicked = true;
-                        return false;
-                    }
-                    if inside([dx + 14.0 + third + 4.0, cy3, third, 28.0]) {
-                        push_undo_snapshot(&mut ed, &tc.settings);
-                        mutate_placement(tc, &ed, &|pl| pl.visible_in_menu = !pl.visible_in_menu);
-                        let _ = tc.settings.save();
-                        tc.clicked = true;
-                        return false;
-                    }
-                    if inside([dx + 14.0 + (third + 4.0) * 2.0, cy3, third, 28.0]) {
-                        push_undo_snapshot(&mut ed, &tc.settings);
-                        tc.settings.apply_visibility_preset_all();
-                        let _ = tc.settings.save();
-                        ed.status_msg = Some("Applied preset visibility to all controls.".into());
-                        tc.clicked = true;
-                        return false;
-                    }
                 }
                 1 => {
-                    let cw = (dw - 28.0 - 12.0) / 4.0;
-                    for i in 0..4 {
-                        let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                        if inside([rx, body_y, cw, 28.0]) {
+                    let sh_pill_w = 192.0f32.min(ww * 0.44);
+                    if inside([wx + ww - sh_pill_w - 12.0, body_y - 2.0, sh_pill_w, 24.0]) {
+                        push_undo_snapshot(&mut ed, &tc.settings);
+                        mutate_placement(tc, &ed, &|pl| pl.shape = (pl.shape + 1) % 6);
+                        let _ = tc.settings.save();
+                        tc.clicked = true;
+                        return false;
+                    }
+                    let cards_y = body_y + 28.0;
+                    let card_h = 35.0;
+                    for i in 0..3 {
+                        let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
+                        if inside([rx, cards_y, cw3, card_h]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
-                            let sign = if p[0] < rx + cw * 0.5 { -1.0 } else { 1.0 };
+                            let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
                             mutate_placement(tc, &ed, &move |pl| match i {
                                 0 => pl.stroke_size = (pl.stroke_size + sign * 0.5).clamp(0.0, 8.0),
                                 1 => {
-                                    pl.stroke_margin =
-                                        (pl.stroke_margin + sign * 1.0).clamp(-4.0, 8.0)
+                                    pl.roundness = (pl.roundness + sign * 3.0).clamp(0.0, 50.0);
+                                    pl.stroke_roundness = pl.roundness;
                                 }
-                                2 => {
-                                    pl.stroke_roundness =
-                                        (pl.stroke_roundness + sign * 3.0).clamp(0.0, 50.0)
+                                _ => {
+                                    pl.shadow_size = (pl.shadow_size + sign * 1.0).clamp(0.0, 12.0)
                                 }
-                                _ => pl.roundness = (pl.roundness + sign * 3.0).clamp(0.0, 50.0),
                             });
                             let _ = tc.settings.save();
                             tc.clicked = true;
                             return false;
                         }
                     }
-                    let r2_y = body_y + 36.0;
-                    for i in 0..4 {
-                        let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                        if inside([rx, r2_y, cw, 28.0]) {
+                    let row2_y = cards_y + 39.0;
+                    for i in 0..3 {
+                        let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
+                        if inside([rx, row2_y, cw3, card_h]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
-                            let sign = if p[0] < rx + cw * 0.5 { -1.0 } else { 1.0 };
+                            let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
                             mutate_placement(tc, &ed, &move |pl| match i {
-                                0 => pl.shape = (pl.shape + 1) % 6,
-                                1 => {
-                                    pl.shadow_size = (pl.shadow_size + sign * 1.0).clamp(0.0, 12.0)
+                                0 => {
+                                    pl.stroke_margin =
+                                        (pl.stroke_margin + sign * 1.0).clamp(-4.0, 8.0)
                                 }
-                                2 => {
+                                1 => {
                                     pl.width_ratio = (pl.width_ratio + sign * 0.10).clamp(0.45, 3.0)
                                 }
                                 _ => {
@@ -6456,11 +7136,21 @@ pub fn touch_hud_editor(
                             return false;
                         }
                     }
-                    let r3_y = r2_y + 36.0;
-                    let sw_w = 24.0;
+                    let prev_r = [wx + ww - preview_w - 12.0, cards_y, preview_w, 74.0];
+                    if inside(prev_r) {
+                        push_undo_snapshot(&mut ed, &tc.settings);
+                        mutate_placement(tc, &ed, &|pl| pl.shape = (pl.shape + 1) % 6);
+                        let _ = tc.settings.save();
+                        tc.clicked = true;
+                        return false;
+                    }
+                    let sw_y = cards_y + 74.0 + 8.0;
+                    let sw_card_h = (box_y + box_h - sw_y - 10.0).clamp(48.0, 62.0);
+                    let sw_d = 20.0;
+                    let sw_row_y = sw_y + sw_card_h - sw_d - 7.0;
                     for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                        let sx = dx + 98.0 + i as f32 * (sw_w + 5.0);
-                        if inside([sx, r3_y, sw_w, 22.0]) {
+                        let sx = wx + 22.0 + i as f32 * (sw_d + 6.0);
+                        if inside([sx, sw_row_y, sw_d, sw_d]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             let c_val = *col;
                             mutate_placement(tc, &ed, &move |pl| pl.stroke_color = c_val);
@@ -6469,28 +7159,39 @@ pub fn touch_hud_editor(
                             return false;
                         }
                     }
+                    let act_w = 152.0f32.min(ww * 0.34);
+                    if inside([
+                        wx + ww - act_w - 22.0,
+                        sw_y + (sw_card_h - 28.0) * 0.5,
+                        act_w,
+                        28.0,
+                    ]) {
+                        push_undo_snapshot(&mut ed, &tc.settings);
+                        mutate_placement(tc, &ed, &|pl| pl.icon_id = (pl.icon_id + 1) % 13);
+                        let _ = tc.settings.save();
+                        tc.clicked = true;
+                        return false;
+                    }
                 }
                 _ => {
                     if tc.settings.control_style == ControlStyle::Mcpe
                         && ed.selected_custom.is_some()
                     {
-                        let half_w = (dw - 28.0 - 8.0) * 0.5;
-                        // Left card: Exclusive Keyboard Binding
-                        if inside([dx + 14.0, body_y, half_w, 42.0]) {
+                        let half_w = (ww - 24.0 - 8.0) * 0.5;
+                        if inside([wx + 12.0, body_y, half_w, 42.0]) {
                             ed.picker_step = PickerStep::Keyboard { event_slot: 0 };
                             tc.clicked = true;
                             return false;
                         }
-                        // Right card: Exclusive Mouse / Action Binding
-                        if inside([dx + 14.0 + half_w + 8.0, body_y, half_w, 42.0]) {
+                        if inside([wx + 12.0 + half_w + 8.0, body_y, half_w, 42.0]) {
                             ed.picker_step = PickerStep::MouseAndActions { event_slot: 0 };
                             tc.clicked = true;
                             return false;
                         }
                     } else {
-                        let ew = (dw - 28.0 - 8.0) / 3.0;
+                        let ew = (ww - 24.0 - 8.0) / 3.0;
                         for slot in 0..3 {
-                            let ex = dx + 14.0 + slot as f32 * (ew + 4.0);
+                            let ex = wx + 12.0 + slot as f32 * (ew + 4.0);
                             if inside([ex, body_y, ew, 42.0]) {
                                 if ed.selected_custom.is_none() {
                                     push_undo_snapshot(&mut ed, &tc.settings);
@@ -6523,9 +7224,9 @@ pub fn touch_hud_editor(
                         }
                     }
                     let by = body_y + 52.0;
-                    let bw = (dw - 28.0 - 12.0) / 4.0;
+                    let bw = (ww - 24.0 - 12.0) / 4.0;
                     for i in 0..4 {
-                        let rx = dx + 14.0 + i as f32 * (bw + 4.0);
+                        let rx = wx + 12.0 + i as f32 * (bw + 4.0);
                         if inside([rx, by, bw, 30.0]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             match i {
@@ -6557,22 +7258,22 @@ pub fn touch_hud_editor(
                         }
                     }
                     let vy = by + 38.0;
-                    let third = (dw - 28.0 - 8.0) / 3.0;
-                    if inside([dx + 14.0, vy, third, 28.0]) {
+                    let third = (ww - 24.0 - 8.0) / 3.0;
+                    if inside([wx + 12.0, vy, third, 28.0]) {
                         push_undo_snapshot(&mut ed, &tc.settings);
                         mutate_placement(tc, &ed, &|pl| pl.visible_in_game = !pl.visible_in_game);
                         let _ = tc.settings.save();
                         tc.clicked = true;
                         return false;
                     }
-                    if inside([dx + 14.0 + third + 4.0, vy, third, 28.0]) {
+                    if inside([wx + 12.0 + third + 4.0, vy, third, 28.0]) {
                         push_undo_snapshot(&mut ed, &tc.settings);
                         mutate_placement(tc, &ed, &|pl| pl.visible_in_menu = !pl.visible_in_menu);
                         let _ = tc.settings.save();
                         tc.clicked = true;
                         return false;
                     }
-                    if inside([dx + 14.0 + (third + 4.0) * 2.0, vy, third, 28.0]) {
+                    if inside([wx + 12.0 + (third + 4.0) * 2.0, vy, third, 28.0]) {
                         push_undo_snapshot(&mut ed, &tc.settings);
                         tc.settings.apply_visibility_preset_all();
                         let _ = tc.settings.save();
@@ -6929,6 +7630,11 @@ mod tests {
         cursor = (213.5, 120.0);
         assert!(ui.sync_viewport_cursor(&mut cursor, [854.0, 480.0]));
         assert_eq!(cursor, (427.0, 240.0));
+
+        // Default is OFF unless previously enabled by the user
+        assert!(!controls.settings.virtual_mouse_enabled);
+        assert!(!ui.compute_virtual_mouse_visibility(&controls, true, false, true, false));
+        controls.settings.virtual_mouse_enabled = true;
 
         // MCPE mode: hidden when MCPE gameplay controls are visible, visible when hidden (menus / F1)
         assert!(!ui.compute_virtual_mouse_visibility(&controls, false, false, true, true));

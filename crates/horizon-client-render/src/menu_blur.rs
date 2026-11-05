@@ -275,6 +275,12 @@ impl MenuBlur {
                 depth_or_array_layers: 1,
             },
         );
+        if radius < 0.5 {
+            self.cached_valid = true;
+            self.cached_size = (copy_size[0], copy_size[1]);
+            self.cached_radius = 0;
+            return;
+        }
         let active_passes = if cfg!(target_os = "android") {
             &PASSES[..2]
         } else {

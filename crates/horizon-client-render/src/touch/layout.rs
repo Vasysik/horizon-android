@@ -290,6 +290,9 @@ pub struct Placement {
     /// Button shape: 0 = Rounded, 1 = Square, 2 = Circle/Pill, 3 = CutOctagon, 4 = Diamond, 5 = Hexagon.
     #[serde(default)]
     pub shape: u8,
+    /// Optional vector icon badge (0 = None/Text only, 1..=12 = built-in vector icon).
+    #[serde(default)]
+    pub icon_id: u8,
     /// Independent horizontal expansion ratio (drag right/left handle).
     #[serde(default = "default_one")]
     pub width_ratio: f32,
@@ -340,6 +343,7 @@ impl Placement {
             toggleable: false,
             swipeable: false,
             shape: 0,
+            icon_id: 0,
             width_ratio: 1.0,
             height_ratio: 1.0,
             use_goy_style: false,
@@ -384,6 +388,7 @@ impl Placement {
         self.size = self.size.clamp(0.045, 0.45);
         self.opacity = self.opacity.clamp(0.0, 1.0);
         self.shape = self.shape.min(5);
+        self.icon_id = self.icon_id.min(12);
         self.width_ratio = if self.width_ratio.is_finite() && self.width_ratio > 0.05 {
             self.width_ratio.clamp(0.4, 3.2)
         } else {
@@ -454,8 +459,12 @@ pub struct Settings {
     #[serde(default)]
     pub toggle_sprint: bool,
     pub inventory_controls: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub virtual_mouse_enabled: bool,
+    #[serde(default)]
+    pub disable_game_animations: bool,
+    #[serde(default = "default_res_scale")]
+    pub resolution_scale_percent: u32,
     pub virtual_mouse_sensitivity: f32,
     /// Rendered size of the virtual mouse pointer, where 1.0 is the default height.
     #[serde(default = "default_pointer_scale")]
@@ -521,6 +530,9 @@ fn default_floating_pos() -> [f32; 2] {
 }
 fn default_pointer_scale() -> f32 {
     1.0
+}
+fn default_res_scale() -> u32 {
+    100
 }
 // Append new buttons without resetting a player's existing ten-button layout.
 fn deserialize_layouts<'de, D: serde::Deserializer<'de>>(
@@ -597,7 +609,9 @@ impl Default for Settings {
             sprint_toggle: false,
             toggle_sprint: false,
             inventory_controls: false,
-            virtual_mouse_enabled: true,
+            virtual_mouse_enabled: false,
+            disable_game_animations: false,
+            resolution_scale_percent: default_res_scale(),
             virtual_mouse_sensitivity: 1.0,
             virtual_mouse_pointer_scale: default_pointer_scale(),
             crosshair_gestures: false,
@@ -762,6 +776,11 @@ impl Settings {
             self.virtual_mouse_sensitivity.clamp(0.25, 3.0)
         } else {
             1.0
+        };
+        self.resolution_scale_percent = if self.resolution_scale_percent == 0 {
+            100
+        } else {
+            self.resolution_scale_percent.clamp(25, 100)
         };
         self.virtual_mouse_pointer_scale = if self.virtual_mouse_pointer_scale.is_finite() {
             self.virtual_mouse_pointer_scale.clamp(0.5, 2.0)

@@ -50,6 +50,63 @@ pub use entity_batch::{
 };
 pub use view::{View, ViewSet};
 
+/// Cloneable GPU state for building `pack_post::PackPost` off the Android UI thread.
+pub struct ShaderPackBuildContext {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    adapter: wgpu::Adapter,
+    screen_format: wgpu::TextureFormat,
+    atlas: Option<(wgpu::TextureView, [u32; 2])>,
+    lightmap: wgpu::TextureView,
+    flat_layout: Option<wgpu::BindGroupLayout>,
+    pack_terrain_flat: bool,
+    celestial: Option<wgpu::TextureView>,
+    clouds: wgpu::BindGroupLayout,
+}
+
+impl ShaderPackBuildContext {
+    pub fn build(self, post: horizon_shaders::Post, block_ids: &[i32]) -> pack_post::PackPost {
+        let instance = wgpu::vertex_attr_array![5=>Float32x4];
+        let vertex = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TerrainVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &TERRAIN_ATTRIBUTES,
+        };
+        let instances = wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &instance,
+        };
+        let buffers = [Some(vertex), Some(instances)];
+        let flat = self.pack_terrain_flat;
+        let world = pack_post::World {
+            atlas: self.atlas.clone(),
+            lightmap: self.lightmap,
+            terrain: self.atlas.as_ref().map(|_| pack_post::Geometry {
+                buffers: if flat { &buffers[..1] } else { &buffers },
+                table: self.flat_layout.as_ref().filter(|_| flat),
+                depth_write: true,
+                atlas: None,
+                ids: None,
+                cull: true,
+            }),
+            block_ids,
+            celestial: self.celestial,
+            clouds: Some(&self.clouds),
+            weather: true,
+            hand: true,
+        };
+        pack_post::PackPost::new(
+            &self.device,
+            &self.queue,
+            &self.adapter,
+            post,
+            self.screen_format,
+            world,
+        )
+    }
+}
+
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
     2.5f32.max(width as f32 / 1920.0 * 2.5)
@@ -116,6 +173,7 @@ mod pack_entities;
 mod pack_hand;
 mod pack_images;
 mod pack_post;
+pub use pack_post::PackPost;
 mod pack_shadow;
 mod pack_sky;
 mod pack_textures;
@@ -5290,6 +5348,39 @@ impl Renderer {
                 world,
             )
         });
+        self.install_built_shader_pack(dimension, post)
+    }
+
+    /// Captures the cloneable GPU handles needed to build `pack_post::PackPost` on a background
+    /// worker thread on Android so `vkCreateGraphicsPipelines` never stalls `android_main`.
+    pub fn shader_pack_build_context(&self) -> ShaderPackBuildContext {
+        ShaderPackBuildContext {
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+            adapter: self.adapter.clone(),
+            screen_format: self.config.format.remove_srgb_suffix(),
+            atlas: self.pack_atlas.as_ref().map(|a| (a.view.clone(), a.size())),
+            lightmap: self.lightmap_view.clone(),
+            flat_layout: self.flat.as_ref().map(|f| f.draw_layout.clone()),
+            pack_terrain_flat: self.pack_terrain_flat,
+            celestial: self
+                .hud
+                .atlas_texture
+                .as_ref()
+                .map(|t| t.create_view(&Default::default())),
+            clouds: self.cloud_bindings.clone(),
+        }
+    }
+
+    /// Installs a `PackPost` built on a background worker thread.
+    pub fn install_built_shader_pack(
+        &mut self,
+        dimension: i32,
+        post: Option<pack_post::PackPost>,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        if post.is_none() {
+            self.pack_atlas = None;
+        }
         let report = post.as_ref().map(|p| {
             let programs = p.programs().into_iter().map(str::to_owned).collect();
             (programs, p.notes.clone())
@@ -5885,7 +5976,8 @@ impl Renderer {
                 })
         });
         let menu_blur = frame.menu_blur.filter(|radius| {
-            *radius > 0.0 && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+            (*radius > 0.0 || frame.menu_blur_cache)
+                && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
         });
         if menu_blur.is_none() {
             self.invalidate_menu_blur();
@@ -8261,16 +8353,19 @@ impl Renderer {
                             };
                             match geometry {
                                 Some((instances, group_slot, layout)) => {
-                                    let indices =
-                                        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                            label: Some("Shader pack geometry indices"),
-                                            layout,
-                                            entries: &[wgpu::BindGroupEntry {
-                                                binding: 0,
-                                                resource: flat.indices.as_entire_binding(),
-                                            }],
-                                        });
-                                    rp.set_bind_group(group_slot, &indices, &[]);
+                                    if group_slot != 3 {
+                                        let indices = self.device.create_bind_group(
+                                            &wgpu::BindGroupDescriptor {
+                                                label: Some("Shader pack geometry indices"),
+                                                layout,
+                                                entries: &[wgpu::BindGroupEntry {
+                                                    binding: 0,
+                                                    resource: flat.indices.as_entire_binding(),
+                                                }],
+                                            },
+                                        );
+                                        rp.set_bind_group(group_slot, &indices, &[]);
+                                    }
                                     let vertices = |p| self.arena.buffer(p);
                                     flat.draw_geometry(rp, calls, vertices, page, instances);
                                 }
@@ -8300,6 +8395,7 @@ impl Renderer {
                 indices: self.indices.clone(),
                 quads: cloud_quads,
             }));
+            let flat_indices = flat.map(|f| &f.indices);
             post.run(
                 &self.device,
                 &self.queue,
@@ -8312,6 +8408,7 @@ impl Renderer {
                 size,
                 [self.config.width, self.config.height],
                 &pages,
+                flat_indices,
                 &mut terrain,
             );
             self.pack_post = Some((dimension, Some(post)));

@@ -2694,6 +2694,8 @@ pub mod motion {
     };
 
     static REDUCED_MOTION: AtomicBool = AtomicBool::new(false);
+    static DISABLE_LAUNCHER_ANIMATIONS: AtomicBool = AtomicBool::new(false);
+    static DISABLE_GAME_ANIMATIONS: AtomicBool = AtomicBool::new(false);
 
     pub fn set_reduced_motion(reduced: bool) {
         REDUCED_MOTION.store(reduced, Ordering::Relaxed);
@@ -2701,6 +2703,23 @@ pub mod motion {
 
     pub fn reduced_motion() -> bool {
         REDUCED_MOTION.load(Ordering::Relaxed)
+            || DISABLE_LAUNCHER_ANIMATIONS.load(Ordering::Relaxed)
+    }
+
+    pub fn set_launcher_animations_disabled(disabled: bool) {
+        DISABLE_LAUNCHER_ANIMATIONS.store(disabled, Ordering::Relaxed);
+    }
+
+    pub fn launcher_animations_disabled() -> bool {
+        DISABLE_LAUNCHER_ANIMATIONS.load(Ordering::Relaxed)
+    }
+
+    pub fn set_game_animations_disabled(disabled: bool) {
+        DISABLE_GAME_ANIMATIONS.store(disabled, Ordering::Relaxed);
+    }
+
+    pub fn game_animations_disabled() -> bool {
+        DISABLE_GAME_ANIMATIONS.load(Ordering::Relaxed)
     }
 
     /// Standard Material 3 decelerate cubic-bezier approximation (`1 - (1 - t)^3`).

@@ -69,6 +69,7 @@ pub(super) struct Launcher {
     prepared_session: Option<PathBuf>,
     pub(super) launching: bool,
     pub(super) launch_pending_tick: bool,
+    pub(super) diagnostics_modal_open: bool,
     focus: Option<usize>,
     diagnostic_export: Option<mpsc::Receiver<std::result::Result<String, String>>>,
 }
@@ -147,6 +148,12 @@ impl Launcher {
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
         horizon_client::ui_theme::set_ui_scale_percent(catalog.config.ui_scale_percent);
+        horizon_client::ui_theme::motion::set_launcher_animations_disabled(
+            catalog.config.disable_launcher_animations,
+        );
+        horizon_client::ui_theme::motion::set_game_animations_disabled(
+            catalog.config.disable_game_animations,
+        );
         // First run: ensure independent MCPE and GoyControl storage directories exist,
         // and initialize MCPE Controls as the default active control system on fresh installs.
         let game_home = catalog.config.game_home(&home);
@@ -240,6 +247,7 @@ impl Launcher {
             prepared_session: None,
             launching: false,
             launch_pending_tick: false,
+            diagnostics_modal_open: false,
             focus: None,
             diagnostic_export: None,
         }
@@ -383,7 +391,9 @@ impl Launcher {
             self.anim.intro_done = true;
             return;
         }
-        if self.exit_confirmation {
+        if self.diagnostics_modal_open {
+            self.diagnostics_modal_open = false;
+        } else if self.exit_confirmation {
             self.exit_confirmation = false;
         } else if self.catalog.fm_modal.take().is_some() {
             self.catalog.editing = None;

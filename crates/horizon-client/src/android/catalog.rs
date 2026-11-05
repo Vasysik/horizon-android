@@ -92,6 +92,10 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub fast_chunk_upload: bool,
     #[serde(default)]
+    pub disable_launcher_animations: bool,
+    #[serde(default)]
+    pub disable_game_animations: bool,
+    #[serde(default)]
     pub last_name_changed: String,
     #[serde(default)]
     pub custom_profile_name: String,
@@ -172,7 +176,12 @@ impl Config {
         config.theme.sanitize();
         horizon_client::ui_theme::set_active_theme(config.theme.resolve());
         horizon_client::ui_theme::motion::set_reduced_motion(
-            config.super_perf_mode || config.battery_perf_mode,
+            config.disable_launcher_animations
+                || config.super_perf_mode
+                || config.battery_perf_mode,
+        );
+        horizon_client::ui_theme::motion::set_game_animations_disabled(
+            config.disable_game_animations,
         );
         config
     }
@@ -240,6 +249,15 @@ impl Config {
         let _ = std::fs::create_dir_all(&game);
         let options_path = game.join("options.txt");
         let mut settings = horizon_client::settings::Settings::load(&options_path);
+        horizon_client::ui_theme::motion::set_game_animations_disabled(
+            self.disable_game_animations,
+        );
+        if self.disable_game_animations {
+            settings.horizon.animated_textures = false;
+            settings.chunk_fade = 0.0;
+            settings.view_bobbing = false;
+            settings.menu_blur = 0;
+        }
         if self.super_perf_mode {
             settings.render_distance = settings.render_distance.min(8);
             settings.simulation_distance = settings.simulation_distance.min(6);
@@ -260,11 +278,17 @@ impl Config {
         } else if self.max_fps_mode {
             settings.max_fps = 260;
             settings.vsync = false;
-            if self.fast_chunk_upload {
-                settings.horizon.upload_budget_kib = 4096;
-            }
         }
+        if self.fast_chunk_upload {
+            settings.horizon.upload_budget_kib = settings.horizon.upload_budget_kib.max(4096);
+        }
+        settings.horizon.resolution_scale = self.render_scale.percent().clamp(25, 100);
         settings.save(&options_path);
+        let touch_path = game.join("horizon-touch.json");
+        let mut touch_cfg = horizon_client::touch::Settings::load_from(&touch_path);
+        touch_cfg.disable_game_animations = self.disable_game_animations;
+        touch_cfg.resolution_scale_percent = self.render_scale.percent().clamp(25, 100);
+        let _ = touch_cfg.save_to(&touch_path);
     }
 }
 #[derive(Clone, Copy, PartialEq)]

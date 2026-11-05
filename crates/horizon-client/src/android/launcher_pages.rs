@@ -321,6 +321,11 @@ pub(super) enum Action {
     CycleClouds,
     ToggleMenuBlur,
     FovDelta(f32),
+    // Animation & Diagnostics Modal actions
+    ToggleLauncherAnimations,
+    ToggleGameAnimations,
+    CloseDiagnosticsSummary,
+    OpenReportsFolder,
     // Experimental settings actions
     ToggleSuperPerf,
     ToggleBatteryPerf,
@@ -1966,6 +1971,9 @@ impl Launcher {
         if self.catalog.fm_modal.is_some() {
             self.draw_fm_modal(&mut ui, w, h, ime_top_dp);
         }
+        if self.diagnostics_modal_open {
+            self.draw_diagnostics_summary_modal(&mut ui, w, h);
+        }
         if self.exit_confirmation {
             self.targets.clear();
             self.list_targets.clear();
@@ -3462,6 +3470,219 @@ impl Launcher {
         );
     }
 
+    fn draw_diagnostics_summary_modal(&mut self, ui: &mut Ui, w: f32, h: f32) {
+        self.targets.clear();
+        self.list_targets.clear();
+        self.list_view = None;
+
+        let modal_t = self.anim.modal_anim.clamp(0.25, 1.0);
+        ui.rounded(
+            0.0,
+            0.0,
+            w,
+            h,
+            0.0,
+            horizon_client::hud::rgba(4, 6, 14, (198.0 * modal_t) as u8),
+        );
+
+        let mw = (w - 28.0).clamp(320.0, 560.0);
+        let mh = (h - 24.0).clamp(248.0, 356.0);
+        let mx = (w - mw) * 0.5;
+        let my = (h - mh) * 0.5 + (1.0 - modal_t) * 10.0;
+
+        ui.rounded(
+            mx + 2.0,
+            my + 6.0,
+            mw,
+            mh,
+            22.0,
+            horizon_client::hud::rgba(0, 0, 0, 175),
+        );
+        ui.rounded(mx, my, mw, mh, 22.0, my3_surface());
+        ui.border(mx, my, mw, mh, 22.0, my3_accent());
+
+        // Header icon & title
+        ui.rounded(mx + 18.0, my + 14.0, 36.0, 36.0, 11.0, my3_accent_soft());
+        ui.icon(Icon::Terminal, mx + 27.0, my + 23.0, 18.0, my3_accent());
+        ui.text(
+            Face::SemiBold,
+            17.0,
+            mx + 64.0,
+            my + 13.0,
+            my3_text(),
+            "Diagnostics & Runtime Health Summary",
+        );
+        ui.text(
+            Face::Regular,
+            11.5,
+            mx + 64.0,
+            my + 33.0,
+            my3_muted(),
+            "Live renderer pipeline, profile state, error log & telemetry status",
+        );
+
+        ui.rounded(mx + 16.0, my + 58.0, mw - 32.0, 1.0, 0.0, my3_border());
+
+        // 2x2 Metric Grid Cards
+        let c = &self.catalog.config;
+        let gx = mx + 18.0;
+        let gw = mw - 36.0;
+        let half_w = (gw - 10.0) * 0.5;
+        let card1_y = my + 68.0;
+        let card2_y = card1_y + 52.0;
+
+        let gpu_txt = format!(
+            "{}  •  {}% Scale  •  {}",
+            c.renderer.label(),
+            c.render_scale.percent(),
+            c.device.display_label()
+        );
+        let prof_txt = format!(
+            "Profile {}  •  UI {}  •  {}",
+            c.profile + 1,
+            c.ui_scale_label(),
+            c.input_host.label()
+        );
+        let anim_txt = format!(
+            "Launcher Anim: {}  •  Game Anim: {}",
+            if c.disable_launcher_animations {
+                "OFF"
+            } else {
+                "ON"
+            },
+            if c.disable_game_animations {
+                "OFF"
+            } else {
+                "ON"
+            }
+        );
+        let perf_txt = format!(
+            "SuperPerf: {}  •  FastUpload: {}  •  ADPF: {}",
+            if c.super_perf_mode { "ON" } else { "OFF" },
+            if c.fast_chunk_upload { "ON" } else { "OFF" },
+            if c.device.performance_hints {
+                "ON"
+            } else {
+                "OFF"
+            }
+        );
+
+        for (r_idx, (title, val, x_off, y_pos)) in [
+            ("GRAPHICS & DISPLAY PIPELINE", gpu_txt.as_str(), gx, card1_y),
+            (
+                "ACTIVE PROFILE & INPUT HOST",
+                prof_txt.as_str(),
+                gx + half_w + 10.0,
+                card1_y,
+            ),
+            ("ANIMATION & MOTION STATE", anim_txt.as_str(), gx, card2_y),
+            (
+                "PERFORMANCE & UPLOAD BOOST",
+                perf_txt.as_str(),
+                gx + half_w + 10.0,
+                card2_y,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let _ = r_idx;
+            ui.rounded(x_off, y_pos, half_w, 46.0, 12.0, my3_card_bg());
+            ui.border(x_off, y_pos, half_w, 46.0, 12.0, my3_card_border());
+            ui.text(
+                Face::SemiBold,
+                9.5,
+                x_off + 10.0,
+                y_pos + 6.0,
+                my3_accent(),
+                title,
+            );
+            let fit_v = ui.fit_text(Face::Medium, 11.2, val, half_w - 20.0);
+            ui.text(
+                Face::Medium,
+                11.2,
+                x_off + 10.0,
+                y_pos + 23.0,
+                my3_text(),
+                &fit_v,
+            );
+        }
+
+        // Summary & Error Log Box
+        let log_y = card2_y + 54.0;
+        let log_h = (mh - (log_y - my) - 60.0).max(52.0);
+        ui.rounded(gx, log_y, gw, log_h, 12.0, my3_card_bg());
+        ui.border(gx, log_y, gw, log_h, 12.0, my3_card_border());
+
+        let summary_str = crate::diagnostics::summary(&self.home);
+        let err_str = std::fs::read_to_string(self.home.join("android-error.txt"))
+            .ok()
+            .map(|e| crate::diagnostics::redact(&e))
+            .unwrap_or_else(|| {
+                "None — last session exited cleanly with zero unhandled errors.".into()
+            });
+
+        ui.text(
+            Face::SemiBold,
+            10.0,
+            gx + 12.0,
+            log_y + 6.0,
+            my3_accent(),
+            "DIAGNOSTICS SUMMARY & LAST HANDLED ERROR",
+        );
+        let fit_sum = ui.fit_text(Face::Regular, 11.0, &summary_str, gw - 24.0);
+        ui.text(
+            Face::Regular,
+            11.0,
+            gx + 12.0,
+            log_y + 22.0,
+            my3_text(),
+            &fit_sum,
+        );
+        let fit_err = ui.fit_text(
+            Face::Mono,
+            10.2,
+            &format!("Last Error: {err_str}"),
+            gw - 24.0,
+        );
+        ui.text(
+            Face::Mono,
+            10.2,
+            gx + 12.0,
+            log_y + 39.0,
+            my3_muted(),
+            &fit_err,
+        );
+
+        // Bottom Action Buttons: Close | Open Reports | Export ZIP
+        let btn_y = my + mh - 46.0;
+        let bw3 = (gw - 16.0) / 3.0;
+        button(
+            ui,
+            &mut self.targets,
+            [gx, btn_y, bw3, 36.0],
+            "Close",
+            Action::CloseDiagnosticsSummary,
+            false,
+        );
+        button(
+            ui,
+            &mut self.targets,
+            [gx + bw3 + 8.0, btn_y, bw3, 36.0],
+            "Open Reports",
+            Action::OpenReportsFolder,
+            false,
+        );
+        button(
+            ui,
+            &mut self.targets,
+            [gx + (bw3 + 8.0) * 2.0, btn_y, bw3, 36.0],
+            "Export ZIP",
+            Action::ExportDiagnostics,
+            true,
+        );
+    }
+
     /// Revamped Settings tab matching `45062.jpg` with 2-column MY3 category cards
     /// and dedicated sub-pages for Video, Launcher, Controls, Experimental, and Diagnostics.
     #[allow(clippy::too_many_arguments)]
@@ -3635,19 +3856,10 @@ impl Launcher {
         match cat {
             SettingsCategory::Video => {
                 let c = &self.catalog.config;
-                let count = 7;
+                let count = 17;
                 let extra_ime = if ime_top_dp.is_some() { 180.0 } else { 0.0 };
                 let max_scroll =
                     (count as f32 * step_y + extra_ime - (list_bottom - list_top)).max(0.0);
-                if self.catalog.editing == Some("server")
-                    && let Some(ime_y) = ime_top_dp
-                {
-                    let server_y = list_top + 6.0 * step_y - self.catalog.scroll;
-                    if server_y + card_h > ime_y - 12.0 {
-                        self.catalog.scroll = (list_top + 6.0 * step_y + card_h - (ime_y - 16.0))
-                            .clamp(0.0, max_scroll);
-                    }
-                }
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
@@ -3660,8 +3872,31 @@ impl Launcher {
                 let hz_str = format!("{} v", c.device.display_label());
                 let aspect_str = format!("{} v", c.screen.aspect.label());
                 let orient_str = format!("{} v", c.orientation.label());
+                let rd_str = format!("{} chunks", opts.render_distance);
+                let rd_frac = ((opts.render_distance - 2) as f32 / 30.0).clamp(0.0, 1.0);
+                let sd_str = format!("{} chunks", opts.simulation_distance);
+                let sd_frac = ((opts.simulation_distance - 5) as f32 / 27.0).clamp(0.0, 1.0);
+                let fov_str = format!("{:.0}°", opts.fov);
+                let fov_frac = ((opts.fov - 30.0) / 80.0).clamp(0.0, 1.0);
+                let preset_str = format!("{} ›", capitalize(&opts.graphics_preset));
+                let fps_str = if opts.max_fps >= 260 {
+                    "Unlimited ›".to_owned()
+                } else {
+                    format!("{} FPS ›", opts.max_fps)
+                };
+                let clouds_str = match opts.clouds.as_str() {
+                    "false" => "Off ›",
+                    "fast" => "Fast ›",
+                    _ => "Fancy ›",
+                };
+                let game_anim_off = c.disable_game_animations || touch_cfg.disable_game_animations;
 
-                let rows: [(&str, &str, SettingControl<'_>); 7] = [
+                let rows: [(&str, &str, SettingControl<'_>); 17] = [
+                    (
+                        "DISPLAY, RESOLUTION & RENDERER PIPELINE",
+                        "Hardware GPU backend, 3D resolution scale, refresh rate & display geometry",
+                        SettingControl::SectionHeader(c.renderer.label(), Icon::Monitor),
+                    ),
                     (
                         "Rendering backend (Vulkan / GLES)",
                         "Hardware GPU driver pipeline used when launching Minecraft",
@@ -3669,7 +3904,7 @@ impl Launcher {
                     ),
                     (
                         "Client resolution scale",
-                        "3D framebuffer resolution percentage (lower boosts FPS on high-DPI phones)",
+                        "3D framebuffer resolution percentage (also adjustable live in-game via Floating Menu)",
                         if self.catalog.editing == Some("render_scale") {
                             SettingControl::TextField {
                                 label: "SCALE %",
@@ -3707,7 +3942,68 @@ impl Launcher {
                         "Inset HUD away from punch-hole cameras and curved display edges",
                         SettingControl::Toggle(c.screen.avoid_cutout, Action::Cutout),
                     ),
+                    (
+                        "IN-GAME GRAPHICS, DISTANCES & MOTION",
+                        "Chunk visibility, simulation radius, FOV, framerate & animation controls",
+                        SettingControl::SectionHeader("Minecraft Video", Icon::Shaders),
+                    ),
+                    (
+                        "Render Distance",
+                        "Visible chunk radius (6–8 chunks recommended on Mali-G52 with shaders)",
+                        SettingControl::Slider {
+                            value_label: &rd_str,
+                            fraction: rd_frac,
+                            minus_action: Action::RenderDistDelta(-2),
+                            plus_action: Action::RenderDistDelta(2),
+                        },
+                    ),
+                    (
+                        "Simulation Distance",
+                        "Active entity and block-tick radius around the player",
+                        SettingControl::Slider {
+                            value_label: &sd_str,
+                            fraction: sd_frac,
+                            minus_action: Action::SimDistDelta(-1),
+                            plus_action: Action::SimDistDelta(1),
+                        },
+                    ),
+                    (
+                        "Field of View (FOV)",
+                        "Horizontal camera view angle in degrees",
+                        SettingControl::Slider {
+                            value_label: &fov_str,
+                            fraction: fov_frac,
+                            minus_action: Action::FovDelta(-5.0),
+                            plus_action: Action::FovDelta(5.0),
+                        },
+                    ),
+                    (
+                        "Graphics Quality Preset",
+                        "Cycle between Fast, Fancy and Fabulous rendering modes",
+                        SettingControl::Button(&preset_str, Action::CycleGraphicsPreset, false),
+                    ),
+                    (
+                        "Max Framerate Ceiling",
+                        "Cap gameplay FPS to save power or unlock for high-refresh displays",
+                        SettingControl::Button(&fps_str, Action::CycleMaxFps, false),
+                    ),
+                    (
+                        "Vertical Sync & Cloud Rendering",
+                        "Tap switch to toggle VSync, or cycle Clouds in in-game video options",
+                        SettingControl::Toggle(opts.vsync, Action::ToggleVsync),
+                    ),
+                    (
+                        "Menu Background Blur",
+                        "Cached zero-lag backdrop blur when opening inventory or pause menus",
+                        SettingControl::Toggle(opts.menu_blur > 0, Action::ToggleMenuBlur),
+                    ),
+                    (
+                        "Disable In-Game Animations",
+                        "Turn off animated block textures, chunk fade, hand bobbing & UI transitions completely",
+                        SettingControl::Toggle(game_anim_off, Action::ToggleGameAnimations),
+                    ),
                 ];
+                let _ = clouds_str;
 
                 ui.set_clip(Some([
                     content_x - 2.0,
@@ -3737,8 +4033,19 @@ impl Launcher {
             }
             SettingsCategory::Launcher => {
                 let c = &self.catalog.config;
-                let count = 8;
-                let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
+                let count = 12;
+                let extra_ime = if ime_top_dp.is_some() { 180.0 } else { 0.0 };
+                let max_scroll =
+                    (count as f32 * step_y + extra_ime - (list_bottom - list_top)).max(0.0);
+                if self.catalog.editing == Some("server")
+                    && let Some(ime_y) = ime_top_dp
+                {
+                    let server_y = list_top + 10.0 * step_y - self.catalog.scroll;
+                    if server_y + card_h > ime_y - 12.0 {
+                        self.catalog.scroll = (list_top + 10.0 * step_y + card_h - (ime_y - 16.0))
+                            .clamp(0.0, max_scroll);
+                    }
+                }
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
@@ -3747,7 +4054,7 @@ impl Launcher {
                 let profile_str = format!("Profile {} v", c.profile + 1);
                 let input_str = format!("{} v", c.input_host.label());
                 let worker_str = if c.worker_limit == 0 {
-                    "Auto (All cores) v".to_owned()
+                    "Auto (Big.LITTLE Safe) v".to_owned()
                 } else {
                     format!("{} threads v", c.worker_limit)
                 };
@@ -3761,8 +4068,14 @@ impl Launcher {
                 } else {
                     c.server.clone()
                 };
+                let game_anim_off = c.disable_game_animations || touch_cfg.disable_game_animations;
 
-                let rows: [(&str, &str, SettingControl<'_>); 8] = [
+                let rows: [(&str, &str, SettingControl<'_>); 12] = [
+                    (
+                        "APPEARANCE, DPI SCALING & MOTION",
+                        "Material 3 Expressive theme studio, adaptive phone DPI scaling & animation toggles",
+                        SettingControl::SectionHeader(c.theme.preset.label(), Icon::Settings),
+                    ),
                     (
                         "Theme",
                         "Preset themes, custom solid/accent colors, multi-stop gradients & light/dark mode",
@@ -3776,6 +4089,24 @@ impl Launcher {
                         "Launcher UI scale (Phone DPI)",
                         "Adapts launcher cards, text and buttons to your screen DPI",
                         SettingControl::Button(&ui_scale_str, Action::UiScale, false),
+                    ),
+                    (
+                        "Disable Launcher Animations",
+                        "Turn off page transitions, nav rail slides, shimmer & modal animations in launcher",
+                        SettingControl::Toggle(
+                            c.disable_launcher_animations,
+                            Action::ToggleLauncherAnimations,
+                        ),
+                    ),
+                    (
+                        "Disable In-Game Animations",
+                        "Turn off animated block textures, chunk fade, view bobbing & HUD animations in-game",
+                        SettingControl::Toggle(game_anim_off, Action::ToggleGameAnimations),
+                    ),
+                    (
+                        "PROFILES, WORKER THREADS & STORAGE",
+                        "Isolated game profiles, CPU worker threads, RAM cache & direct server launch",
+                        SettingControl::SectionHeader(&profile_str, Icon::Folder),
                     ),
                     (
                         "Active game profile",
@@ -4792,12 +5123,27 @@ impl Launcher {
             }
             SettingsCategory::Experimental => {
                 let c = &self.catalog.config;
-                let count = 7;
+                let count = 9;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
-                let rows: [(&str, &str, SettingControl<'_>); 7] = [
+                let active_mode_badge = if c.super_perf_mode {
+                    "Super Perf Active"
+                } else if c.battery_perf_mode {
+                    "Battery Saver Active"
+                } else if c.max_fps_mode {
+                    "260 FPS Uncapped"
+                } else {
+                    "Balanced Default"
+                };
+
+                let rows: [(&str, &str, SettingControl<'_>); 9] = [
+                    (
+                        "PERFORMANCE PROFILES & GPU PIPELINE",
+                        "Hardware-tuned presets for Mali-G52 / Adreno GPUs and high-refresh displays",
+                        SettingControl::SectionHeader(active_mode_badge, Icon::Flask),
+                    ),
                     (
                         "Super Performance Mode",
                         "Aggressive chunk culling, fast clouds, minimal particles & Vulkan batching",
@@ -4814,6 +5160,11 @@ impl Launcher {
                         SettingControl::Toggle(c.max_fps_mode, Action::ToggleMaxFpsMode),
                     ),
                     (
+                        "LOW-LATENCY INPUT, STREAMING & SCHEDULER",
+                        "Direct touch dispatch, 4 MiB chunk upload budget boost & Android ADPF thermal hints",
+                        SettingControl::SectionHeader("Engine Tuning", Icon::Gear),
+                    ),
+                    (
                         "Zero-Latency Touch Pipeline",
                         "Bypasses redundant pointer filtering for instant camera & virtual mouse response",
                         SettingControl::Toggle(
@@ -4823,7 +5174,7 @@ impl Launcher {
                     ),
                     (
                         "Fast Chunk Mesh Upload Boost",
-                        "Prioritizes visible chunk uploads to eliminate singleplayer movement stutter",
+                        "Increases per-frame GPU upload budget to 4 MiB to eliminate movement stutter",
                         SettingControl::Toggle(c.fast_chunk_upload, Action::ToggleFastChunkUpload),
                     ),
                     (
@@ -4869,21 +5220,38 @@ impl Launcher {
             }
             SettingsCategory::Diagnostics => {
                 let c = &self.catalog.config;
-                let count = 5;
+                let count = 7;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
-                let rows: [(&str, &str, SettingControl<'_>); 5] = [
+                let has_err = self.home.join("android-error.txt").is_file();
+                let health_badge = if has_err {
+                    "Crash Log Recorded"
+                } else {
+                    "Runtime Healthy"
+                };
+
+                let rows: [(&str, &str, SettingControl<'_>); 7] = [
+                    (
+                        "RUNTIME HEALTH & CRASH DIAGNOSTICS",
+                        "Live engine summary, shader/Vulkan health check, crash logs & ZIP bundle export",
+                        SettingControl::SectionHeader(health_badge, Icon::Terminal),
+                    ),
                     (
                         "Inspect logs & device summary",
-                        "Check last handled error, renderer info and runtime health",
+                        "Open interactive Diagnostics & Runtime Health Summary dialog",
                         SettingControl::Button("View Summary", Action::Logs, true),
                     ),
                     (
                         "Export diagnostic report (.zip)",
                         "Packages logs and device info into a local ZIP for troubleshooting",
                         SettingControl::Button("Export ZIP", Action::ExportDiagnostics, false),
+                    ),
+                    (
+                        "FRAME TELEMETRY & WORLD STORAGE",
+                        "JSONL frame-time recorder and direct access to profile world saves",
+                        SettingControl::SectionHeader("Telemetry & Saves", Icon::Folder),
                     ),
                     (
                         "Record gameplay performance",
@@ -5853,6 +6221,46 @@ impl Launcher {
                         self.catalog.status
                     );
                 }
+                self.diagnostics_modal_open = true;
+            }
+            Some(Action::CloseDiagnosticsSummary) => {
+                self.diagnostics_modal_open = false;
+            }
+            Some(Action::OpenReportsFolder) => {
+                self.diagnostics_modal_open = false;
+                self.catalog.status = if crate::platform::open_documents("reports") {
+                    "Opened Reports folder in system Files.".into()
+                } else {
+                    "Reports are saved under Horizon Android > Reports.".into()
+                };
+            }
+            Some(Action::ToggleLauncherAnimations) => {
+                self.catalog.config.disable_launcher_animations =
+                    !self.catalog.config.disable_launcher_animations;
+                horizon_client::ui_theme::motion::set_launcher_animations_disabled(
+                    self.catalog.config.disable_launcher_animations,
+                );
+                self.catalog.config.save(&self.home)?;
+                self.catalog.status = if self.catalog.config.disable_launcher_animations {
+                    "Launcher animations disabled (instant page & modal transitions)."
+                } else {
+                    "Launcher animations enabled."
+                }
+                .into();
+            }
+            Some(Action::ToggleGameAnimations) => {
+                let next = !self.catalog.config.disable_game_animations;
+                self.catalog.config.disable_game_animations = next;
+                horizon_client::ui_theme::motion::set_game_animations_disabled(next);
+                self.catalog.config.save(&self.home)?;
+                self.catalog.config.apply_experimental_to_game(&self.home);
+                self.modify_touch_settings(|t| t.disable_game_animations = next);
+                self.catalog.status = if next {
+                    "In-game animations disabled (static textures, instant FOV/menus, no view bobbing)."
+                } else {
+                    "In-game animations enabled."
+                }
+                .into();
             }
             Some(Action::ExportDiagnostics) if self.diagnostic_export.is_none() => {
                 let home = self.home.clone();

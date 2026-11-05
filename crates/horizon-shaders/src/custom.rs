@@ -424,6 +424,9 @@ impl<'a> Parser<'a> {
         hit
     }
     fn expr_all(&mut self) -> Result<Expr, String> {
+        while self.tokens.last().is_some_and(|t| t == ";") {
+            self.tokens.pop();
+        }
         let e = self.binary(0)?;
         match self.peek() {
             None => Ok(e),
