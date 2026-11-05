@@ -574,6 +574,7 @@ mod native_pack_tests {
             description: String::new(),
             problem: None,
             dev: false,
+            has_settings: false,
             native: Some(NativePage::default()),
         });
         let owned = "native-horizon_better_visuals";

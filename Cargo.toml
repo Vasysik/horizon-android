@@ -56,6 +56,9 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.85"
 
+[workspace.lints.rust]
+unknown_lints = "allow"
+
 # Ports mirror vanilla's Java signatures, index loops and nested generic types
 # one to one so they can be checked against the decompiled sources.
 [workspace.lints.clippy]
@@ -64,7 +67,6 @@ type_complexity = "allow"
 needless_range_loop = "allow"
 large_enum_variant = "allow"
 collapsible_match = "allow"
-slice_from_raw_parts = "allow"
 unusual_byte_groupings = "allow"
 items_after_test_module = "allow"
 field_reassign_with_default = "allow"

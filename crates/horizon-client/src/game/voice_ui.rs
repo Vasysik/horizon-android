@@ -142,8 +142,8 @@ impl<'a> Game<'a> {
 
         // Helper closure to render a button
         let draw_btn = |batch: &mut HudBatch,
-                        atlas: &horizon_client::packs::AtlasSources,
-                        cursor: [f64; 2],
+                        atlas: &horizon_client::hud::HudAtlas,
+                        cursor: (f32, f32),
                         bx: f32,
                         by: f32,
                         bw: f32,
