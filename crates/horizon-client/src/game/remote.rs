@@ -549,7 +549,7 @@ pub(super) struct Remote {
     players: HashMap<u128, String>,
     /// `ClientPacketListener.playerInfoMap` as player-list entries, and
     /// which of them are listed.
-    tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
+    pub(crate) tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
     /// Each listed profile's unpacked `textures` property.
     skin_textures: HashMap<u128, horizon_client::skins::Textures>,
     /// Active skin and cape from the services profile when the server sent none.
