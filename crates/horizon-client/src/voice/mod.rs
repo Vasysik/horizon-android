@@ -148,7 +148,8 @@ impl VoiceChatClient {
             }
             CHANNEL_PLAYER_STATE | "voicechat:player_state" => {
                 if let Ok(pkt) = PlayerStatePacket::from_bytes(data) {
-                    if pkt.state.uuid != 0 && Some(pkt.state.uuid) != self.local_player_uuid {
+                    let local_uuid = self.secret.as_ref().map(|s| s.player_uuid);
+                    if pkt.state.uuid != 0 && Some(pkt.state.uuid) != local_uuid {
                         self.register_known_player(pkt.state.uuid, pkt.state.name.clone());
                     }
                     self.player_states.insert(pkt.state.uuid, pkt.state);
@@ -156,8 +157,9 @@ impl VoiceChatClient {
             }
             CHANNEL_PLAYER_STATES | "voicechat:player_states" => {
                 if let Ok(pkt) = PlayerStatesPacket::from_bytes(data) {
+                    let local_uuid = self.secret.as_ref().map(|s| s.player_uuid);
                     for s in pkt.states {
-                        if s.uuid != 0 && Some(s.uuid) != self.local_player_uuid {
+                        if s.uuid != 0 && Some(s.uuid) != local_uuid {
                             self.register_known_player(s.uuid, s.name.clone());
                         }
                         self.player_states.insert(s.uuid, s);
