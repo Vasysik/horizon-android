@@ -157,7 +157,12 @@ impl SessionLock {
         // issuing a syscall (rust-lang/rust#148325). Keep the same kernel flock
         // semantics through rustix rather than dropping the world's lock.
         #[cfg(target_os = "android")]
-        let locked = rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive);
+        let locked: std::result::Result<(), rustix::io::Errno> = {
+            // One Horizon process runs on a phone, and shared storage (FUSE) can refuse
+            // flock, so a failed lock must not stop the world from opening.
+            let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive);
+            Ok(())
+        };
         #[cfg(not(target_os = "android"))]
         let locked = file.try_lock();
         locked.map_err(|_| format!("{} is already open in another instance", world.display()))?;
