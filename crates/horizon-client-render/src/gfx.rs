@@ -3544,6 +3544,17 @@ impl Renderer {
                 on_off(gpu_timer.is_some()),
             ));
         }
+        let surface_extent = {
+            #[cfg(target_os = "android")]
+            {
+                let p = window.outer_size();
+                (u64::from(p.width.max(1)) << 32) | u64::from(p.height.max(1))
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                (u64::from(config.width) << 32) | u64::from(config.height)
+            }
+        };
         Ok(Self {
             display: DisplayWatch::default(),
             display_fresh: false,
@@ -3733,17 +3744,7 @@ impl Renderer {
             suspended: !drawable_size(size.width, size.height, max_side),
             acquire_validation_failures: 0,
             surface_unconfigured: false,
-            surface_extent: std::sync::atomic::AtomicU64::new({
-                #[cfg(target_os = "android")]
-                {
-                    let p = window.outer_size();
-                    (u64::from(p.width.max(1)) << 32) | u64::from(p.height.max(1))
-                }
-                #[cfg(not(target_os = "android"))]
-                {
-                    (u64::from(config.width) << 32) | u64::from(config.height)
-                }
-            }),
+            surface_extent: std::sync::atomic::AtomicU64::new(surface_extent),
             drawn_sections: 0,
             section_draws: 0,
             section_draw_calls: 0,
