@@ -34,6 +34,14 @@ pub struct TouchUi {
     pub sensitivity_dragging: bool,
     /// The pointer-size slider of the Aiming tab is being dragged.
     pub pointer_size_dragging: bool,
+    /// The virtual-mouse-speed slider of the Aiming tab is being dragged.
+    pub mouse_speed_dragging: bool,
+    /// Step state for the Floating Menu "Send Custom Input" picker modal.
+    pub custom_input_picker: crate::touch::PickerStep,
+    /// Horizontal scroll offset for the Floating Menu custom keyboard picker.
+    pub custom_kb_scroll_x: f32,
+    /// Active drag state `(touch_id, last_x, moved)` for the Floating Menu custom keyboard picker.
+    pub custom_kb_drag: Option<(u64, f32, bool)>,
     pub goy_mode: bool,
     pub virtual_mouse: bool,
     /// Mirror of `!settings.virtual_mouse_enabled` for legacy callers; authoritative state lives in `touch::Settings::virtual_mouse_enabled`.
@@ -73,6 +81,10 @@ impl Default for TouchUi {
             cached_presets_style: None,
             sensitivity_dragging: false,
             pointer_size_dragging: false,
+            mouse_speed_dragging: false,
+            custom_input_picker: crate::touch::PickerStep::None,
+            custom_kb_scroll_x: 0.0,
+            custom_kb_drag: None,
             goy_mode: false,
             virtual_mouse: false,
             pointer_off: false,
@@ -139,6 +151,64 @@ pub enum InGameMenuAction {
     OpenLogs,
     /// The naming field of a preset dialog was tapped: show the system keyboard.
     EditPresetField(bool),
+    /// Send a custom keyboard key, mouse button/scroll, or gameplay action token immediately.
+    SendCustomInput(String),
+}
+
+/// Applies an on-screen or hardware keyboard `Output` event to an active Control Editor
+/// Save Preset dialog or Floating Menu Copy/Edit Preset dialog.
+pub fn apply_editor_or_preset_output(
+    ed: Option<&mut crate::touch::Editor>,
+    preset_dlg: Option<&mut PresetDialogState>,
+    out: &Output,
+) -> bool {
+    if let Some(ed) = ed
+        && ed.save_dialog_open
+    {
+        let max_len = if ed.editing_save_desc { 48 } else { 28 };
+        let target = if ed.editing_save_desc {
+            &mut ed.save_desc_input
+        } else {
+            &mut ed.save_name_input
+        };
+        match out {
+            Output::Text(s) => {
+                for ch in s.chars() {
+                    if !ch.is_control() && target.chars().count() < max_len {
+                        target.push(ch);
+                    }
+                }
+            }
+            Output::Backspace => {
+                target.pop();
+            }
+            Output::Enter | Output::Close => {}
+        }
+        return true;
+    }
+    if let Some(dlg) = preset_dlg {
+        let max_len = if dlg.editing_desc { 48 } else { 28 };
+        let target = if dlg.editing_desc {
+            &mut dlg.desc_input
+        } else {
+            &mut dlg.name_input
+        };
+        match out {
+            Output::Text(s) => {
+                for ch in s.chars() {
+                    if !ch.is_control() && target.chars().count() < max_len {
+                        target.push(ch);
+                    }
+                }
+            }
+            Output::Backspace => {
+                target.pop();
+            }
+            Output::Enter | Output::Close => {}
+        }
+        return true;
+    }
+    false
 }
 struct RelativeTouch {
     id: u64,
@@ -205,17 +275,22 @@ fn mouse_button_rects(w: f32, h: f32) -> [([f32; 4], bool); 2] {
 
 /// Faithful Windows 11-style standard arrow pointer (`aero_arrow`) with sub-pixel
 /// vector geometry, crisp dark outline, pure white body, subtle contact shadow,
-/// and exact tip hotspot at `(cursor.0, cursor.1)`.
+/// and exact tip hotspot at `(cursor.0, cursor.1)` clamped cleanly to the screen bounds.
 pub fn draw_pointer(batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32), scale: f32) {
     let scale = if scale.is_finite() {
         scale.clamp(0.5, 2.0)
     } else {
         1.0
     };
-    let h = (batch.height * 0.052).clamp(12.0, 15.5) * scale;
+    let sw = batch.width.max(1.0);
+    let sh = batch.height.max(1.0);
+    let h = (sh * 0.052).clamp(12.0, 15.5) * scale;
     let s = h / 16.0;
-    let (x, y) = (cursor.0, cursor.1);
-    let pt = |dx: f32, dy: f32| -> [f32; 2] { [x + dx * s, y + dy * s] };
+    let x = cursor.0.clamp(0.0, (sw - 3.0 * scale).max(0.0));
+    let y = cursor.1.clamp(0.0, (sh - 3.0 * scale).max(0.0));
+    let pt = |dx: f32, dy: f32| -> [f32; 2] {
+        [(x + dx * s).clamp(0.0, sw), (y + dy * s).clamp(0.0, sh)]
+    };
 
     let shadow: u32 = rgba(0, 0, 0, 64);
     let outline: u32 = rgba(18, 18, 22, 248);
@@ -309,17 +384,17 @@ impl TouchUi {
     /// Ensures the virtual mouse cursor spawns at the exact center `(width * 0.5, height * 0.5)`
     /// of the playable viewport and scales proportionally across viewport/orientation changes
     /// without offset drift or sudden jumps.
-    pub fn sync_viewport_cursor(&mut self, cursor: &mut (f32, f32), [width, height]: [f32; 2]) -> bool {
+    pub fn sync_viewport_cursor(
+        &mut self,
+        cursor: &mut (f32, f32),
+        [width, height]: [f32; 2],
+    ) -> bool {
         if !width.is_finite() || !height.is_finite() || width <= 1.0 || height <= 1.0 {
             return false;
         }
         let max_x = (width - 1.0).max(0.0);
         let max_y = (height - 1.0).max(0.0);
-        if !self.cursor_initialized
-            || !cursor.0.is_finite()
-            || !cursor.1.is_finite()
-            || (cursor.0 == 0.0 && cursor.1 == 0.0)
-        {
+        if !self.cursor_initialized || !cursor.0.is_finite() || !cursor.1.is_finite() {
             *cursor = (width * 0.5, height * 0.5);
             self.cursor_initialized = true;
             self.last_viewport = Some((width, height));
@@ -344,8 +419,9 @@ impl TouchUi {
     }
 
     /// Computes whether the virtual mouse pointer should be visible for the current state:
+    /// - If `controls.editor.is_some()`, always returns false (never show cursor over Control Editor).
     /// - If `settings.virtual_mouse_enabled` is false, always returns false.
-    /// - When the Floating Menu or Control Editor is open, returns true.
+    /// - When the Floating Menu is open, returns true.
     /// - In MCPE mode: hidden when MCPE gameplay controls are visible; automatically visible
     ///   when MCPE controls are hidden (menus, inventory, HUD hidden, or all controls hidden).
     /// - In GoyControl mode: visible in menus or when toggled on in-game via `mouse.virtual.toggle`.
@@ -358,11 +434,14 @@ impl TouchUi {
         captured: bool,
     ) -> bool {
         self.pointer_off = !controls.settings.virtual_mouse_enabled;
+        if controls.editor.is_some() {
+            return false;
+        }
         if !controls.settings.virtual_mouse_enabled {
             self.goy_in_game_mouse = false;
             return false;
         }
-        if self.floating_menu || controls.editor.is_some() {
+        if self.floating_menu {
             return true;
         }
         match controls.settings.control_style {
@@ -441,6 +520,8 @@ impl TouchUi {
         self.relative_click = None;
         self.sensitivity_dragging = false;
         self.pointer_size_dragging = false;
+        self.mouse_speed_dragging = false;
+        self.custom_kb_drag = None;
         self.hub_scroll_drag = None;
     }
     pub fn cancel_relative(&mut self) {
@@ -593,20 +674,20 @@ impl TouchUi {
                 return Some(Action::Key(KeyCode::Escape));
             }
         }
-        if (!self.goy_mode || self.expanded) && (3.0..23.0).contains(&p[1]) {
+        if self.expanded && (3.0..23.0).contains(&p[1]) {
             if (3.0..36.0).contains(&p[0]) {
                 return Some(Action::More);
             }
-            if self.expanded && (39.0..72.0).contains(&p[0]) {
+            if (39.0..72.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::F3));
             }
-            if self.expanded && (75.0..108.0).contains(&p[0]) {
+            if (75.0..108.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::F5));
             }
-            if self.expanded && (111.0..144.0).contains(&p[0]) {
+            if (111.0..144.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::KeyT));
             }
-            if self.expanded && (147.0..186.0).contains(&p[0]) {
+            if (147.0..186.0).contains(&p[0]) {
                 return Some(Action::Keyboard);
             }
         }
@@ -624,7 +705,10 @@ impl TouchUi {
         None
     }
     pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas, menu: bool) {
-        if self.goy_mode && !self.expanded {
+        if menu && !self.goy_mode && crate::touch::current_hud_opacity_scale() > 0.01 {
+            button(b, a, "Back", b.width - 53.0, 3.0, 50.0);
+        }
+        if !self.expanded {
             return;
         }
         for (label, x, width) in [
@@ -634,9 +718,6 @@ impl TouchUi {
             ("Chat", 111.0, 33.0),
             ("Keys", 147.0, 39.0),
         ] {
-            if label != "..." && !self.expanded {
-                continue;
-            }
             button(
                 b,
                 a,
@@ -650,28 +731,23 @@ impl TouchUi {
                 width,
             );
         }
-        if menu && !self.goy_mode {
-            button(b, a, "Back", b.width - 53.0, 3.0, 50.0);
-        }
-        if self.expanded {
+        button(
+            b,
+            a,
+            if self.f3_latched { "F3 ON" } else { "HoldF3" },
+            3.0,
+            195.0,
+            48.0,
+        );
+        for (i, (label, _)) in KEYS.iter().enumerate() {
             button(
                 b,
                 a,
-                if self.f3_latched { "F3 ON" } else { "HoldF3" },
-                3.0,
-                195.0,
+                label,
+                3.0 + (i % 4) as f32 * 50.0,
+                27.0 + (i / 4) as f32 * 24.0,
                 48.0,
             );
-            for (i, (label, _)) in KEYS.iter().enumerate() {
-                button(
-                    b,
-                    a,
-                    label,
-                    3.0 + (i % 4) as f32 * 50.0,
-                    27.0 + (i / 4) as f32 * 24.0,
-                    48.0,
-                );
-            }
         }
     }
     pub fn keyboard_touch(
@@ -865,6 +941,263 @@ const MOUSE_AND_ACTION_ITEMS: &[(&str, &str)] = &[
     ("Action: Advancements (L)", "action:key.advancements"),
 ];
 
+fn draw_input_picker_modal(
+    ui: &mut crate::ui_theme::Ui<'_>,
+    w: f32,
+    h: f32,
+    step: crate::touch::PickerStep,
+    kb_scroll_x: f32,
+    for_custom_send: bool,
+    mcpe_exclusive: bool,
+) {
+    use crate::touch::PickerStep;
+    use crate::ui_theme::Face;
+    let theme = crate::ui_theme::active_theme();
+    let bg_card = theme.bg_solid;
+    let bg_hi = theme.surface;
+    let border_c = theme.border;
+    let accent = theme.accent;
+    let accent_soft = theme.surface_selected;
+    let text_c = theme.text_primary;
+    let muted_c = theme.text_muted;
+    let danger_c = theme.danger;
+
+    ui.fill(0.0, 0.0, w, h, rgba(4, 5, 10, 195));
+    match step {
+        PickerStep::AskInputType { event_slot } => {
+            let dw = (w - 36.0).clamp(270.0, 440.0);
+            let dh = 210.0;
+            let dx = (w - dw) * 0.5;
+            let dy = (h - dh) * 0.5;
+            ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
+            ui.border(dx, dy, dw, dh, 18.0, accent);
+            let title_str = if for_custom_send {
+                "Send Custom Input — Choose Input Type".to_owned()
+            } else if mcpe_exclusive {
+                "MCPE Custom Button — Choose Exclusive Binding".to_owned()
+            } else {
+                format!("Assign Event Slot #{} — Choose Input Type", event_slot + 1)
+            };
+            let sub_str = if for_custom_send {
+                "Select a keyboard key, mouse click/scroll, or game action to send immediately."
+            } else if mcpe_exclusive {
+                "Exclusive binding: Keyboard OR Mouse (selecting one clears the other)."
+            } else {
+                "Each GoyControl button can trigger up to 3 Keyboard or Mouse events simultaneously."
+            };
+            ui.text(
+                Face::SemiBold,
+                13.5,
+                dx + 16.0,
+                dy + 14.0,
+                text_c,
+                &title_str,
+            );
+            ui.text(Face::Regular, 10.2, dx + 16.0, dy + 34.0, muted_c, sub_str);
+            let cw = (dw - 40.0) * 0.5;
+            let r_kb = [dx + 16.0, dy + 62.0, cw, 82.0];
+            let r_ms = [dx + 24.0 + cw, dy + 62.0, cw, 82.0];
+            for (r, title, sub) in [
+                (
+                    r_kb,
+                    "Keyboard Key",
+                    if mcpe_exclusive {
+                        "Bind 1 key (clears mouse binding)"
+                    } else {
+                        "Full 104-Key horizontal PC keyboard"
+                    },
+                ),
+                (
+                    r_ms,
+                    "Mouse & Actions",
+                    if mcpe_exclusive {
+                        "Bind 1 mouse/action (clears key)"
+                    } else {
+                        "LMB, RMB, MMB, Scroll, Look & Actions"
+                    },
+                ),
+            ] {
+                ui.rounded(r[0], r[1], r[2], r[3], 14.0, accent_soft);
+                ui.border(r[0], r[1], r[2], r[3], 14.0, accent);
+                ui.centered_fit(
+                    Face::SemiBold,
+                    13.0,
+                    [r[0] + 6.0, r[1] + 16.0, r[2] - 12.0, 24.0],
+                    text_c,
+                    title,
+                );
+                ui.centered_fit(
+                    Face::Regular,
+                    10.0,
+                    [r[0] + 6.0, r[1] + 44.0, r[2] - 12.0, 22.0],
+                    muted_c,
+                    sub,
+                );
+            }
+            if for_custom_send {
+                let r_can = [dx + 16.0, dy + 156.0, dw - 32.0, 36.0];
+                ui.rounded(r_can[0], r_can[1], r_can[2], r_can[3], 10.0, bg_hi);
+                ui.border(r_can[0], r_can[1], r_can[2], r_can[3], 10.0, border_c);
+                ui.centered_fit(Face::Medium, 11.0, r_can, text_c, "Cancel");
+            } else {
+                let r_clr = [dx + 16.0, dy + 156.0, cw, 36.0];
+                let r_can = [dx + 24.0 + cw, dy + 156.0, cw, 36.0];
+                ui.rounded(r_clr[0], r_clr[1], r_clr[2], r_clr[3], 10.0, bg_hi);
+                ui.border(r_clr[0], r_clr[1], r_clr[2], r_clr[3], 10.0, danger_c);
+                ui.centered_fit(
+                    Face::SemiBold,
+                    11.0,
+                    r_clr,
+                    danger_c,
+                    "Clear / Unassign Slot",
+                );
+                ui.rounded(r_can[0], r_can[1], r_can[2], r_can[3], 10.0, bg_hi);
+                ui.border(r_can[0], r_can[1], r_can[2], r_can[3], 10.0, border_c);
+                ui.centered_fit(Face::Medium, 11.0, r_can, text_c, "Cancel");
+            }
+        }
+        PickerStep::Keyboard { event_slot } => {
+            let dw = (w - 20.0).clamp(300.0, 620.0);
+            let dh = (h - 20.0).clamp(235.0, 340.0);
+            let dx = (w - dw) * 0.5;
+            let dy = (h - dh) * 0.5;
+            ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
+            ui.border(dx, dy, dw, dh, 18.0, accent);
+            let title_str = if for_custom_send {
+                "Send Custom Input — Full PC Keyboard (Swipe Horizontally)".to_owned()
+            } else if mcpe_exclusive {
+                "MCPE Exclusive Keyboard Binding (Clears Mouse Binding)".to_owned()
+            } else {
+                format!(
+                    "Event Slot #{} — Full PC Keyboard (Swipe Horizontally)",
+                    event_slot + 1
+                )
+            };
+            ui.text(
+                Face::SemiBold,
+                13.0,
+                dx + 14.0,
+                dy + 11.0,
+                text_c,
+                &title_str,
+            );
+            let b_left = [dx + dw - 196.0, dy + 8.0, 56.0, 26.0];
+            let b_right = [dx + dw - 134.0, dy + 8.0, 56.0, 26.0];
+            let b_back = [dx + dw - 72.0, dy + 8.0, 58.0, 26.0];
+            for (r, lbl) in [(b_left, "◀ Left"), (b_right, "Right ▶"), (b_back, "Back")] {
+                ui.rounded(r[0], r[1], r[2], r[3], 8.0, bg_hi);
+                ui.border(r[0], r[1], r[2], r[3], 8.0, border_c);
+                ui.centered_fit(Face::SemiBold, 10.0, r, text_c, lbl);
+            }
+
+            let kb_top = dy + 40.0;
+            let kb_h = dh - 56.0;
+            let row_h = ((kb_h - 25.0) / 6.0).clamp(24.0, 38.0);
+            let key_unit = 38.0;
+            let gap = 4.0;
+            ui.set_clip(Some([dx + 10.0, kb_top, dw - 20.0, kb_h]));
+            for (r_idx, row) in KB_ROWS.iter().enumerate() {
+                let ry = kb_top + r_idx as f32 * (row_h + 4.0);
+                let mut kx = dx + 14.0 - kb_scroll_x;
+                for (lbl, _tok, width_mult) in *row {
+                    let kw = key_unit * (*width_mult) + (*width_mult - 1.0).max(0.0) * gap;
+                    if kx + kw >= dx + 8.0 && kx <= dx + dw - 8.0 {
+                        ui.rounded(kx, ry, kw, row_h, 6.0, bg_hi);
+                        ui.border(kx, ry, kw, row_h, 6.0, border_c);
+                        ui.centered_fit(
+                            Face::SemiBold,
+                            10.0,
+                            [kx + 2.0, ry, kw - 4.0, row_h],
+                            text_c,
+                            lbl,
+                        );
+                    }
+                    kx += kw + gap;
+                }
+            }
+            ui.set_clip(None);
+
+            let max_kb_scroll = (880.0 - (dw - 28.0)).max(1.0);
+            let track_w = dw - 28.0;
+            let thumb_w = (track_w * (track_w / 880.0)).clamp(48.0, track_w);
+            let thumb_x =
+                dx + 14.0 + (track_w - thumb_w) * (kb_scroll_x / max_kb_scroll).clamp(0.0, 1.0);
+            ui.rounded(dx + 14.0, dy + dh - 12.0, track_w, 5.0, 2.5, border_c);
+            ui.rounded(thumb_x, dy + dh - 12.0, thumb_w, 5.0, 2.5, accent);
+        }
+        PickerStep::MouseAndActions { event_slot } => {
+            let dw = (w - 24.0).clamp(290.0, 560.0);
+            let dh = (h - 20.0).clamp(235.0, 355.0);
+            let dx = (w - dw) * 0.5;
+            let dy = (h - dh) * 0.5;
+            ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
+            ui.border(dx, dy, dw, dh, 18.0, accent);
+            let title_str = if for_custom_send {
+                "Send Custom Input — Mouse Buttons, Wheel & Actions".to_owned()
+            } else if mcpe_exclusive {
+                "MCPE Exclusive Mouse/Action Binding (Clears Keyboard Binding)".to_owned()
+            } else {
+                format!(
+                    "Event Slot #{} — Mouse Buttons, Wheel, Look & Actions",
+                    event_slot + 1
+                )
+            };
+            ui.text(
+                Face::SemiBold,
+                13.0,
+                dx + 14.0,
+                dy + 11.0,
+                text_c,
+                &title_str,
+            );
+            let b_back = [dx + dw - 72.0, dy + 8.0, 58.0, 26.0];
+            ui.rounded(b_back[0], b_back[1], b_back[2], b_back[3], 8.0, bg_hi);
+            ui.border(b_back[0], b_back[1], b_back[2], b_back[3], 8.0, border_c);
+            ui.centered_fit(Face::SemiBold, 10.0, b_back, text_c, "Back");
+
+            let cols = 3usize;
+            let rows = MOUSE_AND_ACTION_ITEMS.len().div_ceil(cols).max(1);
+            let gx = dx + 12.0;
+            let gy = dy + 40.0;
+            let gw = dw - 24.0;
+            let gh = dh - 50.0;
+            let cw = (gw - (cols as f32 - 1.0) * 6.0) / cols as f32;
+            let ch = ((gh - (rows as f32 - 1.0) * 4.0) / rows as f32).clamp(21.0, 32.0);
+            for (i, (lbl, tok)) in MOUSE_AND_ACTION_ITEMS.iter().enumerate() {
+                let col = i % cols;
+                let row = i / cols;
+                let cx = gx + col as f32 * (cw + 6.0);
+                let cy = gy + row as f32 * (ch + 4.0);
+                let is_mouse = tok.starts_with("key.mouse.") || tok.starts_with("mouse.");
+                ui.rounded(
+                    cx,
+                    cy,
+                    cw,
+                    ch,
+                    7.0,
+                    if is_mouse { accent_soft } else { bg_hi },
+                );
+                ui.border(
+                    cx,
+                    cy,
+                    cw,
+                    ch,
+                    7.0,
+                    if is_mouse { accent } else { border_c },
+                );
+                ui.centered_fit(
+                    Face::Medium,
+                    9.5,
+                    [cx + 3.0, cy, cw - 6.0, ch],
+                    if is_mouse { accent } else { text_c },
+                    lbl,
+                );
+            }
+        }
+        PickerStep::None => {}
+    }
+}
+
 /// Renders the live GoyControl HUD (Analog Joystick + Static Buttons) in-game and in menus
 /// using the exact same `Ui::mobile` TrueType & rounded-shape pipeline as `draw_hud_editor`.
 pub fn draw_goy_hud(
@@ -876,20 +1209,41 @@ pub fn draw_goy_hud(
 ) {
     use crate::touch::{Control, ControlStyle};
     use crate::ui_theme::{Face, Ui, color};
-    if tc.editor.is_some() || tc.settings.control_style != ControlStyle::GoyControl {
+    crate::touch::set_current_hud_opacity_scale(if tc.editor.is_some() {
+        1.0
+    } else {
+        tc.hud_opacity_scale
+    });
+    if tc.editor.is_some() || tc.hud_opacity_scale <= 0.001 {
         return;
     }
+    let is_goy_system = tc.settings.control_style == ControlStyle::GoyControl;
+    let has_goy_move = is_goy_system || tc.placement(Control::Move).use_goy_style;
+    let has_goy_custom = is_goy_system
+        || (0..tc.settings.custom_buttons.len()).any(|i| {
+            tc.custom_visible_for_state(i, in_menu) && tc.custom_placement(i).use_goy_style
+        });
+    if !has_goy_move && !has_goy_custom {
+        return;
+    }
+    let hud_scale = tc.hud_opacity_scale.clamp(0.0, 1.0);
     let mut ui = Ui::mobile(a, b, (0.0, 0.0));
     let (w, h) = (ui.w, ui.h);
     let text_c = color::hex(0xF4EFFA, 255);
     let state = tc.state();
 
     // 1. GoyControl Analog Joystick (Control::Move)
-    if tc.visible_for_state(Control::Move, in_menu) {
+    if has_goy_move && tc.visible_for_state(Control::Move, in_menu) {
         let p = tc.placement(Control::Move);
-        let [nx, ny, nw, nh] = p.rect(tc.aspect());
+        let mut p_draw = p;
+        if tc.settings.mode != crate::touch::Mode::Dpad
+            && let Some(anchor) = tc.move_anchor()
+        {
+            p_draw.center = anchor;
+        }
+        let [nx, ny, nw, nh] = p_draw.rect(tc.aspect());
         let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
-        let alpha = p.opacity.clamp(0.15, 1.0);
+        let alpha = (p.opacity.clamp(0.15, 1.0) * hud_scale).clamp(0.0, 1.0);
         let js = &tc.settings.joystick_style;
         let side = rw.min(rh);
         let jx = rx + (rw - side) * 0.5;
@@ -919,9 +1273,15 @@ pub fn draw_goy_hud(
             continue;
         }
         let p = tc.custom_placement(i);
+        if !is_goy_system && !p.use_goy_style {
+            continue;
+        }
         let [nx, ny, nw, nh] = p.rect(tc.aspect());
         let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
-        let alpha = p.opacity.clamp(0.15, 1.0);
+        let alpha = (p.opacity.clamp(0.15, 1.0) * hud_scale).clamp(0.0, 1.0);
+        if alpha <= 0.001 {
+            continue;
+        }
         let label = custom.label();
 
         let is_active_token = tc.held_custom_tokens().any(|tok| {
@@ -969,7 +1329,7 @@ pub fn draw_goy_hud(
             Face::SemiBold,
             (rh * 0.30).clamp(10.0, 15.0),
             [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
-            color::with_alpha(text_c, alpha.max(0.75)),
+            color::with_alpha(text_c, (alpha.max(0.75) * hud_scale).clamp(0.0, 1.0)),
             &label,
         );
     }
@@ -1018,7 +1378,7 @@ impl TouchUi {
         (next_open, next_tab)
     }
 
-    /// Handles touch events for the draggable Floating '=' Button and the redesigned Horizon Control Hub.
+    /// Handles touch events for the draggable Floating Menu Button and the redesigned Horizon Control Hub.
     pub fn floating_menu_touch(
         &mut self,
         b: &mut HudBatch,
@@ -1041,8 +1401,11 @@ impl TouchUi {
             p[0] >= r[0] && p[0] <= r[0] + r[2] && p[1] >= r[1] && p[1] <= r[1] + r[3]
         };
 
-        let btn_w = 48.0;
-        let btn_h = 42.0;
+        let (btn_w, btn_h) = if settings.control_style == ControlStyle::Mcpe {
+            (42.0, 42.0)
+        } else {
+            (48.0, 42.0)
+        };
         let btn_x = (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
         let btn_y = (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
         let btn_rect = [btn_x, btn_y, btn_w, btn_h];
@@ -1074,13 +1437,17 @@ impl TouchUi {
                             if self.floating_menu {
                                 self.open_anim.set(0.0);
                                 self.tab_anim.set(0.0);
+                                self.last_anim_tick.set(None);
                                 self.hub_scroll = 0.0;
                                 self.refresh_presets_cache(settings.control_style);
                             } else {
                                 self.presets_modal_open = false;
                                 self.preset_dialog = None;
+                                self.custom_input_picker = crate::touch::PickerStep::None;
+                                self.custom_kb_drag = None;
                                 self.sensitivity_dragging = false;
                                 self.pointer_size_dragging = false;
+                                self.mouse_speed_dragging = false;
                                 self.hub_scroll_drag = None;
                             }
                         }
@@ -1121,6 +1488,23 @@ impl TouchUi {
             }
         }
 
+        // Handle ongoing virtual-mouse-speed slider drag on Tab 1
+        if self.mouse_speed_dragging {
+            match phase {
+                TouchPhase::Moved => {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetVirtualMouseSpeed(0.25 + t * 2.75));
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    self.mouse_speed_dragging = false;
+                    return Some(InGameMenuAction::Close);
+                }
+                _ => {}
+            }
+        }
+
         // Handle ongoing pointer-size slider drag on Tab 1
         if self.pointer_size_dragging {
             match phase {
@@ -1135,6 +1519,140 @@ impl TouchUi {
                     return Some(InGameMenuAction::Close);
                 }
                 _ => {}
+            }
+        }
+
+        // 0. If "Send Custom Input" Picker Modal is open:
+        if self.custom_input_picker != crate::touch::PickerStep::None {
+            use crate::touch::PickerStep;
+            if let Some((drag_id, last_x, mut moved)) = self.custom_kb_drag {
+                if drag_id == id {
+                    match phase {
+                        TouchPhase::Moved => {
+                            let dx_k = p[0] - last_x;
+                            if dx_k.abs() > 2.0 {
+                                moved = true;
+                            }
+                            let mdw = (w - 20.0).clamp(300.0, 620.0);
+                            let max_kb_scroll = (880.0 - (mdw - 28.0)).max(0.0);
+                            self.custom_kb_scroll_x =
+                                (self.custom_kb_scroll_x - dx_k).clamp(0.0, max_kb_scroll);
+                            self.custom_kb_drag = Some((drag_id, p[0], moved));
+                            return Some(InGameMenuAction::Close);
+                        }
+                        TouchPhase::Ended | TouchPhase::Cancelled => {
+                            self.custom_kb_drag = None;
+                            return Some(InGameMenuAction::Close);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if phase != TouchPhase::Started {
+                return Some(InGameMenuAction::Close);
+            }
+            match self.custom_input_picker {
+                PickerStep::AskInputType { event_slot } => {
+                    let mdw = (w - 36.0).clamp(270.0, 440.0);
+                    let mdh = 210.0;
+                    let mdx = (w - mdw) * 0.5;
+                    let mdy = (h - mdh) * 0.5;
+                    let mcw = (mdw - 40.0) * 0.5;
+                    if inside([mdx + 16.0, mdy + 62.0, mcw, 82.0]) {
+                        self.custom_input_picker = PickerStep::Keyboard { event_slot };
+                        return Some(InGameMenuAction::Close);
+                    }
+                    if inside([mdx + 24.0 + mcw, mdy + 62.0, mcw, 82.0]) {
+                        self.custom_input_picker = PickerStep::MouseAndActions { event_slot };
+                        return Some(InGameMenuAction::Close);
+                    }
+                    if inside([mdx + 16.0, mdy + 156.0, mdw - 32.0, 36.0])
+                        || !inside([mdx, mdy, mdw, mdh])
+                    {
+                        self.custom_input_picker = PickerStep::None;
+                        return Some(InGameMenuAction::Close);
+                    }
+                    return Some(InGameMenuAction::Close);
+                }
+                PickerStep::Keyboard { event_slot } => {
+                    let mdw = (w - 20.0).clamp(300.0, 620.0);
+                    let mdh = (h - 20.0).clamp(235.0, 340.0);
+                    let mdx = (w - mdw) * 0.5;
+                    let mdy = (h - mdh) * 0.5;
+                    let max_kb_scroll = (880.0 - (mdw - 28.0)).max(0.0);
+                    if inside([mdx + mdw - 196.0, mdy + 8.0, 56.0, 26.0]) {
+                        self.custom_kb_scroll_x =
+                            (self.custom_kb_scroll_x - 140.0).clamp(0.0, max_kb_scroll);
+                        return Some(InGameMenuAction::Close);
+                    }
+                    if inside([mdx + mdw - 134.0, mdy + 8.0, 56.0, 26.0]) {
+                        self.custom_kb_scroll_x =
+                            (self.custom_kb_scroll_x + 140.0).clamp(0.0, max_kb_scroll);
+                        return Some(InGameMenuAction::Close);
+                    }
+                    if inside([mdx + mdw - 72.0, mdy + 8.0, 58.0, 26.0])
+                        || !inside([mdx, mdy, mdw, mdh])
+                    {
+                        self.custom_input_picker = PickerStep::AskInputType { event_slot };
+                        return Some(InGameMenuAction::Close);
+                    }
+                    let kb_top = mdy + 40.0;
+                    let kb_h = mdh - 56.0;
+                    let row_h = ((kb_h - 25.0) / 6.0).clamp(24.0, 38.0);
+                    let key_unit = 38.0;
+                    let gap = 4.0;
+                    for (r_idx, row) in KB_ROWS.iter().enumerate() {
+                        let ry = kb_top + r_idx as f32 * (row_h + 4.0);
+                        let mut kx = mdx + 14.0 - self.custom_kb_scroll_x;
+                        for (_lbl, tok, width_mult) in *row {
+                            let kw = key_unit * (*width_mult) + (*width_mult - 1.0).max(0.0) * gap;
+                            if inside([kx, ry, kw, row_h])
+                                && p[0] >= mdx + 10.0
+                                && p[0] <= mdx + mdw - 10.0
+                            {
+                                self.custom_input_picker = PickerStep::None;
+                                self.floating_menu = false;
+                                return Some(InGameMenuAction::SendCustomInput((*tok).to_owned()));
+                            }
+                            kx += kw + gap;
+                        }
+                    }
+                    self.custom_kb_drag = Some((id, p[0], false));
+                    return Some(InGameMenuAction::Close);
+                }
+                PickerStep::MouseAndActions { event_slot } => {
+                    let mdw = (w - 24.0).clamp(290.0, 560.0);
+                    let mdh = (h - 20.0).clamp(235.0, 355.0);
+                    let mdx = (w - mdw) * 0.5;
+                    let mdy = (h - mdh) * 0.5;
+                    if inside([mdx + mdw - 72.0, mdy + 8.0, 58.0, 26.0])
+                        || !inside([mdx, mdy, mdw, mdh])
+                    {
+                        self.custom_input_picker = PickerStep::AskInputType { event_slot };
+                        return Some(InGameMenuAction::Close);
+                    }
+                    let cols = 3usize;
+                    let rows = MOUSE_AND_ACTION_ITEMS.len().div_ceil(cols).max(1);
+                    let gx = mdx + 12.0;
+                    let gy = mdy + 40.0;
+                    let gw = mdw - 24.0;
+                    let gh = mdh - 50.0;
+                    let mcw = (gw - (cols as f32 - 1.0) * 6.0) / cols as f32;
+                    let mch = ((gh - (rows as f32 - 1.0) * 4.0) / rows as f32).clamp(21.0, 32.0);
+                    for (i, (_lbl, tok)) in MOUSE_AND_ACTION_ITEMS.iter().enumerate() {
+                        let col = i % cols;
+                        let row = i / cols;
+                        let icx = gx + col as f32 * (mcw + 6.0);
+                        let icy = gy + row as f32 * (mch + 4.0);
+                        if inside([icx, icy, mcw, mch]) {
+                            self.custom_input_picker = PickerStep::None;
+                            self.floating_menu = false;
+                            return Some(InGameMenuAction::SendCustomInput((*tok).to_owned()));
+                        }
+                    }
+                    return Some(InGameMenuAction::Close);
+                }
+                PickerStep::None => {}
             }
         }
 
@@ -1286,6 +1804,9 @@ impl TouchUi {
                 self.floating_menu = false;
                 self.sensitivity_dragging = false;
                 self.pointer_size_dragging = false;
+                self.mouse_speed_dragging = false;
+                self.custom_input_picker = crate::touch::PickerStep::None;
+                self.custom_kb_drag = None;
                 self.hub_scroll_drag = None;
                 return Some(InGameMenuAction::Close);
             }
@@ -1299,6 +1820,7 @@ impl TouchUi {
                         self.hub_tab = ti;
                         self.hub_scroll = 0.0;
                         self.tab_anim.set(0.0);
+                        self.last_anim_tick.set(None);
                     }
                     return Some(InGameMenuAction::Close);
                 }
@@ -1319,10 +1841,18 @@ impl TouchUi {
                 }
             }
 
-            // Check if touch started on the Pointer Size slider track in Tab 1
+            // Check if touch started on the Virtual Mouse Speed or Pointer Size slider tracks in Tab 1
             if self.hub_tab == 1 && inside(content_pane) {
                 let body_y = body_top - self.hub_scroll;
-                let size_card_y = body_y + 234.0;
+                let spd_card_y = body_y + 180.0;
+                if inside([cx, spd_card_y, cw, 50.0]) {
+                    self.mouse_speed_dragging = true;
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetVirtualMouseSpeed(0.25 + t * 2.75));
+                }
+                let size_card_y = body_y + 238.0;
                 if inside([cx, size_card_y, cw, 50.0]) {
                     self.pointer_size_dragging = true;
                     let sl_x = cx + 14.0;
@@ -1406,10 +1936,10 @@ impl TouchUi {
                 let r0 = [cx, body_y + 18.0, cw, row_h]; // Movement & Aim Mode
                 let r1 = [cx, body_y + 18.0 + step, cw, row_h]; // Joystick Active Zone
                 let r2 = [cx, body_y + 18.0 + step * 2.0, cw, row_h]; // Virtual Mouse Toggle
-                let r3 = [cx, body_y + 18.0 + step * 3.0, cw, row_h]; // Virtual Mouse Speed
-                let size_card = [cx, body_y + 234.0, cw, 50.0]; // Pointer Size slider
-                let r4 = [cx, body_y + 292.0, cw, row_h]; // Gyroscope Aiming
-                let r5 = [cx, body_y + 346.0, cw, row_h]; // Gyro Sensitivity
+                let spd_card = [cx, body_y + 180.0, cw, 50.0]; // Virtual Mouse Speed slider
+                let size_card = [cx, body_y + 238.0, cw, 50.0]; // Pointer Size slider
+                let r4 = [cx, body_y + 296.0, cw, row_h]; // Gyroscope Aiming
+                let r5 = [cx, body_y + 350.0, cw, row_h]; // Gyro Sensitivity
                 if inside(r0) {
                     return Some(InGameMenuAction::CycleMovementMode);
                 }
@@ -1419,12 +1949,11 @@ impl TouchUi {
                 if inside(r2) {
                     return Some(InGameMenuAction::ToggleVirtualMouse);
                 }
-                if inside(r3) {
-                    return if p[0] < cx + cw * 0.5 {
-                        Some(InGameMenuAction::StepVirtualMouseSpeed(-1))
-                    } else {
-                        Some(InGameMenuAction::StepVirtualMouseSpeed(1))
-                    };
+                if inside(spd_card) {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetVirtualMouseSpeed(0.25 + t * 2.75));
                 }
                 if inside(size_card) {
                     let sl_x = cx + 14.0;
@@ -1497,7 +2026,13 @@ impl TouchUi {
                     self.floating_menu = false;
                     return Some(InGameMenuAction::OpenKeyboard);
                 }
-                let sys_y = body_y + 244.0;
+                let send_y = body_y + 244.0;
+                if inside([cx, send_y, cw, 40.0]) {
+                    self.custom_input_picker =
+                        crate::touch::PickerStep::AskInputType { event_slot: 0 };
+                    return Some(InGameMenuAction::Close);
+                }
+                let sys_y = body_y + 292.0;
                 let half = (cw - 10.0) * 0.5;
                 if inside([cx, sys_y, half, 38.0]) {
                     self.floating_menu = false;
@@ -1513,8 +2048,9 @@ impl TouchUi {
         Some(InGameMenuAction::Close)
     }
 
-    /// Draws the Floating '=' Button and the redesigned Horizon Control Hub with smooth motion,
-    /// generous spacing, scrollable content pane, and authoritative Virtual Mouse & gameplay settings.
+    /// Draws the Floating Menu Button (MCPE stone-slate `H` button vs GoyControl `=` bubble) and
+    /// the redesigned Horizon Control Hub with smooth motion, generous spacing, scrollable content pane,
+    /// and authoritative Virtual Mouse & gameplay settings.
     pub fn draw_floating_menu(
         &self,
         b: &mut HudBatch,
@@ -1523,6 +2059,10 @@ impl TouchUi {
     ) {
         use crate::touch::ControlStyle;
         use crate::ui_theme::{Face, Icon, Ui, color};
+        let hud_scale = crate::touch::current_hud_opacity_scale();
+        if hud_scale <= 0.001 && !self.floating_menu {
+            return;
+        }
         let mut ui = Ui::mobile(a, b, (0.0, 0.0));
         let (w, h) = (ui.w, ui.h);
         let (open_t, tab_t) = self.step_animations();
@@ -1537,55 +2077,122 @@ impl TouchUi {
         let border_c = theme.border;
         let accent = theme.accent;
         let accent_hi = theme.accent;
+        let accent_fg = theme.accent_text;
         let text_c = theme.text_primary;
         let muted_c = theme.text_muted;
+        let danger_c = theme.danger;
 
-        // Draw moveable Floating Menu Button (48x42dp)
-        if !self.expanded {
-            let btn_w = 48.0;
-            let btn_h = 42.0;
-            let btn_x = (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
-            let btn_y = (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
-            ui.rounded(
-                btn_x + 1.5,
-                btn_y + 3.0,
-                btn_w,
-                btn_h,
-                14.0,
-                rgba(0, 0, 0, 135),
-            );
-            ui.rounded(
-                btn_x,
-                btn_y,
-                btn_w,
-                btn_h,
-                14.0,
-                if self.floating_menu { accent } else { card_bg },
-            );
-            ui.stroke_rounded(
-                btn_x,
-                btn_y,
-                btn_w,
-                btn_h,
-                14.0,
-                1.6,
-                if self.floating_menu {
-                    color::hex(0xE5DEFF, 255)
+        let bubble_alpha = if self.floating_menu {
+            1.0
+        } else {
+            hud_scale.clamp(0.0, 1.0)
+        };
+
+        // Draw moveable Floating Menu Button (MCPE 42x42dp stone-bevel H button OR GoyControl 48x42dp '=' pill)
+        if !self.expanded && bubble_alpha > 0.001 {
+            if settings.control_style == ControlStyle::Mcpe {
+                let btn_w = 42.0;
+                let btn_h = 42.0;
+                let btn_x =
+                    (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
+                let btn_y =
+                    (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
+                let scale_rgba = |r: u8, g: u8, bl: u8, al: u8| -> u32 {
+                    rgba(r, g, bl, (f32::from(al) * bubble_alpha).round() as u8)
+                };
+                // Drop shadow
+                ui.rounded(
+                    btn_x + 1.5,
+                    btn_y + 2.5,
+                    btn_w,
+                    btn_h,
+                    4.0,
+                    scale_rgba(0, 0, 0, 125),
+                );
+                // Dark MCPE outer border
+                ui.rounded(btn_x, btn_y, btn_w, btn_h, 4.0, scale_rgba(18, 20, 24, 225));
+                // Translucent MCPE stone-slate body (or emerald-slate when active)
+                let body_col = if self.floating_menu {
+                    scale_rgba(88, 130, 72, 225)
                 } else {
-                    accent
-                },
-            );
-            ui.icon(
-                Icon::MenuEquals,
-                btn_x + (btn_w - 22.0) * 0.5,
-                btn_y + (btn_h - 22.0) * 0.5,
-                22.0,
-                if self.floating_menu {
-                    color::hex(0x140E26, 255)
-                } else {
-                    accent_hi
-                },
-            );
+                    scale_rgba(58, 62, 70, 205)
+                };
+                ui.rounded(
+                    btn_x + 2.0,
+                    btn_y + 2.0,
+                    btn_w - 4.0,
+                    btn_h - 4.0,
+                    2.5,
+                    body_col,
+                );
+                // Classic MCPE 3D top/left light highlight bevel & bottom/right dark shadow bevel
+                let hi_bevel = scale_rgba(165, 172, 184, 180);
+                let lo_bevel = scale_rgba(28, 30, 36, 200);
+                ui.fill(btn_x + 2.0, btn_y + 2.0, btn_w - 4.0, 2.0, hi_bevel);
+                ui.fill(btn_x + 2.0, btn_y + 4.0, 2.0, btn_h - 6.0, hi_bevel);
+                ui.fill(btn_x + 2.0, btn_y + btn_h - 4.0, btn_w - 4.0, 2.0, lo_bevel);
+                ui.fill(btn_x + btn_w - 4.0, btn_y + 4.0, 2.0, btn_h - 6.0, lo_bevel);
+                // Horizon 'H' icon crisp and centered inside the MCPE button
+                ui.icon(
+                    Icon::HorizonLogo,
+                    btn_x + (btn_w - 22.0) * 0.5,
+                    btn_y + (btn_h - 22.0) * 0.5,
+                    22.0,
+                    scale_rgba(244, 246, 250, 245),
+                );
+            } else {
+                let btn_w = 48.0;
+                let btn_h = 42.0;
+                let btn_x =
+                    (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
+                let btn_y =
+                    (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
+                ui.rounded(
+                    btn_x + 1.5,
+                    btn_y + 3.0,
+                    btn_w,
+                    btn_h,
+                    14.0,
+                    rgba(0, 0, 0, (135.0 * bubble_alpha).round() as u8),
+                );
+                ui.rounded(
+                    btn_x,
+                    btn_y,
+                    btn_w,
+                    btn_h,
+                    14.0,
+                    color::with_alpha(
+                        if self.floating_menu { accent } else { card_bg },
+                        bubble_alpha,
+                    ),
+                );
+                ui.stroke_rounded(
+                    btn_x,
+                    btn_y,
+                    btn_w,
+                    btn_h,
+                    14.0,
+                    1.6,
+                    color::with_alpha(
+                        if self.floating_menu { text_c } else { accent },
+                        bubble_alpha,
+                    ),
+                );
+                ui.icon(
+                    Icon::MenuEquals,
+                    btn_x + (btn_w - 22.0) * 0.5,
+                    btn_y + (btn_h - 22.0) * 0.5,
+                    22.0,
+                    color::with_alpha(
+                        if self.floating_menu {
+                            accent_fg
+                        } else {
+                            accent_hi
+                        },
+                        bubble_alpha,
+                    ),
+                );
+            }
         }
 
         if !self.floating_menu {
@@ -1593,11 +2200,11 @@ impl TouchUi {
             return;
         }
 
-        // Backdrop scrim & Modal Shell with subtle entrance slide
+        // Backdrop scrim & Modal Shell with expressive entrance slide
         let scrim_a = (185.0 * open_ease.clamp(0.35, 1.0)).round() as u8;
         ui.fill(0.0, 0.0, w, h, rgba(6, 5, 14, scrim_a));
         let (dw, dh, dx, dy_base, side_w, cx, cw, body_top_base, body_h) = hub_metrics(w, h);
-        let slide_y = (1.0 - open_ease) * 8.0;
+        let slide_y = (1.0 - open_ease) * 18.0;
         let dy = dy_base + slide_y;
         let body_top = body_top_base + slide_y;
 
@@ -1606,20 +2213,24 @@ impl TouchUi {
 
         // Left Sidebar Background & Vertical Divider
         ui.rounded(dx + 2.0, dy + 48.0, side_w, dh - 50.0, 16.0, sidebar_bg);
-        ui.fill(
-            dx + side_w,
-            dy + 48.0,
-            1.0,
-            dh - 48.0,
-            color::hex(0x2B2542, 255),
-        );
-        ui.fill(dx, dy + 47.0, dw, 1.0, color::hex(0x2B2542, 255));
+        ui.fill(dx + side_w, dy + 48.0, 1.0, dh - 48.0, border_c);
+        ui.fill(dx, dy + 47.0, dw, 1.0, border_c);
         ui.stroke_rounded(dx, dy, dw, dh, 20.0, 1.4, border_c);
 
-        // Top Header Bar
+        // Top Header Bar with Active Control System Mode Badge
         ui.rounded(dx + 14.0, dy + 9.0, 30.0, 30.0, 9.0, card_sel);
         ui.border(dx + 14.0, dy + 9.0, 30.0, 30.0, 9.0, accent);
-        ui.icon(Icon::Settings, dx + 20.0, dy + 15.0, 18.0, accent_hi);
+        ui.icon(
+            if settings.control_style == ControlStyle::Mcpe {
+                Icon::HorizonLogo
+            } else {
+                Icon::Settings
+            },
+            dx + 20.0,
+            dy + 15.0,
+            18.0,
+            accent_hi,
+        );
         ui.text(
             Face::SemiBold,
             13.5,
@@ -1636,6 +2247,22 @@ impl TouchUi {
             muted_c,
             "Configure touch controls, virtual mouse & feedback",
         );
+
+        // Active Control System Pill Badge in Header
+        let mode_badge_txt = if settings.control_style == ControlStyle::Mcpe {
+            "MCPE Controls"
+        } else {
+            "GoyControl HUD"
+        };
+        let badge_w = 104.0;
+        let badge_r = [dx + dw - 188.0, dy + 11.0, badge_w, 26.0];
+        if badge_r[0] > dx + 220.0 {
+            ui.rounded(
+                badge_r[0], badge_r[1], badge_r[2], badge_r[3], 8.0, card_sel,
+            );
+            ui.border(badge_r[0], badge_r[1], badge_r[2], badge_r[3], 8.0, accent);
+            ui.centered_fit(Face::SemiBold, 9.5, badge_r, accent_hi, mode_badge_txt);
+        }
 
         // "Done" Button in top-right
         let done_r = [dx + dw - 76.0, dy + 10.0, 62.0, 28.0];
@@ -1672,12 +2299,12 @@ impl TouchUi {
         }
 
         // Scrollable Right Content Panel with scissor clip and tab transition slide
-        let tab_slide = (1.0 - tab_ease) * 6.0;
+        let tab_slide = (1.0 - tab_ease) * 14.0;
         let content_height = match self.hub_tab {
             0 => 368.0,
-            1 => 406.0,
+            1 => 410.0,
             2 => 242.0,
-            _ => 290.0,
+            _ => 340.0,
         };
         let max_scroll = (content_height - body_h).max(0.0);
         self.hub_max_scroll.set(max_scroll);
@@ -1864,14 +2491,7 @@ impl TouchUi {
                 ui.rounded(sl_x, sl_y, (sl_w * frac).max(6.0), 6.0, 3.0, accent);
                 let thumb_x = sl_x + sl_w * frac;
                 ui.rounded(thumb_x - 7.0, sl_y - 4.0, 14.0, 14.0, 7.0, accent_hi);
-                ui.border(
-                    thumb_x - 7.0,
-                    sl_y - 4.0,
-                    14.0,
-                    14.0,
-                    7.0,
-                    color::hex(0xFFFFFF, 220),
-                );
+                ui.border(thumb_x - 7.0, sl_y - 4.0, 14.0, 14.0, 7.0, text_c);
 
                 // 4. Authoritative Virtual Mouse Toggle, Invert Y-Axis & Split Touch
                 draw_toggle_row(
@@ -1915,10 +2535,6 @@ impl TouchUi {
                     crate::touch::Mode::Tap => "Joystick + Tap to Interact",
                 };
                 let area_lbl = settings.joystick_style.move_area.label();
-                let vm_spd_lbl = format!(
-                    "Pointer Speed ({:.0}%) — Tap left (−) or right (+)",
-                    settings.virtual_mouse_sensitivity * 100.0
-                );
                 let gyro_spd_lbl = format!(
                     "Tilt Multiplier ({:.0}%) — Tap left (−) or right (+)",
                     settings.gyro_sensitivity * 100.0
@@ -1948,17 +2564,70 @@ impl TouchUi {
                     Some(settings.virtual_mouse_enabled),
                     None,
                 );
-                draw_toggle_row(
-                    &mut ui,
-                    body_y + 18.0 + step * 3.0,
+
+                // Virtual Mouse Speed slider card (smooth SetVirtualMouseSpeed slider replacing InGameMenuAction::StepVirtualMouseSpeed +/- buttons)
+                let spd_y = body_y + 180.0;
+                ui.rounded(cx, spd_y, cw, 50.0, 11.0, card_bg);
+                ui.border(cx, spd_y, cw, 50.0, 11.0, border_c);
+                ui.text(
+                    Face::SemiBold,
+                    10.8,
+                    cx + 14.0,
+                    spd_y + 6.0,
+                    text_c,
                     "Virtual Mouse Speed",
-                    &vm_spd_lbl,
-                    None,
-                    Some("−   +"),
                 );
+                let spd_pct = format!("{:.0}%", settings.virtual_mouse_sensitivity * 100.0);
+                let spd_pill_w = 48.0;
+                ui.rounded(
+                    cx + cw - spd_pill_w - 12.0,
+                    spd_y + 6.0,
+                    spd_pill_w,
+                    18.0,
+                    6.0,
+                    card_sel,
+                );
+                ui.border(
+                    cx + cw - spd_pill_w - 12.0,
+                    spd_y + 6.0,
+                    spd_pill_w,
+                    18.0,
+                    6.0,
+                    accent,
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    9.4,
+                    [cx + cw - spd_pill_w - 12.0, spd_y + 6.0, spd_pill_w, 18.0],
+                    accent_hi,
+                    &spd_pct,
+                );
+                let spd_sl_x = cx + 14.0;
+                let spd_sl_w = (cw - 28.0).max(40.0);
+                let spd_sl_y = spd_y + 33.0;
+                let spd_frac = ((settings.virtual_mouse_sensitivity - 0.25) / 2.75).clamp(0.0, 1.0);
+                ui.rounded(spd_sl_x, spd_sl_y, spd_sl_w, 6.0, 3.0, sidebar_bg);
+                ui.rounded(
+                    spd_sl_x,
+                    spd_sl_y,
+                    (spd_sl_w * spd_frac).max(6.0),
+                    6.0,
+                    3.0,
+                    accent,
+                );
+                let spd_thumb_x = spd_sl_x + spd_sl_w * spd_frac;
+                ui.rounded(
+                    spd_thumb_x - 7.0,
+                    spd_sl_y - 4.0,
+                    14.0,
+                    14.0,
+                    7.0,
+                    accent_hi,
+                );
+                ui.border(spd_thumb_x - 7.0, spd_sl_y - 4.0, 14.0, 14.0, 7.0, text_c);
 
                 // Pointer Size slider card
-                let size_y = body_y + 234.0;
+                let size_y = body_y + 238.0;
                 ui.rounded(cx, size_y, cw, 50.0, 11.0, card_bg);
                 ui.border(cx, size_y, cw, 50.0, 11.0, border_c);
                 ui.text(
@@ -2022,18 +2691,11 @@ impl TouchUi {
                     7.0,
                     accent_hi,
                 );
-                ui.border(
-                    size_thumb_x - 7.0,
-                    size_sl_y - 4.0,
-                    14.0,
-                    14.0,
-                    7.0,
-                    color::hex(0xFFFFFF, 220),
-                );
+                ui.border(size_thumb_x - 7.0, size_sl_y - 4.0, 14.0, 14.0, 7.0, text_c);
 
                 draw_toggle_row(
                     &mut ui,
-                    body_y + 292.0,
+                    body_y + 296.0,
                     "Gyroscope Aiming",
                     "Tilt device for fine camera and bow aiming",
                     Some(settings.gyroscope),
@@ -2041,7 +2703,7 @@ impl TouchUi {
                 );
                 draw_toggle_row(
                     &mut ui,
-                    body_y + 346.0,
+                    body_y + 350.0,
                     "Gyroscope Sensitivity",
                     &gyro_spd_lbl,
                     None,
@@ -2137,7 +2799,7 @@ impl TouchUi {
                     cx,
                     body_y + 182.0,
                     muted_c,
-                    "QUICK DESKTOP KEYS",
+                    "QUICK DESKTOP KEYS & CUSTOM INPUT",
                 );
                 let ky = body_y + 198.0;
                 let kw = (cw - 25.0) / 6.0;
@@ -2156,15 +2818,51 @@ impl TouchUi {
                         lbl,
                     );
                 }
-                let sys_y = body_y + 244.0;
+                let send_y = body_y + 244.0;
+                ui.rounded(cx, send_y, cw, 40.0, 10.0, card_sel);
+                ui.border(cx, send_y, cw, 40.0, 10.0, accent);
+                ui.icon(Icon::Gamepad, cx + 12.0, send_y + 11.0, 18.0, accent_hi);
+                ui.text(
+                    Face::SemiBold,
+                    10.8,
+                    cx + 38.0,
+                    send_y + 5.0,
+                    text_c,
+                    "Send Custom Input (Keyboard / Mouse / Action)",
+                );
+                ui.text(
+                    Face::Regular,
+                    8.8,
+                    cx + 38.0,
+                    send_y + 21.0,
+                    muted_c,
+                    "Open 104-key PC keyboard, mouse buttons, scroll wheel & actions",
+                );
+                ui.text(
+                    Face::SemiBold,
+                    13.5,
+                    cx + cw - 18.0,
+                    send_y + 11.0,
+                    accent_hi,
+                    "›",
+                );
+
+                let sys_y = body_y + 292.0;
                 let half = (cw - 10.0) * 0.5;
-                ui.rounded(cx, sys_y, half, 38.0, 10.0, color::hex(0x3A1B24, 250));
-                ui.border(cx, sys_y, half, 38.0, 10.0, color::hex(0xD9534F, 255));
+                ui.rounded(
+                    cx,
+                    sys_y,
+                    half,
+                    38.0,
+                    10.0,
+                    color::with_alpha(danger_c, 0.22),
+                );
+                ui.border(cx, sys_y, half, 38.0, 10.0, danger_c);
                 ui.centered_fit(
                     Face::SemiBold,
                     10.8,
                     [cx, sys_y, half, 38.0],
-                    color::hex(0xFCA5A5, 255),
+                    danger_c,
                     "Force Kill",
                 );
                 ui.rounded(cx + half + 10.0, sys_y, half, 38.0, 10.0, card_bg);
@@ -2399,21 +3097,12 @@ impl TouchUi {
                 dlg.editing_desc,
             );
 
-            ui.text(
-                Face::Regular,
-                9.0,
+            ui.hint_line(
                 mdx + 14.0,
-                mdy + 96.0,
+                mdy + 104.0,
+                mdw - 28.0,
+                "Tap a field to type; press Enter to close keyboard, then tap Save below.",
                 muted_c,
-                "Tap a field to type with the Android keyboard.",
-            );
-            ui.text(
-                Face::Regular,
-                8.6,
-                mdx + 14.0,
-                mdy + 110.0,
-                muted_c,
-                "Enter closes the keyboard; then tap the button below.",
             );
 
             let save_r = [mdx + 14.0, mdy + mdh - 38.0, mdw - 28.0, 30.0];
@@ -2431,6 +3120,19 @@ impl TouchUi {
             );
         }
 
+        // Send Custom Input Picker Sub-Modal
+        if self.custom_input_picker != crate::touch::PickerStep::None {
+            draw_input_picker_modal(
+                &mut ui,
+                w,
+                h,
+                self.custom_input_picker,
+                self.custom_kb_scroll_x,
+                true,
+                false,
+            );
+        }
+
         ui.finish();
     }
 }
@@ -2441,6 +3143,17 @@ fn push_undo_snapshot(ed: &mut crate::touch::Editor, current: &crate::touch::Set
     }
     ed.undo_stack.push(current.clone());
     ed.redo_stack.clear();
+}
+
+fn clamp_editor_custom_selection(ed: &mut crate::touch::Editor, settings: &crate::touch::Settings) {
+    if let Some(idx) = ed.selected_custom
+        && idx >= settings.custom_buttons.len()
+    {
+        ed.selected_custom = None;
+        if ed.selected.is_none() {
+            ed.selected = Some(crate::touch::Control::Move);
+        }
+    }
 }
 
 fn shape_name(shape: u8) -> &'static str {
@@ -2455,8 +3168,7 @@ fn shape_name(shape: u8) -> &'static str {
 }
 
 /// Renders the complete MCPE + GoyControl Editor with:
-/// - Authentic 1:1 Vanilla 9-Slot Hotbar + Offhand Reference
-/// - Real MCPE sprites/bevel buttons OR GoyControl Static Buttons (no icons, custom stroke/margin/roundness/shadow)
+/// - Real MCPE sprites/bevel buttons + MCPE custom buttons OR GoyControl Static Buttons
 /// - GoyControl Customizable Analog Joystick + JoystickMoveArea indicator
 /// - Interactive 8-point Corner & Edge Resize Handles
 /// - Moveable/Draggable Floating Menu Pod (No Top Toolbar!) with Undo, Redo, Props, Add & Save
@@ -2468,7 +3180,7 @@ pub fn draw_hud_editor(
     profile_name: &str,
     notice: Option<&str>,
 ) {
-    use crate::touch::{Control, ControlStyle, JoystickMoveArea, PickerStep};
+    use crate::touch::{Control, ControlStyle, CustomButton, JoystickMoveArea, PickerStep};
     use crate::ui_theme::{Face, Icon, Ui, color};
     let Some(ed) = &tc.editor else {
         return;
@@ -2478,14 +3190,16 @@ pub fn draw_hud_editor(
     let dp_to_gui = ui.density / ui.batch.scale;
     let gui_to_dp = ui.batch.scale / ui.density;
 
-    let bg_card = color::hex(0x161422, 248);
-    let bg_hi = color::hex(0x232036, 245);
-    let border_c = color::hex(0x363152, 255);
-    let accent = color::hex(0x9A7BFF, 255);
-    let accent_soft = color::hex(0x372B63, 240);
-    let text_c = color::hex(0xF4EFFA, 255);
-    let muted_c = color::hex(0xACA5C4, 255);
-    let danger_c = color::hex(0xF87171, 255);
+    let theme = crate::ui_theme::active_theme();
+    let bg_card = theme.bg_solid;
+    let bg_hi = theme.surface;
+    let border_c = theme.border;
+    let accent = theme.accent;
+    let accent_soft = theme.surface_selected;
+    let accent_fg = theme.accent_text;
+    let text_c = theme.text_primary;
+    let muted_c = theme.text_muted;
+    let danger_c = theme.danger;
 
     // 1. Dark Blueprint Canvas & Alignment Grid
     ui.fill(0.0, 0.0, w, h, rgba(9, 10, 16, 228));
@@ -2542,7 +3256,6 @@ pub fn draw_hud_editor(
         }
     }
 
-    // Dummy hotbar removed per user request for a clean, unobstructed GoyControl canvas.
     let _ = (gui_to_dp, muted_c, profile_name);
 
     // 3. Draw Built-in Controls (MCPE Style or GoyControl Joystick)
@@ -2565,7 +3278,9 @@ pub fn draw_hud_editor(
             0.35
         };
 
-        if tc.settings.control_style == ControlStyle::GoyControl && c == Control::Move {
+        if (tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
+            && c == Control::Move
+        {
             // Draw GoyControl Customizable Joystick (Base Area + Inner Stick) identically to in-game
             let js = &tc.settings.joystick_style;
             let side = rw.min(rh);
@@ -2591,6 +3306,32 @@ pub fn draw_hud_editor(
             if js.stick_stroke > 0.1 {
                 ui.stroke_rounded(kx, ky, kside, kside, kr, js.stick_stroke, stick_stroke);
             }
+        } else if tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style {
+            let fill_c = color::with_alpha(p.button_color, alpha);
+            let stroke_c = color::with_alpha(p.stroke_color, alpha);
+            let shadow_c = color::with_alpha(p.shadow_color, alpha);
+            ui.goy_box(
+                rx,
+                ry,
+                rw,
+                rh,
+                p.shape,
+                p.roundness,
+                fill_c,
+                p.stroke_size,
+                p.stroke_margin,
+                p.stroke_roundness,
+                stroke_c,
+                p.shadow_size,
+                shadow_c,
+            );
+            ui.centered_fit(
+                Face::SemiBold,
+                (rh * 0.28).clamp(9.0, 14.0),
+                [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
+                text_c,
+                c.name(),
+            );
         } else {
             // Authentic MCPE Sprite / Bevel rendering matching in-game MCPE controls!
             let gui_bounds = [
@@ -2633,16 +3374,16 @@ pub fn draw_hud_editor(
         }
     }
 
-    // 4. Draw GoyControl Custom Buttons (only in GoyControl editor)
-    if tc.settings.control_style == ControlStyle::GoyControl {
-        for (i, custom) in tc.settings.custom_buttons.iter().enumerate() {
-            let p = tc.custom_placement(i);
-            let [nx, ny, nw, nh] = p.rect(tc.aspect());
-            let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
-            let is_sel = ed.selected_custom == Some(i);
-            let alpha = p.opacity.clamp(0.25, 1.0);
-            let label = custom.label();
+    // 4. Draw Custom Buttons in BOTH MCPE and GoyControl modes!
+    for (i, custom) in tc.settings.custom_buttons.iter().enumerate() {
+        let p = tc.custom_placement(i);
+        let [nx, ny, nw, nh] = p.rect(tc.aspect());
+        let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
+        let is_sel = ed.selected_custom == Some(i);
+        let alpha = p.opacity.clamp(0.25, 1.0);
+        let label = custom.label();
 
+        if tc.settings.control_style == ControlStyle::GoyControl || p.use_goy_style {
             let fill_c = color::with_alpha(p.button_color, alpha);
             let stroke_c = color::with_alpha(p.stroke_color, alpha);
             let shadow_c = color::with_alpha(p.shadow_color, alpha);
@@ -2661,17 +3402,57 @@ pub fn draw_hud_editor(
                 p.shadow_size,
                 shadow_c,
             );
-            ui.centered_fit(
-                Face::SemiBold,
-                (rh * 0.30).clamp(9.5, 14.5),
-                [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
-                text_c,
-                &label,
+        } else {
+            // Classic MCPE stone bevel plate for MCPE custom buttons
+            let a_u8 = (alpha * 255.0).round() as u8;
+            ui.rounded(rx, ry, rw, rh, 3.0, rgba(18, 20, 24, a_u8));
+            ui.rounded(
+                rx + 2.0,
+                ry + 2.0,
+                (rw - 4.0).max(2.0),
+                (rh - 4.0).max(2.0),
+                2.0,
+                rgba(58, 62, 70, (alpha * 210.0).round() as u8),
             );
+            ui.fill(
+                rx + 2.0,
+                ry + 2.0,
+                (rw - 4.0).max(2.0),
+                2.0,
+                rgba(175, 182, 194, (alpha * 195.0).round() as u8),
+            );
+            ui.fill(
+                rx + 2.0,
+                ry + 4.0,
+                2.0,
+                (rh - 6.0).max(2.0),
+                rgba(175, 182, 194, (alpha * 195.0).round() as u8),
+            );
+            ui.fill(
+                rx + 2.0,
+                ry + rh - 4.0,
+                (rw - 4.0).max(2.0),
+                2.0,
+                rgba(28, 30, 36, (alpha * 215.0).round() as u8),
+            );
+            ui.fill(
+                rx + rw - 4.0,
+                ry + 4.0,
+                2.0,
+                (rh - 6.0).max(2.0),
+                rgba(28, 30, 36, (alpha * 215.0).round() as u8),
+            );
+        }
+        ui.centered_fit(
+            Face::SemiBold,
+            (rh * 0.30).clamp(9.5, 14.5),
+            [rx + 3.0, ry + 2.0, (rw - 6.0).max(6.0), (rh - 4.0).max(6.0)],
+            text_c,
+            &label,
+        );
 
-            if is_sel {
-                selected_rect_and_title = Some(([rx, ry, rw, rh], format!("Button: {label}")));
-            }
+        if is_sel {
+            selected_rect_and_title = Some(([rx, ry, rw, rh], format!("Button: {label}")));
         }
     }
 
@@ -2690,7 +3471,7 @@ pub fn draw_hud_editor(
         ];
         for (hx, hy, hw, hh) in handles {
             ui.rounded(hx, hy, hw, hh, 3.0, accent);
-            ui.border(hx, hy, hw, hh, 3.0, color::hex(0x140E26, 255));
+            ui.border(hx, hy, hw, hh, 3.0, accent_fg);
         }
         let tag = format!("{sel_name} (Drag corners/edges to resize)");
         let tw = (ui.measure(Face::SemiBold, 9.5, &tag) + 12.0).min(w - 16.0);
@@ -2728,7 +3509,7 @@ pub fn draw_hud_editor(
     ui.rounded(pod_x, pod_y, pod_w, pod_h, 24.0, bg_card);
     ui.stroke_rounded(pod_x, pod_y, pod_w, pod_h, 24.0, 1.8, accent);
 
-    // Main draggable '=' M3 hub button on the left of the pod (40x40dp)
+    // Main draggable M3 hub button on the left of the pod (40x40dp)
     ui.rounded(
         pod_x + 4.0,
         pod_y + 4.0,
@@ -2738,28 +3519,23 @@ pub fn draw_hud_editor(
         if ed.menu_open { accent } else { accent_soft },
     );
     ui.icon(
-        Icon::MenuEquals,
+        if tc.settings.control_style == ControlStyle::Mcpe {
+            Icon::HorizonLogo
+        } else {
+            Icon::MenuEquals
+        },
         pod_x + 13.0,
         pod_y + 13.0,
         22.0,
-        if ed.menu_open {
-            color::hex(0x140E26, 255)
-        } else {
-            accent
-        },
+        if ed.menu_open { accent_fg } else { accent },
     );
 
     if ed.pod_expanded {
-        let fourth_item = if tc.settings.control_style == ControlStyle::GoyControl {
-            (Some(Icon::Plus), "Add", 64.0, true, false)
-        } else {
-            (Some(Icon::Undo), "Reset", 64.0, true, false)
-        };
         let items: [(Option<Icon>, &str, f32, bool, bool); 5] = [
             (Some(Icon::Undo), "", 42.0, !ed.undo_stack.is_empty(), false),
             (Some(Icon::Redo), "", 42.0, !ed.redo_stack.is_empty(), false),
             (Some(Icon::Gear), "Props", 72.0, true, ed.props_open),
-            fourth_item,
+            (Some(Icon::Plus), "Add", 64.0, true, false),
             (Some(Icon::Check), "Save", 68.0, true, true),
         ];
         let mut ix = pod_x + 50.0;
@@ -2786,7 +3562,7 @@ pub fn draw_hud_editor(
                 },
             );
             let fg = if lbl == "Save" {
-                color::hex(0x140E26, 255)
+                accent_fg
             } else if !enabled {
                 color::hex(0x5E5875, 200)
             } else if hi {
@@ -2826,222 +3602,86 @@ pub fn draw_hud_editor(
         );
     }
 
+    // 6b. Unsaved Changes Back Confirmation Modal (when ed.back_confirm_open == true)
+    if ed.back_confirm_open {
+        ui.fill(0.0, 0.0, w, h, rgba(4, 5, 10, 205));
+        let dw = (w - 36.0).clamp(290.0, 430.0);
+        let dh = 178.0;
+        let dx = (w - dw) * 0.5;
+        let dy = (h - dh) * 0.5;
+        ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
+        ui.stroke_rounded(dx, dy, dw, dh, 18.0, 1.6, accent);
+        ui.text(
+            Face::SemiBold,
+            14.0,
+            dx + 18.0,
+            dy + 16.0,
+            text_c,
+            "Unsaved Layout Changes",
+        );
+        ui.text(
+            Face::Regular,
+            10.5,
+            dx + 18.0,
+            dy + 42.0,
+            muted_c,
+            "You have modified your control layout in this session.",
+        );
+        ui.text(
+            Face::Regular,
+            10.0,
+            dx + 18.0,
+            dy + 60.0,
+            muted_c,
+            "Save your changes before leaving, or go back without saving?",
+        );
+        let bw = (dw - 44.0) * 0.5;
+        let by = dy + dh - 50.0;
+        let save_r = [dx + 18.0, by, bw, 36.0];
+        let back_r = [dx + 26.0 + bw, by, bw, 36.0];
+        ui.rounded(save_r[0], save_r[1], save_r[2], save_r[3], 10.0, accent);
+        ui.centered_fit(Face::SemiBold, 11.5, save_r, accent_fg, "Save");
+        ui.rounded(back_r[0], back_r[1], back_r[2], back_r[3], 10.0, bg_hi);
+        ui.border(back_r[0], back_r[1], back_r[2], back_r[3], 10.0, danger_c);
+        ui.centered_fit(Face::SemiBold, 11.5, back_r, danger_c, "Back");
+        ui.finish();
+        return;
+    }
+
     // 7. Step 1 / Step 2 Mouse vs Keyboard Horizontal Picker Modal
     if ed.picker_step != PickerStep::None {
-        ui.fill(0.0, 0.0, w, h, rgba(4, 5, 10, 195));
-        match ed.picker_step {
-            PickerStep::AskInputType { event_slot } => {
-                let dw = (w - 36.0).clamp(270.0, 440.0);
-                let dh = 210.0;
-                let dx = (w - dw) * 0.5;
-                let dy = (h - dh) * 0.5;
-                ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
-                ui.border(dx, dy, dw, dh, 18.0, accent);
-                ui.text(
-                    Face::SemiBold,
-                    14.0,
-                    dx + 16.0,
-                    dy + 14.0,
-                    text_c,
-                    &format!("Assign Event Slot #{} — Choose Input Type", event_slot + 1),
-                );
-                ui.text(
-                    Face::Regular,
-                    11.0,
-                    dx + 16.0,
-                    dy + 34.0,
-                    muted_c,
-                    "Each GoyControl button can trigger up to 3 Keyboard or Mouse events simultaneously.",
-                );
-                let cw = (dw - 40.0) * 0.5;
-                let r_kb = [dx + 16.0, dy + 62.0, cw, 82.0];
-                let r_ms = [dx + 24.0 + cw, dy + 62.0, cw, 82.0];
-                for (r, title, sub) in [
-                    (r_kb, "Keyboard Key", "Full 104-Key horizontal PC keyboard"),
-                    (
-                        r_ms,
-                        "Mouse & Actions",
-                        "LMB, RMB, MMB, Scroll, Look & Actions",
-                    ),
-                ] {
-                    ui.rounded(r[0], r[1], r[2], r[3], 14.0, accent_soft);
-                    ui.border(r[0], r[1], r[2], r[3], 14.0, accent);
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        13.0,
-                        [r[0] + 6.0, r[1] + 16.0, r[2] - 12.0, 24.0],
-                        text_c,
-                        title,
-                    );
-                    ui.centered_fit(
-                        Face::Regular,
-                        10.0,
-                        [r[0] + 6.0, r[1] + 44.0, r[2] - 12.0, 22.0],
-                        muted_c,
-                        sub,
-                    );
-                }
-                let r_clr = [dx + 16.0, dy + 156.0, cw, 36.0];
-                let r_can = [dx + 24.0 + cw, dy + 156.0, cw, 36.0];
-                ui.rounded(r_clr[0], r_clr[1], r_clr[2], r_clr[3], 10.0, bg_hi);
-                ui.border(r_clr[0], r_clr[1], r_clr[2], r_clr[3], 10.0, danger_c);
-                ui.centered_fit(
-                    Face::SemiBold,
-                    11.0,
-                    r_clr,
-                    danger_c,
-                    "Clear / Unassign Slot",
-                );
-                ui.rounded(r_can[0], r_can[1], r_can[2], r_can[3], 10.0, bg_hi);
-                ui.border(r_can[0], r_can[1], r_can[2], r_can[3], 10.0, border_c);
-                ui.centered_fit(Face::Medium, 11.0, r_can, text_c, "Cancel");
-            }
-            PickerStep::Keyboard { event_slot } => {
-                let dw = (w - 20.0).clamp(300.0, 620.0);
-                let dh = (h - 20.0).clamp(235.0, 340.0);
-                let dx = (w - dw) * 0.5;
-                let dy = (h - dh) * 0.5;
-                ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
-                ui.border(dx, dy, dw, dh, 18.0, accent);
-                ui.text(
-                    Face::SemiBold,
-                    13.5,
-                    dx + 14.0,
-                    dy + 11.0,
-                    text_c,
-                    &format!(
-                        "Event Slot #{} — Full PC Keyboard (Swipe Horizontally)",
-                        event_slot + 1
-                    ),
-                );
-                // Top-right scroll buttons & Back button
-                let b_left = [dx + dw - 196.0, dy + 8.0, 56.0, 26.0];
-                let b_right = [dx + dw - 134.0, dy + 8.0, 56.0, 26.0];
-                let b_back = [dx + dw - 72.0, dy + 8.0, 58.0, 26.0];
-                for (r, lbl) in [(b_left, "◀ Left"), (b_right, "Right ▶"), (b_back, "Back")] {
-                    ui.rounded(r[0], r[1], r[2], r[3], 8.0, bg_hi);
-                    ui.border(r[0], r[1], r[2], r[3], 8.0, border_c);
-                    ui.centered_fit(Face::SemiBold, 10.0, r, text_c, lbl);
-                }
-
-                let kb_top = dy + 40.0;
-                let kb_h = dh - 56.0;
-                let row_h = ((kb_h - 25.0) / 6.0).clamp(24.0, 38.0);
-                let key_unit = 38.0;
-                let gap = 4.0;
-                ui.set_clip(Some([dx + 10.0, kb_top, dw - 20.0, kb_h]));
-                for (r_idx, row) in KB_ROWS.iter().enumerate() {
-                    let ry = kb_top + r_idx as f32 * (row_h + 4.0);
-                    let mut kx = dx + 14.0 - ed.kb_scroll_x;
-                    for (lbl, _tok, width_mult) in *row {
-                        let kw = key_unit * (*width_mult) + (*width_mult - 1.0).max(0.0) * gap;
-                        if kx + kw >= dx + 8.0 && kx <= dx + dw - 8.0 {
-                            ui.rounded(kx, ry, kw, row_h, 6.0, bg_hi);
-                            ui.border(kx, ry, kw, row_h, 6.0, border_c);
-                            ui.centered_fit(
-                                Face::SemiBold,
-                                10.0,
-                                [kx + 2.0, ry, kw - 4.0, row_h],
-                                text_c,
-                                lbl,
-                            );
-                        }
-                        kx += kw + gap;
-                    }
-                }
-                ui.set_clip(None);
-
-                // Horizontal scrollbar track at bottom of keyboard modal
-                let max_kb_scroll = (880.0 - (dw - 28.0)).max(1.0);
-                let track_w = dw - 28.0;
-                let thumb_w = (track_w * (track_w / 880.0)).clamp(48.0, track_w);
-                let thumb_x = dx
-                    + 14.0
-                    + (track_w - thumb_w) * (ed.kb_scroll_x / max_kb_scroll).clamp(0.0, 1.0);
-                ui.rounded(dx + 14.0, dy + dh - 12.0, track_w, 5.0, 2.5, border_c);
-                ui.rounded(thumb_x, dy + dh - 12.0, thumb_w, 5.0, 2.5, accent);
-            }
-            PickerStep::MouseAndActions { event_slot } => {
-                let dw = (w - 24.0).clamp(290.0, 560.0);
-                let dh = (h - 20.0).clamp(235.0, 355.0);
-                let dx = (w - dw) * 0.5;
-                let dy = (h - dh) * 0.5;
-                ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
-                ui.border(dx, dy, dw, dh, 18.0, accent);
-                ui.text(
-                    Face::SemiBold,
-                    13.5,
-                    dx + 14.0,
-                    dy + 11.0,
-                    text_c,
-                    &format!(
-                        "Event Slot #{} — Mouse Buttons, Wheel, Look & Actions",
-                        event_slot + 1
-                    ),
-                );
-                let b_back = [dx + dw - 72.0, dy + 8.0, 58.0, 26.0];
-                ui.rounded(b_back[0], b_back[1], b_back[2], b_back[3], 8.0, bg_hi);
-                ui.border(b_back[0], b_back[1], b_back[2], b_back[3], 8.0, border_c);
-                ui.centered_fit(Face::SemiBold, 10.0, b_back, text_c, "Back");
-
-                let cols = 3usize;
-                let rows = MOUSE_AND_ACTION_ITEMS.len().div_ceil(cols).max(1);
-                let gx = dx + 12.0;
-                let gy = dy + 40.0;
-                let gw = dw - 24.0;
-                let gh = dh - 50.0;
-                let cw = (gw - (cols as f32 - 1.0) * 6.0) / cols as f32;
-                let ch = ((gh - (rows as f32 - 1.0) * 4.0) / rows as f32).clamp(21.0, 32.0);
-                for (i, (lbl, tok)) in MOUSE_AND_ACTION_ITEMS.iter().enumerate() {
-                    let col = i % cols;
-                    let row = i / cols;
-                    let cx = gx + col as f32 * (cw + 6.0);
-                    let cy = gy + row as f32 * (ch + 4.0);
-                    let is_mouse = tok.starts_with("key.mouse.") || tok.starts_with("mouse.");
-                    ui.rounded(
-                        cx,
-                        cy,
-                        cw,
-                        ch,
-                        7.0,
-                        if is_mouse { accent_soft } else { bg_hi },
-                    );
-                    ui.border(
-                        cx,
-                        cy,
-                        cw,
-                        ch,
-                        7.0,
-                        if is_mouse { accent } else { border_c },
-                    );
-                    ui.centered_fit(
-                        Face::Medium,
-                        9.5,
-                        [cx + 3.0, cy, cw - 6.0, ch],
-                        if is_mouse { accent } else { text_c },
-                        lbl,
-                    );
-                }
-            }
-            PickerStep::None => {}
-        }
+        let mcpe_excl = tc.settings.control_style == ControlStyle::Mcpe;
+        draw_input_picker_modal(
+            &mut ui,
+            w,
+            h,
+            ed.picker_step,
+            ed.kb_scroll_x,
+            false,
+            mcpe_excl,
+        );
         ui.finish();
         return;
     }
 
     // 8. Component Property Inspector Dialog (when ed.props_open == true)
     if ed.props_open {
-        ui.fill(0.0, 0.0, w, h, rgba(4, 5, 10, 175));
-        let dw = (w - 24.0).clamp(300.0, 540.0);
-        let dh = (h - 18.0).clamp(245.0, 368.0);
+        ui.fill(0.0, 0.0, w, h, rgba(4, 5, 10, 185));
+        let dw = (w - 24.0).clamp(310.0, 548.0);
+        let dh = (h - 18.0).clamp(248.0, 368.0);
         let dx = (w - dw) * 0.5;
         let dy = (h - dh) * 0.5;
-        ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
-        ui.border(dx, dy, dw, dh, 18.0, border_c);
+        ui.rounded(dx + 2.0, dy + 5.0, dw, dh, 20.0, rgba(0, 0, 0, 155));
+        ui.rounded(dx, dy, dw, dh, 20.0, bg_card);
+        ui.stroke_rounded(dx, dy, dw, dh, 20.0, 1.4, border_c);
 
         let is_joystick = ed.selected == Some(Control::Move) && ed.selected_custom.is_none();
-        let header_txt = if is_joystick {
-            "Joystick & Analog Base Properties".to_owned()
+        let is_mcpe_mode = tc.settings.control_style == ControlStyle::Mcpe;
+        let (header_txt, sub_txt) = if is_joystick {
+            (
+                "Joystick & Analog Base Inspector".to_owned(),
+                "Customize stick knob, analog base ring, active zone & visibility",
+            )
         } else if let Some(idx) = ed.selected_custom {
             let lbl = tc
                 .settings
@@ -3049,292 +3689,376 @@ pub fn draw_hud_editor(
                 .get(idx)
                 .map(|b| b.label())
                 .unwrap_or_else(|| "Button".into());
-            format!("GoyControl Button Properties — {lbl}")
+            if is_mcpe_mode {
+                (
+                    format!("MCPE Custom Button — {lbl}"),
+                    "Exclusive Binding (Keyboard OR Mouse — selecting one clears the other)",
+                )
+            } else {
+                (
+                    format!("GoyControl Button — {lbl}"),
+                    "Customize visual style, geometry, stroke, key/mouse bindings & behavior",
+                )
+            }
         } else if let Some(c) = ed.selected {
-            format!("Component Properties — {}", c.name())
+            (
+                format!("MCPE Component — {}", c.name()),
+                "Customize style, opacity, shape, stroke & menu/game visibility",
+            )
         } else {
-            "Component Properties".to_owned()
+            (
+                "Component Properties".to_owned(),
+                "Configure control appearance & behavior",
+            )
         };
+        ui.rounded(dx + 14.0, dy + 9.0, 28.0, 28.0, 9.0, accent_soft);
+        ui.border(dx + 14.0, dy + 9.0, 28.0, 28.0, 9.0, accent);
+        ui.icon(Icon::Gear, dx + 20.0, dy + 15.0, 16.0, accent);
         ui.text(
             Face::SemiBold,
-            13.5,
-            dx + 14.0,
-            dy + 11.0,
+            13.0,
+            dx + 48.0,
+            dy + 8.0,
             text_c,
             &header_txt,
         );
-        let close_r = [dx + dw - 72.0, dy + 8.0, 58.0, 26.0];
-        ui.rounded(close_r[0], close_r[1], close_r[2], close_r[3], 8.0, bg_hi);
-        ui.border(
-            close_r[0], close_r[1], close_r[2], close_r[3], 8.0, border_c,
-        );
-        ui.centered_fit(Face::SemiBold, 10.5, close_r, accent, "Done");
+        ui.text(Face::Regular, 9.0, dx + 48.0, dy + 24.0, muted_c, sub_txt);
 
+        let close_r = [dx + dw - 74.0, dy + 9.0, 60.0, 28.0];
+        ui.rounded(close_r[0], close_r[1], close_r[2], close_r[3], 9.0, accent);
+        ui.centered_fit(Face::SemiBold, 10.5, close_r, accent_fg, "Done");
+
+        // Segmented Material You 3 Tab Header (for both Joystick and Button inspectors)
+        let tab_y = dy + 42.0;
+        let tab_w = (dw - 28.0 - 8.0) / 3.0;
+        let tab_labels = if is_joystick {
+            ["1. Stick & Style", "2. Analog Base", "3. Zone & Visibility"]
+        } else {
+            [
+                "1. Style & Colors",
+                "2. Shape & Stroke",
+                "3. Events & Behavior",
+            ]
+        };
+        for (ti, t_lbl) in tab_labels.into_iter().enumerate() {
+            let tx = dx + 14.0 + ti as f32 * (tab_w + 4.0);
+            let on = ed.props_tab == ti;
+            ui.rounded(
+                tx,
+                tab_y,
+                tab_w,
+                26.0,
+                8.0,
+                if on { accent_soft } else { bg_hi },
+            );
+            ui.border(
+                tx,
+                tab_y,
+                tab_w,
+                26.0,
+                8.0,
+                if on { accent } else { border_c },
+            );
+            ui.centered_fit(
+                Face::SemiBold,
+                10.0,
+                [tx + 3.0, tab_y, tab_w - 6.0, 26.0],
+                if on { accent } else { text_c },
+                t_lbl,
+            );
+        }
+
+        let body_y = tab_y + 34.0;
         if is_joystick {
             let js = &tc.settings.joystick_style;
             let p_move = tc.placement(Control::Move);
-            let y1 = dy + 42.0;
-            let hw = (dw - 28.0 - 8.0) * 0.5;
-            // Style toggle + MoveArea cycle
-            let st_lbl =
-                if tc.settings.control_style == ControlStyle::GoyControl || p_move.use_goy_style {
-                    "Style: Custom GoyControl Stick"
-                } else {
-                    "Style: Default MCPE D-Pad/Stick"
-                };
-            ui.rounded(dx + 14.0, y1, hw, 28.0, 8.0, accent_soft);
-            ui.border(dx + 14.0, y1, hw, 28.0, 8.0, accent);
-            ui.centered_fit(
-                Face::SemiBold,
-                10.0,
-                [dx + 18.0, y1, hw - 8.0, 28.0],
-                accent,
-                st_lbl,
-            );
-
-            let area_txt = format!("Move Area: {}", js.move_area.label());
-            ui.rounded(dx + 14.0 + hw + 8.0, y1, hw, 28.0, 8.0, bg_hi);
-            ui.border(dx + 14.0 + hw + 8.0, y1, hw, 28.0, 8.0, border_c);
-            ui.centered_fit(
-                Face::SemiBold,
-                10.0,
-                [dx + 18.0 + hw + 8.0, y1, hw - 8.0, 28.0],
-                text_c,
-                &area_txt,
-            );
-
-            // Stick Settings Row
-            ui.text(
-                Face::SemiBold,
-                9.5,
-                dx + 14.0,
-                y1 + 33.0,
-                accent,
-                "STICK KNOB (SIZE, OPACITY, STROKE, COLOR)",
-            );
-            let y2 = y1 + 46.0;
             let cw = (dw - 28.0 - 12.0) / 4.0;
-            for (i, txt) in [
-                format!("Stick Sz {:.0}%", js.stick_size * 100.0),
-                format!("Stick Alpha {:.0}%", js.stick_opacity * 100.0),
-                format!("Stick Strk {:.1}dp", js.stick_stroke),
-                format!("Base Sz {:.0}%", p_move.size * 100.0),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                ui.rounded(rx, y2, cw, 26.0, 7.0, bg_hi);
-                ui.border(rx, y2, cw, 26.0, 7.0, border_c);
-                ui.text(Face::SemiBold, 11.0, rx + 5.0, y2 + 4.0, accent, "-");
-                ui.text(Face::SemiBold, 11.0, rx + cw - 11.0, y2 + 4.0, accent, "+");
-                ui.centered_fit(
-                    Face::Medium,
-                    9.0,
-                    [rx + 12.0, y2, cw - 24.0, 26.0],
-                    text_c,
-                    &txt,
-                );
-            }
-
-            // Stick Color & Stick Stroke Color swatches
-            let y3 = y2 + 32.0;
-            ui.text(
-                Face::Medium,
-                9.5,
-                dx + 14.0,
-                y3 + 4.0,
-                muted_c,
-                "Stick Color:",
-            );
             let sw_w = 22.0;
-            for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
-                ui.rounded(sx, y3, sw_w, 20.0, 6.0, *col);
-                if js.stick_color == *col {
-                    ui.border(sx - 1.0, y3 - 1.0, sw_w + 2.0, 22.0, 7.0, accent);
-                }
-            }
             let st_x = dx + 86.0 + 8.0 * (sw_w + 4.0) + 12.0;
             let st_w = (dw - (st_x - dx) - 14.0).max(80.0);
-            ui.rounded(st_x, y3, st_w, 20.0, 6.0, bg_hi);
-            ui.border(st_x, y3, st_w, 20.0, 6.0, js.stick_stroke_color);
-            ui.centered_fit(
-                Face::Medium,
-                9.0,
-                [st_x, y3, st_w, 20.0],
-                text_c,
-                "Cycle Stick Stroke Col",
-            );
 
-            // Analog Base Area Settings Row
-            ui.text(
-                Face::SemiBold,
-                9.5,
-                dx + 14.0,
-                y3 + 26.0,
-                accent,
-                "ANALOG BASE AREA (OPACITY, STROKE, ROUNDNESS, COLOR)",
-            );
-            let y4 = y3 + 40.0;
-            for (i, txt) in [
-                format!("Base Alpha {:.0}%", js.base_opacity * 100.0),
-                format!("Base Strk {:.1}dp", js.base_stroke),
-                format!("Base Round {:.0}", js.base_roundness),
-                if tc.settings.mode == crate::touch::Mode::Dpad {
-                    "Mode: D-Pad".into()
-                } else {
-                    "Mode: Analog".into()
-                },
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                ui.rounded(rx, y4, cw, 26.0, 7.0, bg_hi);
-                ui.border(rx, y4, cw, 26.0, 7.0, border_c);
-                if i < 3 {
-                    ui.text(Face::SemiBold, 11.0, rx + 5.0, y4 + 4.0, accent, "-");
-                    ui.text(Face::SemiBold, 11.0, rx + cw - 11.0, y4 + 4.0, accent, "+");
-                    ui.centered_fit(
-                        Face::Medium,
-                        9.0,
-                        [rx + 12.0, y4, cw - 24.0, 26.0],
-                        text_c,
-                        &txt,
+            match ed.props_tab {
+                0 => {
+                    // Joystick Tab 0: Renderer Style, Active Zone, Stick Knob Sizing & Stick Colors
+                    ui.text(
+                        Face::SemiBold,
+                        9.4,
+                        dx + 14.0,
+                        body_y - 2.0,
+                        muted_c,
+                        "JOYSTICK STYLE & ACTIVE ZONE",
                     );
-                } else {
+                    let y1 = body_y + 12.0;
+                    let hw = (dw - 28.0 - 8.0) * 0.5;
+                    let st_lbl = if tc.settings.control_style == ControlStyle::GoyControl
+                        || p_move.use_goy_style
+                    {
+                        "Style: Custom GoyControl Stick"
+                    } else {
+                        "Style: Default MCPE D-Pad/Stick"
+                    };
+                    ui.rounded(dx + 14.0, y1, hw, 30.0, 9.0, accent_soft);
+                    ui.border(dx + 14.0, y1, hw, 30.0, 9.0, accent);
                     ui.centered_fit(
-                        Face::Medium,
-                        9.0,
-                        [rx + 4.0, y4, cw - 8.0, 26.0],
+                        Face::SemiBold,
+                        10.0,
+                        [dx + 18.0, y1, hw - 8.0, 30.0],
                         accent,
-                        &txt,
+                        st_lbl,
+                    );
+
+                    let area_txt = format!("Move Area: {}", js.move_area.label());
+                    ui.rounded(dx + 14.0 + hw + 8.0, y1, hw, 30.0, 9.0, bg_hi);
+                    ui.border(dx + 14.0 + hw + 8.0, y1, hw, 30.0, 9.0, border_c);
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        10.0,
+                        [dx + 18.0 + hw + 8.0, y1, hw - 8.0, 30.0],
+                        text_c,
+                        &area_txt,
+                    );
+
+                    ui.text(
+                        Face::SemiBold,
+                        9.4,
+                        dx + 14.0,
+                        y1 + 38.0,
+                        muted_c,
+                        "STICK KNOB DIMENSIONS & STROKE",
+                    );
+                    let y2 = y1 + 52.0;
+                    for (i, txt) in [
+                        format!("Stick Sz {:.0}%", js.stick_size * 100.0),
+                        format!("Stick Alpha {:.0}%", js.stick_opacity * 100.0),
+                        format!("Stick Strk {:.1}dp", js.stick_stroke),
+                        format!("Base Sz {:.0}%", p_move.size * 100.0),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let rx = dx + 14.0 + i as f32 * (cw + 4.0);
+                        ui.rounded(rx, y2, cw, 28.0, 8.0, bg_hi);
+                        ui.border(rx, y2, cw, 28.0, 8.0, border_c);
+                        ui.text(Face::SemiBold, 11.0, rx + 5.0, y2 + 5.0, accent, "-");
+                        ui.text(Face::SemiBold, 11.0, rx + cw - 11.0, y2 + 5.0, accent, "+");
+                        ui.centered_fit(
+                            Face::Medium,
+                            9.0,
+                            [rx + 12.0, y2, cw - 24.0, 28.0],
+                            text_c,
+                            &txt,
+                        );
+                    }
+
+                    let y3 = y2 + 38.0;
+                    ui.text(
+                        Face::Medium,
+                        9.5,
+                        dx + 14.0,
+                        y3 + 4.0,
+                        muted_c,
+                        "Stick Color:",
+                    );
+                    for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
+                        let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
+                        ui.rounded(sx, y3, sw_w, 22.0, 6.0, *col);
+                        if js.stick_color == *col {
+                            ui.border(sx - 1.5, y3 - 1.5, sw_w + 3.0, 25.0, 7.0, accent);
+                        }
+                    }
+                    ui.rounded(st_x, y3, st_w, 22.0, 6.0, bg_hi);
+                    ui.border(st_x, y3, st_w, 22.0, 6.0, js.stick_stroke_color);
+                    ui.centered_fit(
+                        Face::Medium,
+                        9.0,
+                        [st_x, y3, st_w, 22.0],
+                        text_c,
+                        "Cycle Stick Stroke Col",
+                    );
+                }
+                1 => {
+                    // Joystick Tab 1: Analog Base Area Opacity, Stroke, Roundness, Mode & Colors
+                    ui.text(
+                        Face::SemiBold,
+                        9.4,
+                        dx + 14.0,
+                        body_y - 2.0,
+                        muted_c,
+                        "ANALOG BASE RING GEOMETRY & INPUT MODE",
+                    );
+                    let y4 = body_y + 14.0;
+                    for (i, txt) in [
+                        format!("Base Alpha {:.0}%", js.base_opacity * 100.0),
+                        format!("Base Strk {:.1}dp", js.base_stroke),
+                        format!("Base Round {:.0}", js.base_roundness),
+                        if tc.settings.mode == crate::touch::Mode::Dpad {
+                            "Mode: D-Pad".into()
+                        } else {
+                            "Mode: Analog".into()
+                        },
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let rx = dx + 14.0 + i as f32 * (cw + 4.0);
+                        ui.rounded(rx, y4, cw, 30.0, 8.0, bg_hi);
+                        ui.border(rx, y4, cw, 30.0, 8.0, border_c);
+                        if i < 3 {
+                            ui.text(Face::SemiBold, 11.0, rx + 5.0, y4 + 6.0, accent, "-");
+                            ui.text(Face::SemiBold, 11.0, rx + cw - 11.0, y4 + 6.0, accent, "+");
+                            ui.centered_fit(
+                                Face::Medium,
+                                9.0,
+                                [rx + 12.0, y4, cw - 24.0, 30.0],
+                                text_c,
+                                &txt,
+                            );
+                        } else {
+                            ui.centered_fit(
+                                Face::SemiBold,
+                                9.2,
+                                [rx + 4.0, y4, cw - 8.0, 30.0],
+                                accent,
+                                &txt,
+                            );
+                        }
+                    }
+
+                    ui.text(
+                        Face::SemiBold,
+                        9.4,
+                        dx + 14.0,
+                        y4 + 40.0,
+                        muted_c,
+                        "ANALOG BASE FILL & STROKE PALETTE",
+                    );
+                    let y5 = y4 + 56.0;
+                    ui.text(
+                        Face::Medium,
+                        9.5,
+                        dx + 14.0,
+                        y5 + 4.0,
+                        muted_c,
+                        "Base Color:",
+                    );
+                    for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
+                        let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
+                        ui.rounded(sx, y5, sw_w, 22.0, 6.0, *col);
+                        if js.base_color == *col {
+                            ui.border(sx - 1.5, y5 - 1.5, sw_w + 3.0, 25.0, 7.0, accent);
+                        }
+                    }
+                    ui.rounded(st_x, y5, st_w, 22.0, 6.0, bg_hi);
+                    ui.border(st_x, y5, st_w, 22.0, 6.0, js.base_stroke_color);
+                    ui.centered_fit(
+                        Face::Medium,
+                        9.0,
+                        [st_x, y5, st_w, 22.0],
+                        text_c,
+                        "Cycle Base Stroke Col",
+                    );
+                }
+                _ => {
+                    // Joystick Tab 2: Active Zone & Visibility Rules
+                    ui.text(
+                        Face::SemiBold,
+                        9.4,
+                        dx + 14.0,
+                        body_y - 2.0,
+                        muted_c,
+                        "ACTIVE TOUCH ZONE & VISIBILITY RULES",
+                    );
+                    let area_y = body_y + 14.0;
+                    let hw = (dw - 28.0 - 8.0) * 0.5;
+                    let area_txt = format!("Active Zone: {}", js.move_area.label());
+                    ui.rounded(dx + 14.0, area_y, hw, 32.0, 9.0, bg_hi);
+                    ui.border(dx + 14.0, area_y, hw, 32.0, 9.0, border_c);
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        10.0,
+                        [dx + 18.0, area_y, hw - 8.0, 32.0],
+                        text_c,
+                        &area_txt,
+                    );
+                    let sz_txt = format!("Joystick Footprint: {:.0}%", p_move.size * 100.0);
+                    let sz_x = dx + 14.0 + hw + 8.0;
+                    ui.rounded(sz_x, area_y, hw, 32.0, 9.0, bg_hi);
+                    ui.border(sz_x, area_y, hw, 32.0, 9.0, border_c);
+                    ui.text(Face::SemiBold, 11.5, sz_x + 6.0, area_y + 7.0, accent, "-");
+                    ui.text(
+                        Face::SemiBold,
+                        11.5,
+                        sz_x + hw - 12.0,
+                        area_y + 7.0,
+                        accent,
+                        "+",
+                    );
+                    ui.centered_fit(
+                        Face::Medium,
+                        9.5,
+                        [sz_x + 16.0, area_y, hw - 32.0, 32.0],
+                        text_c,
+                        &sz_txt,
+                    );
+
+                    let y6 = area_y + 44.0;
+                    let third = (dw - 28.0 - 8.0) / 3.0;
+                    ui.rounded(dx + 14.0, y6, third, 32.0, 9.0, bg_hi);
+                    ui.border(
+                        dx + 14.0,
+                        y6,
+                        third,
+                        32.0,
+                        9.0,
+                        if p_move.visible_in_game {
+                            accent
+                        } else {
+                            border_c
+                        },
+                    );
+                    ui.m3_checkbox(
+                        dx + 20.0,
+                        y6 + 7.0,
+                        18.0,
+                        p_move.visible_in_game,
+                        "Visible in Game",
+                    );
+
+                    let vm_x = dx + 14.0 + third + 4.0;
+                    ui.rounded(vm_x, y6, third, 32.0, 9.0, bg_hi);
+                    ui.border(
+                        vm_x,
+                        y6,
+                        third,
+                        32.0,
+                        9.0,
+                        if p_move.visible_in_menu {
+                            accent
+                        } else {
+                            border_c
+                        },
+                    );
+                    ui.m3_checkbox(
+                        vm_x + 6.0,
+                        y6 + 7.0,
+                        18.0,
+                        p_move.visible_in_menu,
+                        "Visible in Menu",
+                    );
+
+                    let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
+                    ui.rounded(pv_x, y6, third, 32.0, 9.0, accent_soft);
+                    ui.border(pv_x, y6, third, 32.0, 9.0, accent);
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        9.5,
+                        [pv_x + 4.0, y6, third - 8.0, 32.0],
+                        accent,
+                        "Preset Vis for All",
                     );
                 }
             }
-
-            let y5 = y4 + 32.0;
-            ui.text(
-                Face::Medium,
-                9.5,
-                dx + 14.0,
-                y5 + 4.0,
-                muted_c,
-                "Base Color:",
-            );
-            for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
-                ui.rounded(sx, y5, sw_w, 20.0, 6.0, *col);
-                if js.base_color == *col {
-                    ui.border(sx - 1.0, y5 - 1.0, sw_w + 22.0, 22.0, 7.0, accent);
-                }
-            }
-            ui.rounded(st_x, y5, st_w, 20.0, 6.0, bg_hi);
-            ui.border(st_x, y5, st_w, 20.0, 6.0, js.base_stroke_color);
-            ui.centered_fit(
-                Face::Medium,
-                9.0,
-                [st_x, y5, st_w, 20.0],
-                text_c,
-                "Cycle Base Stroke Col",
-            );
-
-            // Visibility Checkboxes Row for Joystick (Visible in Game [✓] | Visible in Menu [ ])
-            let y6 = y5 + 26.0;
-            let third = (dw - 28.0 - 8.0) / 3.0;
-            ui.rounded(dx + 14.0, y6, third, 26.0, 8.0, bg_hi);
-            ui.border(
-                dx + 14.0,
-                y6,
-                third,
-                26.0,
-                8.0,
-                if p_move.visible_in_game {
-                    accent
-                } else {
-                    border_c
-                },
-            );
-            ui.m3_checkbox(
-                dx + 20.0,
-                y6 + 4.0,
-                18.0,
-                p_move.visible_in_game,
-                "Visible in Game",
-            );
-
-            let vm_x = dx + 14.0 + third + 4.0;
-            ui.rounded(vm_x, y6, third, 26.0, 8.0, bg_hi);
-            ui.border(
-                vm_x,
-                y6,
-                third,
-                26.0,
-                8.0,
-                if p_move.visible_in_menu {
-                    accent
-                } else {
-                    border_c
-                },
-            );
-            ui.m3_checkbox(
-                vm_x + 6.0,
-                y6 + 4.0,
-                18.0,
-                p_move.visible_in_menu,
-                "Visible in Menu",
-            );
-
-            let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
-            ui.rounded(pv_x, y6, third, 26.0, 8.0, accent_soft);
-            ui.border(pv_x, y6, third, 26.0, 8.0, accent);
-            ui.centered_fit(
-                Face::SemiBold,
-                9.5,
-                [pv_x + 4.0, y6, third - 8.0, 26.0],
-                accent,
-                "Preset Vis for All",
-            );
         } else {
-            // Button Inspector Tabs: [0: Style, Text & Colors] [1: Stroke, Shape & Shadow] [2: Events (Up to 3) & Behavior]
-            let tab_y = dy + 40.0;
-            let tab_w = (dw - 28.0 - 8.0) / 3.0;
-            for (ti, t_lbl) in [
-                "1. Style, Hint & Colors",
-                "2. Stroke, Shape & Shadow",
-                "3. Events (1-3) & Mode",
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let tx = dx + 14.0 + ti as f32 * (tab_w + 4.0);
-                let on = ed.props_tab == ti;
-                ui.rounded(
-                    tx,
-                    tab_y,
-                    tab_w,
-                    26.0,
-                    8.0,
-                    if on { accent_soft } else { bg_hi },
-                );
-                ui.border(
-                    tx,
-                    tab_y,
-                    tab_w,
-                    26.0,
-                    8.0,
-                    if on { accent } else { border_c },
-                );
-                ui.centered_fit(
-                    Face::SemiBold,
-                    10.0,
-                    [tx + 3.0, tab_y, tab_w - 6.0, 26.0],
-                    if on { accent } else { text_c },
-                    t_lbl,
-                );
-            }
-
             let p = if let Some(idx) = ed.selected_custom {
                 tc.custom_placement(idx)
             } else if let Some(c) = ed.selected {
@@ -3343,7 +4067,6 @@ pub fn draw_hud_editor(
                 crate::touch::Placement::new(0.5, 0.5, 0.12)
             };
 
-            let body_y = tab_y + 34.0;
             match ed.props_tab {
                 0 => {
                     // Tab 0: Style Manager (MCPE Default vs GoyControl Static), Hint Text, Fill Color, Opacity, onClick & onToggle
@@ -3643,43 +4366,112 @@ pub fn draw_hud_editor(
                     }
                 }
                 _ => {
-                    // Tab 2: Up to 3 Button Events (Mouse or Keyboard) + Pass-Through, Toggle, Swipe, Delete
-                    let ew = (dw - 28.0 - 8.0) / 3.0;
-                    for slot in 0..3 {
-                        let ex = dx + 14.0 + slot as f32 * (ew + 4.0);
-                        let tok_name = if let Some(idx) = ed.selected_custom {
-                            tc.settings
-                                .custom_buttons
-                                .get(idx)
-                                .map(|b| {
-                                    crate::touch::custom::friendly_token_name(b.event_slot(slot))
-                                })
-                                .unwrap_or_else(|| "Unassigned".into())
-                        } else if let Some(c) = ed.selected {
-                            if slot == 0 {
-                                c.name().to_owned()
-                            } else {
-                                "Built-in".to_owned()
-                            }
+                    // Tab 2: In MCPE mode, show Exclusive Single Binding (Keyboard OR Mouse);
+                    // in GoyControl mode, show up to 3 Event Slots.
+                    if is_mcpe_mode && ed.selected_custom.is_some() {
+                        let cur_tok = ed
+                            .selected_custom
+                            .and_then(|idx| tc.settings.custom_buttons.get(idx))
+                            .map(|b| b.key.as_str())
+                            .unwrap_or("");
+                        let is_kb = CustomButton::is_keyboard_binding(cur_tok);
+                        let is_ms = CustomButton::is_mouse_binding(cur_tok);
+                        let kb_lbl = if is_kb {
+                            format!(
+                                "Active: {}",
+                                crate::touch::custom::friendly_token_name(cur_tok)
+                            )
                         } else {
-                            "Unassigned".into()
+                            "Inactive (Cleared)".to_owned()
                         };
-                        ui.rounded(ex, body_y, ew, 42.0, 9.0, accent_soft);
-                        ui.border(ex, body_y, ew, 42.0, 9.0, accent);
-                        ui.centered_fit(
-                            Face::SemiBold,
-                            9.5,
-                            [ex + 4.0, body_y + 4.0, ew - 8.0, 16.0],
-                            accent,
-                            &format!("EVENT SLOT #{}", slot + 1),
-                        );
-                        ui.centered_fit(
-                            Face::Medium,
-                            10.5,
-                            [ex + 4.0, body_y + 20.0, ew - 8.0, 18.0],
-                            text_c,
-                            &tok_name,
-                        );
+                        let ms_lbl = if is_ms {
+                            format!(
+                                "Active: {}",
+                                crate::touch::custom::friendly_token_name(cur_tok)
+                            )
+                        } else {
+                            "Inactive (Cleared)".to_owned()
+                        };
+                        let half_w = (dw - 28.0 - 8.0) * 0.5;
+                        for (ci, (title, status, active)) in [
+                            ("KEYBOARD BINDING (EXCLUSIVE)", kb_lbl.as_str(), is_kb),
+                            ("MOUSE / ACTION BINDING (EXCLUSIVE)", ms_lbl.as_str(), is_ms),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            let ex = dx + 14.0 + ci as f32 * (half_w + 8.0);
+                            ui.rounded(
+                                ex,
+                                body_y,
+                                half_w,
+                                42.0,
+                                9.0,
+                                if active { accent_soft } else { bg_hi },
+                            );
+                            ui.border(
+                                ex,
+                                body_y,
+                                half_w,
+                                42.0,
+                                9.0,
+                                if active { accent } else { border_c },
+                            );
+                            ui.centered_fit(
+                                Face::SemiBold,
+                                9.0,
+                                [ex + 4.0, body_y + 4.0, half_w - 8.0, 16.0],
+                                if active { accent } else { muted_c },
+                                title,
+                            );
+                            ui.centered_fit(
+                                Face::Medium,
+                                10.2,
+                                [ex + 4.0, body_y + 20.0, half_w - 8.0, 18.0],
+                                if active { text_c } else { muted_c },
+                                status,
+                            );
+                        }
+                    } else {
+                        let ew = (dw - 28.0 - 8.0) / 3.0;
+                        for slot in 0..3 {
+                            let ex = dx + 14.0 + slot as f32 * (ew + 4.0);
+                            let tok_name = if let Some(idx) = ed.selected_custom {
+                                tc.settings
+                                    .custom_buttons
+                                    .get(idx)
+                                    .map(|b| {
+                                        crate::touch::custom::friendly_token_name(
+                                            b.event_slot(slot),
+                                        )
+                                    })
+                                    .unwrap_or_else(|| "Unassigned".into())
+                            } else if let Some(c) = ed.selected {
+                                if slot == 0 {
+                                    c.name().to_owned()
+                                } else {
+                                    "Built-in".to_owned()
+                                }
+                            } else {
+                                "Unassigned".into()
+                            };
+                            ui.rounded(ex, body_y, ew, 42.0, 9.0, accent_soft);
+                            ui.border(ex, body_y, ew, 42.0, 9.0, accent);
+                            ui.centered_fit(
+                                Face::SemiBold,
+                                9.5,
+                                [ex + 4.0, body_y + 4.0, ew - 8.0, 16.0],
+                                accent,
+                                &format!("EVENT SLOT #{}", slot + 1),
+                            );
+                            ui.centered_fit(
+                                Face::Medium,
+                                10.5,
+                                [ex + 4.0, body_y + 20.0, ew - 8.0, 18.0],
+                                text_c,
+                                &tok_name,
+                            );
+                        }
                     }
 
                     let by = body_y + 52.0;
@@ -3740,7 +4532,7 @@ pub fn draw_hud_editor(
                             30.0,
                             8.0,
                             if danger {
-                                rgba(90, 24, 32, 220)
+                                color::with_alpha(danger_c, 0.22)
                             } else if on {
                                 accent_soft
                             } else {
@@ -3957,11 +4749,7 @@ pub fn draw_hud_editor(
             Face::SemiBold,
             9.5,
             rep_btn_r,
-            if is_def {
-                muted_c
-            } else {
-                color::hex(0x140E26, 255)
-            },
+            if is_def { muted_c } else { accent_fg },
             if is_def {
                 "Protected"
             } else {
@@ -4004,21 +4792,12 @@ pub fn draw_hud_editor(
             "Tap to type",
             !name_focus,
         );
-        ui.text(
-            Face::Regular,
-            9.0,
+        ui.hint_line(
             dx + 14.0,
-            iy + 54.0,
+            iy + 56.0,
+            dw - 28.0,
+            "Tap Name or Desc to type; press Enter, then tap Create New Preset.",
             muted_c,
-            "Tap Name or Desc to type with the Android keyboard.",
-        );
-        ui.text(
-            Face::Regular,
-            8.6,
-            dx + 14.0,
-            iy + 68.0,
-            muted_c,
-            "Enter closes the keyboard; then tap Create New Preset.",
         );
 
         let create_btn_r = [dx + 14.0, dy + dh - 34.0, dw - 28.0, 26.0];
@@ -4034,7 +4813,7 @@ pub fn draw_hud_editor(
             Face::SemiBold,
             10.5,
             create_btn_r,
-            color::hex(0x140E26, 255),
+            accent_fg,
             "Create New Preset & Save",
         );
 
@@ -4052,7 +4831,17 @@ pub fn draw_hud_editor(
         ui.rounded(dx, dy, dw, dh, 18.0, bg_card);
         ui.border(dx, dy, dw, dh, 18.0, border_c);
         ui.rounded(dx + 12.0, dy + 10.0, 26.0, 26.0, 8.0, accent_soft);
-        ui.icon(Icon::MenuEquals, dx + 16.0, dy + 14.0, 18.0, accent);
+        ui.icon(
+            if tc.settings.control_style == ControlStyle::Mcpe {
+                Icon::HorizonLogo
+            } else {
+                Icon::MenuEquals
+            },
+            dx + 16.0,
+            dy + 14.0,
+            18.0,
+            accent,
+        );
         ui.text(
             Face::SemiBold,
             13.0,
@@ -4121,11 +4910,7 @@ pub fn draw_hud_editor(
                 Face::SemiBold,
                 10.0,
                 [rx + 4.0, ey, ew - 8.0, 30.0],
-                if primary {
-                    color::hex(0x140E26, 255)
-                } else {
-                    text_c
-                },
+                if primary { accent_fg } else { text_c },
                 title,
             );
         }
@@ -4259,6 +5044,7 @@ pub fn touch_hud_editor(
     let Some(mut ed) = tc.editor.take() else {
         return false;
     };
+    clamp_editor_custom_selection(&mut ed, &tc.settings);
 
     let closed = (|| -> bool {
         // 1. Handle ongoing drag / resize / floating-pod move / horizontal keyboard scroll
@@ -4394,6 +5180,48 @@ pub fn touch_hud_editor(
             return false;
         }
 
+        // 1a. If Unsaved Changes Back Confirmation Modal is open:
+        if ed.back_confirm_open {
+            let dw = (w - 36.0).clamp(290.0, 430.0);
+            let dh = 178.0;
+            let dx = (w - dw) * 0.5;
+            let dy = (h - dh) * 0.5;
+            let bw = (dw - 44.0) * 0.5;
+            let by = dy + dh - 50.0;
+            let save_r = [dx + 18.0, by, bw, 36.0];
+            let back_r = [dx + 26.0 + bw, by, bw, 36.0];
+            if inside(save_r) {
+                if tc.settings.is_default_preset() {
+                    ed.back_confirm_open = false;
+                    ed.save_dialog_open = true;
+                    ed.editing_save_desc = false;
+                    if ed.save_name_input.trim().is_empty() {
+                        ed.save_name_input = format!("{} Custom", tc.settings.preset_name);
+                    }
+                    if ed.save_desc_input.trim().is_empty() {
+                        ed.save_desc_input = tc.settings.preset_description.clone();
+                    }
+                    tc.clicked = true;
+                    return false;
+                }
+                let _ = tc.settings.save_replace_preset(std::path::Path::new("."));
+                let _ = tc.settings.save();
+                tc.clicked = true;
+                return true;
+            }
+            if inside(back_r) {
+                tc.settings = ed.original.clone();
+                let _ = tc.settings.save();
+                tc.clicked = true;
+                return true;
+            }
+            if !inside([dx, dy, dw, dh]) {
+                ed.back_confirm_open = false;
+                tc.clicked = true;
+            }
+            return false;
+        }
+
         // 1b. If Save Dialog is open (Option A: Replace existing / Option B: Create new preset as...)
         if ed.save_dialog_open {
             let dw = (w - 24.0).clamp(310.0, 520.0);
@@ -4438,13 +5266,13 @@ pub fn touch_hud_editor(
             let iy = dy + 100.0;
             let nw = (dw - 28.0 - 8.0) * 0.44;
             let desc_w = (dw - 28.0 - 8.0) - nw;
-            if inside([dx + 14.0, iy, nw, 28.0]) {
+            if inside([dx + 14.0, iy, nw, 46.0]) {
                 ed.editing_save_desc = false;
                 ed.keyboard_request = true;
                 tc.clicked = true;
                 return false;
             }
-            if inside([dx + 14.0 + nw + 8.0, iy, desc_w, 28.0]) {
+            if inside([dx + 14.0 + nw + 8.0, iy, desc_w, 46.0]) {
                 ed.editing_save_desc = true;
                 ed.keyboard_request = true;
                 tc.clicked = true;
@@ -4475,6 +5303,7 @@ pub fn touch_hud_editor(
 
         // 2. If Mouse vs Keyboard Picker Modal is open:
         if ed.picker_step != PickerStep::None {
+            let is_mcpe = tc.settings.control_style == ControlStyle::Mcpe;
             match ed.picker_step {
                 PickerStep::AskInputType { event_slot } => {
                     let dw = (w - 36.0).clamp(270.0, 440.0);
@@ -4497,7 +5326,11 @@ pub fn touch_hud_editor(
                         if let Some(idx) = ed.selected_custom
                             && let Some(btn) = tc.settings.custom_buttons.get_mut(idx)
                         {
-                            btn.set_event_slot(event_slot, String::new());
+                            if is_mcpe {
+                                btn.set_exclusive_binding("key.keyboard.unknown".into());
+                            } else {
+                                btn.set_event_slot(event_slot, String::new());
+                            }
                             let _ = tc.settings.save();
                         }
                         ed.picker_step = PickerStep::None;
@@ -4550,20 +5383,33 @@ pub fn touch_hud_editor(
                                 if let Some(idx) = ed.selected_custom
                                     && let Some(btn) = tc.settings.custom_buttons.get_mut(idx)
                                 {
-                                    btn.set_event_slot(event_slot, (*tok).to_owned());
-                                    if event_slot == 0
-                                        && (btn.custom_label.is_empty()
-                                            || btn.custom_label == "BTN")
-                                    {
+                                    if is_mcpe {
+                                        // Strict single-binding exclusivity in MCPE mode:
+                                        // selecting a keyboard binding clears any mouse binding.
+                                        btn.set_exclusive_binding((*tok).to_owned());
                                         btn.custom_label = (*lbl).to_owned();
+                                    } else {
+                                        btn.set_event_slot(event_slot, (*tok).to_owned());
+                                        if event_slot == 0
+                                            && (btn.custom_label.is_empty()
+                                                || btn.custom_label == "BTN")
+                                        {
+                                            btn.custom_label = (*lbl).to_owned();
+                                        }
                                     }
                                     let _ = tc.settings.save();
                                 }
                                 ed.picker_step = PickerStep::None;
-                                ed.status_msg = Some(format!(
-                                    "Assigned key '{lbl}' to Event Slot #{}.",
-                                    event_slot + 1
-                                ));
+                                ed.status_msg = Some(if is_mcpe {
+                                    format!(
+                                        "Bound key '{lbl}' (exclusive — mouse binding cleared)."
+                                    )
+                                } else {
+                                    format!(
+                                        "Assigned key '{lbl}' to Event Slot #{}.",
+                                        event_slot + 1
+                                    )
+                                });
                                 tc.clicked = true;
                                 return false;
                             }
@@ -4607,7 +5453,15 @@ pub fn touch_hud_editor(
                             if let Some(idx) = ed.selected_custom
                                 && let Some(btn) = tc.settings.custom_buttons.get_mut(idx)
                             {
-                                btn.set_event_slot(event_slot, (*tok).to_owned());
+                                if is_mcpe {
+                                    // Strict single-binding exclusivity in MCPE mode:
+                                    // selecting a mouse binding clears any keyboard binding.
+                                    btn.set_exclusive_binding((*tok).to_owned());
+                                    btn.custom_label =
+                                        crate::touch::custom::friendly_token_name(tok);
+                                } else {
+                                    btn.set_event_slot(event_slot, (*tok).to_owned());
+                                }
                                 if *tok == "mouse.look" {
                                     for l in &mut btn.layouts {
                                         l.passthrough = true;
@@ -4616,10 +5470,11 @@ pub fn touch_hud_editor(
                                 let _ = tc.settings.save();
                             }
                             ed.picker_step = PickerStep::None;
-                            ed.status_msg = Some(format!(
-                                "Assigned '{lbl}' to Event Slot #{}.",
-                                event_slot + 1
-                            ));
+                            ed.status_msg = Some(if is_mcpe {
+                                format!("Bound '{lbl}' (exclusive — keyboard binding cleared).")
+                            } else {
+                                format!("Assigned '{lbl}' to Event Slot #{}.", event_slot + 1)
+                            });
                             tc.clicked = true;
                             return false;
                         }
@@ -4632,185 +5487,19 @@ pub fn touch_hud_editor(
 
         // 3. If Component Property Inspector Dialog is open:
         if ed.props_open {
-            let dw = (w - 24.0).clamp(300.0, 540.0);
-            let dh = (h - 18.0).clamp(245.0, 368.0);
+            let dw = (w - 24.0).clamp(310.0, 548.0);
+            let dh = (h - 18.0).clamp(248.0, 368.0);
             let dx = (w - dw) * 0.5;
             let dy = (h - dh) * 0.5;
-            if inside([dx + dw - 72.0, dy + 8.0, 58.0, 26.0]) || !inside([dx, dy, dw, dh]) {
+            if inside([dx + dw - 74.0, dy + 9.0, 60.0, 28.0]) || !inside([dx, dy, dw, dh]) {
                 ed.props_open = false;
                 let _ = tc.settings.save();
                 tc.clicked = true;
                 return false;
             }
-            let is_joystick = ed.selected == Some(Control::Move) && ed.selected_custom.is_none();
-            if is_joystick {
-                let y1 = dy + 42.0;
-                let hw = (dw - 28.0 - 8.0) * 0.5;
-                let mode_idx = tc.settings.mode.index();
-                let slot = tc.settings.slot(Control::Move);
-                if inside([dx + 14.0, y1, hw, 28.0]) {
-                    push_undo_snapshot(&mut ed, &tc.settings);
-                    tc.settings.layouts[mode_idx][slot].use_goy_style =
-                        !tc.settings.layouts[mode_idx][slot].use_goy_style;
-                    let _ = tc.settings.save();
-                    tc.clicked = true;
-                    return false;
-                }
-                if inside([dx + 14.0 + hw + 8.0, y1, hw, 28.0]) {
-                    push_undo_snapshot(&mut ed, &tc.settings);
-                    tc.settings.joystick_style.move_area =
-                        tc.settings.joystick_style.move_area.next();
-                    let _ = tc.settings.save();
-                    tc.clicked = true;
-                    return false;
-                }
-                let y2 = y1 + 46.0;
-                let cw = (dw - 28.0 - 12.0) / 4.0;
-                for i in 0..4 {
-                    let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                    if inside([rx, y2, cw, 26.0]) {
-                        push_undo_snapshot(&mut ed, &tc.settings);
-                        let sign = if p[0] < rx + cw * 0.5 { -1.0 } else { 1.0 };
-                        match i {
-                            0 => {
-                                tc.settings.joystick_style.stick_size =
-                                    (tc.settings.joystick_style.stick_size + sign * 0.05)
-                                        .clamp(0.20, 0.85)
-                            }
-                            1 => {
-                                tc.settings.joystick_style.stick_opacity =
-                                    (tc.settings.joystick_style.stick_opacity + sign * 0.10)
-                                        .clamp(0.15, 1.0)
-                            }
-                            2 => {
-                                tc.settings.joystick_style.stick_stroke =
-                                    (tc.settings.joystick_style.stick_stroke + sign * 0.5)
-                                        .clamp(0.0, 8.0)
-                            }
-                            _ => {
-                                tc.settings.layouts[mode_idx][slot].size =
-                                    (tc.settings.layouts[mode_idx][slot].size + sign * 0.025)
-                                        .clamp(0.12, 0.45)
-                            }
-                        }
-                        let _ = tc.settings.save();
-                        tc.clicked = true;
-                        return false;
-                    }
-                }
-                let y3 = y2 + 32.0;
-                let sw_w = 22.0;
-                for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                    let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
-                    if inside([sx, y3, sw_w, 20.0]) {
-                        push_undo_snapshot(&mut ed, &tc.settings);
-                        tc.settings.joystick_style.stick_color = *col;
-                        let _ = tc.settings.save();
-                        tc.clicked = true;
-                        return false;
-                    }
-                }
-                let st_x = dx + 86.0 + 8.0 * (sw_w + 4.0) + 12.0;
-                let st_w = (dw - (st_x - dx) - 14.0).max(80.0);
-                if inside([st_x, y3, st_w, 20.0]) {
-                    push_undo_snapshot(&mut ed, &tc.settings);
-                    let cur = COLOR_SWATCHES
-                        .iter()
-                        .position(|(c, _)| *c == tc.settings.joystick_style.stick_stroke_color)
-                        .unwrap_or(0);
-                    tc.settings.joystick_style.stick_stroke_color =
-                        COLOR_SWATCHES[(cur + 1) % COLOR_SWATCHES.len()].0;
-                    let _ = tc.settings.save();
-                    tc.clicked = true;
-                    return false;
-                }
-                let y4 = y3 + 40.0;
-                for i in 0..4 {
-                    let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                    if inside([rx, y4, cw, 26.0]) {
-                        push_undo_snapshot(&mut ed, &tc.settings);
-                        let sign = if p[0] < rx + cw * 0.5 { -1.0 } else { 1.0 };
-                        match i {
-                            0 => {
-                                tc.settings.joystick_style.base_opacity =
-                                    (tc.settings.joystick_style.base_opacity + sign * 0.10)
-                                        .clamp(0.15, 1.0)
-                            }
-                            1 => {
-                                tc.settings.joystick_style.base_stroke =
-                                    (tc.settings.joystick_style.base_stroke + sign * 0.5)
-                                        .clamp(0.0, 8.0)
-                            }
-                            2 => {
-                                tc.settings.joystick_style.base_roundness =
-                                    (tc.settings.joystick_style.base_roundness + sign * 5.0)
-                                        .clamp(0.0, 50.0)
-                            }
-                            _ => {
-                                tc.settings.mode = match tc.settings.mode {
-                                    Mode::Dpad => Mode::Crosshair,
-                                    Mode::Crosshair => Mode::Tap,
-                                    Mode::Tap => Mode::Dpad,
-                                };
-                            }
-                        }
-                        let _ = tc.settings.save();
-                        tc.clicked = true;
-                        return false;
-                    }
-                }
-                let y5 = y4 + 32.0;
-                for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
-                    let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
-                    if inside([sx, y5, sw_w, 20.0]) {
-                        push_undo_snapshot(&mut ed, &tc.settings);
-                        tc.settings.joystick_style.base_color = *col;
-                        let _ = tc.settings.save();
-                        tc.clicked = true;
-                        return false;
-                    }
-                }
-                if inside([st_x, y5, st_w, 20.0]) {
-                    push_undo_snapshot(&mut ed, &tc.settings);
-                    let cur = COLOR_SWATCHES
-                        .iter()
-                        .position(|(c, _)| *c == tc.settings.joystick_style.base_stroke_color)
-                        .unwrap_or(0);
-                    tc.settings.joystick_style.base_stroke_color =
-                        COLOR_SWATCHES[(cur + 1) % COLOR_SWATCHES.len()].0;
-                    let _ = tc.settings.save();
-                    tc.clicked = true;
-                    return false;
-                }
-                let y6 = y5 + 26.0;
-                let third = (dw - 28.0 - 8.0) / 3.0;
-                if inside([dx + 14.0, y6, third, 26.0]) {
-                    push_undo_snapshot(&mut ed, &tc.settings);
-                    tc.settings.layouts[mode_idx][slot].visible_in_game ^= true;
-                    let _ = tc.settings.save();
-                    tc.clicked = true;
-                    return false;
-                }
-                if inside([dx + 14.0 + third + 4.0, y6, third, 26.0]) {
-                    push_undo_snapshot(&mut ed, &tc.settings);
-                    tc.settings.layouts[mode_idx][slot].visible_in_menu ^= true;
-                    let _ = tc.settings.save();
-                    tc.clicked = true;
-                    return false;
-                }
-                if inside([dx + 14.0 + (third + 4.0) * 2.0, y6, third, 26.0]) {
-                    push_undo_snapshot(&mut ed, &tc.settings);
-                    tc.settings.apply_visibility_preset_all();
-                    let _ = tc.settings.save();
-                    ed.status_msg = Some("Applied preset visibility to all controls.".into());
-                    tc.clicked = true;
-                    return false;
-                }
-                return false;
-            }
 
-            // Button Inspector Tab Header clicks
-            let tab_y = dy + 40.0;
+            // Segmented 3-Tab Header clicks (shared by Joystick and Button inspectors)
+            let tab_y = dy + 42.0;
             let tab_w = (dw - 28.0 - 8.0) / 3.0;
             for ti in 0..3 {
                 let tx = dx + 14.0 + ti as f32 * (tab_w + 4.0);
@@ -4819,6 +5508,210 @@ pub fn touch_hud_editor(
                     tc.clicked = true;
                     return false;
                 }
+            }
+
+            let body_y = tab_y + 34.0;
+            let is_joystick = ed.selected == Some(Control::Move) && ed.selected_custom.is_none();
+            if is_joystick {
+                let mode_idx = tc.settings.mode.index();
+                let slot = tc.settings.slot(Control::Move);
+                let cw = (dw - 28.0 - 12.0) / 4.0;
+                let sw_w = 22.0;
+                let st_x = dx + 86.0 + 8.0 * (sw_w + 4.0) + 12.0;
+                let st_w = (dw - (st_x - dx) - 14.0).max(80.0);
+
+                match ed.props_tab {
+                    0 => {
+                        let y1 = body_y + 12.0;
+                        let hw = (dw - 28.0 - 8.0) * 0.5;
+                        if inside([dx + 14.0, y1, hw, 30.0]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            tc.settings.layouts[mode_idx][slot].use_goy_style =
+                                !tc.settings.layouts[mode_idx][slot].use_goy_style;
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                        if inside([dx + 14.0 + hw + 8.0, y1, hw, 30.0]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            tc.settings.joystick_style.move_area =
+                                tc.settings.joystick_style.move_area.next();
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                        let y2 = y1 + 52.0;
+                        for i in 0..4 {
+                            let rx = dx + 14.0 + i as f32 * (cw + 4.0);
+                            if inside([rx, y2, cw, 28.0]) {
+                                push_undo_snapshot(&mut ed, &tc.settings);
+                                let sign = if p[0] < rx + cw * 0.5 { -1.0 } else { 1.0 };
+                                match i {
+                                    0 => {
+                                        tc.settings.joystick_style.stick_size =
+                                            (tc.settings.joystick_style.stick_size + sign * 0.05)
+                                                .clamp(0.20, 0.85)
+                                    }
+                                    1 => {
+                                        tc.settings.joystick_style.stick_opacity =
+                                            (tc.settings.joystick_style.stick_opacity + sign * 0.10)
+                                                .clamp(0.15, 1.0)
+                                    }
+                                    2 => {
+                                        tc.settings.joystick_style.stick_stroke =
+                                            (tc.settings.joystick_style.stick_stroke + sign * 0.5)
+                                                .clamp(0.0, 8.0)
+                                    }
+                                    _ => {
+                                        tc.settings.layouts[mode_idx][slot].size =
+                                            (tc.settings.layouts[mode_idx][slot].size
+                                                + sign * 0.025)
+                                                .clamp(0.12, 0.45)
+                                    }
+                                }
+                                let _ = tc.settings.save();
+                                tc.clicked = true;
+                                return false;
+                            }
+                        }
+                        let y3 = y2 + 38.0;
+                        for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
+                            let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
+                            if inside([sx, y3, sw_w, 22.0]) {
+                                push_undo_snapshot(&mut ed, &tc.settings);
+                                tc.settings.joystick_style.stick_color = *col;
+                                let _ = tc.settings.save();
+                                tc.clicked = true;
+                                return false;
+                            }
+                        }
+                        if inside([st_x, y3, st_w, 22.0]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            let cur = COLOR_SWATCHES
+                                .iter()
+                                .position(|(c, _)| {
+                                    *c == tc.settings.joystick_style.stick_stroke_color
+                                })
+                                .unwrap_or(0);
+                            tc.settings.joystick_style.stick_stroke_color =
+                                COLOR_SWATCHES[(cur + 1) % COLOR_SWATCHES.len()].0;
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                    }
+                    1 => {
+                        let y4 = body_y + 14.0;
+                        for i in 0..4 {
+                            let rx = dx + 14.0 + i as f32 * (cw + 4.0);
+                            if inside([rx, y4, cw, 30.0]) {
+                                push_undo_snapshot(&mut ed, &tc.settings);
+                                let sign = if p[0] < rx + cw * 0.5 { -1.0 } else { 1.0 };
+                                match i {
+                                    0 => {
+                                        tc.settings.joystick_style.base_opacity =
+                                            (tc.settings.joystick_style.base_opacity + sign * 0.10)
+                                                .clamp(0.15, 1.0)
+                                    }
+                                    1 => {
+                                        tc.settings.joystick_style.base_stroke =
+                                            (tc.settings.joystick_style.base_stroke + sign * 0.5)
+                                                .clamp(0.0, 8.0)
+                                    }
+                                    2 => {
+                                        tc.settings.joystick_style.base_roundness =
+                                            (tc.settings.joystick_style.base_roundness + sign * 5.0)
+                                                .clamp(0.0, 50.0)
+                                    }
+                                    _ => {
+                                        tc.settings.mode = match tc.settings.mode {
+                                            Mode::Dpad => Mode::Crosshair,
+                                            Mode::Crosshair => Mode::Tap,
+                                            Mode::Tap => Mode::Dpad,
+                                        };
+                                    }
+                                }
+                                let _ = tc.settings.save();
+                                tc.clicked = true;
+                                return false;
+                            }
+                        }
+                        let y5 = y4 + 56.0;
+                        for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
+                            let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
+                            if inside([sx, y5, sw_w, 22.0]) {
+                                push_undo_snapshot(&mut ed, &tc.settings);
+                                tc.settings.joystick_style.base_color = *col;
+                                let _ = tc.settings.save();
+                                tc.clicked = true;
+                                return false;
+                            }
+                        }
+                        if inside([st_x, y5, st_w, 22.0]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            let cur = COLOR_SWATCHES
+                                .iter()
+                                .position(|(c, _)| {
+                                    *c == tc.settings.joystick_style.base_stroke_color
+                                })
+                                .unwrap_or(0);
+                            tc.settings.joystick_style.base_stroke_color =
+                                COLOR_SWATCHES[(cur + 1) % COLOR_SWATCHES.len()].0;
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                    }
+                    _ => {
+                        let area_y = body_y + 14.0;
+                        let hw = (dw - 28.0 - 8.0) * 0.5;
+                        if inside([dx + 14.0, area_y, hw, 32.0]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            tc.settings.joystick_style.move_area =
+                                tc.settings.joystick_style.move_area.next();
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                        let sz_x = dx + 14.0 + hw + 8.0;
+                        if inside([sz_x, area_y, hw, 32.0]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            let sign = if p[0] < sz_x + hw * 0.5 { -1.0 } else { 1.0 };
+                            tc.settings.layouts[mode_idx][slot].size =
+                                (tc.settings.layouts[mode_idx][slot].size + sign * 0.025)
+                                    .clamp(0.12, 0.45);
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                        let y6 = area_y + 44.0;
+                        let third = (dw - 28.0 - 8.0) / 3.0;
+                        if inside([dx + 14.0, y6, third, 32.0]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            tc.settings.layouts[mode_idx][slot].visible_in_game ^= true;
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                        if inside([dx + 14.0 + third + 4.0, y6, third, 32.0]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            tc.settings.layouts[mode_idx][slot].visible_in_menu ^= true;
+                            let _ = tc.settings.save();
+                            tc.clicked = true;
+                            return false;
+                        }
+                        if inside([dx + 14.0 + (third + 4.0) * 2.0, y6, third, 32.0]) {
+                            push_undo_snapshot(&mut ed, &tc.settings);
+                            tc.settings.apply_visibility_preset_all();
+                            let _ = tc.settings.save();
+                            ed.status_msg =
+                                Some("Applied preset visibility to all controls.".into());
+                            tc.clicked = true;
+                            return false;
+                        }
+                    }
+                }
+                return false;
             }
 
             let body_y = tab_y + 34.0;
@@ -5027,28 +5920,55 @@ pub fn touch_hud_editor(
                     }
                 }
                 _ => {
-                    let ew = (dw - 28.0 - 8.0) / 3.0;
-                    for slot in 0..3 {
-                        let ex = dx + 14.0 + slot as f32 * (ew + 4.0);
-                        if inside([ex, body_y, ew, 42.0]) {
-                            if ed.selected_custom.is_none()
-                                && tc.settings.control_style == ControlStyle::GoyControl
-                            {
-                                push_undo_snapshot(&mut ed, &tc.settings);
-                                let idx = tc.settings.custom_buttons.len();
-                                let mut nb = CustomButton::new("key.mouse.left".into(), idx);
-                                nb.custom_label = "BTN".into();
-                                for m in 0..3 {
-                                    nb.layouts[m].use_goy_style = true;
-                                }
-                                tc.settings.custom_buttons.push(nb);
-                                ed.selected_custom = Some(idx);
-                            }
-                            if ed.selected_custom.is_some() {
-                                ed.picker_step = PickerStep::AskInputType { event_slot: slot };
-                            }
+                    if tc.settings.control_style == ControlStyle::Mcpe
+                        && ed.selected_custom.is_some()
+                    {
+                        let half_w = (dw - 28.0 - 8.0) * 0.5;
+                        // Left card: Exclusive Keyboard Binding
+                        if inside([dx + 14.0, body_y, half_w, 42.0]) {
+                            ed.picker_step = PickerStep::Keyboard { event_slot: 0 };
                             tc.clicked = true;
                             return false;
+                        }
+                        // Right card: Exclusive Mouse / Action Binding
+                        if inside([dx + 14.0 + half_w + 8.0, body_y, half_w, 42.0]) {
+                            ed.picker_step = PickerStep::MouseAndActions { event_slot: 0 };
+                            tc.clicked = true;
+                            return false;
+                        }
+                    } else {
+                        let ew = (dw - 28.0 - 8.0) / 3.0;
+                        for slot in 0..3 {
+                            let ex = dx + 14.0 + slot as f32 * (ew + 4.0);
+                            if inside([ex, body_y, ew, 42.0]) {
+                                if ed.selected_custom.is_none() {
+                                    push_undo_snapshot(&mut ed, &tc.settings);
+                                    let idx = tc.settings.custom_buttons.len();
+                                    let is_goy =
+                                        tc.settings.control_style == ControlStyle::GoyControl;
+                                    let mut nb = CustomButton::new("key.mouse.left".into(), idx);
+                                    nb.custom_label = format!("BTN {}", idx + 1);
+                                    for m in 0..3 {
+                                        nb.layouts[m].use_goy_style = is_goy;
+                                    }
+                                    tc.settings.custom_buttons.push(nb);
+                                    ed.selected_custom = Some(idx);
+                                    ed.selected = None;
+                                }
+                                if ed.selected_custom.is_some() {
+                                    ed.picker_step = PickerStep::AskInputType {
+                                        event_slot: if tc.settings.control_style
+                                            == ControlStyle::Mcpe
+                                        {
+                                            0
+                                        } else {
+                                            slot
+                                        },
+                                    };
+                                }
+                                tc.clicked = true;
+                                return false;
+                            }
                         }
                     }
                     let by = body_y + 52.0;
@@ -5160,6 +6080,7 @@ pub fn touch_hud_editor(
                 tc.settings.preset_description = cur_desc;
                 tc.settings.active_mcpe_preset = active_mcpe;
                 tc.settings.active_goy_preset = active_goy;
+                clamp_editor_custom_selection(&mut ed, &tc.settings);
                 ed.status_msg = Some(format!(
                     "Reset editor canvas to {} Default layout.",
                     cur_style.label()
@@ -5184,6 +6105,7 @@ pub fn touch_hud_editor(
                         tc.settings.control_style,
                         &meta.id,
                     );
+                    clamp_editor_custom_selection(&mut ed, &tc.settings);
                     ed.save_name_input = tc.settings.preset_name.clone();
                     ed.save_desc_input = tc.settings.preset_description.clone();
                     ed.status_msg = Some(format!("Loaded preset '{}'.", meta.name));
@@ -5248,6 +6170,7 @@ pub fn touch_hud_editor(
                             if let Some(prev) = ed.undo_stack.pop() {
                                 ed.redo_stack.push(tc.settings.clone());
                                 tc.settings = prev;
+                                clamp_editor_custom_selection(&mut ed, &tc.settings);
                                 let _ = tc.settings.save();
                                 ed.status_msg = Some("Undid last change.".into());
                             }
@@ -5257,6 +6180,7 @@ pub fn touch_hud_editor(
                             if let Some(next) = ed.redo_stack.pop() {
                                 ed.undo_stack.push(tc.settings.clone());
                                 tc.settings = next;
+                                clamp_editor_custom_selection(&mut ed, &tc.settings);
                                 let _ = tc.settings.save();
                                 ed.status_msg = Some("Redid change.".into());
                             }
@@ -5267,28 +6191,25 @@ pub fn touch_hud_editor(
                             ed.menu_open = false;
                         }
                         3 => {
-                            if tc.settings.control_style == ControlStyle::GoyControl {
-                                // + Add Button (GoyControl)
+                            // + Add Button (supported in BOTH MCPE and GoyControl modes!)
+                            if tc.settings.custom_buttons.len() < 32 {
                                 push_undo_snapshot(&mut ed, &tc.settings);
                                 let idx = tc.settings.custom_buttons.len();
+                                let is_goy = tc.settings.control_style == ControlStyle::GoyControl;
                                 let mut nb = CustomButton::new("key.mouse.left".into(), idx);
                                 nb.custom_label = format!("BTN {}", idx + 1);
                                 for m in 0..3 {
-                                    nb.layouts[m].use_goy_style = true;
+                                    nb.layouts[m].use_goy_style = is_goy;
                                 }
                                 tc.settings.custom_buttons.push(nb);
                                 ed.selected_custom = Some(idx);
                                 ed.selected = None;
                                 ed.props_open = true;
+                                ed.props_tab = 2;
+                                if !is_goy {
+                                    ed.picker_step = PickerStep::AskInputType { event_slot: 0 };
+                                }
                                 let _ = tc.settings.save();
-                            } else {
-                                // Reset MCPE layout to Default on canvas
-                                push_undo_snapshot(&mut ed, &tc.settings);
-                                let fresh = crate::touch::Settings::default_mcpe();
-                                tc.settings.layouts = fresh.layouts;
-                                tc.settings.button_visibility = fresh.button_visibility;
-                                ed.status_msg =
-                                    Some("Reset MCPE controls to Default positions.".into());
                             }
                         }
                         _ => {
@@ -5354,24 +6275,22 @@ pub fn touch_hud_editor(
             }
         }
 
-        // 7. Hit-test Custom Buttons (GoyControl only) & Built-in Controls for Selection + Move Drag
-        if tc.settings.control_style == ControlStyle::GoyControl {
-            for i in (0..tc.settings.custom_buttons.len()).rev() {
-                let pl = tc.custom_placement(i);
-                let r = pl.rect(aspect);
-                if crate::touch::layout::contains(r, point) {
-                    push_undo_snapshot(&mut ed, &tc.settings);
-                    ed.selected_custom = Some(i);
-                    ed.selected = None;
-                    ed.active_drag = Some((
-                        id,
-                        EditorDragKind::Move {
-                            offset: [point[0] - pl.center[0], point[1] - pl.center[1]],
-                        },
-                    ));
-                    tc.clicked = true;
-                    return false;
-                }
+        // 7. Hit-test Custom Buttons (in both MCPE and GoyControl modes) & Built-in Controls for Selection + Move Drag
+        for i in (0..tc.settings.custom_buttons.len()).rev() {
+            let pl = tc.custom_placement(i);
+            let r = pl.rect(aspect);
+            if crate::touch::layout::contains(r, point) {
+                push_undo_snapshot(&mut ed, &tc.settings);
+                ed.selected_custom = Some(i);
+                ed.selected = None;
+                ed.active_drag = Some((
+                    id,
+                    EditorDragKind::Move {
+                        offset: [point[0] - pl.center[0], point[1] - pl.center[1]],
+                    },
+                ));
+                tc.clicked = true;
+                return false;
             }
         }
 
@@ -5450,7 +6369,13 @@ mod tests {
         assert!(ui.sync_viewport_cursor(&mut cursor, [427.0, 240.0]));
         assert_eq!(cursor, (213.5, 120.0));
 
+        // Moving cursor to (0.0, 0.0) after initialization does NOT teleport it back to center
+        cursor = (0.0, 0.0);
+        assert!(!ui.sync_viewport_cursor(&mut cursor, [427.0, 240.0]));
+        assert_eq!(cursor, (0.0, 0.0));
+
         // Proportional resize preserves relative position without drift
+        cursor = (213.5, 120.0);
         assert!(ui.sync_viewport_cursor(&mut cursor, [854.0, 480.0]));
         assert_eq!(cursor, (427.0, 240.0));
 
@@ -5458,6 +6383,11 @@ mod tests {
         assert!(!ui.compute_virtual_mouse_visibility(&controls, false, false, true, true));
         assert!(ui.compute_virtual_mouse_visibility(&controls, true, false, true, false));
         assert!(ui.compute_virtual_mouse_visibility(&controls, false, true, true, true));
+
+        // Control Editor open: game cursor is ALWAYS hidden over the Control Editor
+        controls.open_editor();
+        assert!(!ui.compute_virtual_mouse_visibility(&controls, false, false, true, false));
+        controls.cancel_editor();
 
         // Authoritative toggle OFF: remains hidden regardless of auto-visibility conditions
         controls.settings.virtual_mouse_enabled = false;

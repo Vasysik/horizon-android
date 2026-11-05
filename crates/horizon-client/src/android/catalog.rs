@@ -247,6 +247,8 @@ impl Config {
             settings.clouds = "false".into();
             settings.particles = 2;
             settings.entity_shadows = false;
+            settings.cutout_leaves = false;
+            settings.smooth_lighting = false;
             settings.graphics_preset = "fast".into();
             settings.horizon.upload_budget_kib = 1536;
         } else if self.battery_perf_mode {
@@ -453,11 +455,105 @@ pub enum ModalUpdate {
 
 type IconData = (String, u32, u32, Vec<u8>, Option<String>);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InstalledSubTab {
+    #[default]
+    Library,
+    FileManager,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InstalledFilter {
+    #[default]
+    All,
+    Mods,
+    Packs,
+    Shaders,
+}
+
+impl InstalledFilter {
+    pub const ALL: [Self; 4] = [Self::All, Self::Mods, Self::Packs, Self::Shaders];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Mods => "Mods",
+            Self::Packs => "Resource Packs",
+            Self::Shaders => "Shaders",
+        }
+    }
+    pub fn matches(self, kind: horizon_client::content_files::Kind) -> bool {
+        match self {
+            Self::All => true,
+            Self::Mods => kind == horizon_client::content_files::Kind::Mods,
+            Self::Packs => kind == horizon_client::content_files::Kind::Packs,
+            Self::Shaders => kind == horizon_client::content_files::Kind::Shaders,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InstalledSort {
+    #[default]
+    Name,
+    Type,
+    Size,
+    Status,
+}
+
+impl InstalledSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Sort: Name",
+            Self::Type => "Sort: Type",
+            Self::Size => "Sort: Size",
+            Self::Status => "Sort: Status",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Self::Name => Self::Type,
+            Self::Type => Self::Size,
+            Self::Size => Self::Status,
+            Self::Status => Self::Name,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum FmModal {
+    ConfirmDelete { paths: Vec<String> },
+    Rename { target_rel: String },
+    NewFolder,
+    Details(crate::document_store::FmFileDetails),
+}
+
+pub fn format_file_size(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 pub struct Catalog {
     pub local: Vec<LocalItem>,
     pub bundled_enabled: std::collections::BTreeSet<String>,
     pub sections: [bool; 3],
     pub pending_delete: Option<LocalItem>,
+    pub installed_sub_tab: InstalledSubTab,
+    pub installed_filter: InstalledFilter,
+    pub installed_sort: InstalledSort,
+    pub installed_query: String,
+    pub fm_current_dir: String,
+    pub fm_back_stack: Vec<String>,
+    pub fm_forward_stack: Vec<String>,
+    pub fm_entries: Vec<crate::document_store::FmEntry>,
+    pub fm_selected: std::collections::BTreeSet<String>,
+    pub fm_clipboard: Option<(Vec<PathBuf>, bool)>,
+    pub fm_modal: Option<FmModal>,
+    pub fm_input_text: String,
     downloaded: Vec<(browser::SourceId, String)>,
     pub downloading: Option<(browser::SourceId, String)>,
     pub downloading_title: String,
@@ -493,6 +589,9 @@ pub struct LocalItem {
     pub file: String,
     pub title: String,
     pub enabled: bool,
+    pub size_bytes: u64,
+    pub badge: &'static str,
+    pub subtitle: String,
 }
 impl Catalog {
     pub fn new(home: &Path) -> Self {
@@ -500,8 +599,20 @@ impl Catalog {
         let mut result = Self {
             local: vec![],
             bundled_enabled: Default::default(),
-            sections: [false, false, false],
+            sections: [true, true, true],
             pending_delete: None,
+            installed_sub_tab: InstalledSubTab::Library,
+            installed_filter: InstalledFilter::All,
+            installed_sort: InstalledSort::Name,
+            installed_query: String::new(),
+            fm_current_dir: String::new(),
+            fm_back_stack: Vec::new(),
+            fm_forward_stack: Vec::new(),
+            fm_entries: Vec::new(),
+            fm_selected: Default::default(),
+            fm_clipboard: None,
+            fm_modal: None,
+            fm_input_text: String::new(),
             downloaded: vec![],
             downloading: None,
             downloading_title: String::new(),
@@ -539,7 +650,15 @@ impl Catalog {
         self.page = Page::Installed;
         self.scroll = 0.0;
         self.editing = None;
-        self.sections = [false; 3];
+        if let Some(k) = kind {
+            self.installed_sub_tab = InstalledSubTab::Library;
+            self.installed_filter = match k {
+                horizon_client::content_files::Kind::Mods => InstalledFilter::Mods,
+                horizon_client::content_files::Kind::Packs => InstalledFilter::Packs,
+                horizon_client::content_files::Kind::Shaders => InstalledFilter::Shaders,
+            };
+        }
+        self.sections = [true; 3];
         if let Some(i) = horizon_client::content_files::Kind::ALL
             .iter()
             .position(|k| Some(*k) == kind)
@@ -589,11 +708,39 @@ impl Catalog {
                         .or_else(|| name.strip_suffix(".jar"))
                         .is_some_and(|id| on.enabled.contains(id)),
                 };
+                let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                let badge = match kind {
+                    horizon_client::content_files::Kind::Mods => "MOD",
+                    horizon_client::content_files::Kind::Packs => "PACK",
+                    horizon_client::content_files::Kind::Shaders => "SHADER",
+                };
+                let ext_tag = if name.ends_with(".hmod") {
+                    "Horizon Mod (.hmod)"
+                } else if name.ends_with(".jar") {
+                    "Java Mod (.jar)"
+                } else if name.ends_with(".hshader") {
+                    "Horizon Shader (.hshader)"
+                } else if kind == horizon_client::content_files::Kind::Shaders {
+                    "Shader Pack (.zip)"
+                } else {
+                    "Resource Pack (.zip)"
+                };
+                let subtitle = format!("{ext_tag}  •  {}  •  {name}", format_file_size(size_bytes));
+                let clean_title = name
+                    .strip_suffix(".hmod")
+                    .or_else(|| name.strip_suffix(".jar"))
+                    .or_else(|| name.strip_suffix(".hshader"))
+                    .or_else(|| name.strip_suffix(".zip"))
+                    .unwrap_or(&name)
+                    .to_owned();
                 self.local.push(LocalItem {
                     kind,
-                    file: name.clone(),
-                    title: name,
+                    file: name,
+                    title: clean_title,
                     enabled,
+                    size_bytes,
+                    badge,
+                    subtitle,
                 });
             }
         }
@@ -621,14 +768,236 @@ impl Catalog {
                 .or_else(|| file_name.strip_suffix(".hmod"))
                 .or_else(|| file_name.strip_suffix(".jar"))
                 .unwrap_or(&file_name);
+            let full_path = game.join(&e.file);
+            let size_bytes = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
+            let subtitle = format!(
+                "Mod Package ({})  •  {}  •  {}",
+                e.number,
+                format_file_size(size_bytes),
+                file_name
+            );
             self.local.push(LocalItem {
                 kind: horizon_client::content_files::Kind::Mods,
                 file: e.file.clone(),
                 title: format!("{} ({})", e.title, e.version),
                 enabled: on.enabled.contains(mod_id),
+                size_bytes,
+                badge: "MOD",
+                subtitle,
             });
         }
-        self.local.sort_by_key(|e| e.title.to_lowercase());
+        self.sort_local_items();
+        self.refresh_fm(home);
+    }
+
+    pub fn sort_local_items(&mut self) {
+        match self.installed_sort {
+            InstalledSort::Name => {
+                self.local
+                    .sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+            }
+            InstalledSort::Type => {
+                self.local.sort_by(|a, b| {
+                    a.badge
+                        .cmp(b.badge)
+                        .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+                });
+            }
+            InstalledSort::Size => {
+                self.local.sort_by(|a, b| {
+                    b.size_bytes
+                        .cmp(&a.size_bytes)
+                        .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+                });
+            }
+            InstalledSort::Status => {
+                self.local.sort_by(|a, b| {
+                    b.enabled
+                        .cmp(&a.enabled)
+                        .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+                });
+            }
+        }
+    }
+
+    pub fn search_worker_active(&self) -> bool {
+        self.search_worker.is_some()
+    }
+
+    pub fn refresh_fm(&mut self, home: &Path) {
+        let game = self.config.game_home(home);
+        match crate::document_store::list_fm_dir(home, &game, &self.fm_current_dir) {
+            Ok(entries) => {
+                self.fm_selected
+                    .retain(|sel| entries.iter().any(|e| &e.rel_path == sel));
+                self.fm_entries = entries;
+            }
+            Err(_) => {
+                self.fm_current_dir.clear();
+                self.fm_selected.clear();
+                self.fm_entries =
+                    crate::document_store::list_fm_dir(home, &game, "").unwrap_or_default();
+            }
+        }
+    }
+
+    pub fn fm_navigate(&mut self, home: &Path, target_rel: String) {
+        let clean = target_rel.trim().trim_matches('/').to_owned();
+        if clean != self.fm_current_dir {
+            self.fm_back_stack.push(self.fm_current_dir.clone());
+            self.fm_forward_stack.clear();
+            self.fm_current_dir = clean;
+            self.fm_selected.clear();
+            self.scroll = 0.0;
+        }
+        self.refresh_fm(home);
+    }
+
+    pub fn fm_back(&mut self, home: &Path) -> bool {
+        let Some(prev) = self.fm_back_stack.pop() else {
+            return false;
+        };
+        self.fm_forward_stack.push(self.fm_current_dir.clone());
+        self.fm_current_dir = prev;
+        self.fm_selected.clear();
+        self.scroll = 0.0;
+        self.refresh_fm(home);
+        true
+    }
+
+    pub fn fm_forward(&mut self, home: &Path) -> bool {
+        let Some(next) = self.fm_forward_stack.pop() else {
+            return false;
+        };
+        self.fm_back_stack.push(self.fm_current_dir.clone());
+        self.fm_current_dir = next;
+        self.fm_selected.clear();
+        self.scroll = 0.0;
+        self.refresh_fm(home);
+        true
+    }
+
+    pub fn fm_up(&mut self, home: &Path) {
+        if self.fm_current_dir.is_empty() {
+            return;
+        }
+        let parent = self
+            .fm_current_dir
+            .rsplit_once('/')
+            .map(|(p, _)| p.to_owned())
+            .unwrap_or_default();
+        self.fm_navigate(home, parent);
+    }
+
+    pub fn fm_copy_or_cut(&mut self, home: &Path, is_cut: bool) {
+        if self.fm_selected.is_empty() {
+            self.status = "Select one or more files or folders first.".into();
+            return;
+        }
+        let game = self.config.game_home(home);
+        let mut paths = Vec::new();
+        for rel in &self.fm_selected {
+            if is_cut && crate::document_store::is_protected_root_folder(rel) {
+                self.status = format!("Built-in root folder '{rel}' cannot be moved.");
+                return;
+            }
+            match crate::document_store::resolve_fm_path(home, &game, rel) {
+                Ok(p) => paths.push(p),
+                Err(e) => {
+                    self.status = e;
+                    return;
+                }
+            }
+        }
+        let count = paths.len();
+        self.fm_clipboard = Some((paths, is_cut));
+        self.status = format!(
+            "{} {count} item(s) to clipboard. Open destination folder and tap Paste.",
+            if is_cut { "Cut" } else { "Copied" }
+        );
+    }
+
+    pub fn fm_paste_here(&mut self, home: &Path) {
+        let Some((sources, is_cut)) = self.fm_clipboard.clone() else {
+            self.status = "Clipboard is empty.".into();
+            return;
+        };
+        let game = self.config.game_home(home);
+        match crate::document_store::fm_paste(home, &game, &sources, is_cut, &self.fm_current_dir) {
+            Ok(count) => {
+                if is_cut {
+                    self.fm_clipboard = None;
+                }
+                self.fm_selected.clear();
+                self.status = format!(
+                    "{} {count} item(s) into '/{}'.",
+                    if is_cut { "Moved" } else { "Pasted" },
+                    self.fm_current_dir
+                );
+                self.refresh(home);
+            }
+            Err(e) => {
+                self.status = e;
+            }
+        }
+    }
+
+    pub fn fm_confirm_delete(&mut self, home: &Path) {
+        let Some(FmModal::ConfirmDelete { paths }) = self.fm_modal.take() else {
+            return;
+        };
+        let game = self.config.game_home(home);
+        match crate::document_store::fm_delete(home, &game, &paths) {
+            Ok(count) => {
+                self.fm_selected.clear();
+                self.status = format!("Deleted {count} item(s).");
+                self.refresh(home);
+            }
+            Err(e) => {
+                self.status = e;
+            }
+        }
+    }
+
+    pub fn fm_submit_rename(&mut self, home: &Path) {
+        let Some(FmModal::Rename { target_rel }) = self.fm_modal.clone() else {
+            return;
+        };
+        let game = self.config.game_home(home);
+        let new_name = self.fm_input_text.trim().to_owned();
+        match crate::document_store::fm_rename(home, &game, &target_rel, &new_name) {
+            Ok(_) => {
+                self.fm_modal = None;
+                self.editing = None;
+                self.fm_selected.clear();
+                crate::platform::hide();
+                self.status = format!("Renamed to '{new_name}'.");
+                self.refresh(home);
+            }
+            Err(e) => {
+                self.status = e;
+            }
+        }
+    }
+
+    pub fn fm_submit_new_folder(&mut self, home: &Path) {
+        if !matches!(self.fm_modal, Some(FmModal::NewFolder)) {
+            return;
+        }
+        let game = self.config.game_home(home);
+        let folder_name = self.fm_input_text.trim().to_owned();
+        match crate::document_store::fm_mkdir(home, &game, &self.fm_current_dir, &folder_name) {
+            Ok(_) => {
+                self.fm_modal = None;
+                self.editing = None;
+                crate::platform::hide();
+                self.status = format!("Created folder '{folder_name}'.");
+                self.refresh(home);
+            }
+            Err(e) => {
+                self.status = e;
+            }
+        }
     }
     pub fn busy(&self) -> bool {
         self.worker.is_some()
@@ -1469,6 +1838,8 @@ impl Catalog {
             Some("theme_grad_start") => &mut self.config.theme.gradient_start_hex,
             Some("theme_grad_mid") => &mut self.config.theme.gradient_mid_hex,
             Some("theme_grad_end") => &mut self.config.theme.gradient_end_hex,
+            Some("installed_search") => &mut self.installed_query,
+            Some("fm_rename" | "fm_new_folder") => &mut self.fm_input_text,
             _ => &mut self.query,
         };
         match out {
@@ -1488,7 +1859,25 @@ impl Catalog {
                 }
             }
             Output::Enter | Output::Close => {
-                if self.editing == Some("render_scale") {
+                if self.editing == Some("fm_rename") {
+                    if matches!(out, Output::Enter) {
+                        self.fm_submit_rename(home);
+                    } else {
+                        self.editing = None;
+                    }
+                    return;
+                } else if self.editing == Some("fm_new_folder") {
+                    if matches!(out, Output::Enter) {
+                        self.fm_submit_new_folder(home);
+                    } else {
+                        self.editing = None;
+                    }
+                    return;
+                } else if self.editing == Some("installed_search") {
+                    self.editing = None;
+                    self.scroll = 0.0;
+                    return;
+                } else if self.editing == Some("render_scale") {
                     match crate::display::RenderScale::parse(&self.render_scale_text) {
                         Ok(scale) => {
                             self.config.render_scale = scale;
@@ -1502,6 +1891,17 @@ impl Catalog {
                 } else if is_name {
                     self.config.touch_name_changed();
                 } else if is_profile_name {
+                    if matches!(out, Output::Enter)
+                        && (self.config.preset_edit_mode == "copy"
+                            || self.config.preset_edit_mode == "edit")
+                    {
+                        self.editing = Some("profile_desc");
+                        let _ = self.config.save(home);
+                        crate::platform::show(&self.config.custom_profile_desc);
+                        self.status =
+                            "Step 2/2: Edit preset description and press Enter to save.".into();
+                        return;
+                    }
                     let game_home = self.config.game_home(home);
                     let clean = horizon_client::touch::Settings::sanitize_profile_name(
                         &self.config.custom_profile_name,
@@ -1514,6 +1914,40 @@ impl Catalog {
                     let _ = touch.save_profile(&game_home, &clean);
                     self.status =
                         format!("Saved controls as '{clean}' in controlmap/{clean}.json.");
+                } else if self.editing == Some("profile_desc") {
+                    let game_home = self.config.game_home(home);
+                    let mut touch = horizon_client::touch::Settings::load_from(
+                        &game_home.join("horizon-touch.json"),
+                    );
+                    let name = self.config.custom_profile_name.trim().to_owned();
+                    let desc = self.config.custom_profile_desc.trim().to_owned();
+                    if self.config.preset_edit_mode == "edit" && !touch.is_default_preset() {
+                        if !name.is_empty() {
+                            touch.preset_name = name.clone();
+                        }
+                        touch.preset_description = desc;
+                        let _ = touch.save_replace_preset(&game_home);
+                        self.status = format!(
+                            "Updated {} preset '{}'.",
+                            touch.control_style.label(),
+                            touch.preset_name
+                        );
+                    } else {
+                        let final_name = if name.is_empty() {
+                            format!("{} Copy", touch.preset_name)
+                        } else {
+                            name
+                        };
+                        let _ = touch.save_new_preset(&game_home, &final_name, &desc);
+                        self.status = format!(
+                            "Saved new {} preset '{}' (controls/{}/{}.json).",
+                            touch.control_style.label(),
+                            touch.preset_name,
+                            touch.control_style.storage_subdir(),
+                            touch.preset_id
+                        );
+                    }
+                    self.config.preset_edit_mode.clear();
                 }
                 if is_theme_field {
                     self.config.theme.sanitize();

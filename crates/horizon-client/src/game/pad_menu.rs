@@ -119,6 +119,11 @@ impl Game<'_> {
     /// A menu, a screen, the title, a sign or a book is open: the pad drives
     /// it instead of the player.
     pub(super) fn pad_in_menu(&self) -> bool {
+        #[cfg(target_os = "android")]
+        let android_hub_open =
+            self.pad.touch_ui.floating_menu || self.pad.touch_ui.preset_dialog.is_some();
+        #[cfg(not(target_os = "android"))]
+        let android_hub_open = false;
         self.title.is_some()
             || self.screen != Screen::Playing
             || self.sign_edit.is_some()
@@ -127,6 +132,7 @@ impl Game<'_> {
             || self.server_packs.prompt.is_some()
             || self.link_prompt.is_some()
             || self.touch_editing()
+            || android_hub_open
     }
 
     pub(super) fn gui_scale(&self) -> Option<HudBatch> {

@@ -3,9 +3,31 @@ use crate::gamepad::{Button, PadState};
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use std::{
     collections::BTreeMap,
+    sync::atomic::{AtomicU32, Ordering},
     time::{Duration, Instant},
 };
 const HOLD_DELAY: Duration = Duration::from_millis(350);
+
+static LAST_HUD_OPACITY_BITS: AtomicU32 = AtomicU32::new(0x3f80_0000);
+
+pub fn current_hud_opacity_scale() -> f32 {
+    let v = f32::from_bits(LAST_HUD_OPACITY_BITS.load(Ordering::Relaxed));
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
+pub fn set_current_hud_opacity_scale(scale: f32) {
+    let clamped = if scale.is_finite() {
+        scale.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    LAST_HUD_OPACITY_BITS.store(clamped.to_bits(), Ordering::Relaxed);
+}
+
 pub mod custom;
 pub mod editor;
 pub use custom::CustomButton;
@@ -159,9 +181,10 @@ enum Role {
     Shield,
     Button(Button),
 }
-#[derive(Default)]
+
 pub struct TouchControls {
     pub settings: Settings,
+    pub hud_opacity_scale: f32,
     pub force_crosshair: bool,
     pub projectile_crosshair: bool,
     pub shield_available: bool,
@@ -203,9 +226,89 @@ pub struct TouchControls {
     last_sneak_tap: Option<Instant>,
     sprint_latched: bool,
 }
+
+impl Default for TouchControls {
+    fn default() -> Self {
+        Self {
+            settings: Settings::default(),
+            hud_opacity_scale: 1.0,
+            force_crosshair: false,
+            projectile_crosshair: false,
+            shield_available: false,
+            auxiliary_only: false,
+            inventory_mode: false,
+            in_menu: false,
+            goy_rendered_by_ui: false,
+            editor: None,
+            fingers: BTreeMap::new(),
+            custom_fingers: BTreeMap::new(),
+            latched_custom: std::collections::BTreeSet::new(),
+            latched_controls: 0,
+            custom_events: Vec::new(),
+            pending: PadState::default(),
+            aim: None,
+            tap_aim: None,
+            pending_tap: None,
+            aspect: 0.0,
+            chat_requested: false,
+            settings_requested: false,
+            debug_requested: false,
+            perspective_requested: false,
+            clicked: false,
+            context_use: false,
+            vertical_movement: false,
+            swimming: false,
+            mounted: false,
+            sneaking: false,
+            hold_uses_item: false,
+            holding_use: false,
+            holding: false,
+            break_progress: 0.0,
+            last_marker: None,
+            last_sneak_tap: None,
+            sprint_latched: false,
+        }
+    }
+}
+
 impl TouchControls {
     pub fn crosshair(&self) -> bool {
         self.force_crosshair || self.settings.crosshair()
+    }
+
+    pub fn update_visibility(&mut self, touch_active: bool, dt: f32) {
+        let target = if touch_active || self.editor.is_some() {
+            1.0
+        } else {
+            0.0
+        };
+        let step = if target > self.hud_opacity_scale {
+            dt.clamp(0.001, 0.05) / 0.12
+        } else {
+            dt.clamp(0.001, 0.05) / 0.25
+        };
+        if (self.hud_opacity_scale - target).abs() <= step {
+            self.hud_opacity_scale = target;
+        } else if target > self.hud_opacity_scale {
+            self.hud_opacity_scale = (self.hud_opacity_scale + step).clamp(0.0, 1.0);
+        } else {
+            self.hud_opacity_scale = (self.hud_opacity_scale - step).clamp(0.0, 1.0);
+        }
+        set_current_hud_opacity_scale(self.hud_opacity_scale);
+        if self.hud_opacity_scale <= 0.001
+            && (!self.fingers.is_empty()
+                || !self.custom_fingers.is_empty()
+                || !self.latched_custom.is_empty())
+        {
+            self.clear();
+        }
+    }
+
+    pub fn move_anchor(&self) -> Option<[f32; 2]> {
+        self.fingers.values().find_map(|(role, _)| match role {
+            Role::Move(anchor) => Some(*anchor),
+            _ => None,
+        })
     }
 
     /// The surface size. The caller owns `settings`: the game and the launcher
@@ -275,7 +378,9 @@ impl TouchControls {
         })
     }
     fn dynamic_joystick(&self) -> bool {
-        self.settings.dynamic_joystick && self.settings.mode != Mode::Dpad
+        self.settings.dynamic_joystick
+            && self.settings.mode != Mode::Dpad
+            && self.settings.joystick_style.move_area != JoystickMoveArea::AbsoluteFixed
     }
     pub fn control_at_point(&self, point: [f32; 2]) -> bool {
         self.custom_at(point).is_some() || self.control_at(point).is_some()
@@ -357,6 +462,7 @@ impl TouchControls {
             return false;
         }
         if self.force_crosshair
+            && self.hud_opacity_scale > 0.01
             && matches!(c, Control::Attack | Control::Use)
             && self.settings.button_visibility[c as usize] == 0
         {
@@ -372,6 +478,14 @@ impl TouchControls {
                         .fingers
                         .values()
                         .any(|(r, _)| matches!(r, Role::Button(Button::LeftTrigger)))))
+    }
+    pub fn opacity(&self, c: Control) -> f32 {
+        let p = self.placement(c);
+        if self.editor.is_some() {
+            p.opacity.max(0.25)
+        } else {
+            (p.opacity * self.hud_opacity_scale.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+        }
     }
     pub fn placement(&self, c: Control) -> layout::Placement {
         let mut p = self.settings.placement(c);
@@ -431,6 +545,14 @@ impl TouchControls {
         })
     }
     pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas) {
+        set_current_hud_opacity_scale(if self.editor.is_some() {
+            1.0
+        } else {
+            self.hud_opacity_scale
+        });
+        if self.hud_opacity_scale <= 0.001 && self.editor.is_none() {
+            return;
+        }
         let (w, h) = (b.width, b.height);
         if self.editor.is_some() {
             self.draw_editor_toolbar(b, a);
@@ -441,6 +563,10 @@ impl TouchControls {
                 continue;
             }
             let p = self.placement(control);
+            let opacity = self.opacity(control);
+            if opacity <= 0.001 {
+                continue;
+            }
             if (self.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
                 && control != Control::Move
             {
@@ -451,7 +577,7 @@ impl TouchControls {
                 let rect = [nx * w, ny * h, nw * w, nh * h];
                 let held = Self::button(control).is_some_and(|bt| state.held(bt));
                 let toggled = (self.latched_controls & (1 << (control as u16))) != 0;
-                draw_goy_static_button(b, a, rect, &p, control.name(), held, toggled, p.opacity);
+                draw_goy_static_button(b, a, rect, &p, control.name(), held, toggled, opacity);
                 continue;
             }
             if control == Control::Move
@@ -461,24 +587,21 @@ impl TouchControls {
                     continue;
                 }
                 let size = p.size * h;
-                let (x, y) = (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0);
-                draw_goy_joystick(
-                    b,
-                    a,
-                    [x, y, size, size],
-                    &self.settings.joystick_style,
-                    state.left,
-                );
+                let center = if self.settings.mode != Mode::Dpad {
+                    self.move_anchor().unwrap_or(p.center)
+                } else {
+                    p.center
+                };
+                let (x, y) = (center[0] * w - size / 2.0, center[1] * h - size / 2.0);
+                let mut js = self.settings.joystick_style;
+                js.base_opacity *= self.hud_opacity_scale.clamp(0.0, 1.0);
+                js.stick_opacity *= self.hud_opacity_scale.clamp(0.0, 1.0);
+                draw_goy_joystick(b, a, [x, y, size, size], &js, state.left);
                 continue;
             }
             let p = self.placement(control);
             let size = p.size * h;
             let (x, y) = (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0);
-            let opacity = if self.editor.is_some() {
-                p.opacity.max(0.25)
-            } else {
-                p.opacity
-            };
             let color = rgba(255, 255, 255, (opacity * 255.0).round() as u8);
             let held = (self.inventory_mode
                 && Self::inventory_token(control)
@@ -490,26 +613,15 @@ impl TouchControls {
                         || (bt == Button::RightTrigger && state.triggers[1] > 0.0)
                 });
             if control == Control::Move {
-                // The frame stays where the finger first landed; only the knob follows.
-                let anchor = self.fingers.values().find_map(|(role, _)| match role {
-                    Role::Move(anchor) => Some(*anchor),
-                    _ => None,
-                });
-                let dynamic = self.dynamic_joystick()
-                    || (self.settings.mode != Mode::Dpad
-                        && self.settings.joystick_style.move_area
-                            == JoystickMoveArea::FollowFinger);
+                // When in analog/joystick mode, center the base at the active touch-origin anchor
+                // and return to p.center when released.
+                let anchor = self.move_anchor();
                 let (x, y) = match anchor {
-                    Some(anchor) if dynamic => {
+                    Some(anchor) if self.settings.mode != Mode::Dpad => {
                         (anchor[0] * w - size / 2.0, anchor[1] * h - size / 2.0)
                     }
                     _ => (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0),
                 };
-                // A dynamic joystick only exists where the player touches; the
-                // editor still shows its home position so it can be moved.
-                if dynamic && anchor.is_none() && self.editor.is_none() {
-                    continue;
-                }
                 if self.settings.mode == Mode::Dpad {
                     let cell = size / 3.0;
                     for (dx, dy, name) in [
@@ -675,9 +787,7 @@ impl TouchControls {
                 }
             }
         }
-        if !self.goy_rendered_by_ui || self.editor.is_some() {
-            self.draw_custom(b, a);
-        }
+        self.draw_custom(b, a);
         if self.editor.is_some() {
             self.draw_editor(b, a);
         } else if let Some(point) = self.pointer() {
@@ -764,12 +874,7 @@ impl TouchControls {
                 .any(|(r, _)| matches!(r, Role::Move(_)));
             let joy_zone_supported = self.settings.control_style == ControlStyle::GoyControl
                 || self.settings.mode != Mode::Dpad;
-            if control.is_none()
-                && !has_move
-                && joy_zone_supported
-                && self.visible(Control::Move)
-                && !self.dynamic_joystick()
-            {
+            if control.is_none() && !has_move && joy_zone_supported && self.visible(Control::Move) {
                 match self.settings.joystick_style.move_area {
                     JoystickMoveArea::MidBottomLeft if point[0] < 0.45 && point[1] > 0.35 => {
                         control = Some(Control::Move);
@@ -777,7 +882,12 @@ impl TouchControls {
                     JoystickMoveArea::RightSideAnywhere if point[0] >= 0.50 => {
                         control = Some(Control::Move);
                     }
-                    JoystickMoveArea::FollowFinger if point[0] < 0.48 && point[1] > 0.25 => {
+                    JoystickMoveArea::FollowFinger
+                        if (!self.dynamic_joystick()
+                            || self.settings.control_style == ControlStyle::GoyControl)
+                            && point[0] < 0.48
+                            && point[1] > 0.25 =>
+                    {
                         control = Some(Control::Move);
                     }
                     _ => {}
@@ -790,12 +900,13 @@ impl TouchControls {
                         .values()
                         .any(|(r, _)| matches!(r, Role::Move(_))) =>
                 {
-                    let anchor = if self.dynamic_joystick()
-                        || (joy_zone_supported
-                            && self.settings.joystick_style.move_area
-                                == JoystickMoveArea::FollowFinger)
+                    let anchor = if self.settings.mode != Mode::Dpad
+                        && (self.dynamic_joystick()
+                            || (joy_zone_supported
+                                && self.settings.joystick_style.move_area
+                                    != JoystickMoveArea::AbsoluteFixed))
                     {
-                        point
+                        [point[0].clamp(0.02, 0.98), point[1].clamp(0.02, 0.98)]
                     } else {
                         self.placement(Control::Move).center
                     };
@@ -1121,6 +1232,18 @@ pub fn theme_button(
         control_quad(b, a, x, y, w, h, rect, color);
     }
     true
+}
+
+/// Renders an MCPE-styled custom button with stone bevel border and centered label.
+pub fn draw_mcpe_custom_button(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    bounds: [f32; 4],
+    label: &str,
+    pressed: bool,
+    color: u32,
+) {
+    text_button(b, a, bounds, label, pressed, color, true);
 }
 
 /// Shared text controls: keep the raised frame at rest, visibly depress it while held.
@@ -1882,6 +2005,8 @@ mod tests {
     #[test]
     fn dynamic_joystick_keeps_fixed_and_dpad_controls_and_button_priority() {
         let mut t = TouchControls::default();
+        t.settings.dynamic_joystick = false;
+        t.settings.joystick_style.move_area = JoystickMoveArea::AbsoluteFixed;
         let home = t.placement(Control::Move).center;
         let start = [home[0] + 0.01, home[1]];
         t.update(1, start, true, false);
@@ -1889,6 +2014,7 @@ mod tests {
         t.clear();
 
         t.settings.dynamic_joystick = true;
+        t.settings.joystick_style.move_area = JoystickMoveArea::FollowFinger;
         t.settings.mode = Mode::Dpad;
         let home = t.placement(Control::Move).center;
         let up = [home[0], home[1] - t.placement(Control::Move).size / 3.0];

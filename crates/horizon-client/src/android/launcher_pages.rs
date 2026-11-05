@@ -79,7 +79,9 @@ pub(super) struct AnimState {
     pub last_tick: std::time::Instant,
     pub last_page: Page,
     pub last_category: SettingsCategory,
+    pub last_has_modal: bool,
     pub nav_pill_y: f32,
+    pub target_nav_y: f32,
     pub page_fade: f32,
     pub page_slide: f32,
     pub progress_smooth: f32,
@@ -87,6 +89,9 @@ pub(super) struct AnimState {
     pub shimmer_phase: f32,
     pub section_expand: [f32; 3],
     pub theme_pulse: f32,
+    pub intro_start: Option<std::time::Instant>,
+    pub intro_elapsed: f32,
+    pub intro_done: bool,
 }
 
 impl Default for AnimState {
@@ -95,7 +100,9 @@ impl Default for AnimState {
             last_tick: std::time::Instant::now(),
             last_page: Page::Play,
             last_category: SettingsCategory::Overview,
-            nav_pill_y: 74.0,
+            last_has_modal: false,
+            nav_pill_y: 62.0,
+            target_nav_y: 62.0,
             page_fade: 1.0,
             page_slide: 0.0,
             progress_smooth: 0.0,
@@ -103,6 +110,9 @@ impl Default for AnimState {
             shimmer_phase: 0.0,
             section_expand: [0.0; 3],
             theme_pulse: 1.0,
+            intro_start: Some(std::time::Instant::now()),
+            intro_elapsed: 0.0,
+            intro_done: false,
         }
     }
 }
@@ -117,15 +127,20 @@ impl AnimState {
         sections: [bool; 3],
     ) {
         let now = std::time::Instant::now();
-        let dt = now
+        let intro_t0 = *self.intro_start.get_or_insert(now);
+        self.intro_elapsed = now.duration_since(intro_t0).as_secs_f32();
+        let raw_dt = now
             .duration_since(self.last_tick)
             .as_secs_f32()
             .clamp(0.001, 0.08);
         self.last_tick = now;
+        self.target_nav_y = target_nav_y;
 
         if horizon_client::ui_theme::motion::reduced_motion() {
+            self.intro_done = true;
             self.last_page = page;
             self.last_category = category;
+            self.last_has_modal = has_modal;
             self.nav_pill_y = target_nav_y;
             self.page_fade = 1.0;
             self.page_slide = 0.0;
@@ -137,52 +152,71 @@ impl AnimState {
             return;
         }
 
-        if page != self.last_page || (page == Page::Settings && category != self.last_category) {
+        let page_changed =
+            page != self.last_page || (page == Page::Settings && category != self.last_category);
+        let modal_changed = has_modal != self.last_has_modal;
+        self.last_has_modal = has_modal;
+
+        if page_changed {
             self.last_page = page;
             self.last_category = category;
             self.page_fade = 0.0;
-            self.page_slide = 12.0;
+            self.page_slide = 18.0;
+        }
+        if modal_changed && has_modal {
+            self.modal_anim = 0.0;
         }
 
-        let speed = (dt * 16.5).min(1.0);
-        self.nav_pill_y += (target_nav_y - self.nav_pill_y) * (dt * 19.0).min(1.0);
-        self.page_fade = (self.page_fade + dt * 8.0).min(1.0);
+        // Clamp first transition frame dt to 16ms so an idle gap before a tap never
+        // consumes most of the entrance animation before the first frame renders.
+        let dt = if page_changed || modal_changed {
+            raw_dt.min(0.016)
+        } else {
+            raw_dt
+        };
+
+        let speed = (dt * 14.0).min(1.0);
+        self.nav_pill_y += (target_nav_y - self.nav_pill_y) * (dt * 18.0).min(1.0);
+        self.page_fade = (self.page_fade + dt * 7.5).min(1.0);
         self.page_slide *= (1.0 - speed).max(0.0);
         let modal_target = if has_modal { 1.0 } else { 0.0 };
-        self.modal_anim += (modal_target - self.modal_anim) * (dt * 16.0).min(1.0);
+        self.modal_anim += (modal_target - self.modal_anim) * (dt * 14.0).min(1.0);
         self.theme_pulse = (self.theme_pulse + dt * 6.5).min(1.0);
         for i in 0..3 {
             let target = if sections[i] { 1.0 } else { 0.0 };
-            self.section_expand[i] += (target - self.section_expand[i]) * (dt * 15.0).min(1.0);
+            self.section_expand[i] += (target - self.section_expand[i]) * (dt * 14.0).min(1.0);
         }
-        self.shimmer_phase = (self.shimmer_phase + dt * 0.85) % 1.0;
+        self.shimmer_phase = (self.shimmer_phase + dt * 0.95) % 1.0;
     }
 
     pub fn trigger_page_transition(&mut self) {
         if !horizon_client::ui_theme::motion::reduced_motion() {
+            self.last_tick = std::time::Instant::now();
             self.page_fade = 0.0;
-            self.page_slide = 12.0;
+            self.page_slide = 18.0;
         }
     }
 
     pub fn trigger_theme_pulse(&mut self) {
         if !horizon_client::ui_theme::motion::reduced_motion() {
+            self.last_tick = std::time::Instant::now();
             self.theme_pulse = 0.0;
         }
     }
 
     pub fn is_active(&self) -> bool {
+        if !self.intro_done {
+            return true;
+        }
         if horizon_client::ui_theme::motion::reduced_motion() {
             return false;
         }
         self.page_fade < 0.99
             || self.page_slide.abs() > 0.35
+            || (self.nav_pill_y - self.target_nav_y).abs() > 0.5
             || (self.modal_anim > 0.01 && self.modal_anim < 0.99)
             || self.theme_pulse < 0.99
-            || self
-                .section_expand
-                .iter()
-                .any(|v| *v > 0.01 && *v < 0.99)
+            || self.section_expand.iter().any(|v| *v > 0.01 && *v < 0.99)
     }
 }
 
@@ -326,6 +360,37 @@ pub(super) enum Action {
     SelectGradStartSwatch(u32),
     SelectGradEndSwatch(u32),
     ResetTheme,
+    // Intro & Installed / File Manager actions
+    SkipIntro,
+    SetInstalledSubTab(crate::catalog::InstalledSubTab),
+    SetInstalledFilter(crate::catalog::InstalledFilter),
+    CycleInstalledSort,
+    ExportLocal(usize),
+    FmNavigateRoot(&'static str),
+    FmBreadcrumb(usize),
+    FmBack,
+    FmForward,
+    FmUp,
+    FmOpenEntry(usize),
+    FmToggleSelect(usize),
+    FmSelectAll,
+    FmClearSelection,
+    FmCopy,
+    FmCut,
+    FmPaste,
+    FmImportHere,
+    FmOpenNewFolder,
+    FmSubmitNewFolder,
+    FmOpenRename(usize),
+    FmOpenRenameSelected,
+    FmSubmitRename,
+    FmRequestDeleteSingle(usize),
+    FmRequestDeleteSelected,
+    FmConfirmDelete,
+    FmOpenDetails(usize),
+    FmExportSingle(usize),
+    FmExportSelected,
+    FmCloseModal,
 }
 
 pub(super) fn button(
@@ -344,7 +409,11 @@ pub(super) fn button(
         w,
         h,
         radius,
-        if accent { my3_accent() } else { my3_surface_high() },
+        if accent {
+            my3_accent()
+        } else {
+            my3_surface_high()
+        },
     );
     if !accent {
         ui.border(x, y, w, h, radius, my3_border());
@@ -466,6 +535,30 @@ fn draw_setting_card(
             list_targets.push((rect, action));
             button(ui, targets, rect, label, action, accent);
         }
+        SettingControl::TextField {
+            label,
+            value,
+            hint,
+            active,
+            action,
+        } => {
+            let bw = 186.0f32.min(w * 0.46);
+            let fh = if label.is_empty() { 36.0 } else { 42.0 };
+            let rect = ui.text_field(
+                x + w - bw - 14.0,
+                y + (h - fh) * 0.5,
+                bw,
+                fh,
+                label,
+                value,
+                hint,
+                active,
+            );
+            list_targets.push((rect, action));
+            if let Some(c) = ui.clip_rect(rect) {
+                targets.push((c, action));
+            }
+        }
         SettingControl::Stepper(value_label, minus_action, plus_action) => {
             let right_x = x + w - 14.0;
             let plus_rect = [right_x - 36.0, y + (h - 36.0) * 0.5, 36.0, 36.0];
@@ -473,7 +566,14 @@ fn draw_setting_card(
             let val_x = plus_rect[0] - val_w - 6.0;
             let minus_rect = [val_x - 36.0 - 6.0, y + (h - 36.0) * 0.5, 36.0, 36.0];
 
-            ui.rounded(val_x, y + (h - 36.0) * 0.5, val_w, 36.0, 12.0, my3_surface());
+            ui.rounded(
+                val_x,
+                y + (h - 36.0) * 0.5,
+                val_w,
+                36.0,
+                12.0,
+                my3_surface(),
+            );
             ui.border(val_x, y + (h - 36.0) * 0.5, val_w, 36.0, 12.0, my3_border());
             let fitted_v = ui.fit_text(Face::SemiBold, 13.5, value_label, val_w - 10.0);
             let tw = ui.measure(Face::SemiBold, 13.5, &fitted_v);
@@ -496,6 +596,13 @@ fn draw_setting_card(
 enum SettingControl<'a> {
     Toggle(bool, Action),
     Button(&'a str, Action, bool),
+    TextField {
+        label: &'a str,
+        value: &'a str,
+        hint: &'a str,
+        active: bool,
+        action: Action,
+    },
     Stepper(&'a str, Action, Action),
 }
 
@@ -671,14 +778,12 @@ fn draw_my3_progress_view(
             let bg = if active {
                 my3_accent_soft()
             } else if done {
-                color::hex(0x1E2832, 255)
+                my3_surface_high()
             } else {
                 my3_surface()
             };
-            let border_col = if active {
+            let border_col = if active || done {
                 my3_accent()
-            } else if done {
-                color::hex(0x4E8E6E, 255)
             } else {
                 my3_border()
             };
@@ -693,7 +798,11 @@ fn draw_my3_progress_view(
                 11.5,
                 px + (pill_w - tw) * 0.5,
                 step_y + 5.0,
-                if active || done { my3_text() } else { my3_muted() },
+                if active || done {
+                    my3_text()
+                } else {
+                    my3_muted()
+                },
                 &fitted,
             );
         }
@@ -810,10 +919,16 @@ impl Launcher {
 
         // Fullscreen MCPE + GoyControl Editor with Draggable Floating Menu Pod
         if let Some(tc) = &mut self.control_editor {
+            let game_home = self.catalog.config.game_home(&self.home);
+            let prev_cwd = std::env::current_dir().ok();
+            let _ = std::env::set_current_dir(&game_home);
             let mut b = HudBatch::new([r.config.width, r.config.height]);
             tc.viewport(r.config.width, r.config.height);
             let profile_name = tc.settings.active_profile.clone();
             horizon_client::touch_ui::draw_hud_editor(tc, &mut b, &gui.atlas, &profile_name, None);
+            if let Some(prev) = prev_cwd {
+                let _ = std::env::set_current_dir(prev);
+            }
             if !r.render(&game::loading_frame(&b))? && !b.patches.is_empty() {
                 horizon_client::ui_theme::reset_atlas();
             }
@@ -822,22 +937,14 @@ impl Launcher {
 
         let mut b = HudBatch::new([r.config.width, r.config.height]);
         let mut ui = Ui::mobile(&gui.atlas, &mut b, (0.0, 0.0));
-        // OEM navigation bars can remain visible even in fullscreen (keypad phones).
-        // Inset the launcher layout only; keep surface and input coordinates intact.
-        if let Some(window) = &self.window {
-            use winit::platform::android::WindowExtAndroid;
-            let rect = window.content_rect();
-            let input = winit::platform::android::native_input_scale();
-            if rect.bottom > 0 {
-                ui.h = ui.h.min(rect.bottom as f32 * input[1] as f32 / ui.density);
-            }
-            if rect.right > 0 {
-                ui.w = ui.w.min(rect.right as f32 * input[0] as f32 / ui.density);
-            }
-        }
-        if let Some(bottom) = crate::native_ime::viewport_bottom() {
-            ui.h = ui.h.min(bottom as f32 / ui.density);
-        }
+        // Keep ui.w and ui.h synchronized with Launcher::ui_density(). When the soft keyboard is
+        // active, compute ime_top_dp and bias scroll offsets / modal Y positions instead of shrinking ui.h.
+        let ime_top_dp = if self.catalog.editing.is_some() {
+            crate::native_ime::viewport_bottom()
+                .map(|bottom_px| (bottom_px as f32 / ui.density).clamp(110.0, ui.h))
+        } else {
+            None
+        };
         let (w, h) = (ui.w, ui.h);
         let active_th = horizon_client::ui_theme::active_theme();
         ui.draw_theme_background(0.0, 0.0, w, h, &active_th);
@@ -885,25 +992,18 @@ impl Launcher {
         ui.text(Face::SemiBold, 16.0, 54.0, 10.0, my3_text(), "Horizon");
         let version_line = format!("Android {}", crate::backend::VERSION);
         let fitted_version = ui.fit_text(Face::Regular, 11.0, &version_line, brand_w);
-        ui.text(Face::Regular, 11.0, 54.0, 30.0, my3_muted(), &fitted_version);
+        ui.text(
+            Face::Regular,
+            11.0,
+            54.0,
+            30.0,
+            my3_muted(),
+            &fitted_version,
+        );
 
         // Top-right Account Selector Pill with circular avatar head, username, and chevron.
-        ui.rounded(
-            pill_x,
-            pill_y,
-            pill_w,
-            pill_h,
-            pill_h * 0.5,
-            my3_surface(),
-        );
-        ui.border(
-            pill_x,
-            pill_y,
-            pill_w,
-            pill_h,
-            pill_h * 0.5,
-            my3_border(),
-        );
+        ui.rounded(pill_x, pill_y, pill_w, pill_h, pill_h * 0.5, my3_surface());
+        ui.border(pill_x, pill_y, pill_w, pill_h, pill_h * 0.5, my3_border());
         ui.avatar_head_2d(pill_x + 6.0, pill_y + 4.0, 28.0, &account_name);
         if self.login.signed_in {
             ui.rounded(pill_x + 26.0, pill_y + 24.0, 9.0, 9.0, 4.5, my3_bg());
@@ -937,7 +1037,14 @@ impl Launcher {
 
         // ---- Left Vertical Navigation Rail + Smooth Gliding Active Pill ----
         let sidebar_w = if w < 560.0 { 136.0 } else { 184.0 };
-        ui.rounded(sidebar_w, 56.0, 1.0, (h - 68.0).max(10.0), 0.0, my3_border());
+        ui.rounded(
+            sidebar_w,
+            56.0,
+            1.0,
+            (h - 68.0).max(10.0),
+            0.0,
+            my3_border(),
+        );
         let nav_start_y = 62.0;
         let nav_step = ((h - nav_start_y - 14.0) / 6.0).clamp(36.0, 48.0);
         let nav_h = (nav_step - 5.0).clamp(32.0, 41.0);
@@ -947,6 +1054,7 @@ impl Launcher {
             .unwrap_or(0);
         let target_nav_y = nav_start_y + selected_idx as f32 * nav_step;
         let has_any_modal = self.catalog.project_modal.is_some()
+            || self.catalog.fm_modal.is_some()
             || self.chooser.is_some()
             || self.login.visible
             || self.exit_confirmation;
@@ -973,11 +1081,7 @@ impl Launcher {
             let ny = nav_start_y + i as f32 * nav_step;
             let nw = sidebar_w - 20.0;
             let selected = *page == self.catalog.page;
-            let fg = if selected {
-                my3_text()
-            } else {
-                my3_muted()
-            };
+            let fg = if selected { my3_text() } else { my3_muted() };
             ui.icon(
                 page_icon(*page),
                 nx + 14.0,
@@ -1191,21 +1295,42 @@ impl Launcher {
 
                 let btn_y = (h - 92.0).max(card_y + card_h + 12.0);
                 let play_w = content_w.min(256.0);
-                button(
-                    &mut ui,
-                    &mut self.targets,
-                    [content_x, btn_y, play_w, 46.0],
-                    if installed {
-                        "Play Minecraft 26.3"
-                    } else if self.error.is_some() {
-                        "Retry installation"
-                    } else {
-                        "Download Minecraft 26.3"
-                    },
-                    Action::Play,
-                    true,
-                );
-                if content_w > 390.0 {
+                let is_launching = self.launching || self.session_worker.is_some();
+                if is_launching && installed {
+                    let radius = 19.0;
+                    ui.rounded(content_x, btn_y, play_w, 46.0, radius, my3_accent_soft());
+                    ui.stroke_rounded(content_x, btn_y, play_w, 46.0, radius, 1.6, my3_accent());
+                    let bar_w = (play_w - 28.0).max(40.0);
+                    let bar_x = content_x + 14.0;
+                    let bar_y = btn_y + 34.0;
+                    ui.rounded(bar_x, bar_y, bar_w, 5.0, 2.5, my3_track());
+                    let sw = (bar_w * 0.36).clamp(24.0, bar_w);
+                    let sx = bar_x + (bar_w - sw) * self.anim.shimmer_phase.clamp(0.0, 1.0);
+                    ui.rounded(sx, bar_y, sw, 5.0, 2.5, my3_accent());
+                    ui.centered_fit(
+                        Face::SemiBold,
+                        15.0,
+                        [content_x + 12.0, btn_y + 4.0, play_w - 24.0, 26.0],
+                        my3_text(),
+                        "Launching...",
+                    );
+                } else {
+                    button(
+                        &mut ui,
+                        &mut self.targets,
+                        [content_x, btn_y, play_w, 46.0],
+                        if installed {
+                            "Play Minecraft 26.3"
+                        } else if self.error.is_some() {
+                            "Retry installation"
+                        } else {
+                            "Download Minecraft 26.3"
+                        },
+                        Action::Play,
+                        true,
+                    );
+                }
+                if content_w > 390.0 && !is_launching {
                     button(
                         &mut ui,
                         &mut self.targets,
@@ -1273,41 +1398,22 @@ impl Launcher {
             let search_y = 98.0 + slide_y;
             let search_btn_w = 98.0;
             let field_w = (content_w - search_btn_w - 8.0).max(120.0);
-            ui.rounded(content_x, search_y, field_w, 36.0, 18.0, my3_surface());
-            ui.border(content_x, search_y, field_w, 36.0, 18.0, my3_border());
-            ui.icon(
-                Icon::Search,
-                content_x + 12.0,
-                search_y + 9.0,
-                17.0,
-                my3_muted(),
-            );
-            let prompt = if self.catalog.query.is_empty() {
-                if page == Page::Mods {
-                    "Search mods or paste .hmod HTTPS link..."
-                } else {
-                    "Search catalog..."
-                }
+            let search_hint = if page == Page::Mods {
+                "Search mods or paste .hmod HTTPS link..."
             } else {
-                &self.catalog.query
+                "Search catalog..."
             };
-            let fitted_q = ui.fit_text(Face::Regular, 13.5, prompt, field_w - 42.0);
-            ui.text(
-                Face::Regular,
-                13.5,
-                content_x + 35.0,
-                search_y + 8.0,
-                if self.catalog.query.is_empty() {
-                    my3_muted()
-                } else {
-                    my3_text()
-                },
-                &fitted_q,
+            let search_rect = ui.text_field(
+                content_x,
+                search_y,
+                field_w,
+                36.0,
+                "",
+                &self.catalog.query,
+                search_hint,
+                self.catalog.editing == Some("search"),
             );
-            self.targets.push((
-                [content_x, search_y, field_w, 36.0],
-                Action::Field("search"),
-            ));
+            self.targets.push((search_rect, Action::Field("search")));
 
             button(
                 &mut ui,
@@ -1390,7 +1496,7 @@ impl Launcher {
                 .collect();
             let row_h = 72.0;
             let row_count = bundled.len() + catalog_rows.len();
-            let top = 176.0;
+            let top = 176.0 + slide_y;
             let bottom = h - 46.0;
             self.catalog.scroll = self
                 .catalog
@@ -1438,9 +1544,15 @@ impl Launcher {
                         44.0,
                         44.0,
                         12.0,
-                        color::hex(0x27213C, 255),
+                        my3_accent_soft(),
                     );
-                    ui.icon(fallback_icon, content_x + 21.0, y + 21.0, 22.0, my3_accent());
+                    ui.icon(
+                        fallback_icon,
+                        content_x + 21.0,
+                        y + 21.0,
+                        22.0,
+                        my3_accent(),
+                    );
                 }
 
                 // Badge chip ("Built-in • Tap for info")
@@ -1526,9 +1638,15 @@ impl Launcher {
                         44.0,
                         44.0,
                         12.0,
-                        color::hex(0x27213C, 255),
+                        my3_accent_soft(),
                     );
-                    ui.icon(fallback_icon, content_x + 21.0, y + 21.0, 22.0, my3_accent());
+                    ui.icon(
+                        fallback_icon,
+                        content_x + 21.0,
+                        y + 21.0,
+                        22.0,
+                        my3_accent(),
+                    );
                 }
 
                 let text_max = (content_w - 190.0).max(80.0);
@@ -1638,161 +1756,11 @@ impl Launcher {
                 false,
             );
         } else if page == Page::Installed {
-            use horizon_client::content_files::Kind;
-            ui.text(
-                Face::SemiBold,
-                19.0,
-                content_x,
-                62.0 + slide_y,
-                my3_text(),
-                "Installed Add-ons",
-            );
-            let top = 96.0;
-            let bottom = h - 46.0;
-            let row_height = if compact { 92.0 } else { 62.0 };
-            let total = Kind::ALL
-                .iter()
-                .enumerate()
-                .map(|(i, k)| {
-                    let expand = self.anim.section_expand[i].clamp(0.0, 1.0);
-                    44.0 + (self.catalog.local.iter().filter(|e| e.kind == *k).count() as f32
-                        * row_height
-                        * expand)
-                })
-                .sum::<f32>();
-            let maximum = (total - (bottom - top)).max(0.0);
-            self.catalog.scroll = self.catalog.scroll.clamp(0.0, maximum);
-            self.list_view = Some([top, bottom, maximum]);
-            ui.set_clip(Some([
-                content_x - 2.0,
-                top,
-                content_w + 4.0,
-                (bottom - top).max(1.0),
-            ]));
-            let mut offset = 0.0;
-            for (section, kind) in Kind::ALL.into_iter().enumerate() {
-                let count = self.catalog.local.iter().filter(|e| e.kind == kind).count();
-                let y = top + offset - self.catalog.scroll;
-                let label = format!(
-                    "{} {} ({count})",
-                    if self.catalog.sections[section] {
-                        "▾"
-                    } else {
-                        "▸"
-                    },
-                    kind.label()
-                );
-                let sec_w = (content_w - 118.0).max(120.0);
-                self.list_targets
-                    .push(([content_x, y, sec_w, 36.0], Action::ToggleSection(section)));
-                self.list_targets.push((
-                    [content_x + sec_w + 8.0, y, 110.0, 36.0],
-                    Action::Import(kind),
-                ));
-                if y + 36.0 >= top && y <= bottom {
-                    button(
-                        &mut ui,
-                        &mut self.targets,
-                        [content_x, y, sec_w, 36.0],
-                        &label,
-                        Action::ToggleSection(section),
-                        self.catalog.sections[section],
-                    );
-                    button(
-                        &mut ui,
-                        &mut self.targets,
-                        [content_x + sec_w + 8.0, y, 110.0, 36.0],
-                        "Import",
-                        Action::Import(kind),
-                        false,
-                    );
-                }
-                offset += 44.0;
-                let expand = self.anim.section_expand[section].clamp(0.0, 1.0);
-                if !self.catalog.sections[section] && expand <= 0.02 {
-                    continue;
-                }
-                for (i, item) in self
-                    .catalog
-                    .local
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, e)| e.kind == kind)
-                {
-                    let y = top + offset - self.catalog.scroll + (1.0 - expand) * -6.0;
-                    offset += row_height * expand;
-                    let toggle_x = if compact {
-                        content_x + 14.0
-                    } else {
-                        content_x + content_w - 230.0
-                    };
-                    let remove_x = content_x + content_w - 106.0;
-                    self.list_targets.push((
-                        [toggle_x, y, 108.0, row_height - 6.0],
-                        Action::ToggleLocal(i),
-                    ));
-                    self.list_targets.push((
-                        [remove_x, y, 94.0, row_height - 6.0],
-                        Action::DeleteLocal(i),
-                    ));
-                    if y + row_height < top || y > bottom {
-                        continue;
-                    }
-                    ui.rounded(content_x, y, content_w, row_height - 6.0, 14.0, my3_card_bg());
-                    ui.border(
-                        content_x,
-                        y,
-                        content_w,
-                        row_height - 6.0,
-                        14.0,
-                        my3_card_border(),
-                    );
-                    let title = ui.fit_text(
-                        Face::SemiBold,
-                        15.0,
-                        &item.title,
-                        if compact {
-                            content_w - 28.0
-                        } else {
-                            content_w - 250.0
-                        },
-                    );
-                    ui.text(
-                        Face::SemiBold,
-                        15.0,
-                        content_x + 16.0,
-                        y + 8.0,
-                        my3_text(),
-                        &title,
-                    );
-                    ui.text(
-                        Face::Regular,
-                        12.5,
-                        content_x + 16.0,
-                        y + 30.0,
-                        my3_muted(),
-                        kind.label(),
-                    );
-                    toggle(
-                        &mut ui,
-                        &mut self.targets,
-                        [toggle_x, y + if compact { 44.0 } else { 8.0 }, 108.0, 38.0],
-                        item.enabled,
-                        Action::ToggleLocal(i),
-                    );
-                    button(
-                        &mut ui,
-                        &mut self.targets,
-                        [remove_x, y + if compact { 44.0 } else { 9.0 }, 94.0, 36.0],
-                        "Remove",
-                        Action::DeleteLocal(i),
-                        false,
-                    );
-                }
-            }
-            ui.set_clip(None);
+            self.draw_installed(&mut ui, content_x, content_w, h, compact, slide_y);
         } else {
-            self.draw_settings_page(&mut ui, content_x, content_w, h, compact, slide_y);
+            self.draw_settings_page(
+                &mut ui, content_x, content_w, h, compact, slide_y, ime_top_dp,
+            );
         }
 
         // Bottom status strip when not in a full-screen progress dialog.
@@ -1803,7 +1771,14 @@ impl Launcher {
             if !status.is_empty() && !page.is_catalog() {
                 let fitted =
                     ui.fit_text(Face::Regular, 12.5, status, (content_w - 116.0).max(60.0));
-                ui.text(Face::Regular, 12.5, content_x, h - 32.0, my3_muted(), &fitted);
+                ui.text(
+                    Face::Regular,
+                    12.5,
+                    content_x,
+                    h - 32.0,
+                    my3_muted(),
+                    &fitted,
+                );
             }
             if page == Page::Play
                 || (page == Page::Settings
@@ -1833,10 +1808,11 @@ impl Launcher {
                 &mut self.targets,
                 &self.catalog.config.name,
                 self.catalog.editing,
+                self.anim.modal_anim,
             );
         }
         if let Some(chooser) = &mut self.chooser {
-            chooser.draw(&mut ui, &mut self.targets);
+            chooser.draw(&mut ui, &mut self.targets, self.anim.modal_anim);
             self.list_targets = chooser.navigation(ui.w);
             self.list_view = Some(chooser.viewport(ui.h));
         }
@@ -1855,41 +1831,8 @@ impl Launcher {
             ui.rounded(w - 10.0, top, 4.0, height, 2.0, my3_border());
             ui.rounded(w - 10.0, y, 4.0, thumb, 2.0, my3_muted());
         }
-        let caret_visible = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .is_ok_and(|t| t.as_millis() % 1000 < 500);
-        if caret_visible && let Some(name) = self.catalog.editing {
-            let value = match name {
-                "name" => self.catalog.config.name.clone(),
-                "profile_name" => self.catalog.config.custom_profile_name.clone(),
-                "profile_desc" => self.catalog.config.custom_profile_desc.clone(),
-                "server" => self.catalog.config.server.clone(),
-                "render_scale" => self.catalog.render_scale_text.clone(),
-                "theme_bg" => self.catalog.config.theme.custom_bg_hex.clone(),
-                "theme_surface" => self.catalog.config.theme.custom_surface_hex.clone(),
-                "theme_accent" => self.catalog.config.theme.custom_accent_hex.clone(),
-                "theme_grad_start" => self.catalog.config.theme.gradient_start_hex.clone(),
-                "theme_grad_mid" => self.catalog.config.theme.gradient_mid_hex.clone(),
-                "theme_grad_end" => self.catalog.config.theme.gradient_end_hex.clone(),
-                _ => self.catalog.query.clone(),
-            };
-            for ([x, y, w, _], action) in &self.targets {
-                if *action == Action::Field(name)
-                    || (name == "render_scale" && *action == Action::RenderScale)
-                {
-                    let pad = if name == "search" { 35.0 } else { 14.0 };
-                    let text = ui.fit_text(Face::Regular, 13.5, &value, w - pad - 12.0);
-                    let caret_x = x + pad + ui.measure(Face::Regular, 13.5, &text);
-                    ui.rounded(
-                        caret_x.min(x + w - 10.0),
-                        y + 9.0,
-                        1.5,
-                        18.0,
-                        0.5,
-                        my3_accent(),
-                    );
-                }
-            }
+        if self.catalog.fm_modal.is_some() {
+            self.draw_fm_modal(&mut ui, w, h, ime_top_dp);
         }
         if self.exit_confirmation {
             self.targets.clear();
@@ -1985,6 +1928,31 @@ impl Launcher {
             );
         }
         crate::documents::draw_ui(&mut ui);
+        if !self.anim.intro_done {
+            let session_prog = if self.session_worker.is_some() {
+                0.30
+            } else {
+                0.55
+            };
+            let loading_progress = (0.45f32 + session_prog).clamp(0.0, 1.0);
+            if loading_progress >= 0.999 && self.anim.intro_elapsed >= 1.55 {
+                self.anim.intro_done = true;
+            } else {
+                let intro_status = if self.session_worker.is_some() {
+                    "Syncing account session & skins..."
+                } else if self.catalog.search_worker_active() {
+                    "Loading content catalog..."
+                } else {
+                    ""
+                };
+                ui.draw_horizon_intro(self.anim.intro_elapsed, loading_progress, intro_status);
+                if loading_progress >= 0.999 {
+                    self.targets.clear();
+                    self.list_targets.clear();
+                    self.targets.push(([0.0, 0.0, w, h], Action::SkipIntro));
+                }
+            }
+        }
         ui.finish();
 
         if !r.render(&game::loading_frame(&b))? && !b.patches.is_empty() {
@@ -1993,6 +1961,1066 @@ impl Launcher {
             horizon_client::ui_theme::reset_atlas();
         }
         Ok(())
+    }
+
+    /// Material Design 3 Library & Content Manager with two top sub-views:
+    /// View 1: `InstalledSubTab::Library` (Search, Category Filter Pills, Sort, Rich M3 Cards)
+    /// View 2: `InstalledSubTab::FileManager` (Real filesystem manager with Back/Forward history,
+    /// Breadcrumbs, Multi-select, Copy/Cut/Paste, Import, Export, Rename, New Folder, Delete, Details)
+    fn draw_installed(
+        &mut self,
+        ui: &mut Ui,
+        content_x: f32,
+        content_w: f32,
+        h: f32,
+        compact: bool,
+        slide_y: f32,
+    ) {
+        use crate::catalog::{InstalledFilter, InstalledSubTab};
+        use horizon_client::content_files::Kind;
+
+        let header_y = 60.0 + slide_y;
+        ui.text(
+            Face::SemiBold,
+            19.0,
+            content_x,
+            header_y + 2.0,
+            my3_text(),
+            if self.catalog.installed_sub_tab == InstalledSubTab::Library {
+                "Content Library"
+            } else {
+                "Profile File Manager"
+            },
+        );
+
+        // Top right segmented sub-tab switcher (Library vs File Manager)
+        let tab_w = if compact { 104.0 } else { 126.0 };
+        let lib_rect = [
+            content_x + content_w - tab_w * 2.0 - 6.0,
+            header_y - 1.0,
+            tab_w,
+            32.0,
+        ];
+        let fm_rect = [content_x + content_w - tab_w, header_y - 1.0, tab_w, 32.0];
+        button(
+            ui,
+            &mut self.targets,
+            lib_rect,
+            "Library",
+            Action::SetInstalledSubTab(InstalledSubTab::Library),
+            self.catalog.installed_sub_tab == InstalledSubTab::Library,
+        );
+        button(
+            ui,
+            &mut self.targets,
+            fm_rect,
+            "File Manager",
+            Action::SetInstalledSubTab(InstalledSubTab::FileManager),
+            self.catalog.installed_sub_tab == InstalledSubTab::FileManager,
+        );
+
+        if self.catalog.installed_sub_tab == InstalledSubTab::Library {
+            // Row 1: Search filter input + Sort selector + Quick Import CTA
+            let row1_y = 96.0 + slide_y;
+            let sort_w = if compact { 96.0 } else { 114.0 };
+            let imp_w = if compact { 78.0 } else { 94.0 };
+            let search_w = (content_w - sort_w - imp_w - 14.0).max(100.0);
+            let search_r = ui.text_field(
+                content_x,
+                row1_y,
+                search_w,
+                34.0,
+                "",
+                &self.catalog.installed_query,
+                "Search installed mods, packs & shaders...",
+                self.catalog.editing == Some("installed_search"),
+            );
+            self.targets
+                .push((search_r, Action::Field("installed_search")));
+
+            let sort_r = [content_x + search_w + 7.0, row1_y, sort_w, 34.0];
+            button(
+                ui,
+                &mut self.targets,
+                sort_r,
+                self.catalog.installed_sort.label(),
+                Action::CycleInstalledSort,
+                false,
+            );
+
+            let import_kind = match self.catalog.installed_filter {
+                InstalledFilter::Mods | InstalledFilter::All => Kind::Mods,
+                InstalledFilter::Packs => Kind::Packs,
+                InstalledFilter::Shaders => Kind::Shaders,
+            };
+            let imp_r = [content_x + search_w + sort_w + 14.0, row1_y, imp_w, 34.0];
+            button(
+                ui,
+                &mut self.targets,
+                imp_r,
+                "+ Import",
+                Action::Import(import_kind),
+                true,
+            );
+
+            // Row 2: Category filter pills (All, Mods, Resource Packs, Shaders)
+            let row2_y = 136.0 + slide_y;
+            let pill_gap = 6.0;
+            let pill_w = ((content_w - pill_gap * 3.0) / 4.0).max(64.0);
+            for (i, filter) in InstalledFilter::ALL.into_iter().enumerate() {
+                let count = self
+                    .catalog
+                    .local
+                    .iter()
+                    .filter(|item| filter.matches(item.kind))
+                    .count();
+                let lbl = if compact && filter == InstalledFilter::Packs {
+                    format!("Packs ({count})")
+                } else {
+                    format!("{} ({count})", filter.label())
+                };
+                let pr = [
+                    content_x + i as f32 * (pill_w + pill_gap),
+                    row2_y,
+                    pill_w,
+                    28.0,
+                ];
+                button(
+                    ui,
+                    &mut self.targets,
+                    pr,
+                    &lbl,
+                    Action::SetInstalledFilter(filter),
+                    self.catalog.installed_filter == filter,
+                );
+            }
+
+            // Filtered items list
+            let q = self.catalog.installed_query.trim().to_lowercase();
+            let filtered: Vec<(usize, crate::catalog::LocalItem)> = self
+                .catalog
+                .local
+                .iter()
+                .cloned()
+                .enumerate()
+                .filter(|(_, item)| {
+                    self.catalog.installed_filter.matches(item.kind)
+                        && (q.is_empty()
+                            || item.title.to_lowercase().contains(&q)
+                            || item.file.to_lowercase().contains(&q)
+                            || item.subtitle.to_lowercase().contains(&q))
+                })
+                .collect();
+
+            let top = 172.0 + slide_y;
+            let bottom = h - 42.0;
+            if filtered.is_empty() {
+                self.list_view = None;
+                let card_h = (bottom - top - 8.0).clamp(110.0, 176.0);
+                ui.rounded(content_x, top, content_w, card_h, 18.0, my3_surface());
+                ui.border(content_x, top, content_w, card_h, 18.0, my3_border());
+                ui.rounded(
+                    content_x + 20.0,
+                    top + 18.0,
+                    42.0,
+                    42.0,
+                    12.0,
+                    my3_accent_soft(),
+                );
+                ui.icon(
+                    Icon::Installed,
+                    content_x + 30.0,
+                    top + 28.0,
+                    22.0,
+                    my3_accent(),
+                );
+                ui.text(
+                    Face::SemiBold,
+                    16.0,
+                    content_x + 74.0,
+                    top + 18.0,
+                    my3_text(),
+                    if self.catalog.local.is_empty() {
+                        "No local add-ons installed yet"
+                    } else {
+                        "No installed add-ons match your filter"
+                    },
+                );
+                ui.hint_line(
+                    content_x + 74.0,
+                    top + 42.0,
+                    (content_w - 92.0).max(80.0),
+                    "Import .hmod/.jar mods, .zip resource packs, or shader packs — or browse files in File Manager.",
+                    my3_muted(),
+                );
+                let cta_y = top + card_h - 46.0;
+                let cta_w = ((content_w - 56.0) / 3.0).clamp(88.0, 168.0);
+                button(
+                    ui,
+                    &mut self.targets,
+                    [content_x + 20.0, cta_y, cta_w, 34.0],
+                    "Import Mod",
+                    Action::Import(Kind::Mods),
+                    true,
+                );
+                button(
+                    ui,
+                    &mut self.targets,
+                    [content_x + 28.0 + cta_w, cta_y, cta_w, 34.0],
+                    "Import Pack",
+                    Action::Import(Kind::Packs),
+                    false,
+                );
+                button(
+                    ui,
+                    &mut self.targets,
+                    [content_x + 36.0 + cta_w * 2.0, cta_y, cta_w, 34.0],
+                    "File Manager",
+                    Action::SetInstalledSubTab(InstalledSubTab::FileManager),
+                    false,
+                );
+                return;
+            }
+
+            let row_h = 68.0;
+            let total_h = filtered.len() as f32 * row_h;
+            let max_scroll = (total_h - (bottom - top)).max(0.0);
+            self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
+            self.list_view = Some([top, bottom, max_scroll]);
+
+            ui.set_clip(Some([
+                content_x - 2.0,
+                top,
+                content_w + 4.0,
+                (bottom - top).max(1.0),
+            ]));
+            for (row_idx, (orig_idx, item)) in filtered.into_iter().enumerate() {
+                let y = top + row_idx as f32 * row_h - self.catalog.scroll;
+                let card_h = 62.0;
+                let toggle_r = [content_x + content_w - 196.0, y + 12.0, 56.0, 38.0];
+                let export_r = [content_x + content_w - 132.0, y + 14.0, 58.0, 34.0];
+                let delete_r = [content_x + content_w - 68.0, y + 14.0, 58.0, 34.0];
+                self.list_targets
+                    .push((toggle_r, Action::ToggleLocal(orig_idx)));
+                self.list_targets
+                    .push((export_r, Action::ExportLocal(orig_idx)));
+                self.list_targets
+                    .push((delete_r, Action::DeleteLocal(orig_idx)));
+
+                if y + card_h < top || y > bottom {
+                    continue;
+                }
+                ui.rounded(content_x, y, content_w, card_h, 14.0, my3_card_bg());
+                ui.border(
+                    content_x,
+                    y,
+                    content_w,
+                    card_h,
+                    14.0,
+                    if item.enabled {
+                        my3_accent()
+                    } else {
+                        my3_card_border()
+                    },
+                );
+
+                // Left file-type icon + badge pill (MOD / PACK / SHADER)
+                let kind_icon = match item.kind {
+                    Kind::Mods => Icon::Mods,
+                    Kind::Packs => Icon::Packs,
+                    Kind::Shaders => Icon::Shaders,
+                };
+                ui.rounded(
+                    content_x + 10.0,
+                    y + 9.0,
+                    44.0,
+                    44.0,
+                    12.0,
+                    if item.enabled {
+                        my3_accent_soft()
+                    } else {
+                        my3_surface_high()
+                    },
+                );
+                ui.icon(
+                    kind_icon,
+                    content_x + 22.0,
+                    y + 15.0,
+                    20.0,
+                    if item.enabled {
+                        my3_accent()
+                    } else {
+                        my3_muted()
+                    },
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    8.0,
+                    [content_x + 11.0, y + 36.0, 42.0, 14.0],
+                    if item.enabled {
+                        my3_accent()
+                    } else {
+                        my3_muted()
+                    },
+                    item.badge,
+                );
+
+                // Status badge pill ("ACTIVE" vs "OFF")
+                let status_str = if item.enabled { "ACTIVE" } else { "OFF" };
+                let status_w = if item.enabled { 48.0 } else { 34.0 };
+                let text_x = content_x + 64.0;
+                let max_title_w = (content_w - 280.0 - status_w).max(60.0);
+                let fitted_title = ui.fit_text(Face::SemiBold, 14.5, &item.title, max_title_w);
+                let title_w = ui.text(
+                    Face::SemiBold,
+                    14.5,
+                    text_x,
+                    y + 9.0,
+                    my3_text(),
+                    &fitted_title,
+                );
+                let badge_x = text_x + title_w + 8.0;
+                ui.rounded(
+                    badge_x,
+                    y + 11.0,
+                    status_w,
+                    18.0,
+                    9.0,
+                    if item.enabled {
+                        my3_accent_soft()
+                    } else {
+                        my3_surface_high()
+                    },
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    8.5,
+                    [badge_x, y + 11.0, status_w, 18.0],
+                    if item.enabled {
+                        my3_accent()
+                    } else {
+                        my3_muted()
+                    },
+                    status_str,
+                );
+
+                ui.text_clipped(
+                    Face::Regular,
+                    11.5,
+                    text_x,
+                    y + 34.0,
+                    (content_w - 270.0).max(70.0),
+                    my3_muted(),
+                    &item.subtitle,
+                );
+
+                // Enable/Disable M3 switch + Export & Delete buttons
+                ui.m3_switch(toggle_r[0] + 2.0, y + 17.0, item.enabled);
+                if let Some(c) = ui.clip_rect(toggle_r) {
+                    self.targets.push((c, Action::ToggleLocal(orig_idx)));
+                }
+                button(
+                    ui,
+                    &mut self.targets,
+                    export_r,
+                    "Export",
+                    Action::ExportLocal(orig_idx),
+                    false,
+                );
+                button(
+                    ui,
+                    &mut self.targets,
+                    delete_r,
+                    "Delete",
+                    Action::DeleteLocal(orig_idx),
+                    false,
+                );
+            }
+            ui.set_clip(None);
+            return;
+        }
+
+        // ---- Sub-View 2: Integrated Mini File Manager (`InstalledSubTab::FileManager`) ----
+        // Row 1: Back, Forward, Up + Clickable Breadcrumb Trail + Import & New Folder CTAs
+        let nav_y = 94.0 + slide_y;
+        let nav_btn_w = 32.0;
+        let has_back = !self.catalog.fm_back_stack.is_empty();
+        let has_fwd = !self.catalog.fm_forward_stack.is_empty();
+        let has_up = !self.catalog.fm_current_dir.is_empty();
+        button(
+            ui,
+            &mut self.targets,
+            [content_x, nav_y, nav_btn_w, 30.0],
+            "←",
+            Action::FmBack,
+            has_back,
+        );
+        button(
+            ui,
+            &mut self.targets,
+            [content_x + 36.0, nav_y, nav_btn_w, 30.0],
+            "→",
+            Action::FmForward,
+            has_fwd,
+        );
+        button(
+            ui,
+            &mut self.targets,
+            [content_x + 72.0, nav_y, nav_btn_w, 30.0],
+            "↑",
+            Action::FmUp,
+            has_up,
+        );
+
+        let right_cta_w = if compact { 148.0 } else { 172.0 };
+        let imp_btn_w = (right_cta_w - 6.0) * 0.48;
+        let new_folder_w = right_cta_w - 6.0 - imp_btn_w;
+        button(
+            ui,
+            &mut self.targets,
+            [content_x + content_w - right_cta_w, nav_y, imp_btn_w, 30.0],
+            "Import",
+            Action::FmImportHere,
+            true,
+        );
+        button(
+            ui,
+            &mut self.targets,
+            [
+                content_x + content_w - new_folder_w,
+                nav_y,
+                new_folder_w,
+                30.0,
+            ],
+            "+ Folder",
+            Action::FmOpenNewFolder,
+            false,
+        );
+
+        // Clickable Breadcrumb Bar between Up button and Right CTAs
+        let bc_x = content_x + 110.0;
+        let bc_w = (content_x + content_w - right_cta_w - 8.0 - bc_x).max(60.0);
+        ui.rounded(bc_x, nav_y, bc_w, 30.0, 10.0, my3_surface());
+        ui.border(bc_x, nav_y, bc_w, 30.0, 10.0, my3_border());
+        let mut cur_bx = bc_x + 6.0;
+        let root_lbl = format!("P{}", self.catalog.config.profile + 1);
+        let root_bw = (ui.measure(Face::SemiBold, 11.5, &root_lbl) + 12.0).min(bc_w - 10.0);
+        let root_br = [cur_bx, nav_y + 4.0, root_bw, 22.0];
+        ui.rounded(
+            root_br[0],
+            root_br[1],
+            root_br[2],
+            root_br[3],
+            6.0,
+            if self.catalog.fm_current_dir.is_empty() {
+                my3_accent_soft()
+            } else {
+                my3_surface_high()
+            },
+        );
+        ui.centered_fit(Face::SemiBold, 11.0, root_br, my3_accent(), &root_lbl);
+        self.targets.push((root_br, Action::FmBreadcrumb(0)));
+        cur_bx += root_bw + 4.0;
+
+        if !self.catalog.fm_current_dir.is_empty() {
+            let parts: Vec<&str> = self
+                .catalog
+                .fm_current_dir
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .collect();
+            for (idx, seg) in parts.iter().enumerate() {
+                if cur_bx + 28.0 > bc_x + bc_w {
+                    break;
+                }
+                ui.text(Face::Regular, 11.0, cur_bx, nav_y + 7.0, my3_muted(), "/");
+                cur_bx += 8.0;
+                let avail = (bc_x + bc_w - 6.0 - cur_bx).max(24.0);
+                let fit_seg = ui.fit_text(Face::Medium, 11.0, seg, (avail - 10.0).max(16.0));
+                let seg_w = (ui.measure(Face::Medium, 11.0, &fit_seg) + 10.0).min(avail);
+                let seg_r = [cur_bx, nav_y + 4.0, seg_w, 22.0];
+                let is_last = idx + 1 == parts.len();
+                ui.rounded(
+                    seg_r[0],
+                    seg_r[1],
+                    seg_r[2],
+                    seg_r[3],
+                    6.0,
+                    if is_last {
+                        my3_accent_soft()
+                    } else {
+                        my3_surface_high()
+                    },
+                );
+                ui.centered_fit(
+                    Face::Medium,
+                    11.0,
+                    seg_r,
+                    if is_last { my3_text() } else { my3_muted() },
+                    &fit_seg,
+                );
+                self.targets.push((seg_r, Action::FmBreadcrumb(idx + 1)));
+                cur_bx += seg_w + 4.0;
+            }
+        }
+
+        // Row 2: Quick Root Folder Pills (Root, Worlds, Mods, Packs, Shaders, Controls, Shots, Reports)
+        let root_y = 128.0 + slide_y;
+        let root_dirs = crate::document_store::FM_ROOT_DIRS;
+        let r_gap = 4.0;
+        let r_w = ((content_w - r_gap * (root_dirs.len() as f32 - 1.0)) / root_dirs.len() as f32)
+            .max(38.0);
+        for (i, (rel, label)) in root_dirs.iter().enumerate() {
+            let rx = content_x + i as f32 * (r_w + r_gap);
+            let active = self.catalog.fm_current_dir == *rel
+                || (!rel.is_empty()
+                    && self
+                        .catalog
+                        .fm_current_dir
+                        .strip_prefix(*rel)
+                        .is_some_and(|rest| rest.starts_with('/')));
+            button(
+                ui,
+                &mut self.targets,
+                [rx, root_y, r_w, 26.0],
+                label,
+                Action::FmNavigateRoot(rel),
+                active,
+            );
+        }
+
+        // Row 3: Multi-Select & Clipboard Action Toolbar
+        let tool_y = 158.0 + slide_y;
+        let sel_count = self.catalog.fm_selected.len();
+        let clip_count = self
+            .catalog
+            .fm_clipboard
+            .as_ref()
+            .map_or(0, |(v, _)| v.len());
+        let paste_label = if clip_count > 0 {
+            format!("Paste ({clip_count})")
+        } else {
+            "Paste".into()
+        };
+        let del_label = if sel_count > 0 {
+            format!("Delete ({sel_count})")
+        } else {
+            "Delete".into()
+        };
+        let tools: [(&str, Action, bool); 8] = [
+            ("All", Action::FmSelectAll, false),
+            ("Clear", Action::FmClearSelection, false),
+            ("Copy", Action::FmCopy, sel_count > 0),
+            ("Cut", Action::FmCut, sel_count > 0),
+            (&paste_label, Action::FmPaste, clip_count > 0),
+            ("Rename", Action::FmOpenRenameSelected, sel_count == 1),
+            ("Export", Action::FmExportSelected, sel_count > 0),
+            (&del_label, Action::FmRequestDeleteSelected, sel_count > 0),
+        ];
+        let t_gap = 4.0;
+        let t_w = ((content_w - t_gap * (tools.len() as f32 - 1.0)) / tools.len() as f32).max(38.0);
+        for (i, (lbl, act, hi)) in tools.into_iter().enumerate() {
+            let tx = content_x + i as f32 * (t_w + t_gap);
+            button(ui, &mut self.targets, [tx, tool_y, t_w, 26.0], lbl, act, hi);
+        }
+
+        // Scrollable File & Directory Rows
+        let top = 190.0 + slide_y;
+        let bottom = h - 42.0;
+        if self.catalog.fm_entries.is_empty() {
+            self.list_view = None;
+            let empty_h = (bottom - top - 8.0).clamp(96.0, 152.0);
+            ui.rounded(content_x, top, content_w, empty_h, 16.0, my3_surface());
+            ui.border(content_x, top, content_w, empty_h, 16.0, my3_border());
+            ui.icon(
+                Icon::Folder,
+                content_x + 20.0,
+                top + 20.0,
+                24.0,
+                my3_accent(),
+            );
+            ui.text(
+                Face::SemiBold,
+                15.0,
+                content_x + 54.0,
+                top + 18.0,
+                my3_text(),
+                "This folder is empty",
+            );
+            ui.hint_line(
+                content_x + 54.0,
+                top + 40.0,
+                (content_w - 72.0).max(80.0),
+                "Use Import to copy files from Android storage, + Folder to create a directory, or Paste from clipboard.",
+                my3_muted(),
+            );
+            return;
+        }
+
+        let row_h = 52.0;
+        let total_h = self.catalog.fm_entries.len() as f32 * row_h;
+        let max_scroll = (total_h - (bottom - top)).max(0.0);
+        self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
+        self.list_view = Some([top, bottom, max_scroll]);
+
+        ui.set_clip(Some([
+            content_x - 2.0,
+            top,
+            content_w + 4.0,
+            (bottom - top).max(1.0),
+        ]));
+        let entries_snapshot = self.catalog.fm_entries.clone();
+        for (idx, entry) in entries_snapshot.iter().enumerate() {
+            let y = top + idx as f32 * row_h - self.catalog.scroll;
+            let card_h = 46.0;
+            let selected = self.catalog.fm_selected.contains(&entry.rel_path);
+            let check_r = [content_x + 6.0, y + 7.0, 32.0, 32.0];
+            let actions_w = if compact { 164.0 } else { 204.0 };
+            let open_r = [
+                content_x + 40.0,
+                y,
+                (content_w - 44.0 - actions_w).max(60.0),
+                card_h,
+            ];
+            let btn_w = (actions_w - 14.0) / 3.0;
+            let info_r = [content_x + content_w - actions_w, y + 8.0, btn_w, 30.0];
+            let ren_r = [info_r[0] + btn_w + 4.0, y + 8.0, btn_w, 30.0];
+            let del_r = [ren_r[0] + btn_w + 4.0, y + 8.0, btn_w, 30.0];
+
+            self.list_targets.push((open_r, Action::FmOpenEntry(idx)));
+            self.list_targets
+                .push((check_r, Action::FmToggleSelect(idx)));
+            self.list_targets.push((info_r, Action::FmOpenDetails(idx)));
+            self.list_targets.push((ren_r, Action::FmOpenRename(idx)));
+            self.list_targets
+                .push((del_r, Action::FmRequestDeleteSingle(idx)));
+
+            if y + card_h < top || y > bottom {
+                continue;
+            }
+            ui.rounded(
+                content_x,
+                y,
+                content_w,
+                card_h,
+                12.0,
+                if selected {
+                    my3_nav_active()
+                } else {
+                    my3_card_bg()
+                },
+            );
+            ui.border(
+                content_x,
+                y,
+                content_w,
+                card_h,
+                12.0,
+                if selected {
+                    my3_accent()
+                } else {
+                    my3_card_border()
+                },
+            );
+
+            ui.m3_checkbox(content_x + 11.0, y + 13.0, 20.0, selected, "");
+            if let Some(c) = ui.clip_rect(check_r) {
+                self.targets.push((c, Action::FmToggleSelect(idx)));
+            }
+
+            let entry_icon = if entry.is_dir {
+                Icon::Folder
+            } else if entry.name.ends_with(".hmod") || entry.name.ends_with(".jar") {
+                Icon::Mods
+            } else if entry.name.ends_with(".hshader") {
+                Icon::Shaders
+            } else if entry.name.ends_with(".zip") {
+                Icon::Packs
+            } else {
+                Icon::FileText
+            };
+            ui.rounded(
+                content_x + 38.0,
+                y + 7.0,
+                32.0,
+                32.0,
+                9.0,
+                if entry.is_dir {
+                    my3_accent_soft()
+                } else {
+                    my3_surface_high()
+                },
+            );
+            ui.icon(
+                entry_icon,
+                content_x + 46.0,
+                y + 15.0,
+                16.0,
+                if entry.is_dir {
+                    my3_accent()
+                } else {
+                    my3_text()
+                },
+            );
+
+            let tx = content_x + 78.0;
+            let max_tw = (content_w - 86.0 - actions_w).max(50.0);
+            ui.text_clipped(
+                Face::SemiBold,
+                13.5,
+                tx,
+                y + 5.0,
+                max_tw,
+                my3_text(),
+                &entry.name,
+            );
+            let meta_line = if entry.is_dir {
+                format!("Folder  •  {} item(s)  •  Tap to open", entry.size_bytes)
+            } else {
+                format!(
+                    "{}  •  {}  •  {}",
+                    entry.kind_label,
+                    crate::catalog::format_file_size(entry.size_bytes),
+                    crate::document_store::format_timestamp_utc(entry.modified_secs)
+                )
+            };
+            ui.text_clipped(
+                Face::Regular,
+                10.5,
+                tx,
+                y + 24.0,
+                max_tw,
+                my3_muted(),
+                &meta_line,
+            );
+            if let Some(c) = ui.clip_rect(open_r) {
+                self.targets.push((c, Action::FmOpenEntry(idx)));
+            }
+
+            button(
+                ui,
+                &mut self.targets,
+                info_r,
+                "Details",
+                Action::FmOpenDetails(idx),
+                false,
+            );
+            button(
+                ui,
+                &mut self.targets,
+                ren_r,
+                "Rename",
+                Action::FmOpenRename(idx),
+                false,
+            );
+            button(
+                ui,
+                &mut self.targets,
+                del_r,
+                "Delete",
+                Action::FmRequestDeleteSingle(idx),
+                false,
+            );
+        }
+        ui.set_clip(None);
+    }
+
+    /// Modal dialogs for the Integrated Mini File Manager:
+    /// - Mandatory Delete Confirmation (`FmModal::ConfirmDelete`)
+    /// - Rename with `Ui::text_field` & path-traversal validation (`FmModal::Rename`)
+    /// - Create New Folder with `Ui::text_field` (`FmModal::NewFolder`)
+    /// - View File Details with metadata & read-only text preview (`FmModal::Details`)
+    fn draw_fm_modal(&mut self, ui: &mut Ui, w: f32, h: f32, ime_top_dp: Option<f32>) {
+        let Some(modal) = self.catalog.fm_modal.clone() else {
+            return;
+        };
+        self.targets.clear();
+        self.list_targets.clear();
+        self.list_view = None;
+
+        let modal_t = self.anim.modal_anim.clamp(0.2, 1.0);
+        ui.rounded(
+            0.0,
+            0.0,
+            w,
+            h,
+            0.0,
+            horizon_client::hud::rgba(6, 5, 12, (185.0 * modal_t) as u8),
+        );
+
+        match modal {
+            crate::catalog::FmModal::ConfirmDelete { paths } => {
+                let mw = (w - 32.0).min(420.0);
+                let mh = 190.0;
+                let mx = (w - mw) * 0.5;
+                let my = (h - mh) * 0.5;
+                ui.rounded(mx, my, mw, mh, 20.0, my3_surface());
+                ui.border(mx, my, mw, mh, 20.0, my3_border());
+                ui.icon(Icon::Trash, mx + 20.0, my + 20.0, 22.0, my3_accent());
+                let title = if paths.len() == 1 {
+                    "Delete selected item?".to_owned()
+                } else {
+                    format!("Delete {} selected items?", paths.len())
+                };
+                ui.text(
+                    Face::SemiBold,
+                    18.0,
+                    mx + 50.0,
+                    my + 18.0,
+                    my3_text(),
+                    &title,
+                );
+                let preview_names = paths.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+                ui.text_clipped(
+                    Face::Medium,
+                    12.5,
+                    mx + 20.0,
+                    my + 54.0,
+                    mw - 40.0,
+                    my3_accent(),
+                    &preview_names,
+                );
+                ui.hint_line(
+                    mx + 20.0,
+                    my + 80.0,
+                    mw - 40.0,
+                    "This permanently deletes the selected file(s) from this profile and cannot be undone.",
+                    my3_muted(),
+                );
+                let bw = (mw - 52.0) * 0.5;
+                button(
+                    ui,
+                    &mut self.targets,
+                    [mx + 20.0, my + mh - 54.0, bw, 38.0],
+                    "Cancel",
+                    Action::FmCloseModal,
+                    false,
+                );
+                button(
+                    ui,
+                    &mut self.targets,
+                    [mx + 32.0 + bw, my + mh - 54.0, bw, 38.0],
+                    "Confirm Delete",
+                    Action::FmConfirmDelete,
+                    true,
+                );
+            }
+            crate::catalog::FmModal::Rename { target_rel } => {
+                let mw = (w - 32.0).min(430.0);
+                let mh = 196.0;
+                let mx = (w - mw) * 0.5;
+                let mut my = (h - mh) * 0.5;
+                if let Some(ime_y) = ime_top_dp {
+                    my = my.min((ime_y - mh - 8.0).max(6.0));
+                }
+                ui.rounded(mx, my, mw, mh, 20.0, my3_surface());
+                ui.border(mx, my, mw, mh, 20.0, my3_border());
+                ui.text(
+                    Face::SemiBold,
+                    18.0,
+                    mx + 20.0,
+                    my + 16.0,
+                    my3_text(),
+                    "Rename File or Folder",
+                );
+                ui.hint_line(
+                    mx + 20.0,
+                    my + 42.0,
+                    mw - 40.0,
+                    &format!("Target: /{target_rel} (Slashes and '..' are rejected)"),
+                    my3_muted(),
+                );
+                let field_r = ui.text_field(
+                    mx + 20.0,
+                    my + 68.0,
+                    mw - 40.0,
+                    48.0,
+                    "NEW NAME",
+                    &self.catalog.fm_input_text,
+                    "Enter new filename",
+                    self.catalog.editing == Some("fm_rename"),
+                );
+                self.targets.push((field_r, Action::Field("fm_rename")));
+                let bw = (mw - 52.0) * 0.5;
+                button(
+                    ui,
+                    &mut self.targets,
+                    [mx + 20.0, my + mh - 52.0, bw, 38.0],
+                    "Cancel",
+                    Action::FmCloseModal,
+                    false,
+                );
+                button(
+                    ui,
+                    &mut self.targets,
+                    [mx + 32.0 + bw, my + mh - 52.0, bw, 38.0],
+                    "Save Name",
+                    Action::FmSubmitRename,
+                    true,
+                );
+            }
+            crate::catalog::FmModal::NewFolder => {
+                let mw = (w - 32.0).min(430.0);
+                let mh = 196.0;
+                let mx = (w - mw) * 0.5;
+                let mut my = (h - mh) * 0.5;
+                if let Some(ime_y) = ime_top_dp {
+                    my = my.min((ime_y - mh - 8.0).max(6.0));
+                }
+                ui.rounded(mx, my, mw, mh, 20.0, my3_surface());
+                ui.border(mx, my, mw, mh, 20.0, my3_border());
+                ui.text(
+                    Face::SemiBold,
+                    18.0,
+                    mx + 20.0,
+                    my + 16.0,
+                    my3_text(),
+                    "Create New Folder",
+                );
+                let loc = if self.catalog.fm_current_dir.is_empty() {
+                    "/".to_owned()
+                } else {
+                    format!("/{}", self.catalog.fm_current_dir)
+                };
+                ui.hint_line(
+                    mx + 20.0,
+                    my + 42.0,
+                    mw - 40.0,
+                    &format!("Location: {loc}"),
+                    my3_muted(),
+                );
+                let field_r = ui.text_field(
+                    mx + 20.0,
+                    my + 68.0,
+                    mw - 40.0,
+                    48.0,
+                    "FOLDER NAME",
+                    &self.catalog.fm_input_text,
+                    "Enter folder name",
+                    self.catalog.editing == Some("fm_new_folder"),
+                );
+                self.targets.push((field_r, Action::Field("fm_new_folder")));
+                let bw = (mw - 52.0) * 0.5;
+                button(
+                    ui,
+                    &mut self.targets,
+                    [mx + 20.0, my + mh - 52.0, bw, 38.0],
+                    "Cancel",
+                    Action::FmCloseModal,
+                    false,
+                );
+                button(
+                    ui,
+                    &mut self.targets,
+                    [mx + 32.0 + bw, my + mh - 52.0, bw, 38.0],
+                    "Create Folder",
+                    Action::FmSubmitNewFolder,
+                    true,
+                );
+            }
+            crate::catalog::FmModal::Details(details) => {
+                let mw = (w - 36.0).min(560.0);
+                let mh = (h - 32.0).min(340.0);
+                let mx = (w - mw) * 0.5;
+                let my = (h - mh) * 0.5;
+                ui.rounded(mx, my, mw, mh, 20.0, my3_surface());
+                ui.border(mx, my, mw, mh, 20.0, my3_border());
+                ui.text_clipped(
+                    Face::SemiBold,
+                    17.5,
+                    mx + 20.0,
+                    my + 14.0,
+                    mw - 80.0,
+                    my3_text(),
+                    &details.name,
+                );
+                let close_r = [mx + mw - 50.0, my + 12.0, 34.0, 34.0];
+                icon_action_button(
+                    ui,
+                    &mut self.targets,
+                    close_r,
+                    my3_surface_high(),
+                    Icon::Close,
+                    Action::FmCloseModal,
+                );
+
+                let meta_summary = format!(
+                    "Path: /{}  •  Kind: {}  •  Size: {} ({} bytes)  •  Modified: {}",
+                    details.rel_path,
+                    details.kind_label,
+                    crate::catalog::format_file_size(details.size_bytes),
+                    details.size_bytes,
+                    details.modified_label
+                );
+                ui.hint_line(mx + 20.0, my + 40.0, mw - 40.0, &meta_summary, my3_accent());
+                ui.rounded(mx + 18.0, my + 62.0, mw - 36.0, 1.0, 0.0, my3_border());
+
+                let box_y = my + 70.0;
+                let box_h = (mh - 126.0).max(60.0);
+                ui.rounded(mx + 18.0, box_y, mw - 36.0, box_h, 12.0, my3_card_bg());
+                ui.border(mx + 18.0, box_y, mw - 36.0, box_h, 12.0, my3_card_border());
+                ui.set_clip(Some([mx + 22.0, box_y + 4.0, mw - 44.0, box_h - 8.0]));
+                for (i, line) in details.preview_lines.iter().enumerate() {
+                    let ly = box_y + 8.0 + i as f32 * 16.0;
+                    if ly + 14.0 > box_y + box_h {
+                        break;
+                    }
+                    ui.text_clipped(Face::Mono, 10.5, mx + 26.0, ly, mw - 52.0, my3_text(), line);
+                }
+                ui.set_clip(None);
+
+                let btn_y = my + mh - 46.0;
+                if let Some(entry_idx) = self
+                    .catalog
+                    .fm_entries
+                    .iter()
+                    .position(|e| e.rel_path == details.rel_path)
+                {
+                    let bw = (mw - 56.0) / 4.0;
+                    button(
+                        ui,
+                        &mut self.targets,
+                        [mx + 18.0, btn_y, bw, 34.0],
+                        "Rename",
+                        Action::FmOpenRename(entry_idx),
+                        false,
+                    );
+                    button(
+                        ui,
+                        &mut self.targets,
+                        [mx + 24.0 + bw, btn_y, bw, 34.0],
+                        "Export",
+                        Action::FmExportSingle(entry_idx),
+                        false,
+                    );
+                    button(
+                        ui,
+                        &mut self.targets,
+                        [mx + 30.0 + bw * 2.0, btn_y, bw, 34.0],
+                        "Delete",
+                        Action::FmRequestDeleteSingle(entry_idx),
+                        false,
+                    );
+                    button(
+                        ui,
+                        &mut self.targets,
+                        [mx + 36.0 + bw * 3.0, btn_y, bw, 34.0],
+                        "Done",
+                        Action::FmCloseModal,
+                        true,
+                    );
+                } else {
+                    button(
+                        ui,
+                        &mut self.targets,
+                        [mx + mw - 128.0, btn_y, 110.0, 34.0],
+                        "Close",
+                        Action::FmCloseModal,
+                        true,
+                    );
+                }
+            }
+        }
     }
 
     /// Material You 3 Project Detail Dialog showing Modrinth PFP, Description,
@@ -2061,14 +3089,7 @@ impl Launcher {
             false
         };
         if !icon_drawn {
-            ui.rounded(
-                mx + 18.0,
-                my + 16.0,
-                50.0,
-                50.0,
-                14.0,
-                color::hex(0x27213C, 255),
-            );
+            ui.rounded(mx + 18.0, my + 16.0, 50.0, 50.0, 14.0, my3_accent_soft());
             ui.icon(
                 page_icon(self.catalog.page),
                 mx + 31.0,
@@ -2174,7 +3195,14 @@ impl Launcher {
         // Section 2: Screenshots (from Modrinth gallery)
         if !modal.screenshots.is_empty() {
             if cy + 20.0 >= body_top && cy <= body_bottom {
-                ui.text(Face::SemiBold, 14.0, inner_x, cy, my3_accent(), "Screenshots");
+                ui.text(
+                    Face::SemiBold,
+                    14.0,
+                    inner_x,
+                    cy,
+                    my3_accent(),
+                    "Screenshots",
+                );
             }
             cy += 22.0;
             let count = modal.screenshots.len().min(3) as f32;
@@ -2304,6 +3332,7 @@ impl Launcher {
 
     /// Revamped Settings tab matching `45062.jpg` with 2-column MY3 category cards
     /// and dedicated sub-pages for Video, Launcher, Controls, Experimental, and Diagnostics.
+    #[allow(clippy::too_many_arguments)]
     fn draw_settings_page(
         &mut self,
         ui: &mut Ui,
@@ -2312,6 +3341,7 @@ impl Launcher {
         h: f32,
         compact: bool,
         slide_y: f32,
+        ime_top_dp: Option<f32>,
     ) {
         let cat = self.catalog.settings_category;
         if cat == SettingsCategory::Overview {
@@ -2391,7 +3421,7 @@ impl Launcher {
                     cx + 20.0,
                     cy + (card_h - icon_size) * 0.5,
                     icon_size,
-                    color::hex(0xD5CEE8, 255),
+                    my3_accent(),
                 );
                 ui.rounded(
                     cx + 54.0,
@@ -2399,7 +3429,7 @@ impl Launcher {
                     1.5,
                     card_h * 0.48,
                     0.75,
-                    color::hex(0x2E2B40, 255),
+                    my3_border(),
                 );
 
                 let text_x = cx + 68.0;
@@ -2460,7 +3490,7 @@ impl Launcher {
             &fitted_cat,
         );
 
-        let list_top = 102.0;
+        let list_top = 102.0 + slide_y;
         let list_bottom = h - 42.0;
         let card_h = 58.0;
         let step_y = 66.0;
@@ -2474,7 +3504,18 @@ impl Launcher {
             SettingsCategory::Video => {
                 let c = &self.catalog.config;
                 let count = 7;
-                let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
+                let extra_ime = if ime_top_dp.is_some() { 180.0 } else { 0.0 };
+                let max_scroll =
+                    (count as f32 * step_y + extra_ime - (list_bottom - list_top)).max(0.0);
+                if self.catalog.editing == Some("server")
+                    && let Some(ime_y) = ime_top_dp
+                {
+                    let server_y = list_top + 6.0 * step_y - self.catalog.scroll;
+                    if server_y + card_h > ime_y - 12.0 {
+                        self.catalog.scroll = (list_top + 6.0 * step_y + card_h - (ime_y - 16.0))
+                            .clamp(0.0, max_scroll);
+                    }
+                }
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
@@ -2497,7 +3538,17 @@ impl Launcher {
                     (
                         "Client resolution scale",
                         "3D framebuffer resolution percentage (lower boosts FPS on high-DPI phones)",
-                        SettingControl::Button(&res_str, Action::RenderScale, false),
+                        if self.catalog.editing == Some("render_scale") {
+                            SettingControl::TextField {
+                                label: "SCALE %",
+                                value: &self.catalog.render_scale_text,
+                                hint: "25 - 100%",
+                                active: true,
+                                action: Action::Field("render_scale"),
+                            }
+                        } else {
+                            SettingControl::Button(&res_str, Action::RenderScale, false)
+                        },
                     ),
                     (
                         "Display refresh rate",
@@ -2516,8 +3567,8 @@ impl Launcher {
                     ),
                     (
                         "Immersive fullscreen",
-                        "Disabled for now while the reported freezes are investigated",
-                        SettingControl::Button("Off", Action::Immersive, false),
+                        "Hide Android system navigation bars during launcher and gameplay",
+                        SettingControl::Toggle(c.screen.immersive, Action::Immersive),
                     ),
                     (
                         "Avoid camera cutout / notch",
@@ -2617,7 +3668,13 @@ impl Launcher {
                     (
                         "Quick-join server address",
                         "Optional server IP:port to connect immediately on Play",
-                        SettingControl::Button(&server_str, Action::Field("server"), false),
+                        SettingControl::TextField {
+                            label: "SERVER IP",
+                            value: &c.server,
+                            hint: &server_str,
+                            active: self.catalog.editing == Some("server"),
+                            action: Action::Field("server"),
+                        },
                     ),
                     (
                         "Open game & world folders",
@@ -2665,7 +3722,25 @@ impl Launcher {
                 } else {
                     580.0
                 };
-                let max_scroll = (total_h - (list_bottom - list_top)).max(0.0);
+                let extra_ime = if ime_top_dp.is_some() { 200.0 } else { 0.0 };
+                let max_scroll = (total_h + extra_ime - (list_bottom - list_top)).max(0.0);
+                if let Some(ime_y) = ime_top_dp {
+                    let target_row_y = match self.catalog.editing {
+                        Some("theme_accent") => Some(list_top + 320.0),
+                        Some("theme_bg" | "theme_surface") => Some(list_top + 404.0),
+                        Some("theme_grad_start" | "theme_grad_mid" | "theme_grad_end") => {
+                            Some(list_top + 532.0)
+                        }
+                        _ => None,
+                    };
+                    if let Some(raw_y) = target_row_y {
+                        let vis_y = raw_y - self.catalog.scroll;
+                        if vis_y + 56.0 > ime_y - 12.0 {
+                            self.catalog.scroll =
+                                (raw_y + 56.0 - (ime_y - 16.0)).clamp(0.0, max_scroll);
+                        }
+                    }
+                }
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
@@ -2685,7 +3760,13 @@ impl Launcher {
                 if cy + prev_h >= list_top && cy <= list_bottom {
                     ui.rounded(px, cy, pw, prev_h, 16.0, resolved.surface);
                     ui.clipped([px + 2.0, cy + 2.0, pw - 4.0, prev_h - 4.0], |ui| {
-                        ui.draw_theme_background(px + 2.0, cy + 2.0, pw - 4.0, prev_h - 4.0, &resolved);
+                        ui.draw_theme_background(
+                            px + 2.0,
+                            cy + 2.0,
+                            pw - 4.0,
+                            prev_h - 4.0,
+                            &resolved,
+                        );
                     });
                     ui.stroke_rounded(px, cy, pw, prev_h, 16.0, 1.5, resolved.accent);
 
@@ -2716,12 +3797,8 @@ impl Launcher {
                         if resolved.is_light { "Light" } else { "Dark" },
                         theme_cfg.background_mode.label()
                     );
-                    let fit_pt = ui.fit_text(
-                        Face::SemiBold,
-                        13.5,
-                        &p_title,
-                        (inner_w - 190.0).max(80.0),
-                    );
+                    let fit_pt =
+                        ui.fit_text(Face::SemiBold, 13.5, &p_title, (inner_w - 190.0).max(80.0));
                     ui.text(
                         Face::SemiBold,
                         13.5,
@@ -2742,12 +3819,8 @@ impl Launcher {
                             theme_cfg.custom_bg_hex.clone()
                         }
                     );
-                    let fit_ps = ui.fit_text(
-                        Face::Regular,
-                        11.0,
-                        &p_sub,
-                        (inner_w - 190.0).max(80.0),
-                    );
+                    let fit_ps =
+                        ui.fit_text(Face::Regular, 11.0, &p_sub, (inner_w - 190.0).max(80.0));
                     ui.text(
                         Face::Regular,
                         11.0,
@@ -2791,7 +3864,8 @@ impl Launcher {
                             Action::SetThemeAppearance(mode),
                             active,
                         );
-                        self.list_targets.push((r, Action::SetThemeAppearance(mode)));
+                        self.list_targets
+                            .push((r, Action::SetThemeAppearance(mode)));
                     }
                     for (i, (lbl, bmode, active)) in [
                         (
@@ -2850,7 +3924,8 @@ impl Launcher {
                     let ry = cy + row as f32 * (p_h + p_gap);
                     let r = [rx, ry, p_w, p_h];
                     let active = theme_cfg.preset == preset;
-                    self.list_targets.push((r, Action::SelectThemePreset(preset)));
+                    self.list_targets
+                        .push((r, Action::SelectThemePreset(preset)));
                     if ry + p_h >= list_top && ry <= list_bottom {
                         ui.rounded(
                             rx,
@@ -2888,7 +3963,14 @@ impl Launcher {
                             1.2,
                             color::hex(p_acc, 255),
                         );
-                        ui.rounded(rx + 20.0, ry + 15.0, 12.0, 12.0, 6.0, color::hex(p_acc, 255));
+                        ui.rounded(
+                            rx + 20.0,
+                            ry + 15.0,
+                            12.0,
+                            12.0,
+                            6.0,
+                            color::hex(p_acc, 255),
+                        );
                         let fit_lbl = ui.fit_text(Face::SemiBold, 11.8, preset.label(), p_w - 42.0);
                         ui.text(
                             Face::SemiBold,
@@ -2955,16 +4037,19 @@ impl Launcher {
                             self.list_targets.push((c, Action::SelectAccentSwatch(rgb)));
                         }
                     }
-                    let hex_btn_r = [content_x + content_w - 122.0, cy + 7.0, 110.0, 36.0];
-                    let hex_lbl = format!("Hex: {}", theme_cfg.custom_accent_hex);
-                    button(
-                        ui,
-                        &mut self.targets,
-                        hex_btn_r,
-                        &hex_lbl,
-                        Action::Field("theme_accent"),
+                    let hex_btn_r = ui.text_field(
+                        content_x + content_w - 126.0,
+                        cy + 5.0,
+                        114.0,
+                        40.0,
+                        "ACCENT HEX",
+                        &theme_cfg.custom_accent_hex,
+                        "#9A7BFF",
                         self.catalog.editing == Some("theme_accent"),
                     );
+                    if let Some(c) = ui.clip_rect(hex_btn_r) {
+                        self.targets.push((c, Action::Field("theme_accent")));
+                    }
                     self.list_targets
                         .push((hex_btn_r, Action::Field("theme_accent")));
                 }
@@ -3012,29 +4097,35 @@ impl Launcher {
                             self.list_targets.push((c, Action::SelectBgSwatch(rgb)));
                         }
                     }
-                    let bg_hex_r = [content_x + content_w - 228.0, cy + 7.0, 106.0, 36.0];
-                    let bg_lbl = format!("BG {}", theme_cfg.custom_bg_hex);
-                    button(
-                        ui,
-                        &mut self.targets,
-                        bg_hex_r,
-                        &bg_lbl,
-                        Action::Field("theme_bg"),
+                    let bg_hex_r = ui.text_field(
+                        content_x + content_w - 232.0,
+                        cy + 5.0,
+                        108.0,
+                        40.0,
+                        "BG HEX",
+                        &theme_cfg.custom_bg_hex,
+                        "#13111C",
                         self.catalog.editing == Some("theme_bg"),
                     );
+                    if let Some(c) = ui.clip_rect(bg_hex_r) {
+                        self.targets.push((c, Action::Field("theme_bg")));
+                    }
                     self.list_targets
                         .push((bg_hex_r, Action::Field("theme_bg")));
 
-                    let surf_hex_r = [content_x + content_w - 116.0, cy + 7.0, 106.0, 36.0];
-                    let surf_lbl = format!("Card {}", theme_cfg.custom_surface_hex);
-                    button(
-                        ui,
-                        &mut self.targets,
-                        surf_hex_r,
-                        &surf_lbl,
-                        Action::Field("theme_surface"),
+                    let surf_hex_r = ui.text_field(
+                        content_x + content_w - 118.0,
+                        cy + 5.0,
+                        108.0,
+                        40.0,
+                        "CARD HEX",
+                        &theme_cfg.custom_surface_hex,
+                        "#1D192B",
                         self.catalog.editing == Some("theme_surface"),
                     );
+                    if let Some(c) = ui.clip_rect(surf_hex_r) {
+                        self.targets.push((c, Action::Field("theme_surface")));
+                    }
                     self.list_targets
                         .push((surf_hex_r, Action::Field("theme_surface")));
                 }
@@ -3073,7 +4164,11 @@ impl Launcher {
                     ui.border(content_x, cy, content_w, 50.0, 12.0, my3_card_border());
                     let stop_w = ((content_w - 36.0) / 3.0).max(80.0);
                     for (i, (lbl, hex_val, field_name)) in [
-                        ("Stop 1", theme_cfg.gradient_start_hex.as_str(), "theme_grad_start"),
+                        (
+                            "Stop 1",
+                            theme_cfg.gradient_start_hex.as_str(),
+                            "theme_grad_start",
+                        ),
                         (
                             if theme_cfg.use_three_stops {
                                 "Mid Stop"
@@ -3083,26 +4178,28 @@ impl Launcher {
                             theme_cfg.gradient_mid_hex.as_str(),
                             "theme_grad_mid",
                         ),
-                        ("End Stop", theme_cfg.gradient_end_hex.as_str(), "theme_grad_end"),
+                        (
+                            "End Stop",
+                            theme_cfg.gradient_end_hex.as_str(),
+                            "theme_grad_end",
+                        ),
                     ]
                     .into_iter()
                     .enumerate()
                     {
-                        let r = [
+                        let r = ui.text_field(
                             content_x + 8.0 + i as f32 * (stop_w + 8.0),
-                            cy + 7.0,
+                            cy + 5.0,
                             stop_w,
-                            36.0,
-                        ];
-                        let txt = format!("{lbl}: {hex_val}");
-                        button(
-                            ui,
-                            &mut self.targets,
-                            r,
-                            &txt,
-                            Action::Field(field_name),
+                            40.0,
+                            lbl,
+                            hex_val,
+                            "#1A1333",
                             self.catalog.editing == Some(field_name),
                         );
+                        if let Some(c) = ui.clip_rect(r) {
+                            self.targets.push((c, Action::Field(field_name)));
+                        }
                         self.list_targets.push((r, Action::Field(field_name)));
                     }
                 }
@@ -3139,7 +4236,8 @@ impl Launcher {
                         Action::StepGradientMidPos(1),
                         false,
                     );
-                    self.list_targets.push((mid_r, Action::StepGradientMidPos(1)));
+                    self.list_targets
+                        .push((mid_r, Action::StepGradientMidPos(1)));
                 }
 
                 ui.set_clip(None);
@@ -3237,12 +4335,36 @@ impl Launcher {
                     (
                         &copy_title,
                         "Duplicate selected layout into a new independent preset with custom name & description",
-                        SettingControl::Button(copy_btn_label, Action::CopyActivePreset, false),
+                        if self.catalog.editing == Some("profile_name") {
+                            SettingControl::TextField {
+                                label: "PRESET NAME",
+                                value: &self.catalog.config.custom_profile_name,
+                                hint: "Enter preset name",
+                                active: true,
+                                action: Action::Field("profile_name"),
+                            }
+                        } else {
+                            SettingControl::Button(copy_btn_label, Action::CopyActivePreset, false)
+                        },
                     ),
                     (
                         &edit_meta_title,
                         edit_meta_sub,
-                        SettingControl::Button(edit_meta_btn, Action::EditActivePresetMeta, false),
+                        if self.catalog.editing == Some("profile_desc") {
+                            SettingControl::TextField {
+                                label: "DESCRIPTION",
+                                value: &self.catalog.config.custom_profile_desc,
+                                hint: "Enter preset description",
+                                active: true,
+                                action: Action::Field("profile_desc"),
+                            }
+                        } else {
+                            SettingControl::Button(
+                                edit_meta_btn,
+                                Action::EditActivePresetMeta,
+                                false,
+                            )
+                        },
                     ),
                     (
                         "Sensitivity (Touch Look Speed)",
@@ -3261,10 +4383,7 @@ impl Launcher {
                     (
                         "Split Touch (Aim & Look)",
                         "Separates aiming and camera look with center crosshair",
-                        SettingControl::Toggle(
-                            touch_cfg.crosshair(),
-                            Action::ToggleSplitControls,
-                        ),
+                        SettingControl::Toggle(touch_cfg.crosshair(), Action::ToggleSplitControls),
                     ),
                     (
                         "HUD Button Scale",
@@ -3335,7 +4454,11 @@ impl Launcher {
                             half_w,
                             58.0,
                             14.0,
-                            if selected { my3_surface() } else { my3_card_bg() },
+                            if selected {
+                                my3_surface()
+                            } else {
+                                my3_card_bg()
+                            },
                         );
                         ui.border(
                             rx,
@@ -3640,6 +4763,7 @@ impl Launcher {
             Some(Action::SettingsCat(cat)) => {
                 self.catalog.settings_category = cat;
                 self.catalog.scroll = 0.0;
+                self.anim.trigger_page_transition();
             }
             Some(Action::OpenProject(index)) => {
                 if let Some(project) = self.catalog.results.get(index).cloned() {
@@ -4030,9 +5154,9 @@ impl Launcher {
                 self.modify_touch_settings(|t| t.gyroscope = !t.gyroscope);
             }
             Some(Action::Immersive) => {
-                self.catalog.status =
-                    "Immersive fullscreen is disabled for now while the reported freezes are investigated; Android's navigation bar stays visible."
-                        .into();
+                self.catalog.config.screen.immersive ^= true;
+                self.catalog.config.save(&self.home)?;
+                self.configure_screen();
             }
             Some(Action::Cutout) => {
                 self.catalog.config.screen.avoid_cutout ^= true;
@@ -4371,6 +5495,8 @@ impl Launcher {
                     "theme_grad_start" => &self.catalog.config.theme.gradient_start_hex,
                     "theme_grad_mid" => &self.catalog.config.theme.gradient_mid_hex,
                     "theme_grad_end" => &self.catalog.config.theme.gradient_end_hex,
+                    "installed_search" => &self.catalog.installed_query,
+                    "fm_rename" | "fm_new_folder" => &self.catalog.fm_input_text,
                     _ => &self.catalog.query,
                 };
                 crate::platform::show(initial);
@@ -4485,7 +5611,8 @@ impl Launcher {
             }
             Some(Action::SetThemeAppearance(appearance)) => {
                 self.catalog.config.theme.appearance = appearance;
-                if self.catalog.config.theme.preset == horizon_client::ui_theme::ThemePreset::DaylightFrost
+                if self.catalog.config.theme.preset
+                    == horizon_client::ui_theme::ThemePreset::DaylightFrost
                     && appearance == horizon_client::ui_theme::ThemeAppearance::Dark
                 {
                     self.catalog.config.theme.preset =
@@ -4588,6 +5715,272 @@ impl Launcher {
                 self.anim.trigger_theme_pulse();
                 self.catalog.config.save(&self.home)?;
                 self.catalog.status = "Theme reset to Horizon default (Obsidian Violet).".into();
+            }
+            Some(Action::SkipIntro) => {
+                self.anim.intro_done = true;
+            }
+            Some(Action::SetInstalledSubTab(tab)) => {
+                self.catalog.installed_sub_tab = tab;
+                self.catalog.editing = None;
+                crate::platform::hide();
+                self.catalog.scroll = 0.0;
+                if tab == crate::catalog::InstalledSubTab::FileManager {
+                    self.catalog.refresh_fm(&self.home);
+                }
+                self.anim.trigger_page_transition();
+            }
+            Some(Action::SetInstalledFilter(filter)) => {
+                self.catalog.installed_filter = filter;
+                self.catalog.scroll = 0.0;
+            }
+            Some(Action::CycleInstalledSort) => {
+                self.catalog.installed_sort = self.catalog.installed_sort.next();
+                self.catalog.sort_local_items();
+                self.catalog.scroll = 0.0;
+            }
+            Some(Action::ExportLocal(idx)) => {
+                if let Some(item) = self.catalog.local.get(idx).cloned() {
+                    let game_home = self.catalog.config.game_home(&self.home);
+                    let direct = game_home.join(&item.file);
+                    let path = if direct.exists() {
+                        direct
+                    } else {
+                        game_home.join(item.kind.folder()).join(&item.file)
+                    };
+                    self.catalog.status = match crate::documents::export_file(
+                        &self.home,
+                        self.catalog.config.profile,
+                        &path,
+                    ) {
+                        Ok(msg) => msg,
+                        Err(e) => e,
+                    };
+                }
+            }
+            Some(Action::FmNavigateRoot(rel)) => {
+                self.catalog.fm_navigate(&self.home, (*rel).to_owned());
+            }
+            Some(Action::FmBreadcrumb(depth)) => {
+                if depth == 0 {
+                    self.catalog.fm_navigate(&self.home, String::new());
+                } else {
+                    let target = self
+                        .catalog
+                        .fm_current_dir
+                        .split('/')
+                        .filter(|s| !s.is_empty())
+                        .take(depth)
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    self.catalog.fm_navigate(&self.home, target);
+                }
+            }
+            Some(Action::FmBack) => {
+                let _ = self.catalog.fm_back(&self.home);
+            }
+            Some(Action::FmForward) => {
+                let _ = self.catalog.fm_forward(&self.home);
+            }
+            Some(Action::FmUp) => {
+                self.catalog.fm_up(&self.home);
+            }
+            Some(Action::FmOpenEntry(idx)) => {
+                if let Some(entry) = self.catalog.fm_entries.get(idx).cloned() {
+                    if entry.is_dir {
+                        self.catalog.fm_navigate(&self.home, entry.rel_path);
+                    } else {
+                        let game_home = self.catalog.config.game_home(&self.home);
+                        match crate::document_store::fm_details(
+                            &self.home,
+                            &game_home,
+                            &entry.rel_path,
+                        ) {
+                            Ok(details) => {
+                                self.catalog.fm_modal =
+                                    Some(crate::catalog::FmModal::Details(details));
+                            }
+                            Err(e) => self.catalog.status = e,
+                        }
+                    }
+                }
+            }
+            Some(Action::FmToggleSelect(idx)) => {
+                if let Some(entry) = self.catalog.fm_entries.get(idx) {
+                    let rel = entry.rel_path.clone();
+                    if !self.catalog.fm_selected.remove(&rel) {
+                        self.catalog.fm_selected.insert(rel);
+                    }
+                }
+            }
+            Some(Action::FmSelectAll) => {
+                for entry in &self.catalog.fm_entries {
+                    self.catalog.fm_selected.insert(entry.rel_path.clone());
+                }
+            }
+            Some(Action::FmClearSelection) => {
+                self.catalog.fm_selected.clear();
+            }
+            Some(Action::FmCopy) => {
+                self.catalog.fm_copy_or_cut(&self.home, false);
+            }
+            Some(Action::FmCut) => {
+                self.catalog.fm_copy_or_cut(&self.home, true);
+            }
+            Some(Action::FmPaste) => {
+                self.catalog.fm_paste_here(&self.home);
+            }
+            Some(Action::FmImportHere) => {
+                let game_home = self.catalog.config.game_home(&self.home);
+                match crate::document_store::resolve_fm_path(
+                    &self.home,
+                    &game_home,
+                    &self.catalog.fm_current_dir,
+                ) {
+                    Ok(target_dir) => {
+                        if let Err(e) = crate::documents::begin_into_dir(target_dir) {
+                            self.catalog.status = e;
+                        }
+                    }
+                    Err(e) => self.catalog.status = e,
+                }
+            }
+            Some(Action::FmOpenNewFolder) => {
+                self.catalog.fm_input_text = "New Folder".into();
+                self.catalog.fm_modal = Some(crate::catalog::FmModal::NewFolder);
+                self.catalog.editing = Some("fm_new_folder");
+                crate::platform::show(&self.catalog.fm_input_text);
+            }
+            Some(Action::FmSubmitNewFolder) => {
+                self.catalog.fm_submit_new_folder(&self.home);
+            }
+            Some(Action::FmOpenRename(idx)) => {
+                if let Some(entry) = self.catalog.fm_entries.get(idx).cloned() {
+                    if crate::document_store::is_protected_root_folder(&entry.rel_path) {
+                        self.catalog.status =
+                            "Built-in profile root folders cannot be renamed.".into();
+                    } else {
+                        self.catalog.fm_input_text = entry.name;
+                        self.catalog.fm_modal = Some(crate::catalog::FmModal::Rename {
+                            target_rel: entry.rel_path,
+                        });
+                        self.catalog.editing = Some("fm_rename");
+                        crate::platform::show(&self.catalog.fm_input_text);
+                    }
+                }
+            }
+            Some(Action::FmOpenRenameSelected) => {
+                if let Some(rel) = self.catalog.fm_selected.iter().next().cloned() {
+                    if crate::document_store::is_protected_root_folder(&rel) {
+                        self.catalog.status =
+                            "Built-in profile root folders cannot be renamed.".into();
+                    } else {
+                        let cur_name = rel.rsplit_once('/').map_or(rel.as_str(), |(_, n)| n);
+                        self.catalog.fm_input_text = cur_name.to_owned();
+                        self.catalog.fm_modal =
+                            Some(crate::catalog::FmModal::Rename { target_rel: rel });
+                        self.catalog.editing = Some("fm_rename");
+                        crate::platform::show(&self.catalog.fm_input_text);
+                    }
+                } else {
+                    self.catalog.status = "Select a single file or folder to rename.".into();
+                }
+            }
+            Some(Action::FmSubmitRename) => {
+                self.catalog.fm_submit_rename(&self.home);
+            }
+            Some(Action::FmRequestDeleteSingle(idx)) => {
+                if let Some(entry) = self.catalog.fm_entries.get(idx).cloned() {
+                    if crate::document_store::is_protected_root_folder(&entry.rel_path) {
+                        self.catalog.status =
+                            "Built-in profile root folders cannot be deleted.".into();
+                    } else {
+                        self.catalog.fm_modal = Some(crate::catalog::FmModal::ConfirmDelete {
+                            paths: vec![entry.rel_path],
+                        });
+                    }
+                }
+            }
+            Some(Action::FmRequestDeleteSelected) => {
+                if self.catalog.fm_selected.is_empty() {
+                    self.catalog.status = "Select one or more items to delete.".into();
+                } else {
+                    let paths: Vec<String> = self
+                        .catalog
+                        .fm_selected
+                        .iter()
+                        .filter(|p| !crate::document_store::is_protected_root_folder(p))
+                        .cloned()
+                        .collect();
+                    if paths.is_empty() {
+                        self.catalog.status =
+                            "Built-in profile root folders cannot be deleted.".into();
+                    } else {
+                        self.catalog.fm_modal =
+                            Some(crate::catalog::FmModal::ConfirmDelete { paths });
+                    }
+                }
+            }
+            Some(Action::FmConfirmDelete) => {
+                self.catalog.fm_confirm_delete(&self.home);
+            }
+            Some(Action::FmOpenDetails(idx)) => {
+                if let Some(entry) = self.catalog.fm_entries.get(idx).cloned() {
+                    let game_home = self.catalog.config.game_home(&self.home);
+                    match crate::document_store::fm_details(&self.home, &game_home, &entry.rel_path)
+                    {
+                        Ok(details) => {
+                            self.catalog.fm_modal = Some(crate::catalog::FmModal::Details(details));
+                        }
+                        Err(e) => self.catalog.status = e,
+                    }
+                }
+            }
+            Some(Action::FmExportSingle(idx)) => {
+                if let Some(entry) = self.catalog.fm_entries.get(idx).cloned() {
+                    let game_home = self.catalog.config.game_home(&self.home);
+                    match crate::document_store::resolve_fm_path(
+                        &self.home,
+                        &game_home,
+                        &entry.rel_path,
+                    ) {
+                        Ok(path) => {
+                            self.catalog.status = match crate::documents::export_file(
+                                &self.home,
+                                self.catalog.config.profile,
+                                &path,
+                            ) {
+                                Ok(msg) => msg,
+                                Err(e) => e,
+                            };
+                        }
+                        Err(e) => self.catalog.status = e,
+                    }
+                }
+            }
+            Some(Action::FmExportSelected) => {
+                if let Some(rel) = self.catalog.fm_selected.iter().next().cloned() {
+                    let game_home = self.catalog.config.game_home(&self.home);
+                    match crate::document_store::resolve_fm_path(&self.home, &game_home, &rel) {
+                        Ok(path) => {
+                            self.catalog.status = match crate::documents::export_file(
+                                &self.home,
+                                self.catalog.config.profile,
+                                &path,
+                            ) {
+                                Ok(msg) => msg,
+                                Err(e) => e,
+                            };
+                        }
+                        Err(e) => self.catalog.status = e,
+                    }
+                } else {
+                    self.catalog.status = "Select a file to export.".into();
+                }
+            }
+            Some(Action::FmCloseModal) => {
+                self.catalog.fm_modal = None;
+                self.catalog.editing = None;
+                crate::platform::hide();
             }
             None => {}
         }
@@ -4692,6 +6085,16 @@ impl Launcher {
                     t.phase == TouchPhase::Started,
                     ended,
                 );
+                if let Some(ed) = &mut tc.editor
+                    && std::mem::take(&mut ed.keyboard_request)
+                {
+                    let text = if ed.editing_save_desc {
+                        ed.save_desc_input.clone()
+                    } else {
+                        ed.save_name_input.clone()
+                    };
+                    crate::platform::show(&text);
+                }
                 if ended || closed {
                     let _ = tc.settings.save_to(&game_home.join("horizon-touch.json"));
                 }
@@ -4755,7 +6158,12 @@ impl Launcher {
             }
             return;
         }
-        if self.catalog.editing.is_none() {
+        let editor_typing = self
+            .control_editor
+            .as_ref()
+            .and_then(|tc| tc.editor.as_ref())
+            .is_some_and(|ed| ed.save_dialog_open);
+        if self.catalog.editing.is_none() && !editor_typing {
             return;
         }
         let out = match key.physical_key {
@@ -4767,7 +6175,7 @@ impl Launcher {
             _ => key.text.map(|s| Output::Text(s.into())),
         };
         if let Some(out) = out {
-            self.catalog.edit(out, &self.home);
+            self.edit_text(out);
         }
     }
 }

@@ -68,6 +68,8 @@ pub mod color {
     }
 }
 
+pub type Color = u32;
+
 /// The launcher's type scale and shapes (`horizon_theme`), in dp.
 pub(crate) const SMALL: f32 = horizon_theme::CAPTION.px;
 pub(crate) const BODY: f32 = horizon_theme::LABEL.px;
@@ -139,6 +141,11 @@ pub enum Icon {
     Crosshair,
     Pencil,
     Copy,
+    ArrowRight,
+    Folder,
+    FileText,
+    Trash,
+    Share,
 }
 
 struct Fonts {
@@ -486,6 +493,43 @@ fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
             let back = back_outer && !back_inner;
             front || back
         }
+        Icon::ArrowRight => {
+            let top = seg_dist(u, v, 0.38, 0.24, 0.66, 0.50) <= 0.055;
+            let bot = seg_dist(u, v, 0.66, 0.50, 0.38, 0.76) <= 0.055;
+            top || bot
+        }
+        Icon::Folder => {
+            let in_tab = (0.14..=0.46).contains(&u) && (0.20..=0.34).contains(&v);
+            let in_body = (0.14..=0.86).contains(&u) && (0.30..=0.80).contains(&v);
+            let top_seam = (0.18..=0.82).contains(&u) && (0.35..=0.40).contains(&v);
+            (in_tab || in_body) && !top_seam
+        }
+        Icon::FileText => {
+            let outer = (0.22..=0.78).contains(&u) && (0.16..=0.84).contains(&v);
+            let inner = (0.29..=0.71).contains(&u) && (0.23..=0.77).contains(&v);
+            let line1 = seg_dist(u, v, 0.35, 0.38, 0.65, 0.38) <= 0.035;
+            let line2 = seg_dist(u, v, 0.35, 0.52, 0.65, 0.52) <= 0.035;
+            let line3 = seg_dist(u, v, 0.35, 0.66, 0.55, 0.66) <= 0.035;
+            (outer && !inner) || line1 || line2 || line3
+        }
+        Icon::Trash => {
+            let lid = seg_dist(u, v, 0.22, 0.26, 0.78, 0.26) <= 0.045;
+            let handle = (0.40..=0.60).contains(&u) && (0.17..=0.26).contains(&v);
+            let body_outer = (0.28..=0.72).contains(&u) && (0.30..=0.84).contains(&v);
+            let body_inner = (0.35..=0.65).contains(&u) && (0.36..=0.77).contains(&v);
+            let slat1 = seg_dist(u, v, 0.44, 0.42, 0.44, 0.71) <= 0.032;
+            let slat2 = seg_dist(u, v, 0.56, 0.42, 0.56, 0.71) <= 0.032;
+            lid || handle || (body_outer && !body_inner) || slat1 || slat2
+        }
+        Icon::Share => {
+            let tray_l = seg_dist(u, v, 0.22, 0.56, 0.22, 0.80) <= 0.048;
+            let tray_r = seg_dist(u, v, 0.78, 0.56, 0.78, 0.80) <= 0.048;
+            let tray_b = seg_dist(u, v, 0.22, 0.80, 0.78, 0.80) <= 0.048;
+            let stem = seg_dist(u, v, 0.50, 0.20, 0.50, 0.62) <= 0.048;
+            let head_l = seg_dist(u, v, 0.34, 0.36, 0.50, 0.20) <= 0.048;
+            let head_r = seg_dist(u, v, 0.66, 0.36, 0.50, 0.20) <= 0.048;
+            tray_l || tray_r || tray_b || stem || head_l || head_r
+        }
     }
 }
 
@@ -759,23 +803,22 @@ impl<'a> Ui<'a> {
                 target_dpi.clamp(1.0, 4.5)
             }
         } else {
-            // Landscape phone/tablet screen: target ~425dp height (and ~840dp width) so the
-            // left navigation rail, header, and 2-column cards match phone DPI instead of
-            // shrinking to a 700dp desktop monitor layout.
-            let fit_phone = (pw / 840.0).min(ph / 425.0);
+            // Landscape phone/tablet screen: target ~440dp height (and ~880dp width) so the
+            // left navigation rail, header, and 2-column cards match phone DPI with breathing room.
+            let fit_phone = (pw / 880.0).min(ph / 440.0);
             let dpi = if hw_dpi >= 1.0 {
-                // Blend hardware DisplayMetrics density with viewport fit so small screens never clip.
-                (hw_dpi * 0.88).min(ph / 385.0).max(fit_phone)
+                (hw_dpi * 0.78).min(ph / 435.0).max(fit_phone)
             } else {
                 fit_phone
             };
             dpi.clamp(0.65, 4.5)
         };
-        // Ensure user_scale still keeps at least 365dp height in landscape so all 6 rail items fit.
+        // Ensure landscape viewports always have at least 410-440dp of vertical breathing room
+        // and 760-880dp of horizontal width even on high-density (3.0-3.5x) screens.
         let max_safe_density = if ph > pw {
             (pw / 340.0).max(1.0)
         } else {
-            (ph / 365.0).min(pw / 660.0).max(0.65)
+            (ph / 410.0).min(pw / 760.0).max(1.0)
         };
         ui.density = (base_density * user_scale)
             .min(max_safe_density)
@@ -1011,20 +1054,21 @@ impl<'a> Ui<'a> {
         }
     }
 
-    /// Draw the stylized two-tone purple Horizon `H` mark at `(x, y)` in `size x size` dp.
+    /// Draw the stylized two-tone Horizon `H` mark at `(x, y)` in `size x size` dp.
     pub fn horizon_logo(&mut self, x: f32, y: f32, size: f32) {
-        // Subtle glow/shadow plate behind the mark, then the crisp supersampled H mark.
-        let primary = color::hex(0x9A7BFF, 255);
-        let accent = color::hex(0x7C5CE6, 255);
-        self.icon(Icon::HorizonLogo, x, y + 0.5, size, accent);
+        let theme = active_theme();
+        let primary = theme.accent;
+        let shadow = color::with_alpha(theme.surface_selected, 0.92);
+        self.icon(Icon::HorizonLogo, x, y + 0.5, size, shadow);
         self.icon(Icon::HorizonLogo, x, y, size, primary);
     }
 
     /// The account's real head as a flat 8x8 skin face (no 3D build), so the
     /// header paints it in the same frame: prepared skin, cached skin, Steve.
     pub fn avatar_head_2d(&mut self, x: f32, y: f32, size: f32, player_name: &str) {
+        let theme = active_theme();
         let radius = size * 0.30;
-        self.rounded(x, y, size, size, radius, color::hex(0x241E38, 255));
+        self.rounded(x, y, size, size, radius, theme.surface_dim);
         let inset = (size * 0.07).max(1.0);
         let face = (size - inset * 2.0).max(8.0);
         let pw = face / 8.0;
@@ -1082,7 +1126,7 @@ impl<'a> Ui<'a> {
                 }
             }
         }
-        self.border(x, y, size, size, radius, color::hex(0x4E4275, 255));
+        self.border(x, y, size, size, radius, theme.border_strong);
     }
 
     /// Draw an authentic Material You 3 Switch (`52x28dp` pill track with sliding thumb and checkmark).
@@ -1096,13 +1140,7 @@ impl<'a> Ui<'a> {
             let tx = x + track_w - thumb_d - 3.0;
             let ty = y + (track_h - thumb_d) * 0.5;
             self.rounded(tx, ty, thumb_d, thumb_d, 11.0, theme.on_accent);
-            self.icon(
-                Icon::Check,
-                tx + 4.0,
-                ty + 4.0,
-                14.0,
-                theme.accent,
-            );
+            self.icon(Icon::Check, tx + 4.0, ty + 4.0, 14.0, theme.accent);
         } else {
             self.rounded(x, y, track_w, track_h, 14.0, theme.surface_dim);
             self.stroke_rounded(x, y, track_w, track_h, 14.0, 1.6, theme.border_strong);
@@ -1177,9 +1215,50 @@ impl<'a> Ui<'a> {
         true
     }
 
-    /// A filled text field: inset surface, small caps label, value (or muted
-    /// placeholder) and a caret while `focused`. The Android IME is routed by
-    /// the caller; this only paints it, so every naming box looks the same.
+    /// Draw a single line of text elided to fit within `max_w` dp, inside a `(size * 1.45).round()`
+    /// tall line box whose top is `y`; returns the rendered advance in dp.
+    pub fn text_clipped(
+        &mut self,
+        face: Face,
+        size: f32,
+        x: f32,
+        y: f32,
+        max_w: f32,
+        color: Color,
+        text: &str,
+    ) -> f32 {
+        if max_w <= 2.0 || text.is_empty() {
+            return 0.0;
+        }
+        let single_line: String = text
+            .chars()
+            .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+            .collect();
+        let fitted = self.fit_text(face, size, &single_line, max_w);
+        self.text(face, size, x, y, color, &fitted)
+    }
+
+    /// Renders a single-line helper/hint string at `(x, y)` within `w` dp, auto-scaling
+    /// font size from `10.5` down to `9.0` if needed so it clips cleanly on a single line.
+    pub fn hint_line(&mut self, x: f32, y: f32, w: f32, text: &str, color: Color) {
+        if w <= 4.0 || text.is_empty() {
+            return;
+        }
+        let single_line: String = text
+            .chars()
+            .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+            .collect();
+        let mut size = 10.5f32;
+        while size > 9.0 && self.measure(Face::Regular, size, &single_line) > w {
+            size = (size - 0.5).max(9.0);
+        }
+        self.text_clipped(Face::Regular, size, x, y, w, color, &single_line);
+    }
+
+    /// Material 3 filled/outlined text field: supports compact single-line mode (`label.is_empty()` or `h < 40.0`)
+    /// and top-labeled mode (`!label.is_empty() && h >= 40.0`), single-line elided hints, and automatic
+    /// tail-scrolling when `active` so newly typed characters and the blinking caret stay visible.
+    #[allow(clippy::too_many_arguments)]
     pub fn text_field(
         &mut self,
         x: f32,
@@ -1188,19 +1267,19 @@ impl<'a> Ui<'a> {
         h: f32,
         label: &str,
         value: &str,
-        placeholder: &str,
-        focused: bool,
-    ) {
+        hint: &str,
+        active: bool,
+    ) -> [f32; 4] {
         let theme = active_theme();
         let accent = theme.accent;
-        let radius = (h * 0.24).clamp(10.0, 14.0);
+        let radius = (h * 0.24).clamp(8.0, 14.0);
         self.rounded(
             x,
             y,
             w,
             h,
             radius,
-            if focused {
+            if active {
                 theme.surface_bright
             } else {
                 theme.surface_dim
@@ -1212,52 +1291,95 @@ impl<'a> Ui<'a> {
             w,
             h,
             radius,
-            if focused { 1.6 } else { 1.0 },
-            if focused {
-                accent
-            } else {
-                theme.border
-            },
+            if active { 1.6 } else { 1.0 },
+            if active { accent } else { theme.border },
         );
         let pad = (w * 0.035).clamp(10.0, 14.0);
-        self.text(
-            Face::SemiBold,
-            8.6,
-            x + pad,
-            y + 6.0,
-            if focused {
+        let compact = label.is_empty() || h < 40.0;
+        let size = if compact {
+            (h * 0.36).clamp(11.5, 14.0)
+        } else {
+            (h * 0.28).clamp(12.0, 14.5)
+        };
+        let box_h = (size * 1.45).round();
+        let text_y = if compact {
+            y + (h - box_h) * 0.5
+        } else {
+            let label_max_w = (w - pad * 2.0).max(8.0);
+            self.text_clipped(
+                Face::SemiBold,
+                8.5,
+                x + pad,
+                y + 5.0,
+                label_max_w,
+                if active { accent } else { theme.text_muted },
+                label,
+            );
+            y + 18.0 + ((h - 20.0) - box_h).max(0.0) * 0.5
+        };
+        let text_max_w = (w - pad * 2.0 - if active { 6.0 } else { 0.0 }).max(8.0);
+        let clean_value: String = value
+            .chars()
+            .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+            .collect();
+        let tw = if clean_value.is_empty() {
+            let _ = self.text_clipped(
+                Face::Regular,
+                size,
+                x + pad,
+                text_y,
+                text_max_w,
+                color::with_alpha(theme.text_muted, 0.72),
+                hint,
+            );
+            0.0
+        } else if active {
+            let limit = (text_max_w - 4.0).max(4.0);
+            let mut start_byte = 0;
+            if self.measure(Face::Medium, size, &clean_value) > limit {
+                for (idx, _) in clean_value.char_indices() {
+                    start_byte = idx;
+                    if self.measure(Face::Medium, size, &clean_value[start_byte..]) <= limit {
+                        break;
+                    }
+                }
+            }
+            let suffix = &clean_value[start_byte..];
+            self.text(
+                Face::Medium,
+                size,
+                x + pad,
+                text_y,
+                theme.text_primary,
+                suffix,
+            )
+        } else {
+            self.text_clipped(
+                Face::Medium,
+                size,
+                x + pad,
+                text_y,
+                text_max_w,
+                theme.text_primary,
+                &clean_value,
+            )
+        };
+        if active {
+            let blink_on = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| (d.as_millis() / 500).is_multiple_of(2))
+                .unwrap_or(true);
+            let caret_col = if blink_on {
                 accent
             } else {
-                color::hex(0x9A93B5, 255)
-            },
-            label,
-        );
-        let empty = value.is_empty();
-        let shown = if empty { placeholder } else { value };
-        let size = (h * 0.29).clamp(12.5, 15.0);
-        let baseline = y + h - size * 1.5 - 2.0;
-        let fitted = self.fit_text(
-            Face::Medium,
-            size,
-            shown,
-            (w - pad * 2.0 - if focused { 3.0 } else { 0.0 }).max(8.0),
-        );
-        let tw = self.text(
-            Face::Medium,
-            size,
-            x + pad,
-            baseline,
-            if empty {
-                color::hex(0x857E9F, 255)
-            } else {
-                color::hex(0xF6F2FF, 255)
-            },
-            &fitted,
-        );
-        if focused {
+                color::with_alpha(accent, 0.32)
+            };
             let cx = (x + pad + tw + 1.5).min(x + w - pad);
-            self.fill(cx, baseline + 1.5, 1.8, size * 1.15, accent);
+            let ch = (size * 1.15).round();
+            let cy = text_y + (box_h - ch) * 0.5;
+            self.rounded(cx, cy, 1.8, ch, 0.9, caret_col);
         }
+        [x, y, w, h]
     }
 
     // ---- text ----
@@ -1627,7 +1749,9 @@ impl<'a> Ui<'a> {
     /// Paints the active theme background (solid or multi-stop gradient) over `[x, y, w, h]` dp.
     pub fn draw_theme_background(&mut self, x: f32, y: f32, w: f32, h: f32, theme: &ResolvedTheme) {
         if theme.is_gradient {
-            let mid = theme.use_three_stops.then_some((theme.gradient_mid_pos, theme.gradient_mid));
+            let mid = theme
+                .use_three_stops
+                .then_some((theme.gradient_mid_pos, theme.gradient_mid));
             self.fill_gradient(
                 x,
                 y,
@@ -1644,7 +1768,212 @@ impl<'a> Ui<'a> {
         }
     }
 
-    // ---- the launcher's components ----
+    // ---- the launcher's components & animated Horizon intro ----
+
+    /// Draws the procedural crisp vector Horizon `H` mark centered at `(cx, cy)` in `size x size` dp:
+    /// left pillar sliding up, right pillar sliding down, and tilted horizon bridge sweeping across
+    /// with a subtle accent glow ring.
+    pub fn draw_animated_horizon_mark(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        size: f32,
+        elapsed: f32,
+        alpha: f32,
+    ) {
+        let a = alpha.clamp(0.0, 1.0);
+        if a <= 0.01 || size <= 4.0 {
+            return;
+        }
+        let theme = active_theme();
+        let ring_t = motion::ease_out_cubic((elapsed / 0.55).clamp(0.0, 1.0));
+        let ring_r = size * (0.56 + 0.08 * ring_t);
+        self.rounded(
+            cx - ring_r,
+            cy - ring_r,
+            ring_r * 2.0,
+            ring_r * 2.0,
+            ring_r * 0.36,
+            color::with_alpha(theme.accent, 0.14 * ring_t * a),
+        );
+        self.stroke_rounded(
+            cx - ring_r,
+            cy - ring_r,
+            ring_r * 2.0,
+            ring_r * 2.0,
+            ring_r * 0.36,
+            1.5,
+            color::with_alpha(theme.accent, 0.38 * ring_t * a),
+        );
+
+        let plate_r = size * 0.46;
+        self.rounded(
+            cx - plate_r,
+            cy - plate_r,
+            plate_r * 2.0,
+            plate_r * 2.0,
+            plate_r * 0.32,
+            color::with_alpha(theme.surface, 0.94 * a),
+        );
+        self.stroke_rounded(
+            cx - plate_r,
+            cy - plate_r,
+            plate_r * 2.0,
+            plate_r * 2.0,
+            plate_r * 0.32,
+            1.4,
+            color::with_alpha(theme.border_strong, 0.85 * a),
+        );
+
+        let t_left = motion::ease_out_quint((elapsed / 0.42).clamp(0.0, 1.0));
+        let t_right = motion::ease_out_quint(((elapsed - 0.08).max(0.0) / 0.42).clamp(0.0, 1.0));
+        let t_bridge = motion::spring_spatial(((elapsed - 0.16).max(0.0) / 0.48).clamp(0.0, 1.0));
+
+        let bar_w = (size * 0.135).max(3.0);
+        let bar_h = (size * 0.56).max(10.0);
+        let bar_r = bar_w * 0.5;
+        let offset_x = size * 0.185;
+
+        // Left pillar sliding up into place
+        let left_slide = (1.0 - t_left) * (size * 0.24);
+        self.rounded(
+            cx - offset_x - bar_w * 0.5,
+            cy - bar_h * 0.5 + left_slide,
+            bar_w,
+            bar_h,
+            bar_r,
+            color::with_alpha(theme.text_primary, t_left * a),
+        );
+
+        // Right pillar sliding down into place
+        let right_slide = -(1.0 - t_right) * (size * 0.24);
+        self.rounded(
+            cx + offset_x - bar_w * 0.5,
+            cy - bar_h * 0.5 + right_slide,
+            bar_w,
+            bar_h,
+            bar_r,
+            color::with_alpha(theme.accent, t_right * a),
+        );
+
+        // Tilted horizon bridge sweeping across from left pillar to right pillar
+        if t_bridge > 0.02 {
+            let x0 = cx - offset_x;
+            let y0 = cy + size * 0.065;
+            let x1 = cx + offset_x;
+            let y1 = cy - size * 0.065;
+            let steps = 15usize;
+            let active_steps = ((steps as f32 * t_bridge).ceil() as usize).clamp(1, steps);
+            let dot_d = (bar_w * 0.92).max(2.5);
+            for i in 0..active_steps {
+                let f = i as f32 / (steps.saturating_sub(1).max(1) as f32);
+                let px = x0 + (x1 - x0) * f;
+                let py = y0 + (y1 - y0) * f;
+                self.rounded(
+                    px - dot_d * 0.5,
+                    py - dot_d * 0.5,
+                    dot_d,
+                    dot_d,
+                    dot_d * 0.5,
+                    color::with_alpha(theme.accent, t_bridge * a),
+                );
+            }
+        }
+    }
+
+    /// Renders a clean, modern, minimal animated Horizon intro screen centered on the
+    /// procedural Horizon `H` logo with real initialization progress and smooth cross-dissolve.
+    pub fn draw_horizon_intro(&mut self, elapsed: f32, loading_progress: f32, status_text: &str) {
+        let real_prog = loading_progress.clamp(0.0, 1.0);
+        let dissolve = if real_prog >= 0.999 && elapsed > 1.15 {
+            1.0 - motion::ease_out_cubic(((elapsed - 1.15) / 0.40).clamp(0.0, 1.0))
+        } else {
+            1.0
+        };
+        if dissolve <= 0.01 {
+            return;
+        }
+        let theme = active_theme();
+        let (w, h) = (self.w, self.h);
+        self.fill(
+            0.0,
+            0.0,
+            w,
+            h,
+            color::with_alpha(theme.bg_solid, 0.97 * dissolve),
+        );
+
+        let cx = w * 0.5;
+        let cy = (h * 0.37).clamp(110.0, h - 150.0);
+        let mark_size = (h * 0.19).clamp(64.0, 88.0);
+        self.draw_animated_horizon_mark(cx, cy, mark_size, elapsed, dissolve);
+
+        let title_t =
+            motion::ease_out_cubic(((elapsed - 0.18).max(0.0) / 0.42).clamp(0.0, 1.0)) * dissolve;
+        if title_t > 0.02 {
+            let slide = (1.0 - title_t) * 8.0;
+            let title_y = cy + mark_size * 0.68 + slide;
+            self.text_centered(
+                Face::SemiBold,
+                24.0,
+                cx,
+                title_y,
+                color::with_alpha(theme.text_primary, title_t),
+                "HORIZON",
+            );
+            let sub_y = title_y + 32.0;
+            self.text_centered(
+                Face::Medium,
+                11.5,
+                cx,
+                sub_y,
+                color::with_alpha(theme.text_muted, title_t * 0.9),
+                "RUST EDITION  •  ANDROID LAUNCHER",
+            );
+
+            // Real initialization progress indicator
+            let bar_w = (w * 0.34).clamp(180.0, 260.0);
+            let bar_h = 6.0;
+            let bar_x = cx - bar_w * 0.5;
+            let bar_y = sub_y + 28.0;
+            self.rounded(
+                bar_x,
+                bar_y,
+                bar_w,
+                bar_h,
+                3.0,
+                color::with_alpha(theme.surface_bright, title_t),
+            );
+            let fill_w = (bar_w * real_prog.max(0.05)).clamp(bar_h, bar_w);
+            self.rounded(
+                bar_x,
+                bar_y,
+                fill_w,
+                bar_h,
+                3.0,
+                color::with_alpha(theme.accent, title_t),
+            );
+
+            let msg = if status_text.trim().is_empty() {
+                if real_prog >= 0.999 {
+                    "Ready • Tap anywhere to continue".to_owned()
+                } else {
+                    format!("Initializing workspace... {:.0}%", real_prog * 100.0)
+                }
+            } else {
+                format!("{status_text} ({:.0}%)", real_prog * 100.0)
+            };
+            let fitted_msg = self.fit_text(Face::Regular, 11.0, &msg, (w - 48.0).max(120.0));
+            self.text_centered(
+                Face::Regular,
+                11.0,
+                cx,
+                bar_y + 12.0,
+                color::with_alpha(theme.text_muted, title_t * 0.88),
+                &fitted_msg,
+            );
+        }
+    }
 }
 
 // ---- the boot screen ----
@@ -1672,22 +2001,71 @@ pub fn draw_boot(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {
     draw_boot_log(atlas, batch, logs);
 }
 
-/// The wordmark with its tagline, centred.
+/// The wordmark with its tagline, crisp vector H mark, and progress bar, centred.
 fn wordmark(atlas: &HudAtlas, batch: &mut HudBatch) {
     let mut ui = Ui::new(atlas, batch, (0.0, 0.0));
     let size = (ui.w / 16.0).clamp(DISPLAY, 96.0);
     let small = (size * 0.25).clamp(MICRO, 18.0);
     let block = size * 1.45 + small * 0.6 + small * 1.5;
     let top = (ui.h - block) / 2.0;
-    ui.text_centered(Face::SemiBold, size, ui.w / 2.0, top, BOOT_TEXT, "Horizon");
+    let cx = ui.w / 2.0;
+
+    // Crisp vector H mark centered symmetrically above the wordmark
+    let mark_s = (size * 0.62).clamp(28.0, 52.0);
+    let mark_cy = (top - mark_s * 0.72).max(mark_s * 0.6);
+    let bar_w = (mark_s * 0.14).max(3.0);
+    let bar_h = (mark_s * 0.56).max(10.0);
+    let off_x = mark_s * 0.18;
+    let accent = active_theme().accent;
+    ui.rounded(
+        cx - off_x - bar_w * 0.5,
+        mark_cy - bar_h * 0.5,
+        bar_w,
+        bar_h,
+        bar_w * 0.5,
+        BOOT_TEXT,
+    );
+    ui.rounded(
+        cx + off_x - bar_w * 0.5,
+        mark_cy - bar_h * 0.5,
+        bar_w,
+        bar_h,
+        bar_w * 0.5,
+        accent,
+    );
+    ui.rounded(
+        cx - off_x,
+        mark_cy - bar_w * 0.45,
+        off_x * 2.0,
+        bar_w * 0.9,
+        bar_w * 0.45,
+        accent,
+    );
+
+    ui.text_centered(Face::SemiBold, size, cx, top, BOOT_TEXT, "Horizon");
+    let sub_y = top + size * 1.45 + small * 0.6;
     ui.text_centered(
         Face::Mono,
         small,
-        ui.w / 2.0,
-        top + size * 1.45 + small * 0.6,
+        cx,
+        sub_y,
         BOOT_LOG,
         "Rust based minecraft client",
     );
+
+    // Symmetrical centered startup progress bar below the tagline
+    let prog_w = (size * 1.8).clamp(80.0, 140.0);
+    let prog_y = sub_y + small * 1.7;
+    ui.rounded(
+        cx - prog_w * 0.5,
+        prog_y,
+        prog_w,
+        4.0,
+        2.0,
+        color::with_alpha(BOOT_LOG, 0.28),
+    );
+    let pulse_w = prog_w * 0.56;
+    ui.rounded(cx - pulse_w * 0.5, prog_y, pulse_w, 4.0, 2.0, accent);
     ui.finish();
 }
 
@@ -1758,9 +2136,7 @@ fn wrapping_lines(ui: &Ui, face: Face, size: f32, text: &str, max_w: f32) -> Vec
 
 // ---- Centralized Launcher Theme System & Motion Utilities ----
 
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemePreset {
     #[default]
@@ -1840,9 +2216,7 @@ impl ThemePreset {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemeAppearance {
     #[default]
@@ -1859,9 +2233,7 @@ impl ThemeAppearance {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BackgroundMode {
     #[default]
@@ -1878,9 +2250,7 @@ impl BackgroundMode {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GradientDirection {
     #[default]
@@ -2066,6 +2436,7 @@ pub struct ResolvedTheme {
     pub accent: u32,
     pub accent_soft: u32,
     pub on_accent: u32,
+    pub accent_text: u32,
     pub text_primary: u32,
     pub text_muted: u32,
     pub success: u32,
@@ -2261,6 +2632,7 @@ impl LauncherThemeConfig {
             accent: color::hex(accent_rgb, 255),
             accent_soft: color::with_alpha(color::hex(accent_rgb, 255), 0.22),
             on_accent: color::hex(on_accent_rgb, 255),
+            accent_text: color::hex(on_accent_rgb, 255),
             text_primary: color::hex(text_primary_rgb, 255),
             text_muted: color::hex(text_muted_rgb, 255),
             success: color::hex(if is_light { 0x15803D } else { 0x4ADE80 }, 255),

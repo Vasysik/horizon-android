@@ -431,6 +431,7 @@ pub(super) fn stage_pack(
     let gui = UiResources {
         atlas,
         panorama: Arc::new(panorama.unwrap_or_else(|p| std::panic::resume_unwind(p))),
+        sounds: Some(horizon_client::sound_events::SoundRegistry::load(&root)),
     };
     progress.set(2);
     let pack = PackResources::load(

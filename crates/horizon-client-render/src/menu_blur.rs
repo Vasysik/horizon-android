@@ -33,6 +33,9 @@ pub struct MenuBlur {
     groups: Vec<wgpu::BindGroup>,
     size: [u32; 2],
     format: wgpu::TextureFormat,
+    pub cached_valid: bool,
+    pub cached_size: (u32, u32),
+    pub cached_radius: u8,
 }
 impl MenuBlur {
     /// `format` is the swapchain's; the blur works in its non-sRGB view.
@@ -132,7 +135,59 @@ impl MenuBlur {
             groups: Vec::new(),
             size: [0, 0],
             format,
+            cached_valid: false,
+            cached_size: (0, 0),
+            cached_radius: 0,
         }
+    }
+    pub fn invalidate(&mut self) {
+        self.cached_valid = false;
+    }
+    pub fn is_cached(&self, size: [u32; 2], radius: f32) -> bool {
+        let copy_size = (size[0].max(1), size[1].max(1));
+        let r = radius.round().clamp(0.0, 255.0) as u8;
+        self.cached_valid
+            && self.cached_size == copy_size
+            && self.cached_radius == r
+            && !self.targets.is_empty()
+    }
+    pub fn blit_cached(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+    ) -> bool {
+        if !self.cached_valid || self.targets.is_empty() || self.groups.is_empty() {
+            return false;
+        }
+        let data = Uniform {
+            size_dir: [
+                self.cached_size.0.max(1) as f32,
+                self.cached_size.1.max(1) as f32,
+                0.0,
+                0.0,
+            ],
+            radius: [0.0, 0.0, 0.0, 0.0],
+        };
+        queue.write_buffer(&self.uniforms[0], 0, bytemuck::bytes_of(&data));
+        let attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Menu blur cached blit"),
+            color_attachments: &attachments,
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.groups[0], &[]);
+        pass.draw(0..3, 0..1);
+        true
     }
     fn ensure(&mut self, device: &wgpu::Device, size: [u32; 2]) {
         let size = [size[0].max(1), size[1].max(1)];
@@ -140,6 +195,7 @@ impl MenuBlur {
             return;
         }
         self.size = size;
+        self.cached_valid = false;
         let downscaled = if cfg!(target_os = "android") {
             [(size[0] / 3).max(1), (size[1] / 3).max(1)]
         } else {
@@ -268,6 +324,18 @@ impl MenuBlur {
             pass.set_bind_group(0, &self.groups[i], &[]);
             pass.draw(0..3, 0..1);
         }
+        encoder.copy_texture_to_texture(
+            frame.as_image_copy(),
+            self.targets[0].0.as_image_copy(),
+            wgpu::Extent3d {
+                width: copy_size[0],
+                height: copy_size[1],
+                depth_or_array_layers: 1,
+            },
+        );
+        self.cached_valid = true;
+        self.cached_size = (copy_size[0], copy_size[1]);
+        self.cached_radius = radius.round().clamp(0.0, 255.0) as u8;
     }
 }
 

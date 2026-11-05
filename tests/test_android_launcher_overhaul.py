@@ -39,6 +39,31 @@ class LauncherOverhaulTests(unittest.TestCase):
             "crates/horizon-client/src/android/launcher.rs",
             "crates/horizon-client/src/android/chooser.rs",
             "crates/horizon-client/src/android/login.rs",
+            "crates/horizon-client/src/android/native_ime.rs",
+            "crates/horizon-client/src/android/display.rs",
+            "crates/horizon-client-render/src/touch/editor.rs",
+            "crates/horizon-client-render/src/gfx.rs",
+            "crates/horizon-client-render/src/audio.rs",
+            "crates/horizon-client-render/src/mesher.rs",
+            "crates/horizon-client-render/src/mesher/sides.rs",
+            "crates/horizon-client-render/src/world.rs",
+            "crates/horizon-world/src/level/mod.rs",
+            "crates/horizon-world/src/level/update.rs",
+            "crates/horizon-world/src/level/tick.rs",
+            "crates/horizon-client-render/src/touch/custom.rs",
+            "crates/horizon-client-render/src/menu_blur.rs",
+            "crates/horizon-client-render/src/ui.rs",
+            "crates/horizon-client/src/android/document_store.rs",
+            "crates/horizon-client/src/android/documents.rs",
+            "crates/horizon-client/src/android/platform.rs",
+            "crates/horizon-client/src/game/perspective.rs",
+            "crates/horizon-client/src/game/recipe_book.rs",
+            "crates/horizon-client/src/game/screens.rs",
+            "crates/horizon-client/src/item_render.rs",
+            "crates/horizon-client/src/item_render/gui.rs",
+            "third_party/winit/src/platform_impl/android/keycodes.rs",
+            "third_party/winit/src/platform_impl/android/mod.rs",
+            "third_party/winit/src/platform_impl/android/mouse_state.rs",
             "launcher/src/skins/preview.rs",
         ]
         for rel in modified_files:
@@ -184,6 +209,236 @@ class LauncherOverhaulTests(unittest.TestCase):
         ].split("return Ok(());")[0]
         self.assertIn("draw_hud_editor", editor_branch)
         self.assertNotIn("self.anim", editor_branch)
+
+
+
+    def test_stability_6s_freeze_burning_village_and_leaves_fps_optimizations(self) -> None:
+        gfx = (ROOT / "crates/horizon-client-render/src/gfx.rs").read_text(encoding="utf-8")
+        audio = (ROOT / "crates/horizon-client-render/src/audio.rs").read_text(encoding="utf-8")
+        mesher = (ROOT / "crates/horizon-client-render/src/mesher.rs").read_text(encoding="utf-8")
+        sides = (ROOT / "crates/horizon-client-render/src/mesher/sides.rs").read_text(
+            encoding="utf-8"
+        )
+        terrain_wgsl = (ROOT / "crates/horizon-client-render/src/terrain.wgsl").read_text(
+            encoding="utf-8"
+        )
+        tick = (ROOT / "crates/horizon-world/src/level/tick.rs").read_text(encoding="utf-8")
+        world = (ROOT / "crates/horizon-client-render/src/world.rs").read_text(encoding="utf-8")
+        game = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
+        native_ime = (ROOT / "crates/horizon-client/src/android/native_ime.rs").read_text(
+            encoding="utf-8"
+        )
+
+        # 1. In-place Loading::set_ui texture update & surface_extent tracking
+        self.assertIn("pub fn set_loading_ui(", gfx)
+        self.assertIn("surface_extent: std::sync::atomic::AtomicU64,", gfx)
+        self.assertIn("pub fn with_registry(", audio)
+
+        # 2. Invisible fire age updates do not mark 8 chunk sections dirty (#88)
+        self.assertIn("pub fn set_with_visibility(", world)
+        self.assertIn("260 | super::flags::UPDATE_KNOWN_SHAPE", tick)
+
+        # 3. Smart/hollow leaf culling & early fragment discard (#156)
+        self.assertIn("let mut force_opaque_face = [false; 6];", mesher)
+        self.assertIn('static GROUPED: AtomicBool = AtomicBool::new(cfg!(all(target_os = "android", not(test))));', sides)
+        self.assertLess(
+            terrain_wgsl.index("if texel.a * in.color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }"),
+            terrain_wgsl.index("var color = texel * in.color;"),
+        )
+
+        # 4. Immersive fullscreen constant decor layout & safe exit_app
+        self.assertIn("immersive: AtomicBool::new(false),", native_ime)
+        self.assertRegex(native_ime, r'call_method\(\s*&decor,\s*"getWidth"')
+        self.assertIn("crate::game::exit_app(event_loop);", game)
+
+    def test_custom_input_dialogue_typing_back_confirm_launching_and_slider(self) -> None:
+        touch_ui = (ROOT / "crates/horizon-client/src/touch_ui.rs").read_text(encoding="utf-8")
+        editor = (ROOT / "crates/horizon-client-render/src/touch/editor.rs").read_text(
+            encoding="utf-8"
+        )
+        android_input = (
+            ROOT / "crates/horizon-client/src/game/android_input.rs"
+        ).read_text(encoding="utf-8")
+        startup_menu = (
+            ROOT / "crates/horizon-client/src/game/startup_menu.rs"
+        ).read_text(encoding="utf-8")
+        launcher = (ROOT / "crates/horizon-client/src/android/launcher.rs").read_text(
+            encoding="utf-8"
+        )
+        launcher_pages = (
+            ROOT / "crates/horizon-client/src/android/launcher_pages.rs"
+        ).read_text(encoding="utf-8")
+
+        # Send Custom Input modal & action
+        self.assertIn("SendCustomInput(String),", touch_ui)
+        self.assertIn("fn draw_input_picker_modal(", touch_ui)
+        self.assertIn("InGameMenuAction::SendCustomInput(token)", android_input)
+        self.assertIn("InGameMenuAction::SendCustomInput(token)", startup_menu)
+
+        # Unified dialogue typing across Launcher, StartupMenu, and In-Game
+        self.assertIn("pub fn apply_editor_or_preset_output(", touch_ui)
+        self.assertIn("apply_editor_or_preset_output(", android_input)
+        self.assertIn("apply_editor_or_preset_output(", startup_menu)
+        self.assertIn("apply_editor_or_preset_output(", launcher)
+
+        # Control Editor back confirmation when unsaved changes exist
+        self.assertIn("pub back_confirm_open: bool,", editor)
+        self.assertIn("pub fn has_unsaved_changes(&self) -> bool", editor)
+        self.assertIn("pub fn request_editor_back(&mut self) -> bool", editor)
+        self.assertIn("Unsaved Layout Changes", touch_ui)
+
+        # Main Launcher "Launching..." state & Virtual Mouse Speed slider
+        self.assertIn("pub(super) launching: bool,", launcher)
+        self.assertIn('"Launching..."', launcher_pages)
+        self.assertIn("pub mouse_speed_dragging: bool,", touch_ui)
+
+
+    def test_next_development_pass_controls_kbm_file_manager_dpi_intro_and_ui_perf(self) -> None:
+        touch = (ROOT / "crates/horizon-client-render/src/touch.rs").read_text(encoding="utf-8")
+        layout = (ROOT / "crates/horizon-client-render/src/touch/layout.rs").read_text(
+            encoding="utf-8"
+        )
+        custom = (ROOT / "crates/horizon-client-render/src/touch/custom.rs").read_text(
+            encoding="utf-8"
+        )
+        editor = (ROOT / "crates/horizon-client-render/src/touch/editor.rs").read_text(
+            encoding="utf-8"
+        )
+        touch_ui = (ROOT / "crates/horizon-client/src/touch_ui.rs").read_text(encoding="utf-8")
+        ui_theme = (ROOT / "crates/horizon-client/src/ui_theme.rs").read_text(encoding="utf-8")
+        doc_store = (ROOT / "crates/horizon-client/src/android/document_store.rs").read_text(
+            encoding="utf-8"
+        )
+        documents = (ROOT / "crates/horizon-client/src/android/documents.rs").read_text(
+            encoding="utf-8"
+        )
+        catalog = (ROOT / "crates/horizon-client/src/android/catalog.rs").read_text(
+            encoding="utf-8"
+        )
+        launcher = (ROOT / "crates/horizon-client/src/android/launcher.rs").read_text(
+            encoding="utf-8"
+        )
+        launcher_pages = (
+            ROOT / "crates/horizon-client/src/android/launcher_pages.rs"
+        ).read_text(encoding="utf-8")
+        mouse_state = (
+            ROOT / "third_party/winit/src/platform_impl/android/mouse_state.rs"
+        ).read_text(encoding="utf-8")
+        keycodes = (
+            ROOT / "third_party/winit/src/platform_impl/android/keycodes.rs"
+        ).read_text(encoding="utf-8")
+        native_ime = (ROOT / "crates/horizon-client/src/android/native_ime.rs").read_text(
+            encoding="utf-8"
+        )
+        game = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
+        android_input = (
+            ROOT / "crates/horizon-client/src/game/android_input.rs"
+        ).read_text(encoding="utf-8")
+        startup_menu = (
+            ROOT / "crates/horizon-client/src/game/startup_menu.rs"
+        ).read_text(encoding="utf-8")
+        menu_blur = (ROOT / "crates/horizon-client-render/src/menu_blur.rs").read_text(
+            encoding="utf-8"
+        )
+        perspective = (
+            ROOT / "crates/horizon-client/src/game/perspective.rs"
+        ).read_text(encoding="utf-8")
+        item_gui = (ROOT / "crates/horizon-client/src/item_render/gui.rs").read_text(
+            encoding="utf-8"
+        )
+        item_render = (ROOT / "crates/horizon-client/src/item_render.rs").read_text(
+            encoding="utf-8"
+        )
+        ui_render = (ROOT / "crates/horizon-client-render/src/ui.rs").read_text(encoding="utf-8")
+        screens = (ROOT / "crates/horizon-client/src/game/screens.rs").read_text(
+            encoding="utf-8"
+        )
+
+        # 1. MCPE Floating Menu bubble appearance (Horizon H icon in MCPE, MenuEquals in GoyControl)
+        self.assertIn("if settings.control_style == ControlStyle::Mcpe {", touch_ui)
+        self.assertIn("Icon::HorizonLogo", touch_ui)
+        self.assertIn("Icon::MenuEquals", touch_ui)
+
+        # 2. Dynamic joystick touch-origin behaviour
+        self.assertIn("pub fn move_anchor(&self) -> Option<[f32; 2]>", touch)
+        self.assertIn("move_area: JoystickMoveArea::FollowFinger", layout)
+        self.assertIn("dynamic_joystick: true,", layout)
+        self.assertIn("let Some(anchor) = tc.move_anchor()", touch_ui)
+
+        # 3. Control-type switching safety & custom button bounds safety
+        self.assertIn("tc.settings = ed.original.clone();", touch_ui)
+        self.assertIn("fn clamp_editor_custom_selection(", touch_ui)
+        self.assertIn("self.android_release_touch_keys(true);", android_input)
+
+        # 4. External KBM support, pointer capture & stability
+        self.assertIn("pub rel_x: f64,", mouse_state)
+        self.assertIn("matches!(sample.action, 2 | 7)", mouse_state)
+        self.assertIn("let ending = sample.action == 3;", mouse_state)
+        self.assertIn("KEY_CHARACTER_MAPS", keycodes)
+        self.assertIn("os_mouse_captured: false,", game)
+        self.assertIn('"setDefaultFocusHighlightEnabled"', native_ime)
+
+        # 5. Smooth auto-hide touch controls on external KBM
+        self.assertIn("pub hud_opacity_scale: f32,", touch)
+        self.assertIn("pub fn update_visibility(&mut self, touch_active: bool, dt: f32)", touch)
+        self.assertIn("self.pad.touch.update_visibility(", game)
+        self.assertIn(".update_visibility(crate::touch_visible(), 1.0 / 60.0);", startup_menu)
+
+        # 6. Mouse cursor rendering & clipping (never over Control Editor, no (0,0) teleport)
+        self.assertIn("if controls.editor.is_some() {\n            return false;\n        }", touch_ui)
+        self.assertNotIn("(cursor.0 == 0.0 && cursor.1 == 0.0)", touch_ui)
+        self.assertIn("let _ = crate::platform::capture_mouse(false);", launcher)
+
+        # 7. Installed Tab redesign & Integrated Mini File Manager
+        self.assertIn("pub enum InstalledSubTab", catalog)
+        self.assertIn("pub fn fm_paste_here(", catalog)
+        self.assertIn("pub fn fm_paste(", doc_store)
+        self.assertIn("pub fn fm_confirm_delete(&mut self, home: &Path)", catalog)
+        self.assertIn("pub fn fm_submit_rename(&mut self, home: &Path)", catalog)
+        self.assertIn("pub fn fm_submit_new_folder(&mut self, home: &Path)", catalog)
+        self.assertIn("pub fn fm_paste(", doc_store)
+        self.assertIn("pub fn begin_into_dir(", documents)
+        self.assertIn("pub fn export_file(", documents)
+        self.assertIn("fn draw_fm_modal(", launcher_pages)
+
+        # 8 & 9. DPI scaling & EditText / single-line hint redesign
+        self.assertIn("(pw / 880.0).min(ph / 440.0)", ui_theme)
+        self.assertIn("pub fn hint_line(", ui_theme)
+        self.assertIn("ui.hint_line(", touch_ui)
+
+        # 10. Animated Horizon intro screen
+        self.assertIn("pub fn draw_horizon_intro(", ui_theme)
+        self.assertIn("pub fn draw_animated_horizon_mark(", ui_theme)
+        self.assertIn("pub intro_done: bool,", launcher_pages)
+
+        # 11 & 12. MCPE Control Editor Add Control & single-binding exclusivity
+        self.assertIn("pub fn set_exclusive_binding(&mut self, token: String)", custom)
+        self.assertIn("pub fn is_keyboard_binding(token: &str) -> bool", custom)
+        self.assertIn("pub fn is_mouse_binding(token: &str) -> bool", custom)
+        self.assertIn("set_exclusive_binding", editor)
+
+        # 13. Rust Edition in-game UI & menu performance
+        self.assertIn("pub fn blit_cached(", menu_blur)
+        self.assertIn("pub menu_blur_cache: bool,", (ROOT / "crates/horizon-client-render/src/gfx.rs").read_text(encoding="utf-8"))
+        self.assertIn("batch.clip_since(start, x0, y0, x1, y1);", perspective)
+        self.assertIn("struct GuiCachedItem", item_gui)
+        self.assertIn("static CACHE: std::cell::RefCell<Vec<(crate::items::ItemStack, StackView)>>", item_render)
+        self.assertIn("src[2] <= 2.0 || src[3] <= 2.0", ui_render)
+        self.assertRegex(
+            screens,
+            r"fill_gradient\(\s*atlas,\s*\(0\.0, 0\.0, w, h\),\s*"
+            r"rgba\(80, 0, 0, 96\),\s*rgba\(128, 48, 48, 160\),\s*\)",
+        )
+
+        # 14. Vulkan Batch render chunk stabilization & mobile performance
+        gfx_code = (ROOT / "crates/horizon-client-render/src/gfx.rs").read_text(encoding="utf-8")
+        cull_code = (ROOT / "crates/horizon-client-render/src/gfx/cull.rs").read_text(encoding="utf-8")
+        flat_code = (ROOT / "crates/horizon-client-render/src/gfx/flat.rs").read_text(encoding="utf-8")
+        budget_code = (ROOT / "crates/horizon-client-render/src/gfx/upload_budget.rs").read_text(encoding="utf-8")
+        self.assertIn("let multi_draw = !cfg!(target_os = \"android\")", gfx_code)
+        self.assertIn("if cfg!(target_os = \"android\") {", cull_code)
+        self.assertIn("std::env::var(\"HORIZON_FLAT_DRAWS\").as_deref() == Ok(\"1\")", flat_code)
+        self.assertIn("crate::android_runtime::gpu_batching()", budget_code)
 
 
 if __name__ == "__main__":

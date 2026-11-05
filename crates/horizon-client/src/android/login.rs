@@ -269,7 +269,18 @@ impl Login {
     ) {
         let [x, y, w, h] = rect;
         ui.rounded(x, y, w, h, 14.0, login_surface());
-        ui.border(x, y, w, h, 14.0, if current { login_accent() } else { login_border() });
+        ui.border(
+            x,
+            y,
+            w,
+            h,
+            14.0,
+            if current {
+                login_accent()
+            } else {
+                login_border()
+            },
+        );
         let avatar = (h - 12.0).clamp(30.0, 40.0);
         ui.avatar_head_2d(x + 10.0, y + (h - avatar) * 0.5, avatar, name);
         let tx = x + avatar + 22.0;
@@ -285,7 +296,11 @@ impl Login {
             11.5,
             tx,
             y + h - 21.0,
-            if current { login_accent() } else { login_muted() },
+            if current {
+                login_accent()
+            } else {
+                login_muted()
+            },
             &detail,
         );
         if current {
@@ -306,15 +321,40 @@ impl Login {
         targets: &mut Vec<([f32; 4], Action)>,
         offline_name: &str,
         editing: Option<&str>,
+        modal_anim: f32,
     ) {
         targets.clear();
-        let w = (ui.w - 24.0).min(620.0);
-        let h = (ui.h - 20.0).min(600.0);
+        let modal_t = modal_anim.clamp(0.2, 1.0);
+        let scale_in = 0.95 + 0.05 * modal_t;
+        let w = (ui.w - 24.0).min(620.0) * scale_in;
+        let h = (ui.h - 20.0).min(600.0) * scale_in;
         let x = (ui.w - w) * 0.5;
-        let y = (ui.h - h) * 0.5;
-        ui.fill(0.0, 0.0, ui.w, ui.h, color::hex(0x05040A, 150));
-        ui.rounded(x + 2.0, y + 8.0, w, h, 26.0, color::hex(0x000000, 90));
-        ui.rounded(x, y, w, h, 26.0, horizon_client::ui_theme::active_theme().bg_solid);
+        let mut y = (ui.h - h) * 0.5 + (1.0 - modal_t) * 14.0;
+        if editing.is_some()
+            && let Some(bottom_px) = crate::native_ime::viewport_bottom()
+        {
+            let ime_top_dp = bottom_px as f32 / ui.density;
+            if ime_top_dp < ui.h - 16.0 {
+                y = y.min((ime_top_dp - h - 8.0).max(6.0));
+            }
+        }
+        let theme = horizon_client::ui_theme::active_theme();
+        ui.fill(
+            0.0,
+            0.0,
+            ui.w,
+            ui.h,
+            color::with_alpha(theme.bg_solid, 0.65 * modal_t),
+        );
+        ui.rounded(
+            x + 2.0,
+            y + 8.0,
+            w,
+            h,
+            26.0,
+            color::hex(0x000000, (90.0 * modal_t) as u8),
+        );
+        ui.rounded(x, y, w, h, 26.0, theme.bg_solid);
         ui.border(x, y, w, h, 26.0, login_border());
 
         let (title, subtitle): (&str, String) = if self.providers {
@@ -354,13 +394,39 @@ impl Login {
         };
         if !self.providers {
             let back = [x + 16.0, y + 16.0, 38.0, 38.0];
-            ui.rounded(back[0], back[1], back[2], back[3], 12.0, login_surface_high());
-            ui.icon(Icon::ArrowLeft, back[0] + 10.0, back[1] + 10.0, 18.0, login_text());
+            ui.rounded(
+                back[0],
+                back[1],
+                back[2],
+                back[3],
+                12.0,
+                login_surface_high(),
+            );
+            ui.icon(
+                Icon::ArrowLeft,
+                back[0] + 10.0,
+                back[1] + 10.0,
+                18.0,
+                login_text(),
+            );
             targets.push((back, Action::Account));
         }
         let close = [x + w - 54.0, y + 16.0, 38.0, 38.0];
-        ui.rounded(close[0], close[1], close[2], close[3], 12.0, login_surface_high());
-        ui.icon(Icon::Close, close[0] + 11.0, close[1] + 11.0, 16.0, login_text());
+        ui.rounded(
+            close[0],
+            close[1],
+            close[2],
+            close[3],
+            12.0,
+            login_surface_high(),
+        );
+        ui.icon(
+            Icon::Close,
+            close[0] + 11.0,
+            close[1] + 11.0,
+            16.0,
+            login_text(),
+        );
         targets.push((close, Action::CloseLogin));
         let text_x = if self.providers { x + 22.0 } else { x + 64.0 };
         ui.text(Face::SemiBold, 20.0, text_x, y + 14.0, login_text(), title);
@@ -370,7 +436,14 @@ impl Login {
             &subtitle,
             (x + w - 70.0 - text_x).max(70.0),
         );
-        ui.text(Face::Regular, 12.5, text_x, y + 42.0, login_muted(), &fitted);
+        ui.text(
+            Face::Regular,
+            12.5,
+            text_x,
+            y + 42.0,
+            login_muted(),
+            &fitted,
+        );
         ui.rounded(x + 20.0, y + 72.0, w - 40.0, 1.0, 0.5, login_border());
 
         let content_y = y + 88.0;
@@ -412,10 +485,31 @@ impl Login {
                 ui.rounded(cx, cy, cw, ch, 16.0, login_surface());
                 ui.border(cx, cy, cw, ch, 16.0, login_border());
                 ui.rounded(cx + 14.0, cy + 14.0, 34.0, 34.0, 11.0, login_accent_soft());
-                ui.text(Face::SemiBold, 15.0, cx + 23.0, cy + 21.0, login_accent(), mark);
-                ui.text(Face::SemiBold, 15.0, cx + 14.0, cy + 50.0, login_text(), label);
+                ui.text(
+                    Face::SemiBold,
+                    15.0,
+                    cx + 23.0,
+                    cy + 21.0,
+                    login_accent(),
+                    mark,
+                );
+                ui.text(
+                    Face::SemiBold,
+                    15.0,
+                    cx + 14.0,
+                    cy + 50.0,
+                    login_text(),
+                    label,
+                );
                 let note = ui.fit_text(Face::Regular, 11.5, note, cw - 28.0);
-                ui.text(Face::Regular, 11.5, cx + 14.0, cy + 68.0, login_muted(), &note);
+                ui.text(
+                    Face::Regular,
+                    11.5,
+                    cx + 14.0,
+                    cy + 68.0,
+                    login_muted(),
+                    &note,
+                );
                 targets.push(([cx, cy, cw, ch], action));
             }
             button(
@@ -569,7 +663,15 @@ impl Login {
             }
             let note_y = content_y + 3.0 * (field_h + gap) + 4.0;
             if !self.message.is_empty() {
-                paragraph(ui, x + 20.0, note_y, w - 40.0, &self.message, login_text(), 2);
+                paragraph(
+                    ui,
+                    x + 20.0,
+                    note_y,
+                    w - 40.0,
+                    &self.message,
+                    login_text(),
+                    2,
+                );
             }
             button(
                 ui,
@@ -616,13 +718,12 @@ impl Login {
                 login_muted(),
                 &count,
             );
-            ui.text(
-                Face::Regular,
-                12.5,
+            ui.hint_line(
                 x + 20.0,
                 content_y + 88.0,
-                login_muted(),
+                w - 40.0,
                 "This name is local; it is not an online identity.",
+                login_muted(),
             );
             if focused {
                 button(
@@ -663,7 +764,14 @@ impl Login {
         ui.avatar_head_2d(card[0] + 14.0, card[1] + 14.0, 56.0, display_name);
         let name_x = card[0] + 84.0;
         let fitted = ui.fit_text(Face::SemiBold, 17.0, display_name, card[2] - 100.0);
-        ui.text(Face::SemiBold, 17.0, name_x, card[1] + 14.0, login_text(), &fitted);
+        ui.text(
+            Face::SemiBold,
+            17.0,
+            name_x,
+            card[1] + 14.0,
+            login_text(),
+            &fitted,
+        );
         let status = self.status(offline_name);
         let fitted = ui.fit_text(Face::Regular, 12.5, &status, card[2] - 100.0);
         ui.text(
@@ -671,7 +779,11 @@ impl Login {
             12.5,
             name_x,
             card[1] + 40.0,
-            if self.signed_in { login_accent() } else { login_muted() },
+            if self.signed_in {
+                login_accent()
+            } else {
+                login_muted()
+            },
             &fitted,
         );
         ui.text(
@@ -690,7 +802,14 @@ impl Login {
         let mut row_y = content_y + card_h + 12.0;
         if let Some(SignInState::Code(code)) = &self.state {
             let code_h = 84.0;
-            ui.rounded(x + 20.0, row_y, w - 40.0, code_h, 14.0, login_surface_high());
+            ui.rounded(
+                x + 20.0,
+                row_y,
+                w - 40.0,
+                code_h,
+                14.0,
+                login_surface_high(),
+            );
             ui.border(x + 20.0, row_y, w - 40.0, code_h, 14.0, login_border());
             ui.text(
                 Face::Regular,

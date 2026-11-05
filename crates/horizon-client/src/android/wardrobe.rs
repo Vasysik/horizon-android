@@ -597,11 +597,7 @@ impl Wardrobe {
 
         // 2. Left / Top Studio 3D Preview Card
         let preview_y = tabs_y + 48.0;
-        let preview_w = if wide {
-            248.0_f32.min(w * 0.41)
-        } else {
-            w
-        };
+        let preview_w = if wide { 248.0_f32.min(w * 0.41) } else { w };
         let preview_h = if wide {
             (h - preview_y - 84.0).clamp(165.0, 276.0)
         } else {
@@ -681,7 +677,12 @@ impl Wardrobe {
         ui.centered_fit(
             Face::Mono,
             9.0,
-            [px + preview_w - hint_w - 10.0, preview_y + 10.0, hint_w, 20.0],
+            [
+                px + preview_w - hint_w - 10.0,
+                preview_y + 10.0,
+                hint_w,
+                20.0,
+            ],
             theme.text_muted,
             &hint,
         );
@@ -1123,7 +1124,14 @@ impl Wardrobe {
                 theme.text_muted
             };
             let note = ui.fit_text(Face::Regular, 10.8, &self.note, w - 20.0);
-            ui.text(Face::Regular, 10.8, x + 10.0, banner_y + 6.0, note_col, &note);
+            ui.text(
+                Face::Regular,
+                10.8,
+                x + 10.0,
+                banner_y + 6.0,
+                note_col,
+                &note,
+            );
         }
     }
 }

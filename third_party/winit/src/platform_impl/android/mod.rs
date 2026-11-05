@@ -44,6 +44,10 @@ pub(crate) fn set_native_text_input_active(active: bool) {
     NATIVE_TEXT_INPUT_ACTIVE.store(active, Ordering::Release);
 }
 
+pub(crate) fn text_input_active() -> bool {
+    NATIVE_TEXT_INPUT_ACTIVE.load(Ordering::Acquire)
+}
+
 pub(crate) mod viewport;
 
 static NATIVE_INPUT_X: AtomicU64 = AtomicU64::new(1.0f64.to_bits());
@@ -227,6 +231,7 @@ pub struct EventLoop<T: 'static> {
     cause: StartCause,
     ignore_volume_keys: bool,
     combining_accent: Option<char>,
+    modifiers: crate::keyboard::ModifiersState,
     mouse: mouse_state::MouseState,
 }
 
@@ -280,6 +285,7 @@ impl<T: 'static> EventLoop<T> {
             cause: StartCause::Init,
             ignore_volume_keys: attributes.ignore_volume_keys,
             combining_accent: None,
+            modifiers: crate::keyboard::ModifiersState::empty(),
             mouse: mouse_state::MouseState::default(),
         })
     }
@@ -323,6 +329,7 @@ impl<T: 'static> EventLoop<T> {
                 }
                 MainEvent::LostFocus => {
                     self.mouse = mouse_state::MouseState::default();
+                    self.modifiers = crate::keyboard::ModifiersState::empty();
                     HAS_FOCUS.store(false, Ordering::Relaxed);
                     callback(
                         event::Event::WindowEvent {
@@ -477,15 +484,17 @@ impl<T: 'static> EventLoop<T> {
                     }
                     let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
                     let window_id = window::WindowId(WindowId);
-                    callback(
-                        event::Event::WindowEvent {
-                            window_id,
-                            event: event::WindowEvent::ModifiersChanged(
-                                modifiers(motion_event.meta_state()).into(),
-                            ),
-                        },
-                        self.window_target(),
-                    );
+                    let mods = modifiers(motion_event.meta_state());
+                    if self.modifiers != mods {
+                        self.modifiers = mods;
+                        callback(
+                            event::Event::WindowEvent {
+                                window_id,
+                                event: event::WindowEvent::ModifiersChanged(mods.into()),
+                            },
+                            self.window_target(),
+                        );
+                    }
                     let Some(pointer) = motion_event.pointers().next() else {
                         self.mouse = mouse_state::MouseState::default();
                         return InputStatus::Handled;
@@ -494,6 +503,8 @@ impl<T: 'static> EventLoop<T> {
                         action: motion_event.action().into(),
                         x: f64::from(pointer.x()),
                         y: f64::from(pointer.y()),
+                        rel_x: f64::from(pointer.axis_value(Axis::RelativeX)),
+                        rel_y: f64::from(pointer.axis_value(Axis::RelativeY)),
                         buttons: motion_event.button_state().0,
                         wheel: (
                             pointer.axis_value(Axis::Hscroll),
@@ -727,15 +738,17 @@ impl<T: 'static> EventLoop<T> {
                             None
                         };
 
-                        callback(
-                            event::Event::WindowEvent {
-                                window_id: window::WindowId(WindowId),
-                                event: event::WindowEvent::ModifiersChanged(
-                                    modifiers(key.meta_state()).into(),
-                                ),
-                            },
-                            self.window_target(),
-                        );
+                        let mods = modifiers(key.meta_state());
+                        if self.modifiers != mods {
+                            self.modifiers = mods;
+                            callback(
+                                event::Event::WindowEvent {
+                                    window_id: window::WindowId(WindowId),
+                                    event: event::WindowEvent::ModifiersChanged(mods.into()),
+                                },
+                                self.window_target(),
+                            );
+                        }
                         let event = event::Event::WindowEvent {
                             window_id: window::WindowId(WindowId),
                             event: event::WindowEvent::KeyboardInput {

@@ -2,7 +2,7 @@
 use super::*;
 use layout::Placement;
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CustomButton {
     pub key: String,
     #[serde(default)]
@@ -41,6 +41,23 @@ impl CustomButton {
             || token
                 .strip_prefix("action:")
                 .is_some_and(|name| crate::keybinds::MAPPINGS.iter().any(|m| m.0 == name))
+    }
+    pub fn is_keyboard_binding(token: &str) -> bool {
+        !token.is_empty()
+            && token != "key.keyboard.unknown"
+            && crate::keybinds::key_code(token).is_some()
+    }
+    pub fn is_mouse_binding(token: &str) -> bool {
+        !token.is_empty()
+            && token != "key.keyboard.unknown"
+            && !Self::is_keyboard_binding(token)
+            && Self::valid_token(token)
+    }
+    /// Sets a single exclusive binding (Keyboard OR Mouse), clearing any secondary/tertiary slots.
+    pub fn set_exclusive_binding(&mut self, token: String) {
+        self.key = token;
+        self.second_key.clear();
+        self.third_key.clear();
     }
     pub fn event_slot(&self, slot: usize) -> &str {
         match slot {
@@ -214,13 +231,19 @@ impl TouchControls {
         p
     }
     pub fn custom_placement(&self, index: usize) -> Placement {
-        let mut p = self.settings.custom_buttons[index].layouts[self.settings.mode.index()];
+        let Some(btn) = self.settings.custom_buttons.get(index) else {
+            return Placement::new(0.5, 0.5, 0.105);
+        };
+        let mut p = btn.layouts[self.settings.mode.index()];
         if self.settings.left_handed {
             p.center[0] = 1.0 - p.center[0];
         }
         self.fit_placement(p)
     }
     pub fn custom_visible_for_state(&self, index: usize, in_menu: bool) -> bool {
+        if index >= self.settings.custom_buttons.len() {
+            return false;
+        }
         let p = self.custom_placement(index);
         if p.opacity <= 0.0 {
             return false;
@@ -294,29 +317,43 @@ impl TouchControls {
         if !started && !ended {
             if let Some(index) = self.custom_at(point) {
                 let placement = self.custom_placement(index);
-                if placement.swipeable {
-                    let key = self.settings.custom_buttons[index].key.clone();
+                if placement.swipeable
+                    && let Some(btn) = self.settings.custom_buttons.get(index)
+                {
+                    let key = btn.key.clone();
+                    let second_key = btn.second_key.clone();
+                    let third_key = btn.third_key.clone();
                     if key != "key.keyboard.unknown"
                         && !self.custom_fingers.values().any(|k| *k == key)
                         && !self.latched_custom.contains(&key)
                     {
                         self.custom_fingers.insert(id, key.clone());
                         self.custom_events.push((key, true));
+                        for extra in [second_key, third_key] {
+                            if !extra.is_empty()
+                                && CustomButton::valid_token(&extra)
+                                && extra != "key.keyboard.unknown"
+                            {
+                                self.custom_events.push((extra, true));
+                            }
+                        }
                         self.clicked = true;
                     }
                 }
             }
         }
-        if started && let Some(index) = self.custom_at(point) {
-            let btn = &self.settings.custom_buttons[index];
+        if started
+            && let Some(index) = self.custom_at(point)
+            && let Some(btn) = self.settings.custom_buttons.get(index)
+        {
             let key = btn.key.clone();
             let second_key = btn.second_key.clone();
+            let third_key = btn.third_key.clone();
             let placement = self.custom_placement(index);
-            if key == "key.keyboard.unknown" {
+            if key == "key.keyboard.unknown" || key.is_empty() {
                 return false;
             }
             self.clicked = true;
-            let third_key = btn.third_key.clone();
             if placement.toggleable && key != "mouse.virtual.toggle" {
                 let now_on = !self.latched_custom.remove(&key);
                 if now_on {
@@ -394,26 +431,59 @@ impl TouchControls {
             .into_values()
             .collect();
         keys.extend(std::mem::take(&mut self.latched_custom));
+        let mut all_tokens = keys.clone();
+        for btn in &self.settings.custom_buttons {
+            if keys.contains(&btn.key)
+                || (!btn.second_key.is_empty() && keys.contains(&btn.second_key))
+                || (!btn.third_key.is_empty() && keys.contains(&btn.third_key))
+            {
+                for extra in [&btn.key, &btn.second_key, &btn.third_key] {
+                    if !extra.is_empty()
+                        && CustomButton::valid_token(extra)
+                        && extra != "key.keyboard.unknown"
+                    {
+                        all_tokens.insert(extra.clone());
+                    }
+                }
+            }
+        }
         self.custom_events
-            .extend(keys.into_iter().map(|k| (k, false)));
+            .extend(all_tokens.into_iter().map(|k| (k, false)));
     }
     pub(super) fn draw_custom(&self, b: &mut HudBatch, a: &HudAtlas) {
+        let hud_scale = if self.editor.is_some() {
+            1.0
+        } else {
+            self.hud_opacity_scale.clamp(0.0, 1.0)
+        };
+        if hud_scale <= 0.001 && self.editor.is_none() {
+            return;
+        }
         for (i, button) in self.settings.custom_buttons.iter().enumerate() {
+            if self.editor.is_none() && !self.custom_visible_for_state(i, self.in_menu) {
+                continue;
+            }
             let p = self.custom_placement(i);
+            let is_goy =
+                self.settings.control_style == layout::ControlStyle::GoyControl || p.use_goy_style;
+            if is_goy && self.goy_rendered_by_ui && self.editor.is_none() {
+                continue;
+            }
             let [nx, ny, nw, nh] = p.rect(self.aspect());
             let rect = [nx * b.width, ny * b.height, nw * b.width, nh * b.height];
             let held = self.custom_fingers.values().any(|key| *key == button.key);
             let toggled = self.latched_custom.contains(&button.key);
             let pressed = held || toggled;
-            let opacity = if self.editor.is_some() {
+            let base_opacity = if self.editor.is_some() {
                 p.opacity.max(0.25)
             } else {
                 p.opacity
             };
-            if opacity <= 0.0 {
+            let opacity = (base_opacity * hud_scale).clamp(0.0, 1.0);
+            if opacity <= 0.001 {
                 continue;
             }
-            if self.settings.control_style == layout::ControlStyle::GoyControl || p.use_goy_style {
+            if is_goy {
                 draw_goy_static_button(b, a, rect, &p, &button.label(), held, toggled, opacity);
             } else {
                 text_button(
@@ -422,7 +492,7 @@ impl TouchControls {
                     rect,
                     &button.label(),
                     pressed,
-                    rgba(255, 255, 255, (opacity * 255.0) as u8),
+                    rgba(255, 255, 255, (opacity * 255.0).round() as u8),
                     true,
                 );
             }
@@ -509,16 +579,21 @@ mod tests {
     fn cancellation_releases_all_custom_keys_and_scaling_preserves_saved_sizes() {
         let mut t = TouchControls::default();
         t.viewport(1920, 1080);
-        t.settings
-            .custom_buttons
-            .push(CustomButton::new("key.keyboard.z".into(), 0));
+        let mut btn = CustomButton::new("key.keyboard.z".into(), 0);
+        btn.set_event_slot(1, "key.keyboard.x".into());
+        btn.set_event_slot(2, "key.mouse.left".into());
+        t.settings.custom_buttons.push(btn);
         let stored = t.settings.custom_buttons[0].layouts[0].size;
         t.settings.button_scale = 2.0;
         assert_eq!(t.custom_placement(0).size, stored * 2.0);
         t.update(1, t.custom_placement(0).center, true, false);
-        t.key_events();
+        let down = t.key_events();
+        assert_eq!(down.len(), 3);
         t.clear();
-        assert_eq!(t.key_events(), [("key.keyboard.z".into(), false)]);
+        let up = t.key_events();
+        assert!(up.contains(&("key.keyboard.z".into(), false)));
+        assert!(up.contains(&("key.keyboard.x".into(), false)));
+        assert!(up.contains(&("key.mouse.left".into(), false)));
         assert_eq!(t.settings.custom_buttons[0].layouts[0].size, stored);
     }
 }

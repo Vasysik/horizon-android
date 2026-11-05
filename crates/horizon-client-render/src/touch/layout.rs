@@ -139,9 +139,9 @@ pub enum JoystickMoveArea {
     /// Move anywhere on the right side (ignores buttons).
     RightSideAnywhere,
     /// Joystick stays in its fixed absolute placement.
-    #[default]
     AbsoluteFixed,
     /// Floating joystick center follows the finger where touched.
+    #[default]
     FollowFinger,
 }
 impl JoystickMoveArea {
@@ -197,7 +197,7 @@ impl Default for JoystickStyle {
             base_color: 0xFF1A1726,
             base_opacity: 0.72,
             base_roundness: 50.0,
-            move_area: JoystickMoveArea::AbsoluteFixed,
+            move_area: JoystickMoveArea::FollowFinger,
         }
     }
 }
@@ -428,7 +428,7 @@ impl Placement {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub mode: Mode,
@@ -604,7 +604,7 @@ impl Default for Settings {
             gyroscope: false,
             gyro_sensitivity: 1.0,
             attack_indicator_left: true,
-            dynamic_joystick: false,
+            dynamic_joystick: true,
             dynamic_area_x: 0.25,
             dynamic_area_y: 1.0,
             auto_jump: false,
@@ -825,7 +825,13 @@ impl Settings {
         self.custom_buttons.truncate(32);
         self.custom_buttons
             .retain(|b| super::CustomButton::valid_token(&b.key));
+        let is_mcpe = self.control_style == ControlStyle::Mcpe;
         for button in &mut self.custom_buttons {
+            if is_mcpe {
+                // Enforce strict single-binding exclusivity in MCPE mode (Keyboard OR Mouse)
+                button.second_key.clear();
+                button.third_key.clear();
+            }
             for p in &mut button.layouts {
                 p.sanitize();
             }
@@ -1698,7 +1704,7 @@ impl Settings {
         match style {
             ControlStyle::Mcpe => {
                 self.button_visibility = [0; 14];
-                self.custom_buttons.clear();
+                self.custom_buttons.retain(|b| !b.layouts[0].use_goy_style);
             }
             ControlStyle::GoyControl => {
                 self.mode = Mode::Crosshair;

@@ -169,6 +169,9 @@ pub fn graphics_api() -> crate::graphics::GraphicsApi {
 pub fn configure_gpu(batching: bool) {
     GPU_BATCHING.store(batching, Ordering::Relaxed);
 }
+pub fn gpu_batching() -> bool {
+    GPU_BATCHING.load(Ordering::Relaxed)
+}
 pub fn compatibility() -> bool {
     cfg!(target_os = "android") && !GPU_BATCHING.load(Ordering::Relaxed)
 }

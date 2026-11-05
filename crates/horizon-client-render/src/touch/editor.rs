@@ -89,6 +89,8 @@ pub struct Editor {
     pub keyboard_request: bool,
     /// True when Option B (Create a new preset as...) is selected in the Save Dialog.
     pub save_create_new_mode: bool,
+    /// True when the Back confirmation dialog (`[ Save ]` / `[ Back ]`) is open.
+    pub back_confirm_open: bool,
 }
 
 enum Drag {
@@ -139,6 +141,7 @@ impl TouchControls {
             save_dialog_open: false,
             keyboard_request: false,
             save_create_new_mode: is_default,
+            back_confirm_open: false,
         });
     }
     pub fn cancel_editor(&mut self) {
@@ -147,12 +150,62 @@ impl TouchControls {
         }
         self.clear();
     }
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.editor
+            .as_ref()
+            .is_some_and(|e| self.settings != e.original)
+    }
+    /// Handle Android Back / Escape inside the Control Editor.
+    /// Closes any open sub-dialog first; if at the root canvas and unsaved
+    /// changes exist, opens the `[ Save ]` `[ Back ]` confirmation dialog;
+    /// otherwise closes the editor and returns `true`.
+    pub fn request_editor_back(&mut self) -> bool {
+        let Some(e) = self.editor.as_mut() else {
+            return true;
+        };
+        if e.picker_step != PickerStep::None {
+            e.picker_step = PickerStep::None;
+            return false;
+        }
+        if e.props_open {
+            e.props_open = false;
+            return false;
+        }
+        if e.menu_open {
+            e.menu_open = false;
+            return false;
+        }
+        if e.save_dialog_open {
+            e.save_dialog_open = false;
+            e.editing_save_name = false;
+            e.editing_save_desc = false;
+            return false;
+        }
+        if e.back_confirm_open {
+            e.back_confirm_open = false;
+            return false;
+        }
+        if self.settings != e.original {
+            e.back_confirm_open = true;
+            e.pod_anim = 0.0;
+            return false;
+        }
+        self.editor = None;
+        self.clear();
+        true
+    }
     /// The editor owns every finger: editing cannot move, mine or open menus.
     /// Returns true when Done/Cancel closed the editor.
     pub fn edit_touch(&mut self, id: u64, p: [f32; 2], started: bool, ended: bool) -> bool {
         let Some(mut e) = self.editor.take() else {
             return false;
         };
+        if e.selected_custom
+            .is_some_and(|idx| idx >= self.settings.custom_buttons.len())
+        {
+            e.selected_custom = None;
+            e.drag = None;
+        }
         self.clicked |= started;
         if self.edit_custom(&mut e, id, p, started, ended) {
             self.editor = Some(e);
@@ -177,6 +230,12 @@ impl TouchControls {
                     def.layouts[self.settings.mode.index()];
                 if self.settings.control_style == ControlStyle::GoyControl {
                     self.settings.custom_buttons = def.custom_buttons;
+                }
+                if e.selected_custom
+                    .is_some_and(|idx| idx >= self.settings.custom_buttons.len())
+                {
+                    e.selected_custom = None;
+                    e.drag = None;
                 }
             } else if layout::contains([0.02, 0.13, 0.335, 0.075], p) {
                 e.palette = !e.palette;
@@ -207,6 +266,12 @@ impl TouchControls {
                         self.settings.control_style,
                         next,
                     );
+                    if e.selected_custom
+                        .is_some_and(|idx| idx >= self.settings.custom_buttons.len())
+                    {
+                        e.selected_custom = None;
+                        e.drag = None;
+                    }
                 }
             } else if layout::contains([0.32, 0.46, 0.115, 0.06], p) && e.selected.is_some() {
                 let slot = self.settings.slot(e.selected.unwrap());
@@ -529,7 +594,14 @@ impl TouchControls {
                         if layout::contains(key_rect(i), p)
                             && let Some(index) = e.selected_custom
                         {
-                            self.settings.custom_buttons[index].key = token;
+                            let is_mcpe = self.settings.control_style == ControlStyle::Mcpe;
+                            if let Some(btn) = self.settings.custom_buttons.get_mut(index) {
+                                if is_mcpe {
+                                    btn.set_exclusive_binding(token);
+                                } else {
+                                    btn.key = token;
+                                }
+                            }
                             e.key_picker = false;
                             break;
                         }
@@ -558,19 +630,24 @@ impl TouchControls {
         if e.palette {
             return false;
         }
-        if started && e.selected_custom.is_some() {
-            let idx = e.selected_custom.unwrap();
+        if started && let Some(idx) = e.selected_custom {
             let mode_idx = self.settings.mode.index();
             if layout::contains([0.32, 0.46, 0.115, 0.06], p) {
-                self.settings.custom_buttons[idx].layouts[mode_idx].passthrough ^= true;
+                if let Some(btn) = self.settings.custom_buttons.get_mut(idx) {
+                    btn.layouts[mode_idx].passthrough ^= true;
+                }
                 return true;
             }
             if layout::contains([0.442, 0.46, 0.115, 0.06], p) {
-                self.settings.custom_buttons[idx].layouts[mode_idx].toggleable ^= true;
+                if let Some(btn) = self.settings.custom_buttons.get_mut(idx) {
+                    btn.layouts[mode_idx].toggleable ^= true;
+                }
                 return true;
             }
             if layout::contains([0.565, 0.46, 0.115, 0.06], p) {
-                self.settings.custom_buttons[idx].layouts[mode_idx].swipeable ^= true;
+                if let Some(btn) = self.settings.custom_buttons.get_mut(idx) {
+                    btn.layouts[mode_idx].swipeable ^= true;
+                }
                 return true;
             }
             if layout::contains([0.32, 0.54, 0.36, 0.07], p) {
@@ -580,9 +657,9 @@ impl TouchControls {
                 return true;
             }
             if layout::contains([0.32, 0.88, 0.36, 0.07], p) {
-                self.settings
-                    .custom_buttons
-                    .remove(e.selected_custom.unwrap());
+                if idx < self.settings.custom_buttons.len() {
+                    self.settings.custom_buttons.remove(idx);
+                }
                 e.selected_custom = None;
                 e.drag = None;
                 return true;
@@ -618,32 +695,39 @@ impl TouchControls {
         let Some(index) = e.selected_custom else {
             return false;
         };
+        if index >= self.settings.custom_buttons.len() {
+            e.selected_custom = None;
+            e.drag = None;
+            return false;
+        }
         if let Some((owner, drag)) = &e.drag
             && *owner == id
         {
             let aspect = self.aspect();
             let scale = self.settings.button_scale;
             let mirror = self.settings.left_handed;
-            let place =
-                &mut self.settings.custom_buttons[index].layouts[self.settings.mode.index()];
-            match drag {
-                Drag::Control(offset) => {
-                    let mut center = [p[0] - offset[0], p[1] - offset[1]];
-                    if mirror {
-                        center[0] = 1.0 - center[0];
+            let mode_idx = self.settings.mode.index();
+            if let Some(btn) = self.settings.custom_buttons.get_mut(index) {
+                let place = &mut btn.layouts[mode_idx];
+                match drag {
+                    Drag::Control(offset) => {
+                        let mut center = [p[0] - offset[0], p[1] - offset[1]];
+                        if mirror {
+                            center[0] = 1.0 - center[0];
+                        }
+                        let size = (place.size * scale).min(aspect).min(1.0);
+                        place.center = [
+                            center[0].clamp(size / aspect / 2.0, 1.0 - size / aspect / 2.0),
+                            center[1].clamp(size / 2.0, 1.0 - size / 2.0),
+                        ];
                     }
-                    let size = (place.size * scale).min(aspect).min(1.0);
-                    place.center = [
-                        center[0].clamp(size / aspect / 2.0, 1.0 - size / aspect / 2.0),
-                        center[1].clamp(size / 2.0, 1.0 - size / 2.0),
-                    ];
-                }
-                Drag::Slider(option) => {
-                    let value = ((p[0] - 0.335) / 0.33).clamp(0.0, 1.0);
-                    if *option == 0 {
-                        place.size = 0.045 + value * 0.405;
-                    } else {
-                        place.opacity = value;
+                    Drag::Slider(option) => {
+                        let value = ((p[0] - 0.335) / 0.33).clamp(0.0, 1.0);
+                        if *option == 0 {
+                            place.size = 0.045 + value * 0.405;
+                        } else {
+                            place.opacity = value;
+                        }
                     }
                 }
             }
@@ -657,11 +741,17 @@ impl TouchControls {
         if crate::keybinds::key_code(name).is_none() {
             return false;
         }
+        let is_mcpe = self.settings.control_style == ControlStyle::Mcpe;
         if let Some(e) = &mut self.editor
             && e.key_picker
             && let Some(i) = e.selected_custom
+            && let Some(btn) = self.settings.custom_buttons.get_mut(i)
         {
-            self.settings.custom_buttons[i].key = name.into();
+            if is_mcpe {
+                btn.set_exclusive_binding(name.into());
+            } else {
+                btn.key = name.into();
+            }
             e.key_picker = false;
             true
         } else {
@@ -674,10 +764,11 @@ impl TouchControls {
             plate(b, a, [0.22, 0.84, 0.56, 0.07], "Create button...", false);
         }
         if let Some(i) = e.selected_custom
+            && let Some(btn) = self.settings.custom_buttons.get(i)
             && !e.palette
             && !e.key_picker
         {
-            let p = self.settings.custom_buttons[i].layouts[self.settings.mode.index()];
+            let p = btn.layouts[self.settings.mode.index()];
             plate(b, a, [0.32, 0.46, 0.115, 0.06], "PassThru", p.passthrough);
             plate(b, a, [0.442, 0.46, 0.115, 0.06], "Toggle", p.toggleable);
             plate(b, a, [0.565, 0.46, 0.115, 0.06], "Swipe", p.swipeable);
@@ -685,7 +776,7 @@ impl TouchControls {
                 b,
                 a,
                 [0.32, 0.54, 0.36, 0.07],
-                &format!("Action: {}", self.settings.custom_buttons[i].label()),
+                &format!("Action: {}", btn.label()),
                 false,
             );
             plate(

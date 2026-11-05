@@ -116,17 +116,28 @@ impl StartupMenu {
         Ok(menu)
     }
 
-    pub(super) fn set_root(&mut self, root: PathBuf, settings: &Settings) {
-        horizon_client::ui::load_metadata(&root);
-        horizon_client::lang::set(horizon_client::lang::Language::load(
-            &[&root],
-            &settings.language,
-        ));
+    pub(super) fn set_root(
+        &mut self,
+        root: PathBuf,
+        settings: &Settings,
+        sounds: Option<horizon_client::sound_events::SoundRegistry>,
+    ) {
         self.root = root;
         #[cfg(target_os = "android")]
         if self.audio.is_none() {
-            self.audio = Some(horizon_client::audio::Audio::new(&self.root));
+            self.audio = Some(match sounds {
+                Some(registry) => horizon_client::audio::Audio::with_registry(
+                    &self.root,
+                    registry,
+                    &settings.sound_device,
+                ),
+                None => {
+                    horizon_client::audio::Audio::with_device(&self.root, &settings.sound_device)
+                }
+            });
         }
+        #[cfg(not(target_os = "android"))]
+        let _ = sounds;
         if self.title.is_none() {
             let mut title = Title::new(
                 std::env::current_dir().unwrap_or_default().join("saves"),
@@ -537,6 +548,11 @@ impl Loading {
             .map_or([1280, 720], |r| [r.config.width, r.config.height])
     }
 
+    fn ui_scale(&self) -> (f32, f32, f32) {
+        let batch = HudBatch::new(self.menu_size());
+        (batch.width, batch.height, batch.scale)
+    }
+
     fn save_menu_address(&mut self) {
         if self.menu.title.as_ref().is_some_and(|title| {
             title.last_server != self.settings.file.string("lastServer")
@@ -779,6 +795,16 @@ impl Loading {
     #[cfg(target_os = "android")]
     pub(super) fn menu_android_keyboard(&mut self) {
         use horizon_client::osk::Output;
+        if let Some(ed) = self.menu.controls.editor.as_mut()
+            && std::mem::take(&mut ed.keyboard_request)
+        {
+            let text = if ed.editing_save_desc {
+                ed.save_desc_input.clone()
+            } else {
+                ed.save_name_input.clone()
+            };
+            crate::platform::show(&text);
+        }
         if let Some(notice) = crate::documents::poll() {
             if notice.changed {
                 if let Some(opts) = self.options.as_ref() {
@@ -791,6 +817,13 @@ impl Loading {
             log::info!("{}", notice.text);
         }
         for out in crate::platform::poll() {
+            if horizon_client::touch_ui::apply_editor_or_preset_output(
+                self.menu.controls.editor.as_mut(),
+                self.menu.touch.preset_dialog.as_mut(),
+                &out,
+            ) {
+                continue;
+            }
             match out {
                 Output::Text(s) => {
                     if self.menu.options_open {
@@ -1157,6 +1190,29 @@ impl Loading {
         event: WindowEvent,
     ) -> Result<()> {
         #[cfg(target_os = "android")]
+        match &event {
+            WindowEvent::Touch(_) => crate::touch_input(true),
+            WindowEvent::CursorMoved { device_id, .. }
+            | WindowEvent::MouseInput { device_id, .. }
+            | WindowEvent::MouseWheel { device_id, .. }
+                if winit::platform::android::native_pointer_device(*device_id) =>
+            {
+                let _ = horizon_client::android_runtime::note_input(
+                    horizon_client::android_gamepad::InputMode::KeyboardMouse,
+                );
+            }
+            WindowEvent::KeyboardInput {
+                device_id,
+                event,
+                is_synthetic: false,
+            } if event.state == ElementState::Pressed
+                && winit::platform::android::native_device_id(*device_id) > 0 =>
+            {
+                crate::touch_input(false);
+            }
+            _ => {}
+        }
+        #[cfg(target_os = "android")]
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && event.state == ElementState::Pressed
             && self.startup_navigation(event_loop, event)?
@@ -1175,10 +1231,49 @@ impl Loading {
         if self.menu.controls.editor.is_some() {
             if matches!(&event, WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed && (event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::BrowserBack) || event.physical_key == PhysicalKey::Code(KeyCode::Escape)))
             {
-                self.menu.controls.cancel_editor();
-                let _ = self.menu.controls.settings.save();
-                self.settings.touch = self.menu.controls.settings.clone();
+                if crate::platform::active() {
+                    crate::platform::hide();
+                    return Ok(());
+                }
+                if self.menu.controls.request_editor_back() {
+                    let _ = self.menu.controls.settings.save();
+                    self.settings.touch = self.menu.controls.settings.clone();
+                }
                 return Ok(());
+            }
+            if let WindowEvent::KeyboardInput { event, .. } = &event
+                && event.state == ElementState::Pressed
+                && self
+                    .menu
+                    .controls
+                    .editor
+                    .as_ref()
+                    .is_some_and(|e| e.save_dialog_open)
+            {
+                if let PhysicalKey::Code(code) = event.physical_key
+                    && matches!(code, KeyCode::Backspace | KeyCode::Enter | KeyCode::Escape)
+                {
+                    horizon_client::touch_ui::apply_editor_or_preset_output(
+                        self.menu.controls.editor.as_mut(),
+                        None,
+                        &match code {
+                            KeyCode::Backspace => horizon_client::osk::Output::Backspace,
+                            KeyCode::Enter => horizon_client::osk::Output::Enter,
+                            _ => horizon_client::osk::Output::Close,
+                        },
+                    );
+                    return Ok(());
+                }
+                if let Some(txt) = event.text.as_deref()
+                    && !txt.is_empty()
+                {
+                    horizon_client::touch_ui::apply_editor_or_preset_output(
+                        self.menu.controls.editor.as_mut(),
+                        None,
+                        &horizon_client::osk::Output::Text(txt.to_owned()),
+                    );
+                    return Ok(());
+                }
             }
             if let WindowEvent::Touch(t) = &event {
                 use winit::event::TouchPhase;
@@ -1201,12 +1296,48 @@ impl Loading {
                         t.phase == TouchPhase::Ended,
                     );
                 }
+                if let Some(ed) = self.menu.controls.editor.as_mut()
+                    && std::mem::take(&mut ed.keyboard_request)
+                {
+                    let text = if ed.editing_save_desc {
+                        ed.save_desc_input.clone()
+                    } else {
+                        ed.save_name_input.clone()
+                    };
+                    crate::platform::show(&text);
+                }
                 if self.menu.controls.editor.is_none() {
                     self.settings.touch = self.menu.controls.settings.clone();
                 }
                 if std::mem::take(&mut self.menu.controls.clicked) {
                     self.menu.click_sound(self.settings.volumes);
                 }
+                return Ok(());
+            }
+        }
+        #[cfg(target_os = "android")]
+        if let WindowEvent::KeyboardInput { event, .. } = &event
+            && event.state == ElementState::Pressed
+            && self.menu.touch.preset_dialog.is_some()
+        {
+            if let PhysicalKey::Code(code) = event.physical_key
+                && matches!(code, KeyCode::Backspace | KeyCode::Enter | KeyCode::Escape)
+            {
+                horizon_client::touch_ui::apply_editor_or_preset_output(
+                    None,
+                    self.menu.touch.preset_dialog.as_mut(),
+                    &horizon_client::osk::Output::Key(code),
+                );
+                return Ok(());
+            }
+            if let Some(txt) = event.text.as_deref()
+                && !txt.is_empty()
+            {
+                horizon_client::touch_ui::apply_editor_or_preset_output(
+                    None,
+                    self.menu.touch.preset_dialog.as_mut(),
+                    &horizon_client::osk::Output::Text(txt.to_owned()),
+                );
                 return Ok(());
             }
         }
@@ -1384,7 +1515,8 @@ impl Loading {
                             }
                             horizon_client::touch::Mode::Tap => horizon_client::touch::Mode::Dpad,
                         };
-                        if self.menu.controls.settings.mode != horizon_client::touch::Mode::Crosshair
+                        if self.menu.controls.settings.mode
+                            != horizon_client::touch::Mode::Crosshair
                         {
                             self.menu.controls.settings.split_controls = false;
                         }
@@ -1537,6 +1669,53 @@ impl Loading {
                     InGameMenuAction::OpenKeyboard => {
                         crate::platform::show("");
                     }
+                    InGameMenuAction::SendCustomInput(token) => match token.as_str() {
+                        "key.mouse.left" | "action:key.attack" => {
+                            self.startup_mouse_button(event_loop, false, true)?;
+                            self.startup_mouse_button(event_loop, false, false)?;
+                        }
+                        "key.mouse.right" | "action:key.use" => {
+                            self.startup_mouse_button(event_loop, true, true)?;
+                            self.startup_mouse_button(event_loop, true, false)?;
+                        }
+                        "key.keyboard.escape" => {
+                            if self.menu.options_open {
+                                if let Some(gui) = self.gui.as_ref() {
+                                    let e = self.menu.options.key(
+                                        &mut self.settings,
+                                        &gui.atlas,
+                                        KeyCode::Escape,
+                                        None,
+                                    );
+                                    self.menu_option_events(e);
+                                }
+                            } else if let Some(t) = &mut self.menu.title {
+                                t.escape();
+                            }
+                        }
+                        "mouse.virtual.toggle" => {
+                            let next = !self.menu.controls.settings.virtual_mouse_enabled;
+                            self.menu.controls.settings.virtual_mouse_enabled = next;
+                            self.menu.touch.pointer_off = !next;
+                            self.menu.touch.virtual_mouse = next;
+                            let _ = self.menu.controls.settings.save();
+                            self.settings.touch = self.menu.controls.settings.clone();
+                        }
+                        _ => {
+                            if let Some(code) = horizon_client::keybinds::key_code(&token)
+                                && self.menu.options_open
+                                && let Some(gui) = self.gui.as_ref()
+                            {
+                                let e = self.menu.options.key(
+                                    &mut self.settings,
+                                    &gui.atlas,
+                                    code,
+                                    None,
+                                );
+                                self.menu_option_events(e);
+                            }
+                        }
+                    },
                     _ => {}
                 }
                 if touch.phase == TouchPhase::Started {
@@ -1548,9 +1727,13 @@ impl Loading {
                 touch.location.x as f32 / raw_size[0].max(1) as f32,
                 touch.location.y as f32 / raw_size[1].max(1) as f32,
             ];
-            if (self.menu.controls.owns_pointer(touch.id)
-                || (touch.phase == TouchPhase::Started
-                    && self.menu.controls.custom_at(norm_p).is_some()))
+            let touch_controls_hidden = !crate::touch_visible()
+                && self.menu.controls.hud_opacity_scale <= 0.01
+                && self.menu.controls.editor.is_none();
+            if !touch_controls_hidden
+                && (self.menu.controls.owns_pointer(touch.id)
+                    || (touch.phase == TouchPhase::Started
+                        && self.menu.controls.custom_at(norm_p).is_some()))
                 && self.menu.controls.menu_update(
                     touch.id,
                     norm_p,
@@ -1572,9 +1755,10 @@ impl Loading {
                             let _ = self.menu.controls.settings.save();
                             self.settings.touch = self.menu.controls.settings.clone();
                             if next {
-                                self.menu
-                                    .touch
-                                    .sync_viewport_cursor(&mut self.menu.cursor, [b.width, b.height]);
+                                self.menu.touch.sync_viewport_cursor(
+                                    &mut self.menu.cursor,
+                                    [b.width, b.height],
+                                );
                             }
                         }
                         "key.mouse.left" | "action:key.attack" => {
@@ -1700,7 +1884,10 @@ impl Loading {
                     !self.menu.touch.mouse_held(),
                 );
                 self.menu.cursor = (cursor[0], cursor[1]);
-                self.menu.pointer = (f64::from(cursor[0] * b.scale), f64::from(cursor[1] * b.scale));
+                self.menu.pointer = (
+                    f64::from(cursor[0] * b.scale),
+                    f64::from(cursor[1] * b.scale),
+                );
                 self.menu_event(
                     event_loop,
                     WindowEvent::CursorMoved {
@@ -1897,6 +2084,12 @@ impl Loading {
                 if self.menu.win.is_some() => {}
             WindowEvent::CursorMoved { position, .. } => {
                 self.menu.pointer = (position.x, position.y);
+                let (_, _, scale) = self.ui_scale();
+                self.menu.cursor = (position.x as f32 / scale, position.y as f32 / scale);
+                #[cfg(target_os = "android")]
+                {
+                    self.menu.touch.cursor_initialized = true;
+                }
                 self.update_menu_cursor();
                 if self.menu.options_open && self.menu.dragging {
                     self.menu_options_click(true, false);
@@ -2126,12 +2319,21 @@ impl Loading {
             self.menu.controls.viewport(size[0], size[1]);
             self.menu.controls.in_menu = true;
             self.menu.controls.goy_rendered_by_ui = true;
+            self.menu
+                .controls
+                .update_visibility(crate::touch_visible(), 1.0 / 60.0);
             let is_goy = self.menu.controls.settings.control_style
                 == horizon_client::touch::ControlStyle::GoyControl;
             self.menu.touch.goy_mode = is_goy;
             // Sync title menu pointer visibility and viewport centering from authoritative settings.
             self.menu.touch.pointer_off = !self.menu.controls.settings.virtual_mouse_enabled;
-            self.menu.touch.virtual_mouse = self.menu.controls.settings.virtual_mouse_enabled;
+            self.menu.touch.virtual_mouse = self.menu.touch.compute_virtual_mouse_visibility(
+                &self.menu.controls,
+                true,
+                false,
+                crate::touch_visible(),
+                false,
+            );
             self.menu
                 .touch
                 .sync_viewport_cursor(&mut self.menu.cursor, [batch.width, batch.height]);

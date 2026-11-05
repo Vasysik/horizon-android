@@ -467,6 +467,8 @@ pub struct Frame<'a> {
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
+    /// Reuse `MenuBlur`'s cached blurred world backdrop while a pausing menu is open.
+    pub menu_blur_cache: bool,
     /// `Options.chunkSectionFadeInTime`, in seconds: how long a section takes to fade in once
     /// uploaded (0 draws it whole at once).
     pub chunk_fade: f32,
@@ -813,6 +815,7 @@ pub struct Renderer {
     /// panics when such a surface is acquired from (it never had one that
     /// worked), so frames configure it again first and skip until it takes.
     surface_unconfigured: bool,
+    surface_extent: std::sync::atomic::AtomicU64,
     pub drawn_sections: usize,
     /// Last frame's section draws (face ranges and translucent sections),
     /// and the draw calls the backend issued for them.
@@ -1458,14 +1461,14 @@ async fn open_backend(
     let mobile = cfg!(target_os = "android");
     let compatibility = crate::android_runtime::compatibility();
     let features = timing::GpuTimer::features(&adapter)
-        | if compatibility {
+        | if compatibility || mobile {
             wgpu::Features::empty()
         } else {
             cull::Cull::features(&adapter)
         }
         | oit::features(&adapter)
         | (adapter.features()
-            & (if compatibility {
+            & (if compatibility || mobile {
                 wgpu::Features::empty()
             } else {
                 wgpu::Features::INDIRECT_FIRST_INSTANCE
@@ -3466,9 +3469,10 @@ impl Renderer {
             .get_downlevel_capabilities()
             .flags
             .contains(wgpu::DownlevelFlags::BASE_VERTEX);
-        let multi_draw = device
-            .features()
-            .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+        let multi_draw = !cfg!(target_os = "android")
+            && device
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
             && adapter
                 .get_downlevel_capabilities()
                 .flags
@@ -3493,6 +3497,7 @@ impl Renderer {
         let cull_env = std::env::var("HORIZON_GPU_CULL");
         let adapter_info = adapter.get_info();
         let cull = cull::Cull::supported(&adapter, &device)
+            .filter(|_| !cfg!(target_os = "android"))
             .filter(|_| !crate::android_runtime::compatibility())
             .filter(|_| gpu_culling_requested(&adapter_info, cull_env.as_deref().ok()))
             .map(|depth_test| match cull_env.as_deref() {
@@ -3565,7 +3570,7 @@ impl Renderer {
             device,
             queue,
             device_lost,
-            config,
+            config: config.clone(),
             solid,
             opaque_terrain,
             opaque_terrain_on: true,
@@ -3728,6 +3733,17 @@ impl Renderer {
             suspended: !drawable_size(size.width, size.height, max_side),
             acquire_validation_failures: 0,
             surface_unconfigured: false,
+            surface_extent: std::sync::atomic::AtomicU64::new({
+                #[cfg(target_os = "android")]
+                {
+                    let p = window.outer_size();
+                    (u64::from(p.width.max(1)) << 32) | u64::from(p.height.max(1))
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    (u64::from(config.width) << 32) | u64::from(config.height)
+                }
+            }),
             drawn_sections: 0,
             section_draws: 0,
             section_draw_calls: 0,
@@ -3885,9 +3901,213 @@ impl Renderer {
                 "Horizon renderer: the new window surface did not configure ({e}); retrying"
             );
         }
+        if configured.is_ok() {
+            let sc = self.surface_config();
+            self.surface_extent.store(
+                (u64::from(sc.width) << 32) | u64::from(sc.height),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
         self.surface_unconfigured = configured.is_err();
         self.surface = Some(surface);
         self.suspended = false;
+        Ok(())
+    }
+    /// Update the loading/title screen's HUD atlas, glint and panorama textures
+    /// in place without tearing down the live swapchain surface or recompiling
+    /// the world's pipelines.
+    pub fn set_loading_ui(
+        &mut self,
+        atlas: &crate::hud::HudAtlas,
+        panorama_faces: &panorama::Faces,
+    ) -> Result<()> {
+        let limit = self.device.limits().max_texture_dimension_2d;
+        if atlas.width.max(atlas.height) > limit {
+            return Err(format!(
+                "the shared atlas is {}x{}; this GPU allows {limit}x{limit}",
+                atlas.width, atlas.height
+            )
+            .into());
+        }
+        atlas.font.reset_cache();
+        let atlas_tex = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Shared atlas"),
+                size: wgpu::Extent3d {
+                    width: atlas.width,
+                    height: atlas.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &atlas.pixels,
+        );
+        let atlas_view = atlas_tex.create_view(&Default::default());
+        let (glint_pixels, glint_width, glint_height) =
+            (&atlas.glint.0, atlas.glint.1, atlas.glint.2);
+        let glint_texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Enchanted glint"),
+                size: wgpu::Extent3d {
+                    width: glint_width,
+                    height: glint_height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            glint_pixels,
+        );
+        let glint_view = glint_texture.create_view(&Default::default());
+        let glint_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Glint"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let (glint_armor_pixels, glint_armor_width, glint_armor_height) = (
+            &atlas.glint_armor.0,
+            atlas.glint_armor.1,
+            atlas.glint_armor.2,
+        );
+        let glint_armor_texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Enchanted armor glint"),
+                size: wgpu::Extent3d {
+                    width: glint_armor_width,
+                    height: glint_armor_height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            glint_armor_pixels,
+        );
+        let glint_armor_view = glint_armor_texture.create_view(&Default::default());
+        let mut hud = HudRenderer::new(
+            &self.device,
+            self.config.format.remove_srgb_suffix(),
+            &atlas_view,
+            &glint_view,
+            &glint_sampler,
+        )?;
+        hud.atlas_texture = Some(atlas_tex);
+        hud.sprite_animations = atlas
+            .sprite_animations
+            .iter()
+            .map(|(rect, animation)| (*rect, animation.clone(), (usize::MAX, 0, 0)))
+            .collect();
+        hud.set_text_shader(&self.device, atlas.text_shader.as_deref());
+        self.hud = hud;
+        let atlas_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Atlas"),
+            ..Default::default()
+        });
+        self.entity_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Entity resources"),
+            layout: &self.entity_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.lightmap_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&glint_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
+                },
+            ],
+        });
+        self.hand_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("First-person hand resources"),
+            layout: &self.entity_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.hand_globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.lightmap_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&glint_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
+                },
+            ],
+        });
+        self.panorama = panorama::Panorama::new(
+            &self.device,
+            &self.queue,
+            self.config.format.remove_srgb_suffix(),
+            panorama_faces,
+        );
         Ok(())
     }
     /// The world's depth, which occlusion culling's test and post effects may read.
@@ -3965,14 +4185,47 @@ impl Renderer {
         if self.suspended {
             return;
         }
+        let size_changed = [self.config.width, self.config.height] != [width, height];
         self.config.width = width;
         self.config.height = height;
         if self.surface.is_some() {
-            self.configure_surface();
-        } else {
+            #[cfg(target_os = "android")]
+            let need_surface = {
+                let p = self.window.outer_size();
+                let extent = (u64::from(p.width.max(1)) << 32) | u64::from(p.height.max(1));
+                self.surface_unconfigured
+                    || self
+                        .surface_extent
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        != extent
+            };
+            #[cfg(not(target_os = "android"))]
+            let need_surface = size_changed;
+            if need_surface {
+                self.configure_surface();
+            }
+        } else if size_changed {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
-        self.depth = Self::depth(&self.device, &self.config);
+        if size_changed {
+            self.depth = Self::depth(&self.device, &self.config);
+            self.invalidate_menu_blur();
+        }
+    }
+    /// Marks the cached blurred menu backdrop invalid (e.g. when entering a menu from gameplay).
+    pub fn invalidate_menu_blur(&mut self) {
+        if let Some(blur) = &mut self.menu_blur {
+            blur.invalidate();
+        }
+    }
+    /// Whether `MenuBlur` holds a valid cached blurred backdrop for the current window and radius.
+    pub fn has_cached_menu_blur(&self, radius: f32) -> bool {
+        self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+            && self.screenshot.is_none()
+            && self
+                .menu_blur
+                .as_ref()
+                .is_some_and(|b| b.is_cached([self.config.width, self.config.height], radius))
     }
     /// Whether sections are drawn as one index list per frame (`flat`).
     pub fn flat_draws(&self) -> bool {
@@ -4584,16 +4837,25 @@ impl Renderer {
     /// Configures the window surface again. One that fails is still the one
     /// wgpu configured before, which acquisition reports as a validation error.
     fn configure_surface(&self) {
-        if let Some(surface) = &self.surface
-            && let Err(e) = Self::configure(
+        if let Some(surface) = &self.surface {
+            let sc = self.surface_config();
+            match Self::configure(
                 &self.device,
                 surface,
-                &self.surface_config(),
+                &sc,
                 self.hdr.as_ref(),
                 &self.device_lost,
-            )
-        {
-            log::warn!("Horizon renderer: the window surface did not configure ({e})");
+            ) {
+                Ok(()) => {
+                    self.surface_extent.store(
+                        (u64::from(sc.width) << 32) | u64::from(sc.height),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+                Err(e) => {
+                    log::warn!("Horizon renderer: the window surface did not configure ({e})");
+                }
+            }
         }
     }
     /// HDR calibration's test picture (`crate::hdr_calibration`) while it runs, else None.
@@ -4992,7 +5254,13 @@ impl Renderer {
     /// (linear, clamped, `bit` anisotropy when anisotropic) and terrain.wgsl's sampleNearest,
     /// or sampleRGSS for RGSS.
     pub fn set_texture_filtering(&mut self, filtering: i32, bit: i32) {
-        let filtering = filtering.clamp(0, 2) as u32;
+        // Mobile TBDR GPUs (e.g. Mali-G52) stall heavily on 9-tap RGSS across
+        // overlapping foliage layers; use standard mipmapped sampling there.
+        let filtering = if cfg!(target_os = "android") && filtering == 1 {
+            0
+        } else {
+            filtering.clamp(0, 2) as u32
+        };
         let anisotropy = if filtering == 2 {
             sampler_anisotropy(bit)
         } else {
@@ -5284,7 +5552,16 @@ impl Renderer {
         let (surface_frame, reconfigure) = match acquired {
             None => (None, false),
             Some(wgpu::CurrentSurfaceTexture::Success(f)) => (Some(f), false),
-            Some(wgpu::CurrentSurfaceTexture::Suboptimal(f)) => (Some(f), true),
+            Some(wgpu::CurrentSurfaceTexture::Suboptimal(f)) => {
+                #[cfg(target_os = "android")]
+                let reconfigure = {
+                    let p = self.window.outer_size();
+                    [f.texture.width(), f.texture.height()] != [p.width.max(1), p.height.max(1)]
+                };
+                #[cfg(not(target_os = "android"))]
+                let reconfigure = true;
+                (Some(f), reconfigure)
+            }
             Some(wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded) => {
                 return Ok(false);
             }
@@ -5365,6 +5642,89 @@ impl Renderer {
                     label: Some("Horizon frame"),
                 })
         });
+        let menu_blur = frame.menu_blur.filter(|radius| {
+            *radius > 0.0 && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+        });
+        if menu_blur.is_none() {
+            self.invalidate_menu_blur();
+        }
+        if frame.menu_blur_cache
+            && self.screenshot.is_none()
+            && menu_blur.is_some_and(|r| self.has_cached_menu_blur(r))
+        {
+            self.hud.prepare(
+                &self.device,
+                &mut self.uploads,
+                &mut encoder,
+                frame.hud,
+                [self.config.width, self.config.height],
+            );
+            let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.config.format.remove_srgb_suffix()),
+                ..Default::default()
+            });
+            if let Some(blur) = &self.menu_blur {
+                let _ = blur.blit_cached(&self.queue, &mut encoder, &view_target);
+            }
+            let blur_at = frame.hud.blur_at;
+            self.hud.draw_range(
+                &mut encoder,
+                &view_target,
+                &self.depth,
+                frame.hud,
+                [self.config.width, self.config.height],
+                blur_at..frame.hud.vertices.len() as u32,
+            );
+            self.uploads.finish(&encoder);
+            if has_section_copies {
+                self.section_copy_bytes = 0;
+                self.section_uploads.finish(&encoder);
+            }
+            if let Some(f) = &surface_frame {
+                self.readback
+                    .present(&self.device, &mut encoder, &f.texture);
+            }
+            if let (Some(hdr), Some(f)) = (&self.hdr, &surface_frame) {
+                hdr.present(&self.queue, &mut encoder, &f.texture, !frame.title);
+            }
+            #[cfg(target_os = "android")]
+            if let (Some(scale), Some(frame)) = (&self.frame_scale, &surface_frame) {
+                scale.present(&mut encoder, &frame.texture);
+            }
+            #[cfg(target_os = "android")]
+            if self.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque
+                && let Some(surface) = &surface_frame
+            {
+                let format = self.surface_config().format.remove_srgb_suffix();
+                let output = self
+                    .opaque_output
+                    .get_or_insert_with(|| opaque_output::OpaqueOutput::new(&self.device, format));
+                if output.format != format {
+                    *output = opaque_output::OpaqueOutput::new(&self.device, format);
+                }
+                output.present(&mut encoder, &surface.texture);
+            }
+            let commands = crate::spans::time("encode", || encoder.finish());
+            let submission = crate::spans::time("submit", || self.queue.submit([commands]));
+            let present = Instant::now();
+            if let Some(surface_frame) = surface_frame {
+                if self.config.present_mode == wgpu::PresentMode::Fifo {
+                    self.window.pre_present_notify();
+                }
+                self.queue.present(surface_frame);
+                if reconfigure {
+                    self.configure_surface();
+                }
+            } else {
+                self.in_flight.push_back(submission);
+                if !self.paced_elsewhere {
+                    self.wait_in_flight();
+                }
+            }
+            self.last_wait += present.elapsed();
+            self.last_encode = started.elapsed().saturating_sub(self.last_wait);
+            return Ok(true);
+        }
         #[cfg(target_os = "android")]
         if let Some(timer) = &mut self.gpu_timer {
             timer.begin(&mut encoder);
@@ -7891,9 +8251,6 @@ impl Renderer {
             let first = debug_depth + debug_top;
             pass.draw(0..4, first..first + crosshair);
         }
-        let menu_blur = frame.menu_blur.filter(|radius| {
-            *radius > 0.0 && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
-        });
         let blur_at = menu_blur.map_or(0, |_| frame.hud.blur_at);
         self.hud.draw_range(
             &mut encoder,

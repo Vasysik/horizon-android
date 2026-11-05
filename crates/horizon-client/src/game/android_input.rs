@@ -149,6 +149,12 @@ impl Game<'_> {
     }
     pub(super) fn android_custom_events(&mut self) {
         for (name, down) in self.pad.touch.key_events() {
+            self.android_dispatch_custom_token(&name, down);
+        }
+    }
+
+    pub(super) fn android_dispatch_custom_token(&mut self, name: &str, down: bool) {
+        {
             if let Some(mapping) = name.strip_prefix("action:") {
                 if mapping == "key.sneak" || mapping == "key.sprint" {
                     let slot = usize::from(mapping == "key.sprint");
@@ -167,7 +173,7 @@ impl Game<'_> {
                             player.sprinting = false;
                         }
                     }
-                    continue;
+                    return;
                 }
                 if self.pad_in_menu()
                     && down
@@ -175,7 +181,7 @@ impl Game<'_> {
                     && matches!(self.screen, Screen::Inventory | Screen::Creative)
                 {
                     let _ = self.pad_back();
-                    continue;
+                    return;
                 }
                 let default = horizon_client::keybinds::KeyBinds::default_of(mapping);
                 let result = if let Some(key) = horizon_client::keybinds::key_code(default) {
@@ -191,13 +197,13 @@ impl Game<'_> {
                 if down && self.screen == Screen::Chat {
                     self.android_show_keyboard();
                 }
-                continue;
+                return;
             }
-            if let Some(button) = horizon_client::keybinds::mouse_button(&name) {
+            if let Some(button) = horizon_client::keybinds::mouse_button(name) {
                 if let Err(error) = self.android_custom_mouse(button, down) {
                     log::warn!("Custom mouse button: {error}");
                 }
-                continue;
+                return;
             }
             if name == "mouse.scroll.up" || name == "mouse.scroll.down" {
                 if down {
@@ -209,10 +215,10 @@ impl Game<'_> {
                     );
                     self.selected = next as usize;
                 }
-                continue;
+                return;
             }
             if name == "mouse.look" {
-                continue;
+                return;
             }
             if name == "mouse.virtual.toggle" {
                 if down {
@@ -234,10 +240,10 @@ impl Game<'_> {
                     self.android_sync_pointer();
                     self.android_touch_haptic(14);
                 }
-                continue;
+                return;
             }
-            let Some(key) = horizon_client::keybinds::key_code(&name) else {
-                continue;
+            let Some(key) = horizon_client::keybinds::key_code(name) else {
+                return;
             };
             if down {
                 self.pad.custom_keys.insert(key);
@@ -245,12 +251,12 @@ impl Game<'_> {
                 self.pad.custom_keys.remove(&key);
             }
             if self.pad.hardware_keys.contains(&key) {
-                continue;
+                return;
             }
             if (!self.pad_in_menu() || !down)
                 && horizon_client::android_runtime::keypad_key(key, down)
             {
-                continue;
+                return;
             }
             if down {
                 self.physical_keys.insert(key);
@@ -276,18 +282,18 @@ impl Game<'_> {
                         player.sprinting = false;
                     }
                 }
-                continue;
+                return;
             }
             if self.pad_in_menu() && down {
                 if key == KeyCode::Escape {
                     let _ = self.pad_back();
-                    continue;
+                    return;
                 }
                 if key == KeyCode::KeyE
                     && matches!(self.screen, Screen::Inventory | Screen::Creative)
                 {
                     let _ = self.pad_back();
-                    continue;
+                    return;
                 }
             }
             let action = if down {
@@ -296,7 +302,7 @@ impl Game<'_> {
                 KeyAction::Release
             };
             if self.debug_key(key, action) {
-                continue;
+                return;
             }
             for mapped in self.settings.keys.translate_all(key) {
                 let result = match mapped {
@@ -498,7 +504,7 @@ impl Game<'_> {
                     self.android_sync_pointer();
                 }
                 InGameMenuAction::SetControlStyle(style) => {
-                    self.android_release_touch_keys(false);
+                    self.android_release_touch_keys(true);
                     self.pad.touch_ui.goy_in_game_mouse = false;
                     self.pad.touch.clear();
                     self.pad
@@ -748,6 +754,16 @@ impl Game<'_> {
                         });
                     }
                 }
+                InGameMenuAction::SendCustomInput(token) => {
+                    self.android_sync_pointer();
+                    self.android_dispatch_custom_token(&token, true);
+                    if token != "mouse.virtual.toggle"
+                        && token != "mouse.scroll.up"
+                        && token != "mouse.scroll.down"
+                    {
+                        self.android_dispatch_custom_token(&token, false);
+                    }
+                }
             }
             return Ok(true);
         }
@@ -932,46 +948,11 @@ impl Game<'_> {
     /// Both naming dialogs (the editor's save-as and the hub's copy) type here
     /// instead of showing a keyboard inside the dialog.
     fn android_preset_typing(&mut self, out: &Output) -> bool {
-        fn edit(buffer: &mut String, out: &Output, max: usize) {
-            match out {
-                Output::Text(text) => {
-                    for c in text.chars() {
-                        if !c.is_control() && buffer.chars().count() < max {
-                            buffer.push(c);
-                        }
-                    }
-                }
-                Output::Backspace => {
-                    buffer.pop();
-                }
-                _ => {}
-            }
-        }
-        if let Some(ed) = self.pad.touch.editor.as_mut()
-            && ed.save_dialog_open
-        {
-            if ed.editing_save_desc {
-                edit(&mut ed.save_desc_input, out, 56);
-            } else {
-                edit(&mut ed.save_name_input, out, 28);
-            }
-            if matches!(out, Output::Enter | Output::Close) {
-                crate::platform::hide();
-            }
-            return true;
-        }
-        let Some(dlg) = self.pad.touch_ui.preset_dialog.as_mut() else {
-            return false;
-        };
-        if dlg.editing_desc {
-            edit(&mut dlg.desc_input, out, 56);
-        } else {
-            edit(&mut dlg.name_input, out, 24);
-        }
-        if matches!(out, Output::Enter | Output::Close) {
-            crate::platform::hide();
-        }
-        true
+        horizon_client::touch_ui::apply_editor_or_preset_output(
+            self.pad.touch.editor.as_mut(),
+            self.pad.touch_ui.preset_dialog.as_mut(),
+            out,
+        )
     }
 
     pub(super) fn android_poll_keyboard(&mut self) {

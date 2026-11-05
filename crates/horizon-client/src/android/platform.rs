@@ -475,29 +475,7 @@ pub fn finish() {
 }
 
 pub fn capture_mouse(capture: bool) -> bool {
-    if crate::native_ime::capture_mouse(capture) {
-        return true;
-    }
-    with_context(|env, activity| {
-        let window = env
-            .call_method(activity, "getWindow", "()Landroid/view/Window;", &[])?
-            .l()?;
-        let view = env
-            .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
-            .l()?;
-        env.call_method(
-            &view,
-            if capture {
-                "requestPointerCapture"
-            } else {
-                "releasePointerCapture"
-            },
-            "()V",
-            &[],
-        )?;
-        Ok(())
-    })
-    .is_some()
+    crate::native_ime::capture_mouse(capture)
 }
 
 pub fn show_secret(text: &str) {

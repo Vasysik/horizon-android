@@ -64,13 +64,13 @@ fn desired(window: &winit::window::Window) -> Option<[u32; 2]> {
     }
     let [_, _, width, height] =
         winit::platform::android::native_content_rect([physical.width, physical.height]);
-    let view = [width, height];
+    let view = [width.max(1), height.max(1)];
     let size = scale.buffer_size(view);
+    winit::platform::android::set_native_input_scale([
+        size[0] as f64 / view[0] as f64,
+        size[1] as f64 / view[1] as f64,
+    ]);
     if size == [current.width, current.height] {
-        winit::platform::android::set_native_input_scale([
-            size[0] as f64 / view[0] as f64,
-            size[1] as f64 / view[1] as f64,
-        ]);
         None
     } else {
         Some(size)

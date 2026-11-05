@@ -188,13 +188,13 @@ impl Launcher {
                     ),
                     (
                         "Vulkan / GPU batching".into(),
-                        "Groups terrain draws and enables supported GPU culling.".into(),
+                        "Optimized Vulkan pipeline with per-page draw batching and high-throughput chunk streaming.".into(),
                         Action::ChooseRenderer(RendererMode::Vulkan),
                         c.renderer == RendererMode::Vulkan,
                     ),
                     (
                         "Vulkan / compatibility".into(),
-                        "Direct terrain draws for drivers with missing or transparent blocks."
+                        "Standard Vulkan rendering path with direct per-section draws."
                             .into(),
                         Action::ChooseRenderer(RendererMode::VulkanCompatibility),
                         c.renderer == RendererMode::VulkanCompatibility,
@@ -373,17 +373,32 @@ impl Chooser {
             (self.choices.len() as f32 * 84.0 - (height - 237.0)).max(0.0),
         ]
     }
-    pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>) {
+    pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>, modal_anim: f32) {
         let (w, h) = (ui.w, ui.h);
         let theme = horizon_client::ui_theme::active_theme();
+        let slide = (1.0 - modal_anim.clamp(0.0, 1.0)) * 16.0;
         targets.clear();
         ui.draw_theme_background(0.0, 0.0, w, h, &theme);
-        ui.text(Face::SemiBold, 24.0, 32.0, 32.0, theme.text_primary, self.title);
-        ui.text(Face::Regular, 14.0, 32.0, 74.0, theme.text_muted, self.help);
+        ui.text(
+            Face::SemiBold,
+            24.0,
+            32.0,
+            32.0 + slide,
+            theme.text_primary,
+            self.title,
+        );
+        ui.text(
+            Face::Regular,
+            14.0,
+            32.0,
+            74.0 + slide,
+            theme.text_muted,
+            self.help,
+        );
         if let Some(device) = &self.device {
-            ui.text(Face::Regular, 12.5, 32.0, 100.0, theme.accent, device);
+            ui.hint_line(32.0, 100.0 + slide, w - 64.0, device, theme.accent);
         }
-        let top = 132.0;
+        let top = 132.0 + slide;
         let bottom = h - 94.0;
         self.scroll = self.scroll.clamp(
             0.0,
@@ -414,7 +429,11 @@ impl Chooser {
                 74.0,
                 14.0,
                 if *selected { 1.6 } else { 1.0 },
-                if *selected { theme.accent } else { theme.border },
+                if *selected {
+                    theme.accent
+                } else {
+                    theme.border
+                },
             );
             ui.stroke_rounded(
                 48.0,
@@ -432,8 +451,22 @@ impl Chooser {
             if *selected {
                 ui.rounded(53.0, y + 31.0, 12.0, 12.0, 6.0, theme.accent);
             }
-            ui.text(Face::SemiBold, 17.0, 84.0, y + 11.0, theme.text_primary, label);
-            ui.text(Face::Regular, 13.0, 84.0, y + 40.0, theme.text_muted, detail);
+            ui.text(
+                Face::SemiBold,
+                17.0,
+                84.0,
+                y + 11.0,
+                theme.text_primary,
+                label,
+            );
+            ui.text(
+                Face::Regular,
+                13.0,
+                84.0,
+                y + 40.0,
+                theme.text_muted,
+                detail,
+            );
             if let Some(c) = ui.clip_rect([32.0, y, w - 64.0, 74.0]) {
                 targets.push((c, *action));
             }
