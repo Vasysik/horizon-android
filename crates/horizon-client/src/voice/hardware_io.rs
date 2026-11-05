@@ -11,6 +11,7 @@ use super::mixer::VoiceMixer;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 pub struct VoiceHardwareIo {
     #[cfg(feature = "audio")]
@@ -21,6 +22,8 @@ pub struct VoiceHardwareIo {
     mixer: Arc<Mutex<VoiceMixer>>,
     input_initialized: bool,
     output_initialized: bool,
+    last_mic_frame_at: Option<Instant>,
+    last_valid_mic_sample_at: Option<Instant>,
 }
 
 impl Default for VoiceHardwareIo {
@@ -40,7 +43,28 @@ impl VoiceHardwareIo {
             mixer: Arc::new(Mutex::new(VoiceMixer::new())),
             input_initialized: false,
             output_initialized: false,
+            last_mic_frame_at: None,
+            last_valid_mic_sample_at: None,
         }
+    }
+
+    /// Drops the current microphone stream and resets capture state.
+    pub fn drop_input_stream(&mut self) {
+        #[cfg(feature = "audio")]
+        {
+            self._input_stream = None;
+        }
+        self.input_initialized = false;
+        self.last_mic_frame_at = None;
+        self.last_valid_mic_sample_at = None;
+        if let Ok(mut g) = self.mic_buffer.lock() {
+            g.clear();
+        }
+    }
+
+    /// Stops microphone capture and releases audio focus.
+    pub fn stop_mic_capture(&mut self) {
+        self.drop_input_stream();
     }
 
     /// Lazily starts microphone capture stream when the player unmutes or holds PTT.
@@ -57,8 +81,61 @@ impl VoiceHardwareIo {
                 log::warn!("SVC: No default microphone input device found");
                 return;
             };
-            let Ok(supported) = device.default_input_config() else {
-                log::warn!("SVC: Failed to query default microphone input config");
+
+            // 1A. Prioritize 1-channel (mono) 48kHz or 44.1kHz config before falling back
+            let supported = device
+                .supported_input_configs()
+                .ok()
+                .and_then(|configs| {
+                    let list: Vec<_> = configs.collect();
+                    // Priority 1: Mono F32 with 48000 Hz
+                    if let Some(c) = list.iter().find(|c| {
+                        c.channels() == 1
+                            && c.sample_format() == cpal::SampleFormat::F32
+                            && (c.min_sample_rate().0..=c.max_sample_rate().0).contains(&48000)
+                    }) {
+                        return c.try_with_sample_rate(cpal::SampleRate(48000));
+                    }
+                    // Priority 2: Mono F32 with 44100 Hz
+                    if let Some(c) = list.iter().find(|c| {
+                        c.channels() == 1
+                            && c.sample_format() == cpal::SampleFormat::F32
+                            && (c.min_sample_rate().0..=c.max_sample_rate().0).contains(&44100)
+                    }) {
+                        return c.try_with_sample_rate(cpal::SampleRate(44100));
+                    }
+                    // Priority 3: Any Mono F32
+                    if let Some(c) = list
+                        .iter()
+                        .find(|c| c.channels() == 1 && c.sample_format() == cpal::SampleFormat::F32)
+                    {
+                        let rate = c
+                            .max_sample_rate()
+                            .min(cpal::SampleRate(48000))
+                            .max(c.min_sample_rate());
+                        return c.try_with_sample_rate(rate);
+                    }
+                    // Priority 4: Any Mono (e.g. I16)
+                    if let Some(c) = list.iter().find(|c| c.channels() == 1) {
+                        let rate = if (c.min_sample_rate().0..=c.max_sample_rate().0)
+                            .contains(&48000)
+                        {
+                            cpal::SampleRate(48000)
+                        } else if (c.min_sample_rate().0..=c.max_sample_rate().0).contains(&44100) {
+                            cpal::SampleRate(44100)
+                        } else {
+                            c.max_sample_rate()
+                                .min(cpal::SampleRate(48000))
+                                .max(c.min_sample_rate())
+                        };
+                        return c.try_with_sample_rate(rate);
+                    }
+                    None
+                })
+                .or_else(|| device.default_input_config().ok());
+
+            let Some(supported) = supported else {
+                log::warn!("SVC: Failed to query microphone input config");
                 return;
             };
 
@@ -105,9 +182,22 @@ impl VoiceHardwareIo {
                     device.build_input_stream(
                         &config,
                         move |data: &[f32], _| {
+                            // 1B. Avoid 50% cut & phase cancellation between ch0 (bottom mic) and ch1 (top mic)
                             let mono: Vec<f32> = data
                                 .chunks(in_channels)
-                                .map(|ch| ch.iter().copied().sum::<f32>() / (ch.len() as f32))
+                                .map(|frame| {
+                                    if in_channels == 1 {
+                                        frame[0]
+                                    } else {
+                                        let ch0 = frame[0];
+                                        let ch1 = frame.get(1).copied().unwrap_or(0.0);
+                                        if ch0.abs() >= ch1.abs() * 0.7 {
+                                            ch0
+                                        } else {
+                                            ch1
+                                        }
+                                    }
+                                })
                                 .collect();
                             cb(&mono);
                         },
@@ -120,11 +210,24 @@ impl VoiceHardwareIo {
                     device.build_input_stream(
                         &config,
                         move |data: &[i16], _| {
+                            // 1B. Avoid 50% cut & phase cancellation between ch0 (bottom mic) and ch1 (top mic)
                             let mono: Vec<f32> = data
                                 .chunks(in_channels)
-                                .map(|ch| {
-                                    ch.iter().map(|&s| s as f32 / 32768.0).sum::<f32>()
-                                        / (ch.len() as f32)
+                                .map(|frame| {
+                                    if in_channels == 1 {
+                                        frame[0] as f32 / 32768.0
+                                    } else {
+                                        let ch0 = frame[0] as f32 / 32768.0;
+                                        let ch1 = frame
+                                            .get(1)
+                                            .map(|&s| s as f32 / 32768.0)
+                                            .unwrap_or(0.0);
+                                        if ch0.abs() >= ch1.abs() * 0.7 {
+                                            ch0
+                                        } else {
+                                            ch1
+                                        }
+                                    }
                                 })
                                 .collect();
                             cb(&mono);
@@ -150,6 +253,8 @@ impl VoiceHardwareIo {
                             in_channels
                         );
                         self._input_stream = Some(stream);
+                        self.last_mic_frame_at = Some(Instant::now());
+                        self.last_valid_mic_sample_at = Some(Instant::now());
                     }
                 }
                 Err(e) => log::warn!("SVC: Failed to build microphone stream: {e}"),
@@ -233,14 +338,48 @@ impl VoiceHardwareIo {
     /// Pops one 960-sample (20ms @ 48kHz) frame from the microphone ring buffer if available.
     pub fn poll_mic_frame(&mut self) -> Option<[f32; FRAME_SIZE]> {
         self.ensure_input_started();
+
+        let now = Instant::now();
+
+        // 1C. Watchdog: check if microphone stream has stalled (>1.5s) or silenced by ScreenRecorder (>3.0s)
+        #[cfg(feature = "audio")]
+        if self._input_stream.is_some() {
+            let stalled = self
+                .last_mic_frame_at
+                .is_some_and(|t| now.duration_since(t) > std::time::Duration::from_millis(1500));
+            let silenced = self
+                .last_valid_mic_sample_at
+                .is_some_and(|t| now.duration_since(t) > std::time::Duration::from_secs(3));
+
+            if stalled || silenced {
+                log::warn!(
+                    "SVC: Microphone stream stalled or silenced by OS/ScreenRecorder, re-initializing..."
+                );
+                self.drop_input_stream();
+                self.ensure_input_started();
+                return None;
+            }
+        }
+
         let mut guard = self.mic_buffer.lock().ok()?;
         if guard.len() < FRAME_SIZE {
             return None;
         }
+
+        self.last_mic_frame_at = Some(now);
+
         let mut frame = [0.0f32; FRAME_SIZE];
+        let mut max_abs = 0.0f32;
         for sample in &mut frame {
-            *sample = guard.pop_front().unwrap_or(0.0);
+            let s = guard.pop_front().unwrap_or(0.0);
+            *sample = s;
+            max_abs = max_abs.max(s.abs());
         }
+
+        if max_abs > 1e-5 {
+            self.last_valid_mic_sample_at = Some(now);
+        }
+
         Some(frame)
     }
 
@@ -257,6 +396,8 @@ impl VoiceHardwareIo {
         }
         self.input_initialized = false;
         self.output_initialized = false;
+        self.last_mic_frame_at = None;
+        self.last_valid_mic_sample_at = None;
         if let Ok(mut g) = self.mic_buffer.lock() {
             g.clear();
         }

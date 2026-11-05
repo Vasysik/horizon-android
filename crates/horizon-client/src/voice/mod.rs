@@ -196,6 +196,18 @@ impl VoiceChatClient {
 
     pub fn toggle_mute(&mut self) -> (String, Vec<u8>) {
         self.config.muted = !self.config.muted;
+        self.hardware_io.drop_input_stream();
+        let _ = self.config.save_to_dir(&self.config_dir);
+        let pkt = UpdateStatePacket {
+            muted: self.config.muted,
+            disabled: self.config.disabled,
+        };
+        (CHANNEL_CLIENT_STATE.to_string(), pkt.to_bytes())
+    }
+
+    pub fn set_muted(&mut self, muted: bool) -> (String, Vec<u8>) {
+        self.config.muted = muted;
+        self.hardware_io.drop_input_stream();
         let _ = self.config.save_to_dir(&self.config_dir);
         let pkt = UpdateStatePacket {
             muted: self.config.muted,
@@ -215,6 +227,9 @@ impl VoiceChatClient {
     }
 
     pub fn set_ptt_pressed(&mut self, pressed: bool) {
+        if !pressed && !self.config.voice_activation && self.ptt_pressed {
+            self.hardware_io.stop_mic_capture();
+        }
         self.ptt_pressed = pressed;
     }
 

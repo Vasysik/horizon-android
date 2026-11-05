@@ -6,7 +6,7 @@
 //! and 3D spatial gain (attenuation & stereo panning).
 
 use audiopus::{
-    Application, Channels, SampleRate,
+    Application, Bitrate, Channels, SampleRate,
     coder::{Decoder as OpusDecoder, Encoder as OpusEncoder, GenericCtl},
 };
 use nnnoiseless::DenoiseState;
@@ -20,6 +20,15 @@ pub const MAX_OPUS_PACKET_SIZE: usize = 1275;
 pub const MAX_PLC_FRAMES: i64 = 5; // Conceal up to 100ms (5 frames) of consecutive packet loss
 pub const DECODER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[inline]
+fn soft_clip_mic(x: f32) -> f32 {
+    if x.abs() <= 0.70 {
+        x
+    } else {
+        x.signum() * (0.70 + 0.30 * ((x.abs() - 0.70) * 2.5).tanh())
+    }
+}
+
 /// Audio capture processing pipeline (Microphone -> RNNoise -> VAD -> Opus Encoder)
 pub struct VoiceCapturePipeline {
     denoiser: Box<DenoiseState<'static>>,
@@ -30,8 +39,9 @@ pub struct VoiceCapturePipeline {
 
 impl Default for VoiceCapturePipeline {
     fn default() -> Self {
-        let encoder = OpusEncoder::new(SampleRate::Hz48000, Channels::Mono, Application::Voip)
+        let mut encoder = OpusEncoder::new(SampleRate::Hz48000, Channels::Mono, Application::Voip)
             .expect("Failed to initialize 48kHz mono VOIP Opus encoder");
+        let _ = encoder.set_bitrate(Bitrate::BitsPerSecond(32_000));
         Self {
             denoiser: DenoiseState::new(),
             encoder,
@@ -86,30 +96,33 @@ impl VoiceCapturePipeline {
 
         let mut denoised_pcm = [0.0f32; FRAME_SIZE];
 
-        let gain = mic_gain.clamp(0.0, 4.0);
+        const MIC_BASE_BOOST: f32 = 1.75;
+        let effective_gain = (mic_gain * MIC_BASE_BOOST).clamp(0.0, 6.0);
         let vad_max = if rnnoise_enabled {
             let mut sub1_in = [0.0f32; SUBFRAME_SIZE];
             let mut sub1_out = [0.0f32; SUBFRAME_SIZE];
             for i in 0..SUBFRAME_SIZE {
-                sub1_in[i] = (pcm_in[i] * gain * 32768.0).clamp(-32768.0, 32767.0);
+                sub1_in[i] = (pcm_in[i] * effective_gain * 32768.0).clamp(-32768.0, 32767.0);
             }
             let vad1 = self.denoiser.process_frame(&mut sub1_out, &sub1_in);
 
             let mut sub2_in = [0.0f32; SUBFRAME_SIZE];
             let mut sub2_out = [0.0f32; SUBFRAME_SIZE];
             for i in 0..SUBFRAME_SIZE {
-                sub2_in[i] = (pcm_in[SUBFRAME_SIZE + i] * gain * 32768.0).clamp(-32768.0, 32767.0);
+                sub2_in[i] =
+                    (pcm_in[SUBFRAME_SIZE + i] * effective_gain * 32768.0).clamp(-32768.0, 32767.0);
             }
             let vad2 = self.denoiser.process_frame(&mut sub2_out, &sub2_in);
 
             for i in 0..SUBFRAME_SIZE {
-                denoised_pcm[i] = (sub1_out[i] / 32768.0).clamp(-1.0, 1.0);
-                denoised_pcm[SUBFRAME_SIZE + i] = (sub2_out[i] / 32768.0).clamp(-1.0, 1.0);
+                denoised_pcm[i] = soft_clip_mic((sub1_out[i] / 32768.0) * 1.25).clamp(-1.0, 1.0);
+                denoised_pcm[SUBFRAME_SIZE + i] =
+                    soft_clip_mic((sub2_out[i] / 32768.0) * 1.25).clamp(-1.0, 1.0);
             }
             vad1.max(vad2)
         } else {
             for i in 0..FRAME_SIZE {
-                denoised_pcm[i] = (pcm_in[i] * gain).clamp(-1.0, 1.0);
+                denoised_pcm[i] = soft_clip_mic(pcm_in[i] * effective_gain).clamp(-1.0, 1.0);
             }
             let sum_sq: f32 = denoised_pcm.iter().map(|s| s * s).sum();
             let rms = (sum_sq / (FRAME_SIZE as f32)).sqrt();
