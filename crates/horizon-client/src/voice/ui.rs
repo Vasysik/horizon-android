@@ -92,8 +92,11 @@ impl VoiceChatUiLabels {
     pub const PTT_MODE: &'static str = "Push-to-Talk";
     pub const VOICE_ACTIVATION_MODE: &'static str = "Voice Activation";
     pub const RNNOISE_TOGGLE: &'static str = "Noise Suppression (RNNoise): ";
+    pub const MASTER_VOLUME: &'static str = "Master Volume: ";
     pub const MIC_GAIN: &'static str = "Mic Amplification: ";
     pub const VAD_THRESHOLD: &'static str = "VAD Threshold: ";
+    pub const PLAYER_VOLUMES: &'static str = "Player Volumes";
+    pub const NO_PLAYERS: &'static str = "No players detected in voice chat yet";
     pub const PROTOCOL_VERSION: &'static str = "Compatibility Version: ";
     pub const NEXT_FALLBACK: &'static str = "Cycle Fallback Version";
     pub const LEAVE_GROUP: &'static str = "Leave Group";

@@ -3,6 +3,7 @@
 pub mod audio_pipeline;
 pub mod config;
 pub mod hardware_io;
+pub mod mixer;
 pub mod protocol;
 pub mod udp_worker;
 pub mod ui;
@@ -12,10 +13,11 @@ pub use protocol::parse_voice_host;
 use audio_pipeline::{FRAME_SIZE, VoiceCapturePipeline, VoicePlaybackPipeline};
 use config::SvcProtocolConfig;
 use hardware_io::VoiceHardwareIo;
+use mixer::GainSource;
 use protocol::*;
 use std::collections::HashMap;
 use std::path::Path;
-use udp_worker::{IncomingSound, UdpConnectionState, UdpWorker, UdpWorkerHandle};
+use udp_worker::{UdpConnectionState, UdpWorker, UdpWorkerHandle};
 use ui::{VoiceChatScreenState, VoiceHudStatus};
 
 pub struct VoiceChatClient {
@@ -34,6 +36,7 @@ pub struct VoiceChatClient {
     pub config_dir: std::path::PathBuf,
     pub fallback_timer: Option<std::time::Instant>,
     pub current_server_host: String,
+    pub known_players: Vec<(u128, String)>,
 }
 
 impl VoiceChatClient {
@@ -56,6 +59,7 @@ impl VoiceChatClient {
             config_dir: config_dir.to_path_buf(),
             fallback_timer: None,
             current_server_host: String::new(),
+            known_players: Vec::new(),
         }
     }
 
@@ -115,7 +119,11 @@ impl VoiceChatClient {
                     handle.stop();
                 }
 
-                let handle = UdpWorker::spawn(secret.clone(), &self.current_server_host)?;
+                let handle = UdpWorker::spawn(
+                    secret.clone(),
+                    &self.current_server_host,
+                    self.hardware_io.mixer(),
+                )?;
                 self.udp_handle = Some(handle);
                 self.secret = Some(secret);
 
@@ -272,86 +280,111 @@ impl VoiceChatClient {
             self.is_talking = false;
         }
 
-        // Prune sender decoders that have been idle > DECODER_IDLE_TIMEOUT
-        self.playback_pipeline.prune_idle_decoders();
-
-        // 2. Drain incoming UDP voice packets and play them on the speaker with 3D spatial gain
-        let default_max_dist = self
-            .secret
-            .as_ref()
-            .map(|s| s.voice_chat_distance as f32)
-            .unwrap_or(48.0);
-
-        let mut incoming = Vec::new();
-        if let Some(ref handle) = self.udp_handle {
-            while let Ok(pkt) = handle.incoming_sound_rx.try_recv() {
-                incoming.push(pkt);
-            }
-        }
-
-        for sound in incoming {
-            match sound {
-                IncomingSound::Player(pkt) => {
-                    let pcm = self.playback_pipeline.decode_sender_frame(
-                        pkt.sender_uuid,
-                        pkt.sequence_number,
-                        &pkt.opus_data,
-                    );
-                    if pcm.is_empty() {
-                        continue;
-                    }
-                    let max_dist = if pkt.distance > 0.0 {
-                        pkt.distance
-                    } else {
-                        default_max_dist
-                    };
-                    let (left, right) = if let Some(src_pos) = resolve_player_pos(pkt.sender_uuid) {
-                        VoicePlaybackPipeline::calculate_spatial_gain(
+        // 2. Playback: decoding and jitter buffering run on the UDP thread and the audio callback.
+        //    The game tick only refreshes the 3D gain targets (listener/source positions).
+        self.hardware_io.ensure_output_started();
+        let mixer = self.hardware_io.mixer();
+        let sources = match mixer.lock() {
+            Ok(m) => m.sources(),
+            Err(_) => return,
+        };
+        let gains: Vec<(u128, (f32, f32))> = sources
+            .into_iter()
+            .map(|(uuid, source)| {
+                self.register_known_player(uuid, String::new());
+                if self.config.is_player_muted(uuid) {
+                    return (uuid, (0.0, 0.0));
+                }
+                let combined_gain = (self.config.output_volume.clamp(0.0, 2.0)
+                    * self.config.player_volume(uuid))
+                .clamp(0.0, 4.0);
+                let (base_l, base_r) = match source {
+                    GainSource::Group => (1.0, 1.0),
+                    GainSource::Player { max_dist } => match resolve_player_pos(uuid) {
+                        Some(src_pos) => VoicePlaybackPipeline::calculate_spatial_gain(
                             listener_pos,
                             listener_yaw,
                             src_pos,
                             max_dist,
+                        ),
+                        None => (0.8, 0.8),
+                    },
+                    GainSource::Location { pos, max_dist } => {
+                        VoicePlaybackPipeline::calculate_spatial_gain(
+                            listener_pos,
+                            listener_yaw,
+                            pos,
+                            max_dist,
                         )
-                    } else {
-                        (0.8, 0.8)
-                    };
-                    self.hardware_io.push_spatial_audio(&pcm, left, right);
-                }
-                IncomingSound::Group(pkt) => {
-                    let pcm = self.playback_pipeline.decode_sender_frame(
-                        pkt.sender_uuid,
-                        pkt.sequence_number,
-                        &pkt.opus_data,
-                    );
-                    if pcm.is_empty() {
-                        continue;
                     }
-                    self.hardware_io.push_spatial_audio(&pcm, 1.0, 1.0);
-                }
-                IncomingSound::Location(pkt) => {
-                    let pcm = self.playback_pipeline.decode_sender_frame(
-                        pkt.sender_uuid,
-                        pkt.sequence_number,
-                        &pkt.opus_data,
-                    );
-                    if pcm.is_empty() {
-                        continue;
-                    }
-                    let max_dist = if pkt.distance > 0.0 {
-                        pkt.distance
-                    } else {
-                        default_max_dist
-                    };
-                    let (left, right) = VoicePlaybackPipeline::calculate_spatial_gain(
-                        listener_pos,
-                        listener_yaw,
-                        pkt.location,
-                        max_dist,
-                    );
-                    self.hardware_io.push_spatial_audio(&pcm, left, right);
-                }
+                };
+                let gain = (
+                    (base_l * combined_gain).clamp(0.0, 2.0),
+                    (base_r * combined_gain).clamp(0.0, 2.0),
+                );
+                (uuid, gain)
+            })
+            .collect();
+        if let Ok(mut m) = mixer.lock() {
+            m.apply_gains(&gains);
+            if let Some((stats, streams)) = m.take_stats_if_due(std::time::Duration::from_secs(5)) {
+                let pushes = stats.pushes;
+                let underruns = stats.underruns;
+                let drops = stats.overflow_drops;
+                let queue_ms = stats.max_queue_samples / 48;
+                log::info!(
+                    "SVC audio: streams={streams} pushes={pushes} underruns={underruns} overflow_drops={drops} max_queue_ms={queue_ms}"
+                );
             }
         }
+    }
+
+    pub fn register_known_player(&mut self, uuid: u128, name: String) {
+        if uuid == 0 {
+            return;
+        }
+        if let Some(entry) = self.known_players.iter_mut().find(|(id, _)| *id == uuid) {
+            if !name.is_empty() && entry.1 != name {
+                entry.1 = name;
+            }
+            return;
+        }
+        if self.known_players.len() >= 64 {
+            self.known_players.remove(0);
+        }
+        let display = if name.is_empty() {
+            format!("Player {:04x}", (uuid & 0xFFFF) as u16)
+        } else {
+            name
+        };
+        self.known_players.push((uuid, display));
+    }
+
+    pub fn set_output_volume(&mut self, volume: f32) {
+        self.config.output_volume = (volume.clamp(0.0, 2.0) * 20.0).round() / 20.0;
+        let _ = self.config.save_to_dir(&self.config_dir);
+    }
+
+    pub fn set_mic_gain(&mut self, gain: f32) {
+        self.config.mic_gain = (gain.clamp(0.0, 4.0) * 20.0).round() / 20.0;
+        let _ = self.config.save_to_dir(&self.config_dir);
+    }
+
+    pub fn set_vad_threshold(&mut self, threshold: f32) {
+        self.config.vad_threshold = (threshold.clamp(0.05, 0.95) * 20.0).round() / 20.0;
+        let _ = self.config.save_to_dir(&self.config_dir);
+    }
+
+    pub fn adjust_player_volume(&mut self, uuid: u128, delta: f32) {
+        let current = self.config.player_volume(uuid);
+        self.config.set_player_volume(uuid, current + delta);
+        let _ = self.config.save_to_dir(&self.config_dir);
+    }
+
+    pub fn toggle_player_mute(&mut self, uuid: u128) -> bool {
+        let muted = self.config.toggle_player_mute(uuid);
+        let _ = self.config.save_to_dir(&self.config_dir);
+        muted
     }
 
     pub fn connection_state(&self) -> UdpConnectionState {
@@ -381,6 +414,7 @@ impl VoiceChatClient {
         self.secret = None;
         self.player_states.clear();
         self.groups.clear();
+        self.known_players.clear();
         self.is_talking = false;
     }
 }

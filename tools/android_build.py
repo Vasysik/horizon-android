@@ -163,6 +163,7 @@ def main():
     environment['OPUS_STATIC'] = '1'
     environment['LIBOPUS_NO_PKG'] = '1'
     environment['OPUS_NO_PKG'] = '1'
+    environment['CMAKE_POLICY_VERSION_MINIMUM'] = '3.5'
     target_dir.mkdir(parents=True, exist_ok=True)
     config_site = target_dir / f'opus-config-{target}.site'
     config_site.write_text(

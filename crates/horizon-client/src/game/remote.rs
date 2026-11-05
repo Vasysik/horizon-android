@@ -9185,6 +9185,18 @@ impl Game<'_> {
                 horizon_protocol::packets::configuration::CustomPayload { channel: ch, data },
             ));
         }
+        if let Some(r) = self.remote.as_ref() {
+            for (&_eid, &u) in self.persist.uuids.iter() {
+                let u128_val = horizon_client::lan::playerdata::ints_uuid(u);
+                let player_name = r
+                    .tab_players
+                    .get(&u128_val)
+                    .map(|p| p.name.clone())
+                    .or_else(|| r.players.get(&u128_val).cloned())
+                    .unwrap_or_default();
+                self.voice.register_known_player(u128_val, player_name);
+            }
+        }
         let listener_pos = self.view.eye;
         let listener_yaw = self.yaw;
         let uuids = &self.persist.uuids;

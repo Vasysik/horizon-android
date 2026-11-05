@@ -4,11 +4,13 @@
 //! 0x05 Authenticate -> 0x06 AuthenticateAck -> 0x09 ConnectionCheck -> 0x0A ConnectionCheckAck,
 //! KeepAlive (0x08) & Ping (0x07) heartbeats, and encrypted audio I/O.
 
+use super::audio_pipeline::VoicePlaybackPipeline;
+use super::mixer::{GainSource, VoiceMixer};
 use super::protocol::*;
 use std::net::{ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,19 +22,10 @@ pub enum UdpConnectionState {
     Failed(String),
 }
 
-/// Incoming audio sound event dispatched to the audio engine.
-#[derive(Debug, Clone)]
-pub enum IncomingSound {
-    Player(PlayerSoundPacket),
-    Group(GroupSoundPacket),
-    Location(LocationSoundPacket),
-}
-
 /// Handle to control the background UDP worker thread.
 pub struct UdpWorkerHandle {
     pub state: Arc<RwLock<UdpConnectionState>>,
     pub outgoing_mic_tx: SyncSender<MicPacket>,
-    pub incoming_sound_rx: Receiver<IncomingSound>,
     pub stop_signal: Arc<AtomicBool>,
 }
 
@@ -56,11 +49,107 @@ impl UdpWorkerHandle {
     }
 }
 
+/// Decodes incoming voice on the UDP thread and feeds the shared mixer, so playback no longer
+/// depends on the game tick rate (20 Hz) or on tick hitches.
+struct VoiceRx {
+    pipeline: VoicePlaybackPipeline,
+    mixer: Arc<Mutex<VoiceMixer>>,
+    default_max_dist: f32,
+    last_maintain: Instant,
+}
+
+impl VoiceRx {
+    fn new(mixer: Arc<Mutex<VoiceMixer>>, default_max_dist: f32) -> Self {
+        Self {
+            pipeline: VoicePlaybackPipeline::new(),
+            mixer,
+            default_max_dist,
+            last_maintain: Instant::now(),
+        }
+    }
+
+    /// Once per second: drop idle Opus decoders and silent mixer streams.
+    fn maintain(&mut self) {
+        if self.last_maintain.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.last_maintain = Instant::now();
+        self.pipeline.prune_idle_decoders();
+        if let Ok(mut m) = self.mixer.lock() {
+            m.prune_idle(Duration::from_secs(5));
+        }
+    }
+
+    fn deliver(
+        &mut self,
+        sender_uuid: u128,
+        sequence_number: i64,
+        opus_data: &[u8],
+        source: GainSource,
+    ) {
+        let pcm = self
+            .pipeline
+            .decode_sender_frame(sender_uuid, sequence_number, opus_data);
+        let Ok(mut m) = self.mixer.lock() else {
+            return;
+        };
+        if opus_data.is_empty() {
+            m.end_stream(sender_uuid);
+        } else if !pcm.is_empty() {
+            m.push(sender_uuid, source, &pcm);
+        }
+    }
+
+    fn on_player(&mut self, pkt: PlayerSoundPacket) {
+        let max_dist = if pkt.distance > 0.0 {
+            pkt.distance
+        } else {
+            self.default_max_dist
+        };
+        self.deliver(
+            pkt.sender_uuid,
+            pkt.sequence_number,
+            &pkt.opus_data,
+            GainSource::Player { max_dist },
+        );
+    }
+
+    fn on_group(&mut self, pkt: GroupSoundPacket) {
+        self.deliver(
+            pkt.sender_uuid,
+            pkt.sequence_number,
+            &pkt.opus_data,
+            GainSource::Group,
+        );
+    }
+
+    fn on_location(&mut self, pkt: LocationSoundPacket) {
+        let max_dist = if pkt.distance > 0.0 {
+            pkt.distance
+        } else {
+            self.default_max_dist
+        };
+        self.deliver(
+            pkt.sender_uuid,
+            pkt.sequence_number,
+            &pkt.opus_data,
+            GainSource::Location {
+                pos: pkt.location,
+                max_dist,
+            },
+        );
+    }
+}
+
 pub struct UdpWorker;
 
 impl UdpWorker {
     /// Spawn the background UDP worker thread with SecretPacket parameters.
-    pub fn spawn(secret: SecretPacket, fallback_host: &str) -> Result<UdpWorkerHandle, String> {
+    pub fn spawn(
+        secret: SecretPacket,
+        fallback_host: &str,
+        mixer: Arc<Mutex<VoiceMixer>>,
+    ) -> Result<UdpWorkerHandle, String> {
         if !(1..=65535).contains(&secret.server_port) {
             return Err(format!(
                 "Invalid server port in SecretPacket: {}",
@@ -70,7 +159,6 @@ impl UdpWorker {
 
         let state = Arc::new(RwLock::new(UdpConnectionState::Connecting));
         let (mic_tx, mic_rx) = sync_channel::<MicPacket>(128);
-        let (sound_tx, sound_rx) = sync_channel::<IncomingSound>(256);
         let stop_signal = Arc::new(AtomicBool::new(false));
 
         let (host, port) =
@@ -82,22 +170,13 @@ impl UdpWorker {
         std::thread::Builder::new()
             .name("svc-udp-worker".to_string())
             .spawn(move || {
-                Self::run_loop(
-                    secret,
-                    host,
-                    port,
-                    thread_state,
-                    thread_stop,
-                    mic_rx,
-                    sound_tx,
-                );
+                Self::run_loop(secret, host, port, thread_state, thread_stop, mic_rx, mixer);
             })
             .map_err(|e| format!("Failed to spawn UDP worker thread: {e}"))?;
 
         Ok(UdpWorkerHandle {
             state,
             outgoing_mic_tx: mic_tx,
-            incoming_sound_rx: sound_rx,
             stop_signal,
         })
     }
@@ -109,7 +188,7 @@ impl UdpWorker {
         state: Arc<RwLock<UdpConnectionState>>,
         stop_signal: Arc<AtomicBool>,
         mic_rx: Receiver<MicPacket>,
-        sound_tx: SyncSender<IncomingSound>,
+        mixer: Arc<Mutex<VoiceMixer>>,
     ) {
         let set_failed = |msg: String| {
             if let Ok(mut lock) = state.write() {
@@ -281,6 +360,9 @@ impl UdpWorker {
             *lock = UdpConnectionState::Connected { ping_ms: 0 };
         }
 
+        // Opus decoders are created on this thread, so they never have to be `Send`.
+        let mut rx = VoiceRx::new(mixer, secret.voice_chat_distance as f32);
+
         let mut last_keep_alive = Instant::now();
         let mut last_ping_sent = Instant::now();
         let keep_alive_interval = Duration::from_millis(secret.keep_alive.clamp(500, 5000) as u64);
@@ -289,6 +371,8 @@ impl UdpWorker {
         let mut current_ping_time = Instant::now();
 
         while !stop_signal.load(Ordering::Relaxed) {
+            rx.maintain();
+
             while let Ok(mic) = mic_rx.try_recv() {
                 let body = mic.to_body();
                 if let Ok(pkt) = build_client_udp_packet(conn_id, &cipher, PACKET_ID_MIC, &body) {
@@ -354,17 +438,17 @@ impl UdpWorker {
                                 }
                                 PACKET_ID_PLAYER_SOUND => {
                                     if let Ok(sound) = PlayerSoundPacket::from_body(&body) {
-                                        let _ = sound_tx.try_send(IncomingSound::Player(sound));
+                                        rx.on_player(sound);
                                     }
                                 }
                                 PACKET_ID_GROUP_SOUND => {
                                     if let Ok(sound) = GroupSoundPacket::from_body(&body) {
-                                        let _ = sound_tx.try_send(IncomingSound::Group(sound));
+                                        rx.on_group(sound);
                                     }
                                 }
                                 PACKET_ID_LOCATION_SOUND => {
                                     if let Ok(sound) = LocationSoundPacket::from_body(&body) {
-                                        let _ = sound_tx.try_send(IncomingSound::Location(sound));
+                                        rx.on_location(sound);
                                     }
                                 }
                                 _ => {}

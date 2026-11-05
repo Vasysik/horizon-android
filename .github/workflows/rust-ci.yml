@@ -113,6 +113,9 @@ jobs:
           sdkmanager --install 'ndk;28.2.13676358'
           NDK="$ANDROID_HOME/ndk/28.2.13676358"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          mkdir -p target
+          CONFIG_SITE="$PWD/target/opus-config-aarch64-linux-android.site"
+          printf 'host_alias=aarch64-linux-android\ncross_compiling=yes\nCC="%s/bin/aarch64-linux-android26-clang"\nAR="%s/bin/llvm-ar"\nRANLIB="%s/bin/llvm-ranlib"\nSTRIP="%s/bin/llvm-strip"\n' "$TOOLCHAIN" "$TOOLCHAIN" "$TOOLCHAIN" "$TOOLCHAIN" > "$CONFIG_SITE"
           {
             echo "ANDROID_NDK_HOME=$NDK"
             echo "CC_aarch64_linux_android=$TOOLCHAIN/bin/aarch64-linux-android26-clang"
@@ -123,6 +126,11 @@ jobs:
             echo "CMAKE_TOOLCHAIN_FILE_aarch64_linux_android=$NDK/build/cmake/android.toolchain.cmake"
             echo "ANDROID_ABI=arm64-v8a"
             echo "ANDROID_PLATFORM=android-26"
+            echo "LIBOPUS_STATIC=1"
+            echo "OPUS_STATIC=1"
+            echo "LIBOPUS_NO_PKG=1"
+            echo "OPUS_NO_PKG=1"
+            echo "CONFIG_SITE=$CONFIG_SITE"
             echo "CMAKE_POLICY_VERSION_MINIMUM=3.5"
             echo "PKG_CONFIG_ALLOW_CROSS=0"
           } >> "$GITHUB_ENV"
