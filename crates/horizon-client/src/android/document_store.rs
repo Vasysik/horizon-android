@@ -7,6 +7,9 @@ use std::{
 };
 
 pub const ROOT: &str = "horizon";
+/// "Open" mode: the whole Horizon data folder, every file and folder, readable and
+/// writable even while the game runs. Modified build only.
+pub const FULL: &str = "files";
 const DIRECTORY: &str = "vnd.android.document/directory";
 const MAX_CHILDREN: usize = 32768;
 const CONFIG_FILES: &[&str] = &[
@@ -19,7 +22,32 @@ static GAME_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 pub fn set_game_active(active: bool) {
     GAME_ACTIVE.store(active, std::sync::atomic::Ordering::Release);
 }
+fn is_full(id: &str) -> bool {
+    id == FULL || id.starts_with("files/")
+}
+/// Looser name rule for the open tree: dotfiles are allowed, traversal and separators are not.
+fn component_open(name: &str) -> io::Result<()> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.len() > 240
+        || name.chars().any(|c| c.is_control() || "/\\:".contains(c))
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+fn name_ok(id: &str, name: &str) -> io::Result<()> {
+    if is_full(id) {
+        component_open(name)
+    } else {
+        component(name)
+    }
+}
 fn world_access(id: &str) -> io::Result<()> {
+    if is_full(id) {
+        return Ok(());
+    }
     if matches!(id.split('/').nth(1), Some("worlds" | "configuration"))
         && GAME_ACTIVE.load(std::sync::atomic::Ordering::Acquire)
     {
@@ -48,8 +76,8 @@ fn component(name: &str) -> io::Result<()> {
 }
 
 pub fn folder_id(profile: u32, folder: &str) -> String {
-    if folder == "reports" {
-        "reports".into()
+    if folder == "reports" || folder == FULL {
+        folder.into()
     } else {
         format!("p{profile}/{folder}")
     }
@@ -74,7 +102,10 @@ fn shareable_report(name: &str) -> bool {
 fn resolve(home: &Path, id: &str) -> io::Result<Document> {
     let mut parts = id.split('/');
     let first = parts.next().ok_or_else(invalid)?;
-    let (base, label, reports) = if first == "reports" {
+    let full = first == FULL;
+    let (base, label, reports) = if full {
+        (home.to_owned(), "All files", false)
+    } else if first == "reports" {
         (home.join("performance"), "Reports", true)
     } else {
         let number = first.strip_prefix('p').ok_or_else(invalid)?;
@@ -104,7 +135,11 @@ fn resolve(home: &Path, id: &str) -> io::Result<Document> {
         return Err(invalid());
     }
     for name in &tail {
-        component(name)?;
+        if full {
+            component_open(name)?;
+        } else {
+            component(name)?;
+        }
     }
     // Internal session/error logs and raw OS traces are private. Sharing goes
     // through the bounded, redacted ZIP exporter; retain standalone performance
@@ -201,6 +236,7 @@ pub fn children(home: &Path, id: &str) -> io::Result<Vec<Value>> {
             "worlds",
             "configuration",
             "reports",
+            FULL,
         ]
         .iter()
         .map(|folder| row(home, &folder_id(profile(home), folder)))
@@ -222,7 +258,7 @@ pub fn children(home: &Path, id: &str) -> io::Result<Vec<Value>> {
         if doc.configuration && !CONFIG_FILES.contains(&name) {
             continue;
         }
-        if component(name).is_err() || entry.file_type()?.is_symlink() {
+        if name_ok(id, name).is_err() || entry.file_type()?.is_symlink() {
             continue;
         }
         let child = format!("{id}/{name}");
@@ -290,7 +326,7 @@ pub fn call(home: &Path, op: &str, id: &str, arg: &str) -> io::Result<Value> {
             if id != ROOT {
                 let mut parts = id.split('/');
                 let first = parts.next().ok_or_else(invalid)?;
-                let mut current = if first == "reports" {
+                let mut current = if first == "reports" || first == FULL {
                     first.into()
                 } else {
                     format!("{first}/{}", parts.next().ok_or_else(invalid)?)
@@ -309,7 +345,7 @@ pub fn call(home: &Path, op: &str, id: &str, arg: &str) -> io::Result<Value> {
             Ok(json!(path))
         }
         "create" | "mkdir" => {
-            component(arg)?;
+            name_ok(id, arg)?;
             let parent = resolve(home, id)?;
             if parent.reports || !parent.path.is_dir() || (parent.configuration && op == "mkdir") {
                 return Err(invalid());
@@ -344,7 +380,7 @@ pub fn call(home: &Path, op: &str, id: &str, arg: &str) -> io::Result<Value> {
                 if !doc.path.is_file() {
                     return Err(invalid());
                 }
-                component(arg)?;
+                name_ok(id, arg)?;
                 let (parent, _) = id.rsplit_once('/').ok_or_else(invalid)?;
                 let child = format!("{parent}/{arg}");
                 let target = resolve(home, &child)?;
@@ -398,7 +434,7 @@ mod tests {
         ));
         fs::create_dir_all(&home).unwrap();
         let roots = children(&home, ROOT).unwrap();
-        assert_eq!(roots.len(), 6);
+        assert_eq!(roots.len(), 7);
         assert_eq!(roots[0]["document_id"], "p0/mods");
         for id in [
             "../tokens",
@@ -446,6 +482,30 @@ mod tests {
             assert!(resolve(&home, "p0/mods/link/report.jsonl").is_err());
             assert!(!is_child(&home, ROOT, "p0/mods/link/report.jsonl"));
         }
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn open_tree_reaches_everything_but_never_escapes() {
+        let home =
+            std::env::temp_dir().join(format!("horizon-open-documents-{}", std::process::id()));
+        fs::create_dir_all(home.join("saves/W")).unwrap();
+        fs::write(home.join(".hidden"), b"x").unwrap();
+        fs::write(home.join("account.json"), b"y").unwrap();
+        let names: Vec<String> = children(&home, FULL)
+            .unwrap()
+            .iter()
+            .map(|v| v["_display_name"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(names.contains(&".hidden".to_owned()));
+        assert!(names.contains(&"account.json".to_owned()));
+        assert!(names.contains(&"saves".to_owned()));
+        assert!(resolve(&home, "files/../outside").is_err());
+        assert!(resolve(&home, "files/saves/..").is_err());
+        assert!(open(&home, "files/account.json", "r").is_ok());
+        assert!(children(&home, "files/saves").is_ok());
+        call(&home, "create", "files/saves", ".new").unwrap();
+        assert!(call(&home, "create", "files", "a/b").is_err());
         fs::remove_dir_all(home).unwrap();
     }
 }
