@@ -306,54 +306,146 @@ impl VoiceChatClient {
         }
 
         // 2. Playback: decoding and jitter buffering run on the UDP thread and the audio callback.
-        //    The game tick only refreshes the 3D gain targets (listener/source positions).
+        //    The game tick only refreshes the 3D gain targets (listener/source positions) and priority voice culling.
         self.hardware_io.ensure_output_started();
         let mixer = self.hardware_io.mixer();
         let sources = match mixer.lock() {
             Ok(m) => m.sources(),
             Err(_) => return,
         };
-        let gains: Vec<(u128, (f32, f32))> = sources
-            .into_iter()
-            .map(|(uuid, source)| {
-                self.register_known_player(uuid, String::new());
-                if self.config.is_player_muted(uuid) {
-                    return (uuid, (0.0, 0.0));
+
+        const MAX_ACTIVE_SPATIAL_VOICES: usize = 8;
+        const SPEAKER_MAKEUP_BOOST: f32 = 2.6;
+        let mic_active_compensation = if self.hardware_io.is_input_stream_open() {
+            1.25
+        } else {
+            1.0
+        };
+
+        struct Candidate {
+            uuid: u128,
+            base_l: f32,
+            base_r: f32,
+            is_group: bool,
+            signal_strength: f32,
+            player_vol: f32,
+        }
+
+        let crowd_size = sources.len();
+        let mut candidates = Vec::with_capacity(crowd_size);
+        let mut culled_gains: Vec<(u128, (f32, f32), bool)> = Vec::new();
+
+        for (uuid, source) in sources {
+            self.register_known_player(uuid, String::new());
+
+            if self.config.is_player_muted(uuid) || self.config.disabled {
+                culled_gains.push((uuid, (0.0, 0.0), true));
+                continue;
+            }
+
+            let player_vol = self.config.player_volume(uuid);
+            match source {
+                GainSource::Group => {
+                    candidates.push(Candidate {
+                        uuid,
+                        base_l: 1.0,
+                        base_r: 1.0,
+                        is_group: true,
+                        signal_strength: 1.0 * player_vol,
+                        player_vol,
+                    });
                 }
-                const SPEAKER_MAKEUP_BOOST: f32 = 2.6;
-                let mic_active_compensation = if self.is_talking { 1.25 } else { 1.0 };
-                let combined_gain = (self.config.output_volume.clamp(0.0, 3.0)
-                    * self.config.player_volume(uuid)
-                    * SPEAKER_MAKEUP_BOOST
-                    * mic_active_compensation)
-                    .clamp(0.0, 8.0);
-                let (base_l, base_r) = match source {
-                    GainSource::Group => (1.0, 1.0),
-                    GainSource::Player { max_dist } => match resolve_player_pos(uuid) {
-                        Some(src_pos) => VoicePlaybackPipeline::calculate_spatial_gain(
+                GainSource::Player { max_dist } => {
+                    let (base_l, base_r) = match resolve_player_pos(uuid) {
+                        Some(src_pos) => VoicePlaybackPipeline::compute_spatial_gains(
                             listener_pos,
                             listener_yaw,
                             src_pos,
                             max_dist,
+                            crowd_size,
                         ),
                         None => (0.8, 0.8),
-                    },
-                    GainSource::Location { pos, max_dist } => {
-                        VoicePlaybackPipeline::calculate_spatial_gain(
-                            listener_pos,
-                            listener_yaw,
-                            pos,
-                            max_dist,
-                        )
+                    };
+                    if base_l == 0.0 && base_r == 0.0 {
+                        culled_gains.push((uuid, (0.0, 0.0), true));
+                    } else {
+                        let strength = base_l.max(base_r) * player_vol;
+                        candidates.push(Candidate {
+                            uuid,
+                            base_l,
+                            base_r,
+                            is_group: false,
+                            signal_strength: strength,
+                            player_vol,
+                        });
                     }
-                };
-                let gain = (
-                    (base_l * combined_gain).clamp(0.0, 8.0),
-                    (base_r * combined_gain).clamp(0.0, 8.0),
-                );
-                (uuid, gain)
-            })
-            .collect();
+                }
+                GainSource::Location { pos, max_dist } => {
+                    let (base_l, base_r) = VoicePlaybackPipeline::compute_spatial_gains(
+                        listener_pos,
+                        listener_yaw,
+                        pos,
+                        max_dist,
+                        crowd_size,
+                    );
+                    if base_l == 0.0 && base_r == 0.0 {
+                        culled_gains.push((uuid, (0.0, 0.0), true));
+                    } else {
+                        let strength = base_l.max(base_r) * player_vol;
+                        candidates.push(Candidate {
+                            uuid,
+                            base_l,
+                            base_r,
+                            is_group: false,
+                            signal_strength: strength,
+                            player_vol,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Separate group vs spatial candidates
+        let (group_candidates, mut spatial_candidates): (Vec<_>, Vec<_>) =
+            candidates.into_iter().partition(|c| c.is_group);
+
+        // Sort spatial candidates descending by signal strength
+        spatial_candidates.sort_by(|a, b| {
+            b.signal_strength
+                .partial_cmp(&a.signal_strength)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Cull spatial voices beyond top 8
+        if spatial_candidates.len() > MAX_ACTIVE_SPATIAL_VOICES {
+            for excess in spatial_candidates.drain(MAX_ACTIVE_SPATIAL_VOICES..) {
+                culled_gains.push((excess.uuid, (0.0, 0.0), true));
+            }
+        }
+
+        let audible_count = group_candidates.len() + spatial_candidates.len();
+        let crowd_norm = if audible_count <= 1 {
+            1.0
+        } else {
+            1.0 / (audible_count as f32).powf(0.32)
+        };
+
+        let mut gains: Vec<(u128, (f32, f32), bool)> = culled_gains;
+        for c in group_candidates
+            .into_iter()
+            .chain(spatial_candidates.into_iter())
+        {
+            let combined_gain = (self.config.output_volume.clamp(0.0, 3.0)
+                * c.player_vol
+                * SPEAKER_MAKEUP_BOOST
+                * mic_active_compensation
+                * crowd_norm)
+                .clamp(0.0, 8.0);
+            let gain_l = (c.base_l * combined_gain).clamp(0.0, 8.0);
+            let gain_r = (c.base_r * combined_gain).clamp(0.0, 8.0);
+            gains.push((c.uuid, (gain_l, gain_r), false));
+        }
+
         if let Ok(mut m) = mixer.lock() {
             m.apply_gains(&gains);
             if let Some((stats, streams)) = m.take_stats_if_due(std::time::Duration::from_secs(5)) {

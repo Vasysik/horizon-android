@@ -301,12 +301,13 @@ impl VoicePlaybackPipeline {
         uuids
     }
 
-    /// Calculate distance attenuation and stereo panning based on 3D coordinates and camera yaw.
-    pub fn calculate_spatial_gain(
+    /// Calculate distance attenuation and stereo panning with crowd focus adaptivity.
+    pub fn compute_spatial_gains(
         listener_pos: [f64; 3],
         listener_yaw: f32,
         source_pos: [f64; 3],
         max_distance: f32,
+        crowd_size: usize,
     ) -> (f32, f32) {
         let dx = (source_pos[0] - listener_pos[0]) as f32;
         let dy = (source_pos[1] - listener_pos[1]) as f32;
@@ -320,14 +321,22 @@ impl VoicePlaybackPipeline {
             return (0.0, 0.0);
         }
 
-        // Close proximity (0-25% max distance) keeps 100% full volume.
-        // Mid-to-far distance follows a gentle quadratic falloff with a minimum floor of 0.15.
-        let near = (max_distance * 0.25).max(1.0);
-        let attenuation = if dist <= near {
-            1.0
+        let attenuation = if crowd_size >= 4 {
+            let fade_dist = (max_distance * 0.12).min(5.0);
+            if dist <= fade_dist {
+                1.0
+            } else {
+                let norm = ((dist - fade_dist) / (max_distance - fade_dist)).clamp(0.0, 1.0);
+                (1.0 - norm).powf(1.65)
+            }
         } else {
-            let norm = ((dist - near) / (max_distance - near)).clamp(0.0, 1.0);
-            (1.0 - norm * norm).max(0.15)
+            let near = (max_distance * 0.25).max(1.0);
+            if dist <= near {
+                1.0
+            } else {
+                let norm = ((dist - near) / (max_distance - near)).clamp(0.0, 1.0);
+                (1.0 - norm * norm).max(0.15)
+            }
         };
 
         let yaw_rad = -listener_yaw.to_radians();
@@ -344,6 +353,16 @@ impl VoicePlaybackPipeline {
         let right_gain = (attenuation * right_pan).clamp(0.0, 1.0);
 
         (left_gain, right_gain)
+    }
+
+    /// Calculate distance attenuation and stereo panning based on 3D coordinates and camera yaw.
+    pub fn calculate_spatial_gain(
+        listener_pos: [f64; 3],
+        listener_yaw: f32,
+        source_pos: [f64; 3],
+        max_distance: f32,
+    ) -> (f32, f32) {
+        Self::compute_spatial_gains(listener_pos, listener_yaw, source_pos, max_distance, 1)
     }
 }
 

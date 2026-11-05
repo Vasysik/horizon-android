@@ -9222,7 +9222,9 @@ impl Game<'_> {
                         sender_uuid as i32,
                     ] {
                         if let Some(tracked) = r.entities.get(&(eid as i32)) {
-                            return Some(tracked.position);
+                            let mut pos = tracked.position;
+                            pos[1] += 1.62;
+                            return Some(pos);
                         }
                     }
                 }

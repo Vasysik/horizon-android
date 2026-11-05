@@ -87,6 +87,19 @@ impl VoiceRx {
         opus_data: &[u8],
         source: GainSource,
     ) {
+        if !opus_data.is_empty() {
+            let should_decode = self
+                .mixer
+                .lock()
+                .map(|m| m.should_decode_sender(sender_uuid))
+                .unwrap_or(true);
+            if !should_decode {
+                if let Ok(mut m) = self.mixer.lock() {
+                    m.touch_culled_sender(sender_uuid, source);
+                }
+                return;
+            }
+        }
         let pcm = self
             .pipeline
             .decode_sender_frame(sender_uuid, sequence_number, opus_data);

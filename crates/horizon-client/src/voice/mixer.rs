@@ -50,6 +50,7 @@ struct SenderStream {
     gain_r: f32,
     target_l: f32,
     target_r: f32,
+    culled: bool,
     source: GainSource,
     last_push: Instant,
 }
@@ -67,6 +68,7 @@ impl SenderStream {
             gain_r: DEFAULT_GAIN,
             target_l: DEFAULT_GAIN,
             target_r: DEFAULT_GAIN,
+            culled: false,
             source,
             last_push: Instant::now(),
         }
@@ -168,6 +170,9 @@ impl VoiceMixer {
         stream.source = source;
         stream.ending = false;
         stream.last_push = Instant::now();
+        if stream.culled {
+            return;
+        }
         stream.buf.extend(pcm.iter().copied());
         if stream.buf.len() > MAX_BUFFER_SAMPLES {
             let drop_count = FRAME_SIZE.min(stream.buf.len());
@@ -179,6 +184,26 @@ impl VoiceMixer {
         if queued > self.stats.max_queue_samples {
             self.stats.max_queue_samples = queued;
         }
+    }
+
+    /// Checks if incoming audio packets from `sender_uuid` should be decoded.
+    /// Returns false if the sender is currently culled (muted, out of range, or beyond top-8).
+    pub fn should_decode_sender(&self, sender_uuid: u128) -> bool {
+        match self.streams.get(&sender_uuid) {
+            Some(stream) => !stream.culled,
+            None => true,
+        }
+    }
+
+    /// Updates active timestamp and source for a culled sender without decoding or buffering audio.
+    pub fn touch_culled_sender(&mut self, uuid: u128, source: GainSource) {
+        let stream = self
+            .streams
+            .entry(uuid)
+            .or_insert_with(|| SenderStream::new(source));
+        stream.source = source;
+        stream.ending = false;
+        stream.last_push = Instant::now();
     }
 
     /// The sender stopped talking (empty Opus packet): play out what is buffered, then fade.
@@ -193,12 +218,17 @@ impl VoiceMixer {
         self.streams.iter().map(|(u, s)| (*u, s.source)).collect()
     }
 
-    /// Sets the 3D gain targets computed by the game tick (smoothed per sample).
-    pub fn apply_gains(&mut self, gains: &[(u128, (f32, f32))]) {
-        for (uuid, (left, right)) in gains {
+    /// Sets the 3D gain targets and culling state computed by the game tick (smoothed per sample).
+    pub fn apply_gains(&mut self, gains: &[(u128, (f32, f32), bool)]) {
+        for (uuid, (left, right), culled) in gains {
             if let Some(stream) = self.streams.get_mut(uuid) {
                 stream.target_l = *left;
                 stream.target_r = *right;
+                stream.culled = *culled;
+                if *culled {
+                    stream.buf.clear();
+                    stream.playing = false;
+                }
             }
         }
     }
@@ -416,7 +446,7 @@ mod tests {
     fn gain_follows_target_smoothly() {
         let mut mixer = VoiceMixer::new();
         mixer.push(A, GainSource::Group, &constant(0.5, 50));
-        mixer.apply_gains(&[(A, (0.0, 0.0))]);
+        mixer.apply_gains(&[(A, (0.0, 0.0), false)]);
         let mut prev = 0.0f32;
         let mut max_step = 0.0f32;
         let mut last = 1.0f32;
@@ -430,6 +460,25 @@ mod tests {
         }
         assert!(max_step < 0.002, "max step {max_step}");
         assert!(last.abs() < 0.001, "last {last}");
+    }
+
+    #[test]
+    fn test_culling_clears_buffer_and_drops_samples() {
+        let mut mixer = VoiceMixer::new();
+        mixer.push(A, GainSource::Group, &constant(0.5, 4));
+        assert!(mixer.should_decode_sender(A));
+
+        // Cull sender A
+        mixer.apply_gains(&[(A, (0.0, 0.0), true)]);
+        assert!(!mixer.should_decode_sender(A));
+
+        // Pushing samples to culled sender should not buffer audio
+        mixer.push(A, GainSource::Group, &constant(0.5, 4));
+        assert_eq!(mixer.next_frame(), (0.0, 0.0));
+
+        // Touching culled sender keeps it active
+        mixer.touch_culled_sender(A, GainSource::Group);
+        assert!(!mixer.should_decode_sender(A));
     }
 
     #[test]

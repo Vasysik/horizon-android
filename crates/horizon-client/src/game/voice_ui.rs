@@ -340,6 +340,24 @@ impl<'a> Game<'a> {
                 true,
             );
 
+            // Protocol version badge at top-right of modal header
+            let badge_w = 38.0;
+            let badge_h = 16.0;
+            let badge_x = x + modal_w - 15.0 - badge_w;
+            let badge_y = y + 6.0;
+            let cycle_txt = format!("v{}", self.voice.config.compatibility_version);
+            draw_btn(
+                batch,
+                &self.gui.atlas,
+                self.cursor,
+                badge_x,
+                badge_y,
+                badge_w,
+                badge_h,
+                &cycle_txt,
+                false,
+            );
+
             let col1_x = x + 15.0;
             let col1_w = 330.0;
 
@@ -570,28 +588,16 @@ impl<'a> Game<'a> {
                 false,
             );
 
-            // Row 8: Done Button & Cycle Version
+            // Row 8: Done Button (expanded to full width 330px)
             draw_btn(
                 batch,
                 &self.gui.atlas,
                 self.cursor,
                 col1_x,
                 y + 202.0,
-                220.0,
+                col1_w,
                 22.0,
                 "Done (Esc / V)",
-                false,
-            );
-            let cycle_txt = format!("v{}", self.voice.config.compatibility_version);
-            draw_btn(
-                batch,
-                &self.gui.atlas,
-                self.cursor,
-                col1_x + 230.0,
-                y + 202.0,
-                100.0,
-                22.0,
-                &cycle_txt,
                 false,
             );
         }
@@ -708,23 +714,29 @@ impl<'a> Game<'a> {
                 self.voice.show_player_volumes = true;
                 self.voice.player_list_page = 0;
             }
-            // Row 8: Done
-            else if ui::hovered(self.cursor, col1_x, y + 202.0, 220.0, 22.0) {
+            // Header Badge: Cycle Fallback Version (disabled when connected to prevent muscle memory accidents)
+            else if ui::hovered(self.cursor, x + modal_w - 15.0 - 38.0, y + 6.0, 38.0, 16.0) {
+                let is_connected = matches!(
+                    self.voice.connection_state(),
+                    UdpConnectionState::Connected { .. }
+                );
+                if !is_connected {
+                    let next = self.voice.config.next_fallback_version();
+                    let _ = self.voice.config.save_to_dir(&self.voice.config_dir);
+                    log::info!("SVC: Manually cycled compatibility version to {next}");
+                    self.voice.secret = None;
+                    if let Some(h) = self.voice.udp_handle.take() {
+                        h.stop();
+                    }
+                    if self.remote.is_some() {
+                        self.initiate_voice_handshake();
+                    }
+                }
+            }
+            // Row 8: Done (expanded to full width)
+            else if ui::hovered(self.cursor, col1_x, y + 202.0, col1_w, 22.0) {
                 self.screen = Screen::Playing;
                 self.capture(true);
-            }
-            // Row 8: Cycle Fallback Version
-            else if ui::hovered(self.cursor, col1_x + 230.0, y + 202.0, 100.0, 22.0) {
-                let next = self.voice.config.next_fallback_version();
-                let _ = self.voice.config.save_to_dir(&self.voice.config_dir);
-                log::info!("SVC: Manually cycled compatibility version to {next}");
-                self.voice.secret = None;
-                if let Some(h) = self.voice.udp_handle.take() {
-                    h.stop();
-                }
-                if self.remote.is_some() {
-                    self.initiate_voice_handshake();
-                }
             }
         }
     }

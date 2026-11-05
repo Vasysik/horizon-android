@@ -67,6 +67,18 @@ impl VoiceHardwareIo {
         self.drop_input_stream();
     }
 
+    /// Returns true if the microphone input stream is actively open.
+    pub fn is_input_stream_open(&self) -> bool {
+        #[cfg(feature = "audio")]
+        {
+            self._input_stream.is_some()
+        }
+        #[cfg(not(feature = "audio"))]
+        {
+            false
+        }
+    }
+
     /// Lazily starts microphone capture stream when the player unmutes or holds PTT.
     pub fn ensure_input_started(&mut self) {
         if self.input_initialized {
