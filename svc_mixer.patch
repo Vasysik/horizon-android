@@ -1,0 +1,1160 @@
+diff --git a/crates/horizon-client/src/voice/hardware_io.rs b/crates/horizon-client/src/voice/hardware_io.rs
+index fce9fe5..b139d31 100644
+--- a/crates/horizon-client/src/voice/hardware_io.rs
++++ b/crates/horizon-client/src/voice/hardware_io.rs
+@@ -5,171 +5,20 @@
+ 
+ use super::audio_pipeline::{FRAME_SIZE, SAMPLE_RATE};
+ #[cfg(feature = "audio")]
++use super::mixer::OutputResampler;
++use super::mixer::VoiceMixer;
++#[cfg(feature = "audio")]
+ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+ use std::collections::VecDeque;
+ use std::sync::{Arc, Mutex};
+ 
+-/// ~60ms prebuffer at 48kHz (3 frames * 960 samples = 2880 stereo samples).
+-pub const PREBUFFER_SAMPLES: usize = FRAME_SIZE * 3;
+-
+-/// Stateful speaker playback resampler (48000 Hz -> hardware `out_rate`) with 60ms prebuffering
+-/// and linear interpolation.
+-pub struct SpeakerResampler {
+-    prebuffering: bool,
+-    phase: f64,
+-    prev: (f32, f32),
+-    curr: (f32, f32),
+-}
+-
+-impl Default for SpeakerResampler {
+-    fn default() -> Self {
+-        Self::new()
+-    }
+-}
+-
+-impl SpeakerResampler {
+-    pub fn new() -> Self {
+-        Self {
+-            prebuffering: true,
+-            phase: 0.0,
+-            prev: (0.0, 0.0),
+-            curr: (0.0, 0.0),
+-        }
+-    }
+-
+-    fn enter_prebuffering(&mut self) {
+-        self.prebuffering = true;
+-        self.phase = 0.0;
+-        self.prev = (0.0, 0.0);
+-        self.curr = (0.0, 0.0);
+-    }
+-
+-    /// Fills `data` (interleaved `out_channels` @ `out_rate` Hz) from `queue` (48kHz stereo).
+-    pub fn fill_f32(
+-        &mut self,
+-        queue: &mut VecDeque<(f32, f32)>,
+-        data: &mut [f32],
+-        out_channels: usize,
+-        out_rate: usize,
+-    ) {
+-        let out_channels = out_channels.max(1);
+-        if self.prebuffering {
+-            if queue.len() < PREBUFFER_SAMPLES {
+-                data.fill(0.0);
+-                return;
+-            }
+-            self.prebuffering = false;
+-            self.phase = 0.0;
+-            self.prev = queue.pop_front().unwrap_or((0.0, 0.0));
+-            self.curr = queue.pop_front().unwrap_or(self.prev);
+-        }
+-
+-        let step = (SAMPLE_RATE as f64) / (out_rate.max(1) as f64);
+-
+-        for frame in data.chunks_mut(out_channels) {
+-            while self.phase >= 1.0 {
+-                self.phase -= 1.0;
+-                self.prev = self.curr;
+-                if let Some(next) = queue.pop_front() {
+-                    self.curr = next;
+-                } else {
+-                    // Buffer underrun: stop continuous (0,0) stepping and re-prebuffer
+-                    self.enter_prebuffering();
+-                    frame.fill(0.0);
+-                    continue;
+-                }
+-            }
+-
+-            if self.prebuffering {
+-                frame.fill(0.0);
+-                continue;
+-            }
+-
+-            let frac = self.phase as f32;
+-            let left = self.prev.0 + (self.curr.0 - self.prev.0) * frac;
+-            let right = self.prev.1 + (self.curr.1 - self.prev.1) * frac;
+-
+-            if out_channels == 1 {
+-                frame[0] = (left + right) * 0.5;
+-            } else {
+-                frame[0] = left;
+-                frame[1] = right;
+-                for extra in &mut frame[2..] {
+-                    *extra = 0.0;
+-                }
+-            }
+-
+-            self.phase += step;
+-        }
+-    }
+-
+-    /// Fills `data` (i16 interleaved `out_channels` @ `out_rate` Hz) from `queue` (48kHz stereo).
+-    pub fn fill_i16(
+-        &mut self,
+-        queue: &mut VecDeque<(f32, f32)>,
+-        data: &mut [i16],
+-        out_channels: usize,
+-        out_rate: usize,
+-    ) {
+-        let out_channels = out_channels.max(1);
+-        if self.prebuffering {
+-            if queue.len() < PREBUFFER_SAMPLES {
+-                data.fill(0);
+-                return;
+-            }
+-            self.prebuffering = false;
+-            self.phase = 0.0;
+-            self.prev = queue.pop_front().unwrap_or((0.0, 0.0));
+-            self.curr = queue.pop_front().unwrap_or(self.prev);
+-        }
+-
+-        let step = (SAMPLE_RATE as f64) / (out_rate.max(1) as f64);
+-
+-        for frame in data.chunks_mut(out_channels) {
+-            while self.phase >= 1.0 {
+-                self.phase -= 1.0;
+-                self.prev = self.curr;
+-                if let Some(next) = queue.pop_front() {
+-                    self.curr = next;
+-                } else {
+-                    self.enter_prebuffering();
+-                    frame.fill(0);
+-                    continue;
+-                }
+-            }
+-
+-            if self.prebuffering {
+-                frame.fill(0);
+-                continue;
+-            }
+-
+-            let frac = self.phase as f32;
+-            let left = (self.prev.0 + (self.curr.0 - self.prev.0) * frac).clamp(-1.0, 1.0);
+-            let right = (self.prev.1 + (self.curr.1 - self.prev.1) * frac).clamp(-1.0, 1.0);
+-
+-            if out_channels == 1 {
+-                let mono = ((left + right) * 0.5).clamp(-1.0, 1.0);
+-                frame[0] = (mono * 32767.0) as i16;
+-            } else {
+-                frame[0] = (left * 32767.0) as i16;
+-                frame[1] = (right * 32767.0) as i16;
+-                for extra in &mut frame[2..] {
+-                    *extra = 0;
+-                }
+-            }
+-
+-            self.phase += step;
+-        }
+-    }
+-}
+-
+ pub struct VoiceHardwareIo {
+     #[cfg(feature = "audio")]
+     _input_stream: Option<cpal::Stream>,
+     #[cfg(feature = "audio")]
+     _output_stream: Option<cpal::Stream>,
+     mic_buffer: Arc<Mutex<VecDeque<f32>>>,
+-    speaker_buffer: Arc<Mutex<VecDeque<(f32, f32)>>>,
++    mixer: Arc<Mutex<VoiceMixer>>,
+     input_initialized: bool,
+     output_initialized: bool,
+ }
+@@ -188,7 +37,7 @@ impl VoiceHardwareIo {
+             #[cfg(feature = "audio")]
+             _output_stream: None,
+             mic_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(FRAME_SIZE * 10))),
+-            speaker_buffer: Arc::new(Mutex::new(VecDeque::with_capacity(FRAME_SIZE * 20))),
++            mixer: Arc::new(Mutex::new(VoiceMixer::new())),
+             input_initialized: false,
+             output_initialized: false,
+         }
+@@ -330,17 +179,17 @@ impl VoiceHardwareIo {
+             let config = supported.config();
+             let out_rate = config.sample_rate.0 as usize;
+             let out_channels = (config.channels as usize).max(1);
+-            let spk_buf = Arc::clone(&self.speaker_buffer);
++            let mixer = Arc::clone(&self.mixer);
+ 
+             let err_fn = |err| log::warn!("SVC: Speaker output stream error: {err}");
+ 
+             let stream_res = match supported.sample_format() {
+                 cpal::SampleFormat::F32 => {
+-                    let mut resampler = SpeakerResampler::new();
++                    let mut resampler = OutputResampler::new();
+                     device.build_output_stream(
+                         &config,
+                         move |data: &mut [f32], _| {
+-                            let Ok(mut guard) = spk_buf.lock() else {
++                            let Ok(mut guard) = mixer.lock() else {
+                                 data.fill(0.0);
+                                 return;
+                             };
+@@ -351,11 +200,11 @@ impl VoiceHardwareIo {
+                     )
+                 }
+                 cpal::SampleFormat::I16 => {
+-                    let mut resampler = SpeakerResampler::new();
++                    let mut resampler = OutputResampler::new();
+                     device.build_output_stream(
+                         &config,
+                         move |data: &mut [i16], _| {
+-                            let Ok(mut guard) = spk_buf.lock() else {
++                            let Ok(mut guard) = mixer.lock() else {
+                                 data.fill(0);
+                                 return;
+                             };
+@@ -395,26 +244,9 @@ impl VoiceHardwareIo {
+         Some(frame)
+     }
+ 
+-    /// Queues decoded 48kHz mono samples with stereo spatial gains into the speaker buffer.
+-    pub fn push_spatial_audio(&mut self, mono_pcm: &[f32], left_gain: f32, right_gain: f32) {
+-        if left_gain <= 0.0001 && right_gain <= 0.0001 {
+-            return;
+-        }
+-        self.ensure_output_started();
+-        let Ok(mut guard) = self.speaker_buffer.lock() else {
+-            return;
+-        };
+-        // Cap speaker queue at ~300ms (15 frames) to keep latency low
+-        if guard.len() > FRAME_SIZE * 15 {
+-            let drop_count = guard.len() - FRAME_SIZE * 5;
+-            guard.drain(..drop_count);
+-        }
+-        for &s in mono_pcm {
+-            guard.push_back((
+-                (s * left_gain).clamp(-1.0, 1.0),
+-                (s * right_gain).clamp(-1.0, 1.0),
+-            ));
+-        }
++    /// Shared mixer: the UDP thread pushes decoded voice into it, the audio callback plays it.
++    pub fn mixer(&self) -> Arc<Mutex<VoiceMixer>> {
++        Arc::clone(&self.mixer)
+     }
+ 
+     pub fn stop(&mut self) {
+@@ -428,61 +260,8 @@ impl VoiceHardwareIo {
+         if let Ok(mut g) = self.mic_buffer.lock() {
+             g.clear();
+         }
+-        if let Ok(mut g) = self.speaker_buffer.lock() {
+-            g.clear();
++        if let Ok(mut m) = self.mixer.lock() {
++            m.clear();
+         }
+     }
+ }
+-
+-#[cfg(test)]
+-mod tests {
+-    use super::*;
+-
+-    #[test]
+-    fn test_prebuffer_and_underrun_recovery() {
+-        let mut resampler = SpeakerResampler::new();
+-        let mut queue = VecDeque::new();
+-        let mut out = vec![1.0f32; 480 * 2]; // 10ms stereo buffer
+-
+-        // Push only 2 frames (40ms < 60ms prebuffer): output must remain silent and queue untouched
+-        for _ in 0..(FRAME_SIZE * 2) {
+-            queue.push_back((0.5, -0.5));
+-        }
+-        resampler.fill_f32(&mut queue, &mut out, 2, 48000);
+-        assert!(out.iter().all(|&s| s == 0.0));
+-        assert_eq!(queue.len(), FRAME_SIZE * 2);
+-
+-        // Push 3rd frame to reach 60ms (2880 samples): playback starts
+-        for _ in 0..FRAME_SIZE {
+-            queue.push_back((0.5, -0.5));
+-        }
+-        resampler.fill_f32(&mut queue, &mut out, 2, 48000);
+-        assert!(out.iter().any(|&s| s != 0.0));
+-
+-        // Drain remaining samples until empty, verify resampler re-enters prebuffering
+-        let mut drain_buf = vec![0.0f32; PREBUFFER_SAMPLES * 4];
+-        resampler.fill_f32(&mut queue, &mut drain_buf, 2, 48000);
+-        assert!(queue.is_empty());
+-        assert!(resampler.prebuffering);
+-    }
+-
+-    #[test]
+-    fn test_linear_interpolation_resampling() {
+-        let mut resampler = SpeakerResampler::new();
+-        let mut queue = VecDeque::new();
+-        for i in 0..PREBUFFER_SAMPLES {
+-            let v = (i as f32) / (PREBUFFER_SAMPLES as f32);
+-            queue.push_back((v, v));
+-        }
+-
+-        // Resample 48000 -> 96000 Hz (step = 0.5): midpoint must be linearly interpolated
+-        let mut out = vec![0.0f32; 8]; // 4 stereo frames
+-        resampler.fill_f32(&mut queue, &mut out, 2, 96000);
+-        let s0 = 0.0f32;
+-        let s1 = 1.0f32 / (PREBUFFER_SAMPLES as f32);
+-        let mid = (s0 + s1) * 0.5;
+-        assert!((out[0] - s0).abs() < 1e-6);
+-        assert!((out[2] - mid).abs() < 1e-6);
+-        assert!((out[4] - s1).abs() < 1e-6);
+-    }
+-}
+diff --git a/crates/horizon-client/src/voice/mixer.rs b/crates/horizon-client/src/voice/mixer.rs
+new file mode 100644
+index 0000000..a0d029e
+--- /dev/null
++++ b/crates/horizon-client/src/voice/mixer.rs
+@@ -0,0 +1,452 @@
++//! Per-sender jitter buffers and a real-time mixer for Simple Voice Chat playback.
++//!
++//! Data flow:
++//! - UDP worker thread: decodes packets and calls [`VoiceMixer::push`] (48 kHz mono PCM per sender).
++//! - Game tick: calls [`VoiceMixer::sources`] / [`VoiceMixer::apply_gains`] to refresh 3D gains.
++//! - Audio callback: pulls [`VoiceMixer::next_frame`] through an [`OutputResampler`]; every active
++//!   sender is SUMMED (never appended one after another), gains are smoothed per sample and an
++//!   underrun fades out instead of cutting to silence.
++
++use super::audio_pipeline::{FRAME_SIZE, SAMPLE_RATE};
++use std::collections::{HashMap, VecDeque};
++use std::time::{Duration, Instant};
++
++/// Playback of a sender starts once this much audio is buffered (4 frames = 80 ms).
++pub const PREBUFFER_SAMPLES: usize = FRAME_SIZE * 4;
++/// Hard cap per sender (20 frames = 400 ms). Overflow drops ONE frame per push.
++pub const MAX_BUFFER_SAMPLES: usize = FRAME_SIZE * 20;
++/// Fade-in / fade-out length (5 ms @ 48 kHz).
++pub const FADE_SAMPLES: usize = 240;
++/// One-pole gain smoothing coefficient per sample (about 10 ms time constant).
++const GAIN_SMOOTHING: f32 = 0.002;
++/// Gain used until the game tick has computed a real 3D gain.
++const DEFAULT_GAIN: f32 = 0.8;
++
++/// Where the 3D gain of a sender comes from.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub enum GainSource {
++    Player { max_dist: f32 },
++    Group,
++    Location { pos: [f64; 3], max_dist: f32 },
++}
++
++/// Counters for diagnostics (reset every time they are taken).
++#[derive(Debug, Clone, Copy, Default)]
++pub struct MixerStats {
++    pub pushes: u64,
++    pub underruns: u64,
++    pub overflow_drops: u64,
++    pub max_queue_samples: usize,
++}
++
++struct SenderStream {
++    buf: VecDeque<f32>,
++    playing: bool,
++    ending: bool,
++    fade_pos: usize,
++    tail: usize,
++    last: f32,
++    gain_l: f32,
++    gain_r: f32,
++    target_l: f32,
++    target_r: f32,
++    source: GainSource,
++    last_push: Instant,
++}
++
++impl SenderStream {
++    fn new(source: GainSource) -> Self {
++        Self {
++            buf: VecDeque::with_capacity(FRAME_SIZE * 8),
++            playing: false,
++            ending: false,
++            fade_pos: 0,
++            tail: 0,
++            last: 0.0,
++            gain_l: DEFAULT_GAIN,
++            gain_r: DEFAULT_GAIN,
++            target_l: DEFAULT_GAIN,
++            target_r: DEFAULT_GAIN,
++            source,
++            last_push: Instant::now(),
++        }
++    }
++
++    /// Linear decay of the last played sample after an underrun or the end of speech.
++    fn decay_tail(&mut self) -> f32 {
++        if self.tail == 0 {
++            self.last = 0.0;
++            return 0.0;
++        }
++        let v = self.last * (self.tail as f32 / FADE_SAMPLES as f32);
++        self.tail -= 1;
++        v
++    }
++
++    fn next_mono(&mut self, underruns: &mut u64) -> f32 {
++        if !self.playing {
++            let ready = self.buf.len() >= PREBUFFER_SAMPLES || (self.ending && !self.buf.is_empty());
++            if !ready {
++                return self.decay_tail();
++            }
++            self.playing = true;
++            self.fade_pos = 0;
++        }
++        match self.buf.pop_front() {
++            Some(s) => {
++                let g = if self.fade_pos < FADE_SAMPLES {
++                    let f = self.fade_pos as f32 / FADE_SAMPLES as f32;
++                    self.fade_pos += 1;
++                    f
++                } else {
++                    1.0
++                };
++                let v = s * g;
++                self.last = v;
++                v
++            }
++            None => {
++                self.playing = false;
++                if !self.ending {
++                    *underruns += 1;
++                }
++                self.tail = FADE_SAMPLES;
++                self.decay_tail()
++            }
++        }
++    }
++
++    fn next_frame(&mut self, underruns: &mut u64) -> (f32, f32) {
++        let m = self.next_mono(underruns);
++        self.gain_l += (self.target_l - self.gain_l) * GAIN_SMOOTHING;
++        self.gain_r += (self.target_r - self.gain_r) * GAIN_SMOOTHING;
++        (m * self.gain_l, m * self.gain_r)
++    }
++}
++
++fn soft_clip(x: f32) -> f32 {
++    const KNEE: f32 = 0.8;
++    let a = x.abs();
++    if a <= KNEE {
++        x
++    } else {
++        x.signum() * (KNEE + (1.0 - KNEE) * ((a - KNEE) / (1.0 - KNEE)).tanh())
++    }
++}
++
++/// Sums every sender into one 48 kHz stereo stream.
++pub struct VoiceMixer {
++    streams: HashMap<u128, SenderStream>,
++    stats: MixerStats,
++    last_stats: Instant,
++}
++
++impl Default for VoiceMixer {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++impl VoiceMixer {
++    pub fn new() -> Self {
++        Self {
++            streams: HashMap::new(),
++            stats: MixerStats::default(),
++            last_stats: Instant::now(),
++        }
++    }
++
++    /// Queues decoded 48 kHz mono samples of `uuid` (called from the UDP thread).
++    pub fn push(&mut self, uuid: u128, source: GainSource, pcm: &[f32]) {
++        if pcm.is_empty() {
++            return;
++        }
++        let stream = self
++            .streams
++            .entry(uuid)
++            .or_insert_with(|| SenderStream::new(source));
++        stream.source = source;
++        stream.ending = false;
++        stream.last_push = Instant::now();
++        stream.buf.extend(pcm.iter().copied());
++        if stream.buf.len() > MAX_BUFFER_SAMPLES {
++            let drop_count = FRAME_SIZE.min(stream.buf.len());
++            stream.buf.drain(..drop_count);
++            self.stats.overflow_drops += 1;
++        }
++        self.stats.pushes += 1;
++        let queued = stream.buf.len();
++        if queued > self.stats.max_queue_samples {
++            self.stats.max_queue_samples = queued;
++        }
++    }
++
++    /// The sender stopped talking (empty Opus packet): play out what is buffered, then fade.
++    pub fn end_stream(&mut self, uuid: u128) {
++        if let Some(stream) = self.streams.get_mut(&uuid) {
++            stream.ending = true;
++        }
++    }
++
++    /// Snapshot of every sender and where its 3D gain comes from (for the game tick).
++    pub fn sources(&self) -> Vec<(u128, GainSource)> {
++        self.streams.iter().map(|(u, s)| (*u, s.source)).collect()
++    }
++
++    /// Sets the 3D gain targets computed by the game tick (smoothed per sample).
++    pub fn apply_gains(&mut self, gains: &[(u128, (f32, f32))]) {
++        for (uuid, (left, right)) in gains {
++            if let Some(stream) = self.streams.get_mut(uuid) {
++                stream.target_l = *left;
++                stream.target_r = *right;
++            }
++        }
++    }
++
++    /// Removes silent senders that have not pushed audio for `max_idle`.
++    pub fn prune_idle(&mut self, max_idle: Duration) {
++        self.streams
++            .retain(|_, s| s.playing || s.last_push.elapsed() <= max_idle);
++    }
++
++    /// Returns and resets the counters when `every` has elapsed and there was activity.
++    pub fn take_stats_if_due(&mut self, every: Duration) -> Option<(MixerStats, usize)> {
++        if self.last_stats.elapsed() < every {
++            return None;
++        }
++        self.last_stats = Instant::now();
++        let stats = std::mem::take(&mut self.stats);
++        if stats.pushes == 0 && stats.underruns == 0 {
++            return None;
++        }
++        Some((stats, self.streams.len()))
++    }
++
++    pub fn clear(&mut self) {
++        self.streams.clear();
++        self.stats = MixerStats::default();
++    }
++
++    /// Next 48 kHz stereo frame: the sum of all senders (called from the audio callback).
++    pub fn next_frame(&mut self) -> (f32, f32) {
++        let mut left = 0.0f32;
++        let mut right = 0.0f32;
++        for stream in self.streams.values_mut() {
++            let (l, r) = stream.next_frame(&mut self.stats.underruns);
++            left += l;
++            right += r;
++        }
++        (soft_clip(left), soft_clip(right))
++    }
++}
++
++/// Linear-interpolation resampler from the mixer's 48 kHz to the hardware rate.
++#[derive(Default)]
++pub struct OutputResampler {
++    phase: f64,
++    prev: (f32, f32),
++    curr: (f32, f32),
++    primed: bool,
++}
++
++impl OutputResampler {
++    pub fn new() -> Self {
++        Self::default()
++    }
++
++    fn next(&mut self, mixer: &mut VoiceMixer, step: f64) -> (f32, f32) {
++        if !self.primed {
++            self.prev = mixer.next_frame();
++            self.curr = mixer.next_frame();
++            self.phase = 0.0;
++            self.primed = true;
++        }
++        while self.phase >= 1.0 {
++            self.phase -= 1.0;
++            self.prev = self.curr;
++            self.curr = mixer.next_frame();
++        }
++        let frac = self.phase as f32;
++        let left = self.prev.0 + (self.curr.0 - self.prev.0) * frac;
++        let right = self.prev.1 + (self.curr.1 - self.prev.1) * frac;
++        self.phase += step;
++        (left, right)
++    }
++
++    /// Fills interleaved `data` (`out_channels` @ `out_rate` Hz) from the mixer.
++    pub fn fill_f32(
++        &mut self,
++        mixer: &mut VoiceMixer,
++        data: &mut [f32],
++        out_channels: usize,
++        out_rate: usize,
++    ) {
++        let out_channels = out_channels.max(1);
++        let step = SAMPLE_RATE as f64 / out_rate.max(1) as f64;
++        for frame in data.chunks_mut(out_channels) {
++            let (left, right) = self.next(mixer, step);
++            if out_channels == 1 || frame.len() < 2 {
++                frame[0] = (left + right) * 0.5;
++            } else {
++                frame[0] = left;
++                frame[1] = right;
++                for extra in &mut frame[2..] {
++                    *extra = 0.0;
++                }
++            }
++        }
++    }
++
++    /// Same as [`Self::fill_f32`] for 16-bit output.
++    pub fn fill_i16(
++        &mut self,
++        mixer: &mut VoiceMixer,
++        data: &mut [i16],
++        out_channels: usize,
++        out_rate: usize,
++    ) {
++        let out_channels = out_channels.max(1);
++        let step = SAMPLE_RATE as f64 / out_rate.max(1) as f64;
++        for frame in data.chunks_mut(out_channels) {
++            let (left, right) = self.next(mixer, step);
++            if out_channels == 1 || frame.len() < 2 {
++                let mono = ((left + right) * 0.5).clamp(-1.0, 1.0);
++                frame[0] = (mono * 32767.0) as i16;
++            } else {
++                frame[0] = (left.clamp(-1.0, 1.0) * 32767.0) as i16;
++                frame[1] = (right.clamp(-1.0, 1.0) * 32767.0) as i16;
++                for extra in &mut frame[2..] {
++                    *extra = 0;
++                }
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    const A: u128 = 1;
++    const B: u128 = 2;
++
++    fn constant(value: f32, frames: usize) -> Vec<f32> {
++        vec![value; FRAME_SIZE * frames]
++    }
++
++    #[test]
++    fn two_senders_are_summed_not_interleaved() {
++        let mut mixer = VoiceMixer::new();
++        mixer.push(A, GainSource::Group, &constant(0.2, 10));
++        mixer.push(B, GainSource::Group, &constant(0.2, 10));
++        let mut last = (0.0, 0.0);
++        for _ in 0..(FADE_SAMPLES + 100) {
++            last = mixer.next_frame();
++        }
++        // 0.2 * 0.8 (default gain) * 2 senders = 0.32
++        assert!((last.0 - 0.32).abs() < 1e-4, "left was {}", last.0);
++        assert!((last.1 - 0.32).abs() < 1e-4, "right was {}", last.1);
++    }
++
++    #[test]
++    fn stays_silent_until_prebuffer_is_full() {
++        let mut mixer = VoiceMixer::new();
++        mixer.push(A, GainSource::Group, &constant(0.5, 2));
++        for _ in 0..200 {
++            assert_eq!(mixer.next_frame(), (0.0, 0.0));
++        }
++        mixer.push(A, GainSource::Group, &constant(0.5, 2));
++        let mut heard = false;
++        for _ in 0..(FADE_SAMPLES * 2) {
++            let (l, _) = mixer.next_frame();
++            if l > 0.1 {
++                heard = true;
++            }
++        }
++        assert!(heard);
++    }
++
++    #[test]
++    fn underrun_fades_out_without_a_click() {
++        let mut mixer = VoiceMixer::new();
++        mixer.push(A, GainSource::Group, &constant(0.5, 4));
++        let mut prev = 0.0f32;
++        let mut max_step = 0.0f32;
++        for _ in 0..(FRAME_SIZE * 4 + FADE_SAMPLES * 3) {
++            let (l, _) = mixer.next_frame();
++            max_step = max_step.max((l - prev).abs());
++            prev = l;
++        }
++        assert!(max_step < 0.005, "max step {max_step}");
++        assert_eq!(prev, 0.0);
++        let (stats, streams) = mixer.take_stats_if_due(Duration::ZERO).unwrap();
++        assert_eq!(stats.underruns, 1);
++        assert_eq!(streams, 1);
++    }
++
++    #[test]
++    fn end_of_speech_is_not_counted_as_underrun() {
++        let mut mixer = VoiceMixer::new();
++        mixer.push(A, GainSource::Group, &constant(0.5, 1));
++        mixer.end_stream(A);
++        let mut heard = false;
++        for _ in 0..(FRAME_SIZE * 2) {
++            if mixer.next_frame().0 > 0.1 {
++                heard = true;
++            }
++        }
++        assert!(heard);
++        let (stats, _) = mixer.take_stats_if_due(Duration::ZERO).unwrap();
++        assert_eq!(stats.underruns, 0);
++    }
++
++    #[test]
++    fn overflow_drops_one_frame_per_push() {
++        let mut mixer = VoiceMixer::new();
++        mixer.push(A, GainSource::Group, &constant(0.1, 21));
++        let (stats, _) = mixer.take_stats_if_due(Duration::ZERO).unwrap();
++        assert_eq!(stats.overflow_drops, 1);
++        assert_eq!(stats.max_queue_samples, FRAME_SIZE * 20);
++    }
++
++    #[test]
++    fn gain_follows_target_smoothly() {
++        let mut mixer = VoiceMixer::new();
++        mixer.push(A, GainSource::Group, &constant(0.5, 50));
++        mixer.apply_gains(&[(A, (0.0, 0.0))]);
++        let mut prev = 0.0f32;
++        let mut max_step = 0.0f32;
++        let mut last = 1.0f32;
++        for i in 0..8000 {
++            let (l, _) = mixer.next_frame();
++            if i > FADE_SAMPLES {
++                max_step = max_step.max((l - prev).abs());
++            }
++            prev = l;
++            last = l;
++        }
++        assert!(max_step < 0.002, "max step {max_step}");
++        assert!(last.abs() < 0.001, "last {last}");
++    }
++
++    #[test]
++    fn soft_clip_is_identity_below_knee_and_bounded_above() {
++        assert_eq!(soft_clip(0.5), 0.5);
++        assert_eq!(soft_clip(-0.5), -0.5);
++        assert!(soft_clip(1.5) > 0.8 && soft_clip(1.5) < 1.0);
++        assert!(soft_clip(-1.5) < -0.8 && soft_clip(-1.5) > -1.0);
++    }
++
++    #[test]
++    fn resampler_44100_stays_fed_and_audible() {
++        let mut mixer = VoiceMixer::new();
++        mixer.push(A, GainSource::Group, &constant(0.3, 40));
++        let mut resampler = OutputResampler::new();
++        // 0.5 s of stereo output at 44.1 kHz pulls about 25 frames of the 40 queued.
++        let mut out = vec![0.0f32; 22050 * 2];
++        resampler.fill_f32(&mut mixer, &mut out, 2, 44100);
++        let (stats, _) = mixer.take_stats_if_due(Duration::ZERO).unwrap();
++        assert_eq!(stats.underruns, 0);
++        assert!(out.iter().any(|&s| s > 0.1));
++    }
++}
+diff --git a/crates/horizon-client/src/voice/mod.rs b/crates/horizon-client/src/voice/mod.rs
+index 7576ae5..0b84e46 100644
+--- a/crates/horizon-client/src/voice/mod.rs
++++ b/crates/horizon-client/src/voice/mod.rs
+@@ -3,6 +3,7 @@
+ pub mod audio_pipeline;
+ pub mod config;
+ pub mod hardware_io;
++pub mod mixer;
+ pub mod protocol;
+ pub mod udp_worker;
+ pub mod ui;
+@@ -12,10 +13,11 @@ pub use protocol::parse_voice_host;
+ use audio_pipeline::{FRAME_SIZE, VoiceCapturePipeline, VoicePlaybackPipeline};
+ use config::SvcProtocolConfig;
+ use hardware_io::VoiceHardwareIo;
++use mixer::GainSource;
+ use protocol::*;
+ use std::collections::HashMap;
+ use std::path::Path;
+-use udp_worker::{IncomingSound, UdpConnectionState, UdpWorker, UdpWorkerHandle};
++use udp_worker::{UdpConnectionState, UdpWorker, UdpWorkerHandle};
+ use ui::{VoiceChatScreenState, VoiceHudStatus};
+ 
+ pub struct VoiceChatClient {
+@@ -115,7 +117,11 @@ impl VoiceChatClient {
+                     handle.stop();
+                 }
+ 
+-                let handle = UdpWorker::spawn(secret.clone(), &self.current_server_host)?;
++                let handle = UdpWorker::spawn(
++                    secret.clone(),
++                    &self.current_server_host,
++                    self.hardware_io.mixer(),
++                )?;
+                 self.udp_handle = Some(handle);
+                 self.secret = Some(secret);
+ 
+@@ -272,84 +278,51 @@ impl VoiceChatClient {
+             self.is_talking = false;
+         }
+ 
+-        // Prune sender decoders that have been idle > DECODER_IDLE_TIMEOUT
+-        self.playback_pipeline.prune_idle_decoders();
+-
+-        // 2. Drain incoming UDP voice packets and play them on the speaker with 3D spatial gain
+-        let default_max_dist = self
+-            .secret
+-            .as_ref()
+-            .map(|s| s.voice_chat_distance as f32)
+-            .unwrap_or(48.0);
+-
+-        let mut incoming = Vec::new();
+-        if let Some(ref handle) = self.udp_handle {
+-            while let Ok(pkt) = handle.incoming_sound_rx.try_recv() {
+-                incoming.push(pkt);
+-            }
+-        }
+-
+-        for sound in incoming {
+-            match sound {
+-                IncomingSound::Player(pkt) => {
+-                    let pcm = self.playback_pipeline.decode_sender_frame(
+-                        pkt.sender_uuid,
+-                        pkt.sequence_number,
+-                        &pkt.opus_data,
+-                    );
+-                    if pcm.is_empty() {
+-                        continue;
+-                    }
+-                    let max_dist = if pkt.distance > 0.0 {
+-                        pkt.distance
+-                    } else {
+-                        default_max_dist
+-                    };
+-                    let (left, right) = if let Some(src_pos) = resolve_player_pos(pkt.sender_uuid) {
+-                        VoicePlaybackPipeline::calculate_spatial_gain(
++        // 2. Playback: decoding and jitter buffering run on the UDP thread and the audio callback.
++        //    The game tick only refreshes the 3D gain targets (listener/source positions).
++        self.hardware_io.ensure_output_started();
++        let mixer = self.hardware_io.mixer();
++        let sources = match mixer.lock() {
++            Ok(m) => m.sources(),
++            Err(_) => return,
++        };
++        let gains: Vec<(u128, (f32, f32))> = sources
++            .into_iter()
++            .map(|(uuid, source)| {
++                let gain = match source {
++                    GainSource::Group => (1.0, 1.0),
++                    GainSource::Player { max_dist } => match resolve_player_pos(uuid) {
++                        Some(src_pos) => VoicePlaybackPipeline::calculate_spatial_gain(
+                             listener_pos,
+                             listener_yaw,
+                             src_pos,
+                             max_dist,
++                        ),
++                        None => (0.8, 0.8),
++                    },
++                    GainSource::Location { pos, max_dist } => {
++                        VoicePlaybackPipeline::calculate_spatial_gain(
++                            listener_pos,
++                            listener_yaw,
++                            pos,
++                            max_dist,
+                         )
+-                    } else {
+-                        (0.8, 0.8)
+-                    };
+-                    self.hardware_io.push_spatial_audio(&pcm, left, right);
+-                }
+-                IncomingSound::Group(pkt) => {
+-                    let pcm = self.playback_pipeline.decode_sender_frame(
+-                        pkt.sender_uuid,
+-                        pkt.sequence_number,
+-                        &pkt.opus_data,
+-                    );
+-                    if pcm.is_empty() {
+-                        continue;
+-                    }
+-                    self.hardware_io.push_spatial_audio(&pcm, 1.0, 1.0);
+-                }
+-                IncomingSound::Location(pkt) => {
+-                    let pcm = self.playback_pipeline.decode_sender_frame(
+-                        pkt.sender_uuid,
+-                        pkt.sequence_number,
+-                        &pkt.opus_data,
+-                    );
+-                    if pcm.is_empty() {
+-                        continue;
+                     }
+-                    let max_dist = if pkt.distance > 0.0 {
+-                        pkt.distance
+-                    } else {
+-                        default_max_dist
+-                    };
+-                    let (left, right) = VoicePlaybackPipeline::calculate_spatial_gain(
+-                        listener_pos,
+-                        listener_yaw,
+-                        pkt.location,
+-                        max_dist,
+-                    );
+-                    self.hardware_io.push_spatial_audio(&pcm, left, right);
+-                }
++                };
++                (uuid, gain)
++            })
++            .collect();
++        if let Ok(mut m) = mixer.lock() {
++            m.apply_gains(&gains);
++            if let Some((stats, streams)) = m.take_stats_if_due(std::time::Duration::from_secs(5))
++            {
++                let pushes = stats.pushes;
++                let underruns = stats.underruns;
++                let drops = stats.overflow_drops;
++                let queue_ms = stats.max_queue_samples / 48;
++                log::info!(
++                    "SVC audio: streams={streams} pushes={pushes} underruns={underruns} overflow_drops={drops} max_queue_ms={queue_ms}"
++                );
+             }
+         }
+     }
+diff --git a/crates/horizon-client/src/voice/udp_worker.rs b/crates/horizon-client/src/voice/udp_worker.rs
+index bcc5443..03d8c7b 100644
+--- a/crates/horizon-client/src/voice/udp_worker.rs
++++ b/crates/horizon-client/src/voice/udp_worker.rs
+@@ -4,11 +4,13 @@
+ //! 0x05 Authenticate -> 0x06 AuthenticateAck -> 0x09 ConnectionCheck -> 0x0A ConnectionCheckAck,
+ //! KeepAlive (0x08) & Ping (0x07) heartbeats, and encrypted audio I/O.
+ 
++use super::audio_pipeline::VoicePlaybackPipeline;
++use super::mixer::{GainSource, VoiceMixer};
+ use super::protocol::*;
+ use std::net::{ToSocketAddrs, UdpSocket};
+ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+-use std::sync::{Arc, RwLock};
++use std::sync::{Arc, Mutex, RwLock};
+ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+ 
+ #[derive(Debug, Clone, PartialEq)]
+@@ -20,19 +22,10 @@ pub enum UdpConnectionState {
+     Failed(String),
+ }
+ 
+-/// Incoming audio sound event dispatched to the audio engine.
+-#[derive(Debug, Clone)]
+-pub enum IncomingSound {
+-    Player(PlayerSoundPacket),
+-    Group(GroupSoundPacket),
+-    Location(LocationSoundPacket),
+-}
+-
+ /// Handle to control the background UDP worker thread.
+ pub struct UdpWorkerHandle {
+     pub state: Arc<RwLock<UdpConnectionState>>,
+     pub outgoing_mic_tx: SyncSender<MicPacket>,
+-    pub incoming_sound_rx: Receiver<IncomingSound>,
+     pub stop_signal: Arc<AtomicBool>,
+ }
+ 
+@@ -56,11 +49,107 @@ impl UdpWorkerHandle {
+     }
+ }
+ 
++/// Decodes incoming voice on the UDP thread and feeds the shared mixer, so playback no longer
++/// depends on the game tick rate (20 Hz) or on tick hitches.
++struct VoiceRx {
++    pipeline: VoicePlaybackPipeline,
++    mixer: Arc<Mutex<VoiceMixer>>,
++    default_max_dist: f32,
++    last_maintain: Instant,
++}
++
++impl VoiceRx {
++    fn new(mixer: Arc<Mutex<VoiceMixer>>, default_max_dist: f32) -> Self {
++        Self {
++            pipeline: VoicePlaybackPipeline::new(),
++            mixer,
++            default_max_dist,
++            last_maintain: Instant::now(),
++        }
++    }
++
++    /// Once per second: drop idle Opus decoders and silent mixer streams.
++    fn maintain(&mut self) {
++        if self.last_maintain.elapsed() < Duration::from_secs(1) {
++            return;
++        }
++        self.last_maintain = Instant::now();
++        self.pipeline.prune_idle_decoders();
++        if let Ok(mut m) = self.mixer.lock() {
++            m.prune_idle(Duration::from_secs(5));
++        }
++    }
++
++    fn deliver(
++        &mut self,
++        sender_uuid: u128,
++        sequence_number: i64,
++        opus_data: &[u8],
++        source: GainSource,
++    ) {
++        let pcm = self
++            .pipeline
++            .decode_sender_frame(sender_uuid, sequence_number, opus_data);
++        let Ok(mut m) = self.mixer.lock() else {
++            return;
++        };
++        if opus_data.is_empty() {
++            m.end_stream(sender_uuid);
++        } else if !pcm.is_empty() {
++            m.push(sender_uuid, source, &pcm);
++        }
++    }
++
++    fn on_player(&mut self, pkt: PlayerSoundPacket) {
++        let max_dist = if pkt.distance > 0.0 {
++            pkt.distance
++        } else {
++            self.default_max_dist
++        };
++        self.deliver(
++            pkt.sender_uuid,
++            pkt.sequence_number,
++            &pkt.opus_data,
++            GainSource::Player { max_dist },
++        );
++    }
++
++    fn on_group(&mut self, pkt: GroupSoundPacket) {
++        self.deliver(
++            pkt.sender_uuid,
++            pkt.sequence_number,
++            &pkt.opus_data,
++            GainSource::Group,
++        );
++    }
++
++    fn on_location(&mut self, pkt: LocationSoundPacket) {
++        let max_dist = if pkt.distance > 0.0 {
++            pkt.distance
++        } else {
++            self.default_max_dist
++        };
++        self.deliver(
++            pkt.sender_uuid,
++            pkt.sequence_number,
++            &pkt.opus_data,
++            GainSource::Location {
++                pos: pkt.location,
++                max_dist,
++            },
++        );
++    }
++}
++
+ pub struct UdpWorker;
+ 
+ impl UdpWorker {
+     /// Spawn the background UDP worker thread with SecretPacket parameters.
+-    pub fn spawn(secret: SecretPacket, fallback_host: &str) -> Result<UdpWorkerHandle, String> {
++    pub fn spawn(
++        secret: SecretPacket,
++        fallback_host: &str,
++        mixer: Arc<Mutex<VoiceMixer>>,
++    ) -> Result<UdpWorkerHandle, String> {
+         if !(1..=65535).contains(&secret.server_port) {
+             return Err(format!(
+                 "Invalid server port in SecretPacket: {}",
+@@ -70,7 +159,6 @@ impl UdpWorker {
+ 
+         let state = Arc::new(RwLock::new(UdpConnectionState::Connecting));
+         let (mic_tx, mic_rx) = sync_channel::<MicPacket>(128);
+-        let (sound_tx, sound_rx) = sync_channel::<IncomingSound>(256);
+         let stop_signal = Arc::new(AtomicBool::new(false));
+ 
+         let (host, port) =
+@@ -89,7 +177,7 @@ impl UdpWorker {
+                     thread_state,
+                     thread_stop,
+                     mic_rx,
+-                    sound_tx,
++                    mixer,
+                 );
+             })
+             .map_err(|e| format!("Failed to spawn UDP worker thread: {e}"))?;
+@@ -97,7 +185,6 @@ impl UdpWorker {
+         Ok(UdpWorkerHandle {
+             state,
+             outgoing_mic_tx: mic_tx,
+-            incoming_sound_rx: sound_rx,
+             stop_signal,
+         })
+     }
+@@ -109,7 +196,7 @@ impl UdpWorker {
+         state: Arc<RwLock<UdpConnectionState>>,
+         stop_signal: Arc<AtomicBool>,
+         mic_rx: Receiver<MicPacket>,
+-        sound_tx: SyncSender<IncomingSound>,
++        mixer: Arc<Mutex<VoiceMixer>>,
+     ) {
+         let set_failed = |msg: String| {
+             if let Ok(mut lock) = state.write() {
+@@ -281,6 +368,9 @@ impl UdpWorker {
+             *lock = UdpConnectionState::Connected { ping_ms: 0 };
+         }
+ 
++        // Opus decoders are created on this thread, so they never have to be `Send`.
++        let mut rx = VoiceRx::new(mixer, secret.voice_chat_distance as f32);
++
+         let mut last_keep_alive = Instant::now();
+         let mut last_ping_sent = Instant::now();
+         let keep_alive_interval = Duration::from_millis(secret.keep_alive.clamp(500, 5000) as u64);
+@@ -289,6 +379,8 @@ impl UdpWorker {
+         let mut current_ping_time = Instant::now();
+ 
+         while !stop_signal.load(Ordering::Relaxed) {
++            rx.maintain();
++
+             while let Ok(mic) = mic_rx.try_recv() {
+                 let body = mic.to_body();
+                 if let Ok(pkt) = build_client_udp_packet(conn_id, &cipher, PACKET_ID_MIC, &body) {
+@@ -354,17 +446,17 @@ impl UdpWorker {
+                                 }
+                                 PACKET_ID_PLAYER_SOUND => {
+                                     if let Ok(sound) = PlayerSoundPacket::from_body(&body) {
+-                                        let _ = sound_tx.try_send(IncomingSound::Player(sound));
++                                        rx.on_player(sound);
+                                     }
+                                 }
+                                 PACKET_ID_GROUP_SOUND => {
+                                     if let Ok(sound) = GroupSoundPacket::from_body(&body) {
+-                                        let _ = sound_tx.try_send(IncomingSound::Group(sound));
++                                        rx.on_group(sound);
+                                     }
+                                 }
+                                 PACKET_ID_LOCATION_SOUND => {
+                                     if let Ok(sound) = LocationSoundPacket::from_body(&body) {
+-                                        let _ = sound_tx.try_send(IncomingSound::Location(sound));
++                                        rx.on_location(sound);
+                                     }
+                                 }
+                                 _ => {}
