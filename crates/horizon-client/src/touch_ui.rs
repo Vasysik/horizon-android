@@ -3312,6 +3312,128 @@ fn shape_name(shape: u8) -> &'static str {
 /// - Interactive 8-point Corner & Edge Resize Handles
 /// - Moveable/Draggable Floating Menu Pod (No Top Toolbar!) with Undo, Redo, Props, Add & Save
 /// - Main Control Manager Dialog, Component Property Inspector, and Mouse/Keyboard Horizontal Picker
+#[allow(clippy::too_many_arguments)]
+fn draw_m3_stepper_cell(
+    ui: &mut crate::ui_theme::Ui,
+    rect: [f32; 4],
+    label: &str,
+    fraction: f32,
+    accent: u32,
+    accent_soft: u32,
+    bg_hi: u32,
+    border_c: u32,
+    text_c: u32,
+) {
+    let [rx, ry, cw, ch] = rect;
+    let rad = (ch * 0.36).clamp(8.0, 12.0);
+    ui.rounded(rx, ry, cw, ch, rad, bg_hi);
+    ui.border(rx, ry, cw, ch, rad, border_c);
+
+    // M3 Expressive horizontal progress fill strip along the bottom interior of the cell
+    let t = fraction.clamp(0.0, 1.0);
+    let track_x = rx + 6.0;
+    let track_w = (cw - 12.0).max(16.0);
+    let track_y = ry + ch - 5.0;
+    ui.rounded(track_x, track_y, track_w, 3.0, 1.5, rgba(255, 255, 255, 22));
+    let fill_w = (track_w * t).max(4.0);
+    ui.rounded(track_x, track_y, fill_w, 3.0, 1.5, accent);
+
+    // Left (-) and Right (+) tactile M3 micro-capsules
+    let btn_s = (ch - 8.0).clamp(16.0, 22.0);
+    let btn_y = ry + (ch - btn_s) * 0.5 - 1.0;
+    let minus_x = rx + 3.0;
+    let plus_x = rx + cw - btn_s - 3.0;
+    ui.rounded(
+        minus_x,
+        btn_y,
+        btn_s,
+        btn_s,
+        btn_s * 0.5,
+        rgba(255, 255, 255, 14),
+    );
+    ui.centered_fit(
+        crate::ui_theme::Face::SemiBold,
+        10.5,
+        [minus_x, btn_y, btn_s, btn_s],
+        accent,
+        "-",
+    );
+    ui.rounded(plus_x, btn_y, btn_s, btn_s, btn_s * 0.5, accent_soft);
+    ui.centered_fit(
+        crate::ui_theme::Face::SemiBold,
+        10.5,
+        [plus_x, btn_y, btn_s, btn_s],
+        accent,
+        "+",
+    );
+
+    ui.centered_fit(
+        crate::ui_theme::Face::Medium,
+        9.0,
+        [
+            rx + btn_s + 4.0,
+            ry,
+            (cw - (btn_s + 4.0) * 2.0).max(20.0),
+            ch - 3.0,
+        ],
+        text_c,
+        label,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_m3_swatch_chip(
+    ui: &mut crate::ui_theme::Ui,
+    sx: f32,
+    sy: f32,
+    sw_w: f32,
+    sw_h: f32,
+    col: u32,
+    selected: bool,
+    accent: u32,
+    text_c: u32,
+) {
+    let rad = (sw_h * 0.38).clamp(6.0, 9.0);
+    if selected {
+        ui.rounded(
+            sx - 2.5,
+            sy - 2.5,
+            sw_w + 5.0,
+            sw_h + 5.0,
+            rad + 2.5,
+            crate::ui_theme::color::with_alpha(accent, 0.28),
+        );
+    }
+    ui.rounded(sx, sy, sw_w, sw_h, rad, col);
+    ui.border(sx, sy, sw_w, sw_h, rad, rgba(255, 255, 255, 52));
+    if selected {
+        ui.stroke_rounded(
+            sx - 1.5,
+            sy - 1.5,
+            sw_w + 3.0,
+            sw_h + 3.0,
+            rad + 1.5,
+            1.8,
+            accent,
+        );
+        ui.rounded(
+            sx + (sw_w - 12.0) * 0.5,
+            sy + (sw_h - 12.0) * 0.5,
+            12.0,
+            12.0,
+            6.0,
+            rgba(8, 10, 18, 185),
+        );
+        ui.centered_fit(
+            crate::ui_theme::Face::SemiBold,
+            8.5,
+            [sx, sy, sw_w, sw_h],
+            text_c,
+            "✓",
+        );
+    }
+}
+
 pub fn draw_hud_editor(
     tc: &crate::touch::TouchControls,
     b: &mut HudBatch,
@@ -3803,16 +3925,26 @@ pub fn draw_hud_editor(
         return;
     }
 
-    // 8. Component Property Inspector Dialog (when ed.props_open == true)
+    // 8. Component Property Inspector Dialog — Material Design 3 Expressive Surface (when ed.props_open == true)
     if ed.props_open {
-        ui.fill(0.0, 0.0, w, h, rgba(4, 5, 10, 185));
+        ui.fill(0.0, 0.0, w, h, rgba(4, 6, 14, 196));
         let dw = (w - 24.0).clamp(310.0, 548.0);
         let dh = (h - 18.0).clamp(248.0, 368.0);
         let dx = (w - dw) * 0.5;
         let dy = (h - dh) * 0.5;
-        ui.rounded(dx + 2.0, dy + 5.0, dw, dh, 20.0, rgba(0, 0, 0, 155));
-        ui.rounded(dx, dy, dw, dh, 20.0, bg_card);
-        ui.stroke_rounded(dx, dy, dw, dh, 20.0, 1.4, border_c);
+        // M3 Expressive multi-layered elevation shadow + surface-container-low card (24dp corner radius)
+        ui.rounded(dx + 3.0, dy + 8.0, dw, dh, 24.0, rgba(0, 0, 0, 165));
+        ui.rounded(
+            dx - 1.5,
+            dy - 1.5,
+            dw + 3.0,
+            dh + 3.0,
+            25.5,
+            color::with_alpha(accent, 0.22),
+        );
+        ui.rounded(dx, dy, dw, dh, 24.0, bg_card);
+        ui.rounded(dx + 2.0, dy + 2.0, dw - 4.0, 38.0, 22.0, bg_hi);
+        ui.stroke_rounded(dx, dy, dw, dh, 24.0, 1.5, border_c);
 
         let is_joystick = ed.selected == Some(Control::Move) && ed.selected_custom.is_none();
         let is_mcpe_mode = tc.settings.control_style == ControlStyle::Mcpe;
@@ -3864,40 +3996,80 @@ pub fn draw_hud_editor(
             cur_pl.size * 100.0,
             cur_pl.opacity * 100.0
         );
-        ui.rounded(dx + 14.0, dy + 9.0, 28.0, 28.0, 9.0, accent_soft);
-        ui.border(dx + 14.0, dy + 9.0, 28.0, 28.0, 9.0, accent);
-        ui.icon(Icon::Gear, dx + 20.0, dy + 15.0, 16.0, accent);
+
+        // Live M3 Miniature Component Preview Badge in top-left header
+        ui.rounded(dx + 12.0, dy + 7.0, 30.0, 30.0, 10.0, accent_soft);
+        ui.border(dx + 12.0, dy + 7.0, 30.0, 30.0, 10.0, accent);
+        if is_joystick {
+            let js = &tc.settings.joystick_style;
+            let br = (js.base_roundness * 0.22).clamp(3.0, 11.0);
+            ui.rounded(dx + 16.0, dy + 11.0, 22.0, 22.0, br, js.base_color);
+            ui.border(dx + 16.0, dy + 11.0, 22.0, 22.0, br, js.base_stroke_color);
+            let ks = (js.stick_size * 14.0).clamp(6.0, 12.0);
+            ui.rounded(
+                dx + 27.0 - ks * 0.5,
+                dy + 22.0 - ks * 0.5,
+                ks,
+                ks,
+                ks * 0.5,
+                js.stick_color,
+            );
+        } else {
+            let pr = (cur_pl.roundness * 0.20).clamp(3.0, 10.0);
+            ui.rounded(dx + 16.0, dy + 11.0, 22.0, 22.0, pr, cur_pl.button_color);
+            ui.border(dx + 16.0, dy + 11.0, 22.0, 22.0, pr, cur_pl.stroke_color);
+            ui.icon(Icon::Gear, dx + 20.0, dy + 15.0, 14.0, accent);
+        }
+
         ui.text_clipped(
             Face::SemiBold,
-            12.8,
+            13.0,
             dx + 48.0,
             dy + 7.0,
-            (dw - 260.0).max(90.0),
+            (dw - 266.0).max(90.0),
             text_c,
             &header_txt,
         );
         ui.text_clipped(
             Face::Regular,
-            9.0,
+            9.2,
             dx + 48.0,
             dy + 24.0,
-            (dw - 260.0).max(90.0),
+            (dw - 266.0).max(90.0),
             muted_c,
             sub_txt,
         );
+        // M3 Assist Chip for Telemetry + Horizontal Center Snap
         let pill_w = 132.0;
         let pill_r = [dx + dw - 78.0 - pill_w, dy + 10.0, pill_w, 26.0];
-        ui.rounded(pill_r[0], pill_r[1], pill_r[2], pill_r[3], 8.0, bg_hi);
-        ui.border(pill_r[0], pill_r[1], pill_r[2], pill_r[3], 8.0, border_c);
-        ui.centered_fit(Face::Mono, 8.8, pill_r, accent, &telem);
+        ui.rounded(
+            pill_r[0],
+            pill_r[1],
+            pill_r[2],
+            pill_r[3],
+            13.0,
+            accent_soft,
+        );
+        ui.border(pill_r[0], pill_r[1], pill_r[2], pill_r[3], 13.0, accent);
+        ui.centered_fit(Face::Mono, 8.6, pill_r, accent, &telem);
 
+        // M3 Filled Primary Pill Button for "Done"
         let close_r = [dx + dw - 74.0, dy + 9.0, 60.0, 28.0];
-        ui.rounded(close_r[0], close_r[1], close_r[2], close_r[3], 9.0, accent);
-        ui.centered_fit(Face::SemiBold, 10.5, close_r, accent_fg, "Done");
+        ui.rounded(close_r[0], close_r[1], close_r[2], close_r[3], 14.0, accent);
+        ui.centered_fit(Face::SemiBold, 10.5, close_r, accent_fg, "✓ Done");
 
-        // Segmented Material You 3 Tab Header (for both Joystick and Button inspectors)
+        // M3 Expressive Segmented Pill Tab Bar
         let tab_y = dy + 42.0;
         let tab_w = (dw - 28.0 - 8.0) / 3.0;
+        ui.rounded(
+            dx + 12.0,
+            tab_y - 2.0,
+            dw - 24.0,
+            30.0,
+            15.0,
+            rgba(8, 10, 18, 155),
+        );
+        ui.border(dx + 12.0, tab_y - 2.0, dw - 24.0, 30.0, 15.0, border_c);
         let tab_labels = if is_joystick {
             ["1. Stick & Style", "2. Analog Base", "3. Zone & Visibility"]
         } else {
@@ -3915,22 +4087,17 @@ pub fn draw_hud_editor(
                 tab_y,
                 tab_w,
                 26.0,
-                8.0,
-                if on { accent_soft } else { bg_hi },
+                13.0,
+                if on { accent } else { rgba(255, 255, 255, 8) },
             );
-            ui.border(
-                tx,
-                tab_y,
-                tab_w,
-                26.0,
-                8.0,
-                if on { accent } else { border_c },
-            );
+            if !on {
+                ui.border(tx, tab_y, tab_w, 26.0, 13.0, border_c);
+            }
             ui.centered_fit(
                 Face::SemiBold,
                 10.0,
-                [tx + 3.0, tab_y, tab_w - 6.0, 26.0],
-                if on { accent } else { text_c },
+                [tx + 4.0, tab_y, tab_w - 8.0, 26.0],
+                if on { accent_fg } else { text_c },
                 t_lbl,
             );
         }
@@ -3952,7 +4119,7 @@ pub fn draw_hud_editor(
                         9.4,
                         dx + 14.0,
                         body_y - 2.0,
-                        muted_c,
+                        accent,
                         "JOYSTICK STYLE & ACTIVE ZONE",
                     );
                     let y1 = body_y + 12.0;
@@ -3960,12 +4127,12 @@ pub fn draw_hud_editor(
                     let st_lbl = if tc.settings.control_style == ControlStyle::GoyControl
                         || p_move.use_goy_style
                     {
-                        "Style: Custom GoyControl Stick"
+                        "● Style: Custom GoyControl Stick"
                     } else {
-                        "Style: Default MCPE D-Pad/Stick"
+                        "● Style: Default MCPE D-Pad/Stick"
                     };
-                    ui.rounded(dx + 14.0, y1, hw, 30.0, 9.0, accent_soft);
-                    ui.border(dx + 14.0, y1, hw, 30.0, 9.0, accent);
+                    ui.rounded(dx + 14.0, y1, hw, 30.0, 11.0, accent_soft);
+                    ui.border(dx + 14.0, y1, hw, 30.0, 11.0, accent);
                     ui.centered_fit(
                         Face::SemiBold,
                         10.0,
@@ -3975,8 +4142,8 @@ pub fn draw_hud_editor(
                     );
 
                     let area_txt = format!("Move Area: {}", js.move_area.label());
-                    ui.rounded(dx + 14.0 + hw + 8.0, y1, hw, 30.0, 9.0, bg_hi);
-                    ui.border(dx + 14.0 + hw + 8.0, y1, hw, 30.0, 9.0, border_c);
+                    ui.rounded(dx + 14.0 + hw + 8.0, y1, hw, 30.0, 11.0, bg_hi);
+                    ui.border(dx + 14.0 + hw + 8.0, y1, hw, 30.0, 11.0, border_c);
                     ui.centered_fit(
                         Face::SemiBold,
                         10.0,
@@ -3990,55 +4157,82 @@ pub fn draw_hud_editor(
                         9.4,
                         dx + 14.0,
                         y1 + 38.0,
-                        muted_c,
+                        accent,
                         "STICK KNOB DIMENSIONS & STROKE",
                     );
                     let y2 = y1 + 52.0;
-                    for (i, txt) in [
-                        format!("Stick Sz {:.0}%", js.stick_size * 100.0),
-                        format!("Stick Alpha {:.0}%", js.stick_opacity * 100.0),
-                        format!("Stick Strk {:.1}dp", js.stick_stroke),
-                        format!("Base Sz {:.0}%", p_move.size * 100.0),
+                    for (i, (txt, frac)) in [
+                        (
+                            format!("Stick Sz {:.0}%", js.stick_size * 100.0),
+                            (js.stick_size - 0.20) / 0.65,
+                        ),
+                        (
+                            format!("Stick Alpha {:.0}%", js.stick_opacity * 100.0),
+                            (js.stick_opacity - 0.15) / 0.85,
+                        ),
+                        (
+                            format!("Stick Strk {:.1}dp", js.stick_stroke),
+                            js.stick_stroke / 8.0,
+                        ),
+                        (
+                            format!("Base Sz {:.0}%", p_move.size * 100.0),
+                            (p_move.size - 0.12) / 0.33,
+                        ),
                     ]
                     .into_iter()
                     .enumerate()
                     {
                         let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                        ui.rounded(rx, y2, cw, 28.0, 8.0, bg_hi);
-                        ui.border(rx, y2, cw, 28.0, 8.0, border_c);
-                        ui.text(Face::SemiBold, 11.0, rx + 5.0, y2 + 5.0, accent, "-");
-                        ui.text(Face::SemiBold, 11.0, rx + cw - 11.0, y2 + 5.0, accent, "+");
-                        ui.centered_fit(
-                            Face::Medium,
-                            9.0,
-                            [rx + 12.0, y2, cw - 24.0, 28.0],
-                            text_c,
+                        draw_m3_stepper_cell(
+                            &mut ui,
+                            [rx, y2, cw, 28.0],
                             &txt,
+                            frac,
+                            accent,
+                            accent_soft,
+                            bg_hi,
+                            border_c,
+                            text_c,
                         );
                     }
 
                     let y3 = y2 + 38.0;
+                    ui.rounded(
+                        dx + 10.0,
+                        y3 - 4.0,
+                        dw - 20.0,
+                        30.0,
+                        10.0,
+                        rgba(255, 255, 255, 7),
+                    );
                     ui.text(
-                        Face::Medium,
+                        Face::SemiBold,
                         9.5,
-                        dx + 14.0,
+                        dx + 16.0,
                         y3 + 4.0,
                         muted_c,
                         "Stick Color:",
                     );
                     for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
                         let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
-                        ui.rounded(sx, y3, sw_w, 22.0, 6.0, *col);
-                        if js.stick_color == *col {
-                            ui.border(sx - 1.5, y3 - 1.5, sw_w + 3.0, 25.0, 7.0, accent);
-                        }
+                        draw_m3_swatch_chip(
+                            &mut ui,
+                            sx,
+                            y3,
+                            sw_w,
+                            22.0,
+                            *col,
+                            js.stick_color == *col,
+                            accent,
+                            text_c,
+                        );
                     }
-                    ui.rounded(st_x, y3, st_w, 22.0, 6.0, bg_hi);
-                    ui.border(st_x, y3, st_w, 22.0, 6.0, js.stick_stroke_color);
+                    ui.rounded(st_x, y3, st_w, 22.0, 8.0, bg_hi);
+                    ui.stroke_rounded(st_x, y3, st_w, 22.0, 8.0, 1.6, js.stick_stroke_color);
                     ui.centered_fit(
-                        Face::Medium,
+                        Face::SemiBold,
                         9.0,
-                        [st_x, y3, st_w, 22.0],
+                        [st_x + 4.0, y3, st_w - 8.0, 22.0],
                         text_c,
                         "Cycle Stick Stroke Col",
                     );
@@ -4050,40 +4244,54 @@ pub fn draw_hud_editor(
                         9.4,
                         dx + 14.0,
                         body_y - 2.0,
-                        muted_c,
+                        accent,
                         "ANALOG BASE RING GEOMETRY & INPUT MODE",
                     );
                     let y4 = body_y + 14.0;
-                    for (i, txt) in [
-                        format!("Base Alpha {:.0}%", js.base_opacity * 100.0),
-                        format!("Base Strk {:.1}dp", js.base_stroke),
-                        format!("Base Round {:.0}", js.base_roundness),
-                        if tc.settings.mode == crate::touch::Mode::Dpad {
-                            "Mode: D-Pad".into()
-                        } else {
-                            "Mode: Analog".into()
-                        },
+                    for (i, (txt, frac)) in [
+                        (
+                            format!("Base Alpha {:.0}%", js.base_opacity * 100.0),
+                            (js.base_opacity - 0.15) / 0.85,
+                        ),
+                        (
+                            format!("Base Strk {:.1}dp", js.base_stroke),
+                            js.base_stroke / 8.0,
+                        ),
+                        (
+                            format!("Base Round {:.0}", js.base_roundness),
+                            js.base_roundness / 50.0,
+                        ),
+                        (
+                            if tc.settings.mode == crate::touch::Mode::Dpad {
+                                "Mode: D-Pad".into()
+                            } else {
+                                "Mode: Analog".into()
+                            },
+                            1.0,
+                        ),
                     ]
                     .into_iter()
                     .enumerate()
                     {
                         let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                        ui.rounded(rx, y4, cw, 30.0, 8.0, bg_hi);
-                        ui.border(rx, y4, cw, 30.0, 8.0, border_c);
                         if i < 3 {
-                            ui.text(Face::SemiBold, 11.0, rx + 5.0, y4 + 6.0, accent, "-");
-                            ui.text(Face::SemiBold, 11.0, rx + cw - 11.0, y4 + 6.0, accent, "+");
-                            ui.centered_fit(
-                                Face::Medium,
-                                9.0,
-                                [rx + 12.0, y4, cw - 24.0, 30.0],
-                                text_c,
+                            draw_m3_stepper_cell(
+                                &mut ui,
+                                [rx, y4, cw, 30.0],
                                 &txt,
+                                frac,
+                                accent,
+                                accent_soft,
+                                bg_hi,
+                                border_c,
+                                text_c,
                             );
                         } else {
+                            ui.rounded(rx, y4, cw, 30.0, 10.0, accent_soft);
+                            ui.border(rx, y4, cw, 30.0, 10.0, accent);
                             ui.centered_fit(
                                 Face::SemiBold,
-                                9.2,
+                                9.5,
                                 [rx + 4.0, y4, cw - 8.0, 30.0],
                                 accent,
                                 &txt,
@@ -4096,31 +4304,46 @@ pub fn draw_hud_editor(
                         9.4,
                         dx + 14.0,
                         y4 + 40.0,
-                        muted_c,
+                        accent,
                         "ANALOG BASE FILL & STROKE PALETTE",
                     );
                     let y5 = y4 + 56.0;
+                    ui.rounded(
+                        dx + 10.0,
+                        y5 - 4.0,
+                        dw - 20.0,
+                        30.0,
+                        10.0,
+                        rgba(255, 255, 255, 7),
+                    );
                     ui.text(
-                        Face::Medium,
+                        Face::SemiBold,
                         9.5,
-                        dx + 14.0,
+                        dx + 16.0,
                         y5 + 4.0,
                         muted_c,
                         "Base Color:",
                     );
                     for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
                         let sx = dx + 86.0 + i as f32 * (sw_w + 4.0);
-                        ui.rounded(sx, y5, sw_w, 22.0, 6.0, *col);
-                        if js.base_color == *col {
-                            ui.border(sx - 1.5, y5 - 1.5, sw_w + 3.0, 25.0, 7.0, accent);
-                        }
+                        draw_m3_swatch_chip(
+                            &mut ui,
+                            sx,
+                            y5,
+                            sw_w,
+                            22.0,
+                            *col,
+                            js.base_color == *col,
+                            accent,
+                            text_c,
+                        );
                     }
-                    ui.rounded(st_x, y5, st_w, 22.0, 6.0, bg_hi);
-                    ui.border(st_x, y5, st_w, 22.0, 6.0, js.base_stroke_color);
+                    ui.rounded(st_x, y5, st_w, 22.0, 8.0, bg_hi);
+                    ui.stroke_rounded(st_x, y5, st_w, 22.0, 8.0, 1.6, js.base_stroke_color);
                     ui.centered_fit(
-                        Face::Medium,
+                        Face::SemiBold,
                         9.0,
-                        [st_x, y5, st_w, 22.0],
+                        [st_x + 4.0, y5, st_w - 8.0, 22.0],
                         text_c,
                         "Cycle Base Stroke Col",
                     );
@@ -4132,14 +4355,14 @@ pub fn draw_hud_editor(
                         9.4,
                         dx + 14.0,
                         body_y - 2.0,
-                        muted_c,
+                        accent,
                         "ACTIVE TOUCH ZONE & VISIBILITY RULES",
                     );
                     let area_y = body_y + 14.0;
                     let hw = (dw - 28.0 - 8.0) * 0.5;
                     let area_txt = format!("Active Zone: {}", js.move_area.label());
-                    ui.rounded(dx + 14.0, area_y, hw, 32.0, 9.0, bg_hi);
-                    ui.border(dx + 14.0, area_y, hw, 32.0, 9.0, border_c);
+                    ui.rounded(dx + 14.0, area_y, hw, 32.0, 11.0, bg_hi);
+                    ui.border(dx + 14.0, area_y, hw, 32.0, 11.0, border_c);
                     ui.centered_fit(
                         Face::SemiBold,
                         10.0,
@@ -4149,34 +4372,38 @@ pub fn draw_hud_editor(
                     );
                     let sz_txt = format!("Joystick Footprint: {:.0}%", p_move.size * 100.0);
                     let sz_x = dx + 14.0 + hw + 8.0;
-                    ui.rounded(sz_x, area_y, hw, 32.0, 9.0, bg_hi);
-                    ui.border(sz_x, area_y, hw, 32.0, 9.0, border_c);
-                    ui.text(Face::SemiBold, 11.5, sz_x + 6.0, area_y + 7.0, accent, "-");
-                    ui.text(
-                        Face::SemiBold,
-                        11.5,
-                        sz_x + hw - 12.0,
-                        area_y + 7.0,
-                        accent,
-                        "+",
-                    );
-                    ui.centered_fit(
-                        Face::Medium,
-                        9.5,
-                        [sz_x + 16.0, area_y, hw - 32.0, 32.0],
-                        text_c,
+                    draw_m3_stepper_cell(
+                        &mut ui,
+                        [sz_x, area_y, hw, 32.0],
                         &sz_txt,
+                        (p_move.size - 0.12) / 0.33,
+                        accent,
+                        accent_soft,
+                        bg_hi,
+                        border_c,
+                        text_c,
                     );
 
                     let y6 = area_y + 44.0;
                     let third = (dw - 28.0 - 8.0) / 3.0;
-                    ui.rounded(dx + 14.0, y6, third, 32.0, 9.0, bg_hi);
+                    ui.rounded(
+                        dx + 14.0,
+                        y6,
+                        third,
+                        32.0,
+                        11.0,
+                        if p_move.visible_in_game {
+                            accent_soft
+                        } else {
+                            bg_hi
+                        },
+                    );
                     ui.border(
                         dx + 14.0,
                         y6,
                         third,
                         32.0,
-                        9.0,
+                        11.0,
                         if p_move.visible_in_game {
                             accent
                         } else {
@@ -4192,13 +4419,24 @@ pub fn draw_hud_editor(
                     );
 
                     let vm_x = dx + 14.0 + third + 4.0;
-                    ui.rounded(vm_x, y6, third, 32.0, 9.0, bg_hi);
+                    ui.rounded(
+                        vm_x,
+                        y6,
+                        third,
+                        32.0,
+                        11.0,
+                        if p_move.visible_in_menu {
+                            accent_soft
+                        } else {
+                            bg_hi
+                        },
+                    );
                     ui.border(
                         vm_x,
                         y6,
                         third,
                         32.0,
-                        9.0,
+                        11.0,
                         if p_move.visible_in_menu {
                             accent
                         } else {
@@ -4214,8 +4452,8 @@ pub fn draw_hud_editor(
                     );
 
                     let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
-                    ui.rounded(pv_x, y6, third, 32.0, 9.0, accent_soft);
-                    ui.border(pv_x, y6, third, 32.0, 9.0, accent);
+                    ui.rounded(pv_x, y6, third, 32.0, 11.0, accent_soft);
+                    ui.border(pv_x, y6, third, 32.0, 11.0, accent);
                     ui.centered_fit(
                         Face::SemiBold,
                         9.5,
@@ -4245,7 +4483,7 @@ pub fn draw_hud_editor(
                         body_y,
                         hw,
                         28.0,
-                        8.0,
+                        10.0,
                         if !is_goy { accent_soft } else { bg_hi },
                     );
                     ui.border(
@@ -4253,7 +4491,7 @@ pub fn draw_hud_editor(
                         body_y,
                         hw,
                         28.0,
-                        8.0,
+                        10.0,
                         if !is_goy { accent } else { border_c },
                     );
                     ui.centered_fit(
@@ -4261,7 +4499,11 @@ pub fn draw_hud_editor(
                         10.0,
                         [dx + 16.0, body_y, hw - 4.0, 28.0],
                         if !is_goy { accent } else { text_c },
-                        "Style: Default (MCPE)",
+                        if !is_goy {
+                            "● Style: Default (MCPE)"
+                        } else {
+                            "Style: Default (MCPE)"
+                        },
                     );
 
                     ui.rounded(
@@ -4269,7 +4511,7 @@ pub fn draw_hud_editor(
                         body_y,
                         hw,
                         28.0,
-                        8.0,
+                        10.0,
                         if is_goy { accent_soft } else { bg_hi },
                     );
                     ui.border(
@@ -4277,7 +4519,7 @@ pub fn draw_hud_editor(
                         body_y,
                         hw,
                         28.0,
-                        8.0,
+                        10.0,
                         if is_goy { accent } else { border_c },
                     );
                     ui.centered_fit(
@@ -4285,10 +4527,14 @@ pub fn draw_hud_editor(
                         10.0,
                         [dx + 16.0 + hw + 8.0, body_y, hw - 4.0, 28.0],
                         if is_goy { accent } else { text_c },
-                        "Style: Static (GoyControl)",
+                        if is_goy {
+                            "● Style: Static (GoyControl)"
+                        } else {
+                            "Style: Static (GoyControl)"
+                        },
                     );
 
-                    // Hint Text Row
+                    // Hint Text Row + M3 Opacity Stepper
                     let hy = body_y + 36.0;
                     let cur_hint = if let Some(idx) = ed.selected_custom {
                         tc.settings
@@ -4302,8 +4548,8 @@ pub fn draw_hud_editor(
                         String::new()
                     };
                     let h_box_w = (dw - 28.0) * 0.54;
-                    ui.rounded(dx + 14.0, hy, h_box_w, 28.0, 8.0, bg_hi);
-                    ui.border(dx + 14.0, hy, h_box_w, 28.0, 8.0, accent);
+                    ui.rounded(dx + 14.0, hy, h_box_w, 28.0, 10.0, bg_hi);
+                    ui.border(dx + 14.0, hy, h_box_w, 28.0, 10.0, accent);
                     ui.centered_fit(
                         Face::SemiBold,
                         10.0,
@@ -4314,31 +4560,32 @@ pub fn draw_hud_editor(
 
                     let op_x = dx + 14.0 + h_box_w + 8.0;
                     let op_w = dw - 28.0 - h_box_w - 8.0;
-                    ui.rounded(op_x, hy, op_w, 28.0, 8.0, bg_hi);
-                    ui.border(op_x, hy, op_w, 28.0, 8.0, border_c);
-                    ui.text(Face::SemiBold, 12.0, op_x + 6.0, hy + 5.0, accent, "-");
-                    ui.text(
-                        Face::SemiBold,
-                        12.0,
-                        op_x + op_w - 13.0,
-                        hy + 5.0,
-                        accent,
-                        "+",
-                    );
-                    ui.centered_fit(
-                        Face::Medium,
-                        9.8,
-                        [op_x + 16.0, hy, op_w - 32.0, 28.0],
-                        text_c,
+                    draw_m3_stepper_cell(
+                        &mut ui,
+                        [op_x, hy, op_w, 28.0],
                         &format!("Transparency {:.0}%", p.opacity * 100.0),
+                        (p.opacity - 0.15) / 0.85,
+                        accent,
+                        accent_soft,
+                        bg_hi,
+                        border_c,
+                        text_c,
                     );
 
-                    // Button Fill Color Swatches
+                    // Button Fill Color Swatches inside M3 Tonal Strip
                     let cy1 = hy + 36.0;
+                    ui.rounded(
+                        dx + 10.0,
+                        cy1 - 3.0,
+                        dw - 20.0,
+                        28.0,
+                        10.0,
+                        rgba(255, 255, 255, 7),
+                    );
                     ui.text(
-                        Face::Medium,
+                        Face::SemiBold,
                         9.5,
-                        dx + 14.0,
+                        dx + 16.0,
                         cy1 + 4.0,
                         muted_c,
                         "Button Color:",
@@ -4346,17 +4593,32 @@ pub fn draw_hud_editor(
                     let sw_w = 24.0;
                     for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
                         let sx = dx + 98.0 + i as f32 * (sw_w + 5.0);
-                        ui.rounded(sx, cy1, sw_w, 22.0, 6.0, *col);
-                        if p.button_color == *col {
-                            ui.border(sx - 1.5, cy1 - 1.5, sw_w + 3.0, 25.0, 7.0, accent);
-                        }
+                        draw_m3_swatch_chip(
+                            &mut ui,
+                            sx,
+                            cy1,
+                            sw_w,
+                            22.0,
+                            *col,
+                            p.button_color == *col,
+                            accent,
+                            text_c,
+                        );
                     }
 
                     // onClick & onToggle visual state color selectors
                     let cy2 = cy1 + 32.0;
                     let half = (dw - 28.0 - 8.0) * 0.5;
-                    ui.rounded(dx + 14.0, cy2, half, 28.0, 8.0, p.on_click_color);
-                    ui.border(dx + 14.0, cy2, half, 28.0, 8.0, p.on_click_stroke_color);
+                    ui.rounded(dx + 14.0, cy2, half, 28.0, 10.0, p.on_click_color);
+                    ui.stroke_rounded(
+                        dx + 14.0,
+                        cy2,
+                        half,
+                        28.0,
+                        10.0,
+                        1.5,
+                        p.on_click_stroke_color,
+                    );
                     ui.centered_fit(
                         Face::SemiBold,
                         10.0,
@@ -4370,15 +4632,16 @@ pub fn draw_hud_editor(
                         cy2,
                         half,
                         28.0,
-                        8.0,
+                        10.0,
                         p.on_toggle_color,
                     );
-                    ui.border(
+                    ui.stroke_rounded(
                         dx + 14.0 + half + 8.0,
                         cy2,
                         half,
                         28.0,
-                        8.0,
+                        10.0,
+                        1.5,
                         p.on_toggle_stroke_color,
                     );
                     ui.centered_fit(
@@ -4392,13 +4655,24 @@ pub fn draw_hud_editor(
                     // Row 4: Visible in Game [✓] | Visible in Menu [✓] | Preset Visibility for All
                     let cy3 = cy2 + 34.0;
                     let third = (dw - 28.0 - 8.0) / 3.0;
-                    ui.rounded(dx + 14.0, cy3, third, 28.0, 8.0, bg_hi);
+                    ui.rounded(
+                        dx + 14.0,
+                        cy3,
+                        third,
+                        28.0,
+                        10.0,
+                        if p.visible_in_game {
+                            accent_soft
+                        } else {
+                            bg_hi
+                        },
+                    );
                     ui.border(
                         dx + 14.0,
                         cy3,
                         third,
                         28.0,
-                        8.0,
+                        10.0,
                         if p.visible_in_game { accent } else { border_c },
                     );
                     ui.m3_checkbox(
@@ -4410,13 +4684,24 @@ pub fn draw_hud_editor(
                     );
 
                     let vm_x = dx + 14.0 + third + 4.0;
-                    ui.rounded(vm_x, cy3, third, 28.0, 8.0, bg_hi);
+                    ui.rounded(
+                        vm_x,
+                        cy3,
+                        third,
+                        28.0,
+                        10.0,
+                        if p.visible_in_menu {
+                            accent_soft
+                        } else {
+                            bg_hi
+                        },
+                    );
                     ui.border(
                         vm_x,
                         cy3,
                         third,
                         28.0,
-                        8.0,
+                        10.0,
                         if p.visible_in_menu { accent } else { border_c },
                     );
                     ui.m3_checkbox(
@@ -4428,8 +4713,8 @@ pub fn draw_hud_editor(
                     );
 
                     let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
-                    ui.rounded(pv_x, cy3, third, 28.0, 8.0, accent_soft);
-                    ui.border(pv_x, cy3, third, 28.0, 8.0, accent);
+                    ui.rounded(pv_x, cy3, third, 28.0, 10.0, accent_soft);
+                    ui.border(pv_x, cy3, third, 28.0, 10.0, accent);
                     ui.centered_fit(
                         Face::SemiBold,
                         9.5,
@@ -4439,53 +4724,64 @@ pub fn draw_hud_editor(
                     );
                 }
                 1 => {
-                    // Tab 1: Stroke Size, Stroke Margin, Stroke Roundness, Stroke Color, Button Roundness, Shape, Shadow, Width/Height
+                    // Tab 1: Stroke Size, Stroke Margin, Stroke Roundness, Button Roundness
                     let cw = (dw - 28.0 - 12.0) / 4.0;
-                    for (i, txt) in [
-                        format!("Stroke {:.1}dp", p.stroke_size),
-                        format!("Margin {:.1}dp", p.stroke_margin),
-                        format!("Strk Rnd {:.0}", p.stroke_roundness),
-                        format!("Btn Rnd {:.0}", p.roundness),
+                    for (i, (txt, frac)) in [
+                        (
+                            format!("Stroke {:.1}dp", p.stroke_size),
+                            p.stroke_size / 8.0,
+                        ),
+                        (
+                            format!("Margin {:.1}dp", p.stroke_margin),
+                            (p.stroke_margin + 4.0) / 12.0,
+                        ),
+                        (
+                            format!("Strk Rnd {:.0}", p.stroke_roundness),
+                            p.stroke_roundness / 50.0,
+                        ),
+                        (format!("Btn Rnd {:.0}", p.roundness), p.roundness / 50.0),
                     ]
                     .into_iter()
                     .enumerate()
                     {
                         let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                        ui.rounded(rx, body_y, cw, 28.0, 7.0, bg_hi);
-                        ui.border(rx, body_y, cw, 28.0, 7.0, border_c);
-                        ui.text(Face::SemiBold, 11.5, rx + 5.0, body_y + 5.0, accent, "-");
-                        ui.text(
-                            Face::SemiBold,
-                            11.5,
-                            rx + cw - 11.0,
-                            body_y + 5.0,
-                            accent,
-                            "+",
-                        );
-                        ui.centered_fit(
-                            Face::Medium,
-                            9.0,
-                            [rx + 12.0, body_y, cw - 24.0, 28.0],
-                            text_c,
+                        draw_m3_stepper_cell(
+                            &mut ui,
+                            [rx, body_y, cw, 28.0],
                             &txt,
+                            frac,
+                            accent,
+                            accent_soft,
+                            bg_hi,
+                            border_c,
+                            text_c,
                         );
                     }
 
                     // Row 2: Shape (All 6 shapes), Shadow Size, Width Ratio, Height Ratio
                     let r2_y = body_y + 36.0;
-                    for (i, txt) in [
-                        format!("Shape: {}", shape_name(p.shape)),
-                        format!("Shadow {:.1}dp", p.shadow_size),
-                        format!("Width {:.0}%", p.width_ratio * 100.0),
-                        format!("Height {:.0}%", p.height_ratio * 100.0),
+                    for (i, (txt, frac)) in [
+                        (format!("Shape: {}", shape_name(p.shape)), 1.0),
+                        (
+                            format!("Shadow {:.1}dp", p.shadow_size),
+                            p.shadow_size / 14.0,
+                        ),
+                        (
+                            format!("Width {:.0}%", p.width_ratio * 100.0),
+                            (p.width_ratio - 0.50) / 1.50,
+                        ),
+                        (
+                            format!("Height {:.0}%", p.height_ratio * 100.0),
+                            (p.height_ratio - 0.50) / 1.50,
+                        ),
                     ]
                     .into_iter()
                     .enumerate()
                     {
                         let rx = dx + 14.0 + i as f32 * (cw + 4.0);
-                        ui.rounded(rx, r2_y, cw, 28.0, 7.0, bg_hi);
-                        ui.border(rx, r2_y, cw, 28.0, 7.0, border_c);
                         if i == 0 {
+                            ui.rounded(rx, r2_y, cw, 28.0, 10.0, accent_soft);
+                            ui.border(rx, r2_y, cw, 28.0, 10.0, accent);
                             ui.centered_fit(
                                 Face::SemiBold,
                                 9.5,
@@ -4494,31 +4790,34 @@ pub fn draw_hud_editor(
                                 &txt,
                             );
                         } else {
-                            ui.text(Face::SemiBold, 11.5, rx + 5.0, r2_y + 5.0, accent, "-");
-                            ui.text(
-                                Face::SemiBold,
-                                11.5,
-                                rx + cw - 11.0,
-                                r2_y + 5.0,
-                                accent,
-                                "+",
-                            );
-                            ui.centered_fit(
-                                Face::Medium,
-                                9.0,
-                                [rx + 12.0, r2_y, cw - 24.0, 28.0],
-                                text_c,
+                            draw_m3_stepper_cell(
+                                &mut ui,
+                                [rx, r2_y, cw, 28.0],
                                 &txt,
+                                frac,
+                                accent,
+                                accent_soft,
+                                bg_hi,
+                                border_c,
+                                text_c,
                             );
                         }
                     }
 
-                    // Row 3: Stroke Color Swatches
+                    // Row 3: Stroke Color Swatches inside M3 Tonal Strip
                     let r3_y = r2_y + 36.0;
+                    ui.rounded(
+                        dx + 10.0,
+                        r3_y - 3.0,
+                        dw - 20.0,
+                        28.0,
+                        10.0,
+                        rgba(255, 255, 255, 7),
+                    );
                     ui.text(
-                        Face::Medium,
+                        Face::SemiBold,
                         9.5,
-                        dx + 14.0,
+                        dx + 16.0,
                         r3_y + 4.0,
                         muted_c,
                         "Stroke Color:",
@@ -4526,10 +4825,17 @@ pub fn draw_hud_editor(
                     let sw_w = 24.0;
                     for (i, (col, _)) in COLOR_SWATCHES.iter().enumerate() {
                         let sx = dx + 98.0 + i as f32 * (sw_w + 5.0);
-                        ui.rounded(sx, r3_y, sw_w, 22.0, 6.0, *col);
-                        if p.stroke_color == *col {
-                            ui.border(sx - 1.5, r3_y - 1.5, sw_w + 3.0, 25.0, 7.0, accent);
-                        }
+                        draw_m3_swatch_chip(
+                            &mut ui,
+                            sx,
+                            r3_y,
+                            sw_w,
+                            22.0,
+                            *col,
+                            p.stroke_color == *col,
+                            accent,
+                            text_c,
+                        );
                     }
                 }
                 _ => {
@@ -4573,7 +4879,7 @@ pub fn draw_hud_editor(
                                 body_y,
                                 half_w,
                                 42.0,
-                                9.0,
+                                12.0,
                                 if active { accent_soft } else { bg_hi },
                             );
                             ui.border(
@@ -4581,7 +4887,7 @@ pub fn draw_hud_editor(
                                 body_y,
                                 half_w,
                                 42.0,
-                                9.0,
+                                12.0,
                                 if active { accent } else { border_c },
                             );
                             ui.centered_fit(
@@ -4592,8 +4898,8 @@ pub fn draw_hud_editor(
                                 title,
                             );
                             ui.centered_fit(
-                                Face::Medium,
-                                10.2,
+                                Face::SemiBold,
+                                10.5,
                                 [ex + 4.0, body_y + 20.0, half_w - 8.0, 18.0],
                                 if active { text_c } else { muted_c },
                                 status,
@@ -4622,17 +4928,32 @@ pub fn draw_hud_editor(
                             } else {
                                 "Unassigned".into()
                             };
-                            ui.rounded(ex, body_y, ew, 42.0, 9.0, accent_soft);
-                            ui.border(ex, body_y, ew, 42.0, 9.0, accent);
+                            let has_binding = tok_name != "Unassigned" && tok_name != "None";
+                            ui.rounded(
+                                ex,
+                                body_y,
+                                ew,
+                                42.0,
+                                12.0,
+                                if has_binding { accent_soft } else { bg_hi },
+                            );
+                            ui.border(
+                                ex,
+                                body_y,
+                                ew,
+                                42.0,
+                                12.0,
+                                if has_binding { accent } else { border_c },
+                            );
                             ui.centered_fit(
                                 Face::SemiBold,
-                                9.5,
+                                9.0,
                                 [ex + 4.0, body_y + 4.0, ew - 8.0, 16.0],
-                                accent,
+                                if has_binding { accent } else { muted_c },
                                 &format!("EVENT SLOT #{}", slot + 1),
                             );
                             ui.centered_fit(
-                                Face::Medium,
+                                Face::SemiBold,
                                 10.5,
                                 [ex + 4.0, body_y + 20.0, ew - 8.0, 18.0],
                                 text_c,
@@ -4697,9 +5018,9 @@ pub fn draw_hud_editor(
                             by,
                             bw,
                             30.0,
-                            8.0,
+                            10.0,
                             if danger {
-                                color::with_alpha(danger_c, 0.22)
+                                color::with_alpha(danger_c, 0.24)
                             } else if on {
                                 accent_soft
                             } else {
@@ -4711,7 +5032,7 @@ pub fn draw_hud_editor(
                             by,
                             bw,
                             30.0,
-                            8.0,
+                            10.0,
                             if danger {
                                 danger_c
                             } else if on {
@@ -4738,13 +5059,24 @@ pub fn draw_hud_editor(
                     // Row 3 in Tab 2: Visible in Game [✓] | Visible in Menu [✓] | Preset Vis for All
                     let vy = by + 38.0;
                     let third = (dw - 28.0 - 8.0) / 3.0;
-                    ui.rounded(dx + 14.0, vy, third, 28.0, 8.0, bg_hi);
+                    ui.rounded(
+                        dx + 14.0,
+                        vy,
+                        third,
+                        28.0,
+                        10.0,
+                        if p.visible_in_game {
+                            accent_soft
+                        } else {
+                            bg_hi
+                        },
+                    );
                     ui.border(
                         dx + 14.0,
                         vy,
                         third,
                         28.0,
-                        8.0,
+                        10.0,
                         if p.visible_in_game { accent } else { border_c },
                     );
                     ui.m3_checkbox(
@@ -4756,13 +5088,24 @@ pub fn draw_hud_editor(
                     );
 
                     let vm_x = dx + 14.0 + third + 4.0;
-                    ui.rounded(vm_x, vy, third, 28.0, 8.0, bg_hi);
+                    ui.rounded(
+                        vm_x,
+                        vy,
+                        third,
+                        28.0,
+                        10.0,
+                        if p.visible_in_menu {
+                            accent_soft
+                        } else {
+                            bg_hi
+                        },
+                    );
                     ui.border(
                         vm_x,
                         vy,
                         third,
                         28.0,
-                        8.0,
+                        10.0,
                         if p.visible_in_menu { accent } else { border_c },
                     );
                     ui.m3_checkbox(
@@ -4774,8 +5117,8 @@ pub fn draw_hud_editor(
                     );
 
                     let pv_x = dx + 14.0 + (third + 4.0) * 2.0;
-                    ui.rounded(pv_x, vy, third, 28.0, 8.0, accent_soft);
-                    ui.border(pv_x, vy, third, 28.0, 8.0, accent);
+                    ui.rounded(pv_x, vy, third, 28.0, 10.0, accent_soft);
+                    ui.border(pv_x, vy, third, 28.0, 10.0, accent);
                     ui.centered_fit(
                         Face::SemiBold,
                         9.5,

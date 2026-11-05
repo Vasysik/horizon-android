@@ -65,6 +65,12 @@ class LauncherOverhaulTests(unittest.TestCase):
             "third_party/winit/src/platform_impl/android/mod.rs",
             "third_party/winit/src/platform_impl/android/mouse_state.rs",
             "launcher/src/skins/preview.rs",
+            "crates/horizon-client-render/src/gfx/pack_post.rs",
+            "crates/horizon-client-render/src/gfx/pack_atlas.rs",
+            "crates/horizon-client-render/src/gfx/pack_uniforms.rs",
+            "crates/horizon-client-render/src/gfx/arena.rs",
+            "crates/horizon-client-render/src/graphics.rs",
+            "crates/horizon-client/src/game/shader_packs.rs",
         ]
         for rel in modified_files:
             path = ROOT / rel
@@ -501,6 +507,61 @@ class LauncherOverhaulTests(unittest.TestCase):
         self.assertIn("Action::ToggleTouchVibrate", launcher_pages)
         self.assertIn('Row::Header("Movement & Look Sensitivity")', options_ui)
         self.assertIn("glyph_scratch: Vec<(f32, f32, Rect)>,", ui_theme)
+
+
+    def test_mali_g52_shaders_startup_freeze_arena_pooling_and_m3_controls_overhaul(self) -> None:
+        pack_post = (
+            ROOT / "crates/horizon-client-render/src/gfx/pack_post.rs"
+        ).read_text(encoding="utf-8")
+        pack_atlas = (
+            ROOT / "crates/horizon-client-render/src/gfx/pack_atlas.rs"
+        ).read_text(encoding="utf-8")
+        pack_uniforms = (
+            ROOT / "crates/horizon-client-render/src/gfx/pack_uniforms.rs"
+        ).read_text(encoding="utf-8")
+        arena = (ROOT / "crates/horizon-client-render/src/gfx/arena.rs").read_text(
+            encoding="utf-8"
+        )
+        graphics = (ROOT / "crates/horizon-client-render/src/graphics.rs").read_text(
+            encoding="utf-8"
+        )
+        gfx = (ROOT / "crates/horizon-client-render/src/gfx.rs").read_text(encoding="utf-8")
+        shader_packs = (
+            ROOT / "crates/horizon-client/src/game/shader_packs.rs"
+        ).read_text(encoding="utf-8")
+        game = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
+        startup_menu = (
+            ROOT / "crates/horizon-client/src/game/startup_menu.rs"
+        ).read_text(encoding="utf-8")
+        launcher_pages = (
+            ROOT / "crates/horizon-client/src/android/launcher_pages.rs"
+        ).read_text(encoding="utf-8")
+        touch_ui = (ROOT / "crates/horizon-client/src/touch_ui.rs").read_text(encoding="utf-8")
+
+        # 1. Shader pack compatibility on max_bind_groups=4 mobile GPUs & non-flat mc_Entity
+        self.assertIn("fn remap_bind_group(", pack_post)
+        self.assertIn("vertex_writable_storage: bool,", pack_post)
+        self.assertIn("pub fn has_any_pass(&self) -> bool", pack_post)
+        self.assertIn("pub fn terrain_inputs_with_ids(", pack_atlas)
+        self.assertIn('"endFlashIntensity"', pack_uniforms)
+        self.assertIn("pub fn has_active_shader_pack(&self) -> bool", gfx)
+        self.assertIn("PENDING_SHADER_JOB", shader_packs)
+
+        # 2. Startup / MC Title Menu freeze elimination on Android
+        self.assertIn('let rest_loader = if menu && !cfg!(target_os = "android") {', game)
+        self.assertIn('let android_boot_loading = cfg!(target_os = "android")', startup_menu)
+        self.assertIn("self.arena.prewarm(&self.device);", gfx)
+
+        # 3. Mali-G52 MC2 32 MiB 64-bit arena pages, spare page recycling & big.LITTLE worker cap
+        self.assertIn("spare: Vec<(wgpu::Buffer, u64, bool)>,", arena)
+        self.assertIn("pub fn prewarm(&mut self, device: &wgpu::Device)", arena)
+        self.assertIn("cores.saturating_sub(2).clamp(1, 4)", graphics)
+
+        # 4. Material Design 3 Expressive overhaul of Settings > Controls & Property Inspector
+        self.assertIn("SettingControl::SectionHeader(", launcher_pages)
+        self.assertIn("SettingControl::Slider {", launcher_pages)
+        self.assertIn("fn draw_m3_stepper_cell(", touch_ui)
+        self.assertIn("fn draw_m3_swatch_chip(", touch_ui)
 
 
 if __name__ == "__main__":

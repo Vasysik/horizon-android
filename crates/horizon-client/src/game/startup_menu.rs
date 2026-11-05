@@ -2332,7 +2332,12 @@ impl Loading {
             );
             return;
         }
-        if self.menu.pending.is_some() {
+        let android_boot_loading = cfg!(target_os = "android")
+            && self.window.is_some()
+            && self.loaded.is_none()
+            && !self.menu.options_open
+            && self.menu.controls.editor.is_none();
+        if self.menu.pending.is_some() || android_boot_loading {
             horizon_client::level_loading::draw_loading_overlay(
                 batch,
                 &gui.atlas,

@@ -507,17 +507,58 @@ fn draw_setting_card(
     subtitle: &str,
     right_control: SettingControl<'_>,
 ) {
+    if let SettingControl::SectionHeader(badge, icon) = right_control {
+        ui.rounded(x, y + 6.0, w, h - 10.0, 16.0, my3_surface());
+        ui.border(x, y + 6.0, w, h - 10.0, 16.0, my3_border());
+        ui.rounded(x + 12.0, y + 13.0, 34.0, 34.0, 11.0, my3_accent_soft());
+        ui.icon(icon, x + 20.0, y + 21.0, 18.0, my3_accent());
+        let text_max = (w - 170.0).max(90.0);
+        let fitted_title = ui.fit_text(Face::SemiBold, 13.5, title, text_max);
+        ui.text(
+            Face::SemiBold,
+            13.5,
+            x + 56.0,
+            y + 12.0,
+            my3_accent(),
+            &fitted_title,
+        );
+        let fitted_sub = ui.fit_text(Face::Regular, 11.5, subtitle, text_max);
+        ui.text(
+            Face::Regular,
+            11.5,
+            x + 56.0,
+            y + 31.0,
+            my3_muted(),
+            &fitted_sub,
+        );
+        let chip_w = (ui.measure(Face::SemiBold, 10.5, badge) + 22.0).clamp(64.0, 124.0);
+        let chip_x = x + w - chip_w - 14.0;
+        let chip_y = y + (h - 24.0) * 0.5 + 1.0;
+        ui.rounded(chip_x, chip_y, chip_w, 24.0, 12.0, my3_accent_soft());
+        ui.border(chip_x, chip_y, chip_w, 24.0, 12.0, my3_accent());
+        ui.centered_fit(
+            Face::SemiBold,
+            10.0,
+            [chip_x + 4.0, chip_y, chip_w - 8.0, 24.0],
+            my3_accent(),
+            badge,
+        );
+        return;
+    }
+
     let is_active_card = matches!(
         right_control,
-        SettingControl::Toggle(true, _) | SettingControl::Button(_, _, true)
+        SettingControl::Toggle(true, _)
+            | SettingControl::Button(_, _, true)
+            | SettingControl::TextField { active: true, .. }
     );
-    ui.rounded(x, y, w, h, 14.0, my3_card_bg());
+    ui.rounded(x, y, w, h, 16.0, my3_card_bg());
     ui.border(
         x,
         y,
         w,
         h,
-        14.0,
+        16.0,
         if is_active_card {
             color::with_alpha(my3_accent(), 0.55)
         } else {
@@ -535,7 +576,7 @@ fn draw_setting_card(
         );
     }
 
-    let text_max = (w - 220.0).max(90.0);
+    let text_max = (w - 236.0).max(90.0);
     let fitted_title = ui.fit_text(Face::SemiBold, 15.0, title, text_max);
     ui.text(
         Face::SemiBold,
@@ -556,6 +597,7 @@ fn draw_setting_card(
     );
 
     match right_control {
+        SettingControl::SectionHeader(..) => {}
         SettingControl::Toggle(on, action) => {
             let rect = [x + w - 122.0, y + (h - 38.0) * 0.5, 108.0, 38.0];
             list_targets.push((rect, action));
@@ -622,10 +664,62 @@ fn draw_setting_card(
             button(ui, targets, minus_rect, "-", minus_action, false);
             button(ui, targets, plus_rect, "+", plus_action, true);
         }
+        SettingControl::Slider {
+            value_label,
+            fraction,
+            minus_action,
+            plus_action,
+        } => {
+            let right_x = x + w - 14.0;
+            let plus_rect = [right_x - 34.0, y + (h - 34.0) * 0.5, 34.0, 34.0];
+            let track_w = 112.0f32.min((w * 0.26).max(76.0));
+            let track_x = plus_rect[0] - track_w - 6.0;
+            let minus_rect = [track_x - 34.0 - 6.0, y + (h - 34.0) * 0.5, 34.0, 34.0];
+
+            let pill_y = y + (h - 36.0) * 0.5;
+            ui.rounded(track_x, pill_y, track_w, 36.0, 12.0, my3_surface());
+            ui.border(track_x, pill_y, track_w, 36.0, 12.0, my3_border());
+
+            // M3 Expressive Value Label + Linear Track Bar with Active Thumb
+            let fitted_v = ui.fit_text(Face::SemiBold, 12.0, value_label, track_w - 12.0);
+            let tw = ui.measure(Face::SemiBold, 12.0, &fitted_v);
+            ui.text(
+                Face::SemiBold,
+                12.0,
+                track_x + (track_w - tw) * 0.5,
+                pill_y + 4.0,
+                my3_accent(),
+                &fitted_v,
+            );
+
+            let bar_x = track_x + 10.0;
+            let bar_w = (track_w - 20.0).max(24.0);
+            let bar_y = pill_y + 24.0;
+            let t = fraction.clamp(0.0, 1.0);
+            ui.rounded(bar_x, bar_y, bar_w, 6.0, 3.0, my3_surface_high());
+            let fill_w = (bar_w * t).max(6.0);
+            ui.rounded(bar_x, bar_y, fill_w, 6.0, 3.0, my3_accent());
+            let thumb_x = (bar_x + bar_w * t - 2.0).clamp(bar_x, bar_x + bar_w - 4.0);
+            ui.rounded(thumb_x, bar_y - 2.0, 4.0, 10.0, 2.0, my3_text());
+
+            let left_half = [track_x, pill_y, track_w * 0.5, 36.0];
+            let right_half = [track_x + track_w * 0.5, pill_y, track_w * 0.5, 36.0];
+            if let Some(c) = ui.clip_rect(left_half) {
+                targets.push((c, minus_action));
+            }
+            if let Some(c) = ui.clip_rect(right_half) {
+                targets.push((c, plus_action));
+            }
+            list_targets.push((minus_rect, minus_action));
+            list_targets.push((plus_rect, plus_action));
+            button(ui, targets, minus_rect, "-", minus_action, false);
+            button(ui, targets, plus_rect, "+", plus_action, true);
+        }
     }
 }
 
 enum SettingControl<'a> {
+    SectionHeader(&'a str, Icon),
     Toggle(bool, Action),
     Button(&'a str, Action, bool),
     TextField {
@@ -636,6 +730,12 @@ enum SettingControl<'a> {
         action: Action,
     },
     Stepper(&'a str, Action, Action),
+    Slider {
+        value_label: &'a str,
+        fraction: f32,
+        minus_action: Action,
+        plus_action: Action,
+    },
 }
 
 fn page_icon(page: Page) -> Icon {
@@ -4275,8 +4375,8 @@ impl Launcher {
                 ui.set_clip(None);
             }
             SettingsCategory::Controls => {
-                let count = 22;
-                let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
+                let count = 26;
+                let max_scroll = (74.0 + count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
@@ -4348,12 +4448,23 @@ impl Launcher {
                 let btn_scale = format!("{:.0}%", touch_cfg.button_scale * 100.0);
                 let ptr_size = format!("{:.0}%", touch_cfg.virtual_mouse_pointer_scale * 100.0);
                 let gyro_sens = format!("{:.0}%", touch_cfg.gyro_sensitivity * 100.0);
+                let touch_sens_frac = ((touch_cfg.sensitivity - 0.20) / 2.30).clamp(0.0, 1.0);
+                let btn_scale_frac = ((touch_cfg.button_scale - 0.50) / 1.50).clamp(0.0, 1.0);
+                let ptr_size_frac =
+                    ((touch_cfg.virtual_mouse_pointer_scale - 0.50) / 1.50).clamp(0.0, 1.0);
+                let gyro_sens_frac = ((touch_cfg.gyro_sensitivity - 0.20) / 2.80).clamp(0.0, 1.0);
+                let mouse_sens_frac = opts.sensitivity.clamp(0.0, 1.0);
                 let scheme_str = touch_cfg.mode.label();
                 let zone_str = touch_cfg.joystick_style.move_area.label();
                 let invert_y_active = opts.invert_y || touch_cfg.invert_y;
                 let sprint_latch_active = opts.toggle_sprint || touch_cfg.sprint_toggle;
 
-                let rows: [(&str, &str, SettingControl<'_>); 21] = [
+                let rows: [(&str, &str, SettingControl<'_>); 25] = [
+                    (
+                        "LAYOUT EDITOR & PRESET PROFILES",
+                        "Visual HUD canvas editor, multi-profile switcher, duplication & JSON export",
+                        SettingControl::SectionHeader(sys_name, Icon::MenuEquals),
+                    ),
                     (
                         &editor_title,
                         editor_sub,
@@ -4403,13 +4514,34 @@ impl Launcher {
                         },
                     ),
                     (
+                        "Export Active Control Preset",
+                        "Export current layout JSON to Horizon Reports & controls folder",
+                        SettingControl::Button("Export JSON", Action::ExportControlProfile, false),
+                    ),
+                    (
+                        "CAMERA LOOK & AIMING SENSITIVITY",
+                        "Touch swipe responsiveness, 3D look multiplier, Y-axis inversion & crosshair mode",
+                        SettingControl::SectionHeader("CAMERA", Icon::Shaders),
+                    ),
+                    (
                         "Sensitivity (Touch Look Speed)",
                         "Direct finger drag camera rotation speed multiplier",
-                        SettingControl::Stepper(
-                            &touch_sens,
-                            Action::TouchSensDelta(-0.10),
-                            Action::TouchSensDelta(0.10),
-                        ),
+                        SettingControl::Slider {
+                            value_label: &touch_sens,
+                            fraction: touch_sens_frac,
+                            minus_action: Action::TouchSensDelta(-0.10),
+                            plus_action: Action::TouchSensDelta(0.10),
+                        },
+                    ),
+                    (
+                        "3D Camera Base Sensitivity",
+                        "Base in-game 3D look sensitivity stored in options.txt",
+                        SettingControl::Slider {
+                            value_label: &mouse_sens,
+                            fraction: mouse_sens_frac,
+                            minus_action: Action::MouseSensDelta(-0.05),
+                            plus_action: Action::MouseSensDelta(0.05),
+                        },
                     ),
                     (
                         "Invert Y-Axis",
@@ -4422,13 +4554,19 @@ impl Launcher {
                         SettingControl::Toggle(touch_cfg.crosshair(), Action::ToggleSplitControls),
                     ),
                     (
+                        "MOVEMENT, HUD SCALE & ERGONOMICS",
+                        "On-screen button scale, thumbstick vs D-Pad, active touch zone & haptics",
+                        SettingControl::SectionHeader("ERGONOMICS", Icon::Settings),
+                    ),
+                    (
                         "HUD Button Scale",
                         "Global size multiplier for on-screen touch buttons",
-                        SettingControl::Stepper(
-                            &btn_scale,
-                            Action::ButtonScaleDelta(-0.10),
-                            Action::ButtonScaleDelta(0.10),
-                        ),
+                        SettingControl::Slider {
+                            value_label: &btn_scale,
+                            fraction: btn_scale_frac,
+                            minus_action: Action::ButtonScaleDelta(-0.10),
+                            plus_action: Action::ButtonScaleDelta(0.10),
+                        },
                     ),
                     (
                         "Movement Control Scheme",
@@ -4469,6 +4607,11 @@ impl Launcher {
                         SettingControl::Toggle(touch_cfg.vibrate, Action::ToggleTouchVibrate),
                     ),
                     (
+                        "VIRTUAL MOUSE & GYROSCOPE MOTION",
+                        "Windows 11 menu cursor scaling and motion-assisted gyroscope aiming",
+                        SettingControl::SectionHeader("POINTER & GYRO", Icon::Play),
+                    ),
+                    (
                         "Authoritative Virtual Mouse",
                         "Enable virtual mouse pointer in menus and on-demand in GoyControl",
                         SettingControl::Toggle(
@@ -4479,11 +4622,12 @@ impl Launcher {
                     (
                         "Virtual Cursor Scale",
                         "Adjust size of the Windows 11 virtual mouse arrow in menus",
-                        SettingControl::Stepper(
-                            &ptr_size,
-                            Action::PointerSizeDelta(-0.10),
-                            Action::PointerSizeDelta(0.10),
-                        ),
+                        SettingControl::Slider {
+                            value_label: &ptr_size,
+                            fraction: ptr_size_frac,
+                            minus_action: Action::PointerSizeDelta(-0.10),
+                            plus_action: Action::PointerSizeDelta(0.10),
+                        },
                     ),
                     (
                         "Gyroscope Aiming",
@@ -4493,43 +4637,38 @@ impl Launcher {
                     (
                         "Gyroscope Sensitivity",
                         "Fine-tune motion tilt speed when Gyroscope Aiming is enabled",
-                        SettingControl::Stepper(
-                            &gyro_sens,
-                            Action::GyroSensDelta(-0.10),
-                            Action::GyroSensDelta(0.10),
-                        ),
-                    ),
-                    (
-                        "3D Camera Base Sensitivity",
-                        "Base in-game 3D look sensitivity stored in options.txt",
-                        SettingControl::Stepper(
-                            &mouse_sens,
-                            Action::MouseSensDelta(-0.05),
-                            Action::MouseSensDelta(0.05),
-                        ),
-                    ),
-                    (
-                        "Export Active Control Preset",
-                        "Export current layout JSON to Horizon Reports & controls folder",
-                        SettingControl::Button("Export JSON", Action::ExportControlProfile, false),
+                        SettingControl::Slider {
+                            value_label: &gyro_sens,
+                            fraction: gyro_sens_frac,
+                            minus_action: Action::GyroSensDelta(-0.10),
+                            plus_action: Action::GyroSensDelta(0.10),
+                        },
                     ),
                 ];
 
-                // The same two radio cards as the in-game floating menu, so
-                // choosing a control system looks identical in both places.
+                ui.set_clip(Some([
+                    content_x - 2.0,
+                    list_top,
+                    content_w + 4.0,
+                    (list_bottom - list_top).max(1.0),
+                ]));
+
+                // M3 Expressive Control Engine Hero Selector Cards
                 let picker_y = list_top - self.catalog.scroll;
-                if picker_y + 58.0 >= list_top && picker_y <= list_bottom {
-                    let half_w = (content_w - 8.0) * 0.5;
-                    for (i, (title, sub, selected, action)) in [
+                if picker_y + 66.0 >= list_top && picker_y <= list_bottom {
+                    let half_w = (content_w - 10.0) * 0.5;
+                    for (i, (title, sub, badge, selected, action)) in [
                         (
                             "MCPE (Default)",
-                            "Vanilla touch controls",
+                            "Vanilla touch sprites, D-Pad & thumbstick",
+                            "CLASSIC HUD",
                             is_mcpe,
                             Action::SelectControlMode(horizon_client::touch::ControlStyle::Mcpe),
                         ),
                         (
                             "GoyControl",
-                            "Custom layout with more options",
+                            "Custom multi-bind HUD, macros & pass-through",
+                            "PRO OVERLAY",
                             is_goy,
                             Action::SelectControlMode(
                                 horizon_client::touch::ControlStyle::GoyControl,
@@ -4539,16 +4678,18 @@ impl Launcher {
                     .into_iter()
                     .enumerate()
                     {
-                        let rx = content_x + i as f32 * (half_w + 8.0);
-                        let rect = [rx, picker_y, half_w, 58.0];
-                        self.targets.push((rect, action));
+                        let rx = content_x + i as f32 * (half_w + 10.0);
+                        let rect = [rx, picker_y, half_w, 66.0];
+                        if let Some(c) = ui.clip_rect(rect) {
+                            self.targets.push((c, action));
+                        }
                         self.list_targets.push((rect, action));
                         ui.rounded(
                             rx,
                             picker_y,
                             half_w,
-                            58.0,
-                            14.0,
+                            66.0,
+                            18.0,
                             if selected {
                                 my3_surface()
                             } else {
@@ -4559,59 +4700,78 @@ impl Launcher {
                             rx,
                             picker_y,
                             half_w,
-                            58.0,
-                            14.0,
+                            66.0,
+                            18.0,
                             if selected {
                                 my3_accent()
                             } else {
                                 my3_card_border()
                             },
                         );
-                        let rad_x = rx + 14.0;
-                        let rad_y = picker_y + 21.0;
+                        if selected {
+                            ui.rounded(rx + 4.0, picker_y + 12.0, 4.0, 42.0, 2.0, my3_accent());
+                        }
+                        let rad_x = rx + 16.0;
+                        let rad_y = picker_y + 23.0;
                         ui.stroke_rounded(
                             rad_x,
                             rad_y,
-                            16.0,
-                            16.0,
-                            8.0,
-                            1.6,
+                            20.0,
+                            20.0,
+                            10.0,
+                            1.8,
                             if selected { my3_accent() } else { my3_muted() },
                         );
                         if selected {
-                            ui.rounded(rad_x + 4.0, rad_y + 4.0, 8.0, 8.0, 4.0, my3_accent());
+                            ui.rounded(rad_x + 5.0, rad_y + 5.0, 10.0, 10.0, 5.0, my3_accent());
                         }
-                        let text_x = rx + 38.0;
-                        let max_w = (half_w - 46.0).max(40.0);
-                        let fitted = ui.fit_text(Face::SemiBold, 14.0, title, max_w);
+                        let chip_w = 78.0;
+                        let chip_x = rx + half_w - chip_w - 10.0;
+                        ui.rounded(
+                            chip_x,
+                            picker_y + 10.0,
+                            chip_w,
+                            20.0,
+                            10.0,
+                            if selected {
+                                my3_accent_soft()
+                            } else {
+                                my3_surface_high()
+                            },
+                        );
+                        ui.centered_fit(
+                            Face::SemiBold,
+                            8.5,
+                            [chip_x + 4.0, picker_y + 10.0, chip_w - 8.0, 20.0],
+                            if selected { my3_accent() } else { my3_muted() },
+                            if selected { "ACTIVE" } else { badge },
+                        );
+                        let text_x = rx + 44.0;
+                        let max_w = (half_w - 134.0).max(56.0);
+                        let fitted = ui.fit_text(Face::SemiBold, 14.5, title, max_w);
                         ui.text(
                             Face::SemiBold,
-                            14.0,
+                            14.5,
                             text_x,
-                            picker_y + 12.0,
+                            picker_y + 11.0,
                             my3_text(),
                             &fitted,
                         );
-                        let fitted_sub = ui.fit_text(Face::Regular, 11.5, sub, max_w);
+                        let sub_max_w = (half_w - 54.0).max(60.0);
+                        let fitted_sub = ui.fit_text(Face::Regular, 11.5, sub, sub_max_w);
                         ui.text(
                             Face::Regular,
                             11.5,
                             text_x,
-                            picker_y + 33.0,
+                            picker_y + 36.0,
                             my3_muted(),
                             &fitted_sub,
                         );
                     }
                 }
 
-                ui.set_clip(Some([
-                    content_x - 2.0,
-                    list_top,
-                    content_w + 4.0,
-                    (list_bottom - list_top).max(1.0),
-                ]));
                 for (i, (title, sub, ctrl)) in rows.into_iter().enumerate() {
-                    let y = list_top + 66.0 + i as f32 * step_y - self.catalog.scroll;
+                    let y = list_top + 74.0 + i as f32 * step_y - self.catalog.scroll;
                     if y + card_h < list_top || y > list_bottom {
                         continue;
                     }

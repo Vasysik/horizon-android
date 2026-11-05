@@ -4332,6 +4332,9 @@ impl Renderer {
         self.active_animated_layers = vec![0; active_layer_words];
         self.sprite_minimum_size = sprite_minimum_size;
         self.emission_stats = emission_stats;
+        self.arena.prewarm(&self.device);
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::Poll);
         Ok(())
     }
     /// The world's depth, which occlusion culling's test and post effects may read.
@@ -5297,6 +5300,13 @@ impl Renderer {
         }
         report
     }
+    /// Whether the loaded `shaders/` pack has at least one active pass.
+    pub fn has_active_shader_pack(&self) -> bool {
+        self.pack_post
+            .as_ref()
+            .and_then(|(_, p)| p.as_ref())
+            .is_some_and(pack_post::PackPost::has_any_pass)
+    }
     /// Drops the running shader pack, of either kind.
     pub fn drop_shader_packs(&mut self) {
         self.pack_post = None;
@@ -5396,11 +5406,19 @@ impl Renderer {
         }
         // Flat draws whenever the device has them (`render` keeps them on with a pack).
         self.pack_terrain_flat = self.flat.is_some() && self.flat_on;
-        Some(
-            self.pack_atlas
-                .as_ref()?
-                .terrain_inputs(self.pack_terrain_flat),
-        )
+        let vertex_storage = self
+            .adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+            && !std::env::var("HORIZON_SHADER_PACK_WITHOUT")
+                .unwrap_or_default()
+                .split(',')
+                .any(|w| w.trim() == "vertex-storage");
+        Some(self.pack_atlas.as_ref()?.terrain_inputs_with_ids(
+            self.pack_terrain_flat,
+            self.pack_terrain_flat || vertex_storage,
+        ))
     }
     /// Times the shader pack's passes on the GPU while `on` (the F3 overlay is open), or always
     /// with `HORIZON_SHADER_PACK_TIMING`.
@@ -8222,7 +8240,7 @@ impl Renderer {
                 |rp: &mut wgpu::RenderPass<'_>,
                  list: pack_post::TerrainList,
                  page: &dyn Fn(&mut wgpu::RenderPass<'_>, u32),
-                 geometry: Option<(u32, &wgpu::BindGroupLayout)>| {
+                 geometry: Option<(u32, u32, &wgpu::BindGroupLayout)>| {
                     use pack_post::TerrainList as L;
                     let shadow = matches!(list, L::ShadowSolid | L::ShadowTranslucent);
                     if !(if shadow {
@@ -8242,7 +8260,7 @@ impl Renderer {
                                 L::ShadowTranslucent => &flat.calls[shadow_translucent..],
                             };
                             match geometry {
-                                Some((instances, layout)) => {
+                                Some((instances, group_slot, layout)) => {
                                     let indices =
                                         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                             label: Some("Shader pack geometry indices"),
@@ -8252,7 +8270,7 @@ impl Renderer {
                                                 resource: flat.indices.as_entire_binding(),
                                             }],
                                         });
-                                    rp.set_bind_group(5, &indices, &[]);
+                                    rp.set_bind_group(group_slot, &indices, &[]);
                                     let vertices = |p| self.arena.buffer(p);
                                     flat.draw_geometry(rp, calls, vertices, page, instances);
                                 }

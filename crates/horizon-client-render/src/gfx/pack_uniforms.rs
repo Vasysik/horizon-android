@@ -173,6 +173,8 @@ pub const NAMES: &[&str] = &[
     "playerLookVector",
     "playerBodyVector",
     "firstPersonCamera",
+    "endFlashIntensity",
+    "endFlashPosition",
 ];
 
 /// Values carried from frame to frame.
@@ -439,6 +441,8 @@ impl FrameUniforms {
                 "heldItemId2" => Value::i(&[inputs.held_items[1]]),
                 "heldBlockLightValue" => Value::i(&[inputs.held_light[0]]),
                 "heldBlockLightValue2" => Value::i(&[inputs.held_light[1]]),
+                "endFlashIntensity" => Value::f(&[0.0]),
+                "endFlashPosition" => Value::f(&[0.0, 100.0, 0.0]),
                 // renderStage is NONE outside gbuffers draws.
                 _ => Value::i(&[0]),
             }

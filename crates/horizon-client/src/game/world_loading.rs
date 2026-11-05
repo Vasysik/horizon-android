@@ -385,6 +385,24 @@ pub(super) fn preload_world_data(
     }
 }
 
+/// Reads the same world data as `preload_world_data` on the calling thread.
+/// Android's loading worker runs this before the title menu takes over, so
+/// the first world handoff never waits for the worldgen bundle or loot data.
+pub(super) fn preload_world_data_now(
+    resources: &std::path::Path,
+    registry: &'static horizon_world::registry::BlockRegistry,
+) {
+    if let Ok(data) = horizon_client::vanillagen::shared_data(&resources.join("worldgen"), registry)
+    {
+        let _ = data.prepare_decoration("minecraft:normal", "minecraft:overworld");
+    }
+    let _ = horizon_client::structure_blocks::loot_data(
+        resources,
+        &horizon_world::loot::PackOverlay::NONE,
+    );
+    let _ = super::lan::sync_data(resources, &horizon_world::loot::PackOverlay::NONE);
+}
+
 /// A launch that names a world (`--world`, `--quickPlaySingleplayer`): the
 /// same preload, started as soon as the block registry and the biomes are
 /// loaded, so it overlaps the rest of the startup instead of the world's

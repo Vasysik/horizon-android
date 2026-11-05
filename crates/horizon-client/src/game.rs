@@ -19555,7 +19555,9 @@ fn load_resources(
     // The block entity renderer's face visibility: the meshes' own, whose
     // shapes already hold their faces, not a second load of the same tables.
     let visibility = pack.context.tables.visibility.clone();
-    let rest_loader = if menu {
+    // On Android, complete all rest resources and worldgen preload on the loading worker
+    // before transitioning to the MC Title Menu so the title menu never freezes on handoff.
+    let rest_loader = if menu && !cfg!(target_os = "android") {
         let resources = resources.clone();
         let root = root.clone();
         let rest_progress = progress.clone();
@@ -19607,6 +19609,15 @@ fn load_resources(
             .rest
             .set(rest)
             .map_err(|_| "world resources already loaded")?;
+        if menu {
+            world_loading::preload_world_data_now(&root, assets.registry);
+            progress.set(9);
+            horizon_client::telemetry::mark_rest_ready();
+            log::info!(
+                "Horizon: rest-ready after {} ms",
+                started.elapsed().as_millis()
+            );
+        }
         None
     };
     Ok(Loaded {
@@ -20581,6 +20592,7 @@ impl Loading {
                 renderer.gpu_times.clear();
             }
         }
+        let _ = horizon_client::spans::take();
         if !self.shown {
             self.shown = true;
             log::info!(
@@ -20702,6 +20714,7 @@ impl Loading {
         game.panorama_rotation = self.panorama_rotation;
         self.menu.handoff(&mut game);
         game.apply_settings();
+        let _ = horizon_client::spans::take();
         game.previous = Instant::now();
         log::info!(
             "Horizon: startup handoff {} ms (renderer {} ms, start_game {} ms)",
