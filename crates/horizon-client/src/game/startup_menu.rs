@@ -1326,7 +1326,11 @@ impl Loading {
                 horizon_client::touch_ui::apply_editor_or_preset_output(
                     None,
                     self.menu.touch.preset_dialog.as_mut(),
-                    &horizon_client::osk::Output::Key(code),
+                    &match code {
+                        KeyCode::Backspace => horizon_client::osk::Output::Backspace,
+                        KeyCode::Enter => horizon_client::osk::Output::Enter,
+                        _ => horizon_client::osk::Output::Close,
+                    },
                 );
                 return Ok(());
             }
@@ -2459,6 +2463,7 @@ mod tests {
                 size: 1,
                 pixels: [96, 110, 111, 255].repeat(6),
             }),
+            sounds: None,
         }
     }
 

@@ -341,6 +341,9 @@ impl Launcher {
                 size: 1,
                 pixels: [0u8; 4].repeat(6),
             }),
+            sounds: Some(horizon_client::sound_events::SoundRegistry::load(
+                &atlas_root,
+            )),
         };
         self.renderer = Some(game::loading_renderer(
             window.clone(),
