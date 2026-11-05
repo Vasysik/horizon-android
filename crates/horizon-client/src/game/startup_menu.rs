@@ -1815,6 +1815,10 @@ mod tests {
             receiver,
             loaded: None,
             renderer_job: None,
+            renderer_job_gl: false,
+            backgrounded: false,
+            surface_lost: false,
+            cancel_renderer: false,
             prepared_renderer: None,
             delivered: false,
             handle: None,
@@ -1826,27 +1830,30 @@ mod tests {
 
     #[test]
     fn renderer_preparation_does_not_wait_for_its_worker() {
-        let (_sender, receiver) = std::sync::mpsc::channel();
-        let (release, wait) = std::sync::mpsc::channel();
-        let mut loading = loading(receiver);
-        loading.renderer_job = Some(std::thread::spawn(move || {
-            wait.recv().unwrap();
-            Err("test renderer failure".into())
-        }));
-        loading.prepare_renderer().unwrap();
-        assert!(!loading.renderer_job.as_ref().unwrap().is_finished());
-        release.send(()).unwrap();
-        while !loading.renderer_job.as_ref().unwrap().is_finished() {
-            std::thread::yield_now();
+        for gl in [false, true] {
+            let (_sender, receiver) = std::sync::mpsc::channel();
+            let (release, wait) = std::sync::mpsc::channel();
+            let mut loading = loading(receiver);
+            loading.renderer_job_gl = gl;
+            loading.renderer_job = Some(std::thread::spawn(move || {
+                wait.recv().unwrap();
+                Err("test renderer failure".into())
+            }));
+            loading.prepare_renderer().unwrap();
+            assert!(!loading.renderer_job.as_ref().unwrap().is_finished());
+            release.send(()).unwrap();
+            while !loading.renderer_job.as_ref().unwrap().is_finished() {
+                std::thread::yield_now();
+            }
+            assert!(
+                loading
+                    .prepare_renderer()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("test renderer failure")
+            );
+            assert!(loading.renderer_job.is_none());
         }
-        assert!(
-            loading
-                .prepare_renderer()
-                .unwrap_err()
-                .to_string()
-                .contains("test renderer failure")
-        );
-        assert!(loading.renderer_job.is_none());
     }
 
     #[test]

@@ -9,6 +9,7 @@ path = "../horizon-client/src/android_main.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+self_cell = "1.3"
 horizon-client-render = { path = "../horizon-client-render" }
 horizon-chat-filter = { path = "../horizon-chat-filter" }
 horizon-narrator = { path = "../horizon-narrator" }
