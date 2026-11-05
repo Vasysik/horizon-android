@@ -5136,12 +5136,12 @@ impl Game<'_> {
             if let Some(tp) = r.tab_players.get(&uuid_u128) {
                 resolved_name = Some(tp.name.clone());
                 if let Some(s) = r.skins.get(&uuid_u128) {
-                    custom_skin = Some(s.clone());
+                    custom_skin = Some((s.clone(), s.contains("/slim/")));
                 }
             } else if let Some(pname) = r.players.get(&uuid_u128) {
                 resolved_name = Some(pname.clone());
                 if let Some(s) = r.skins.get(&uuid_u128) {
-                    custom_skin = Some(s.clone());
+                    custom_skin = Some((s.clone(), s.contains("/slim/")));
                 }
             }
 
@@ -5160,7 +5160,7 @@ impl Game<'_> {
                     matched_uuid = u;
                     resolved_name = Some(tp.name.clone());
                     if let Some(s) = r.skins.get(&u) {
-                        custom_skin = Some(s.clone());
+                        custom_skin = Some((s.clone(), s.contains("/slim/")));
                     }
                 } else if let Some((&u, pname)) = r
                     .players
@@ -5170,7 +5170,7 @@ impl Game<'_> {
                     matched_uuid = u;
                     resolved_name = Some(pname.clone());
                     if let Some(s) = r.skins.get(&u) {
-                        custom_skin = Some(s.clone());
+                        custom_skin = Some((s.clone(), s.contains("/slim/")));
                     }
                 }
             }
