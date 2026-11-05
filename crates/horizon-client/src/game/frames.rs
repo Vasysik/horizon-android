@@ -477,7 +477,10 @@ impl Game<'_> {
             self.cull_entity_vertices(out, entity_start);
             if let Some(id) = map {
                 // ItemFrameRenderer: the map fills the face, in 90-degree steps.
-                let depth = if f.invisible { 0.5 } else { 0.4375 };
+                // 2 mm off the backboard's front plane, toward the viewer (local
+                // +z points into the supporting block): a flat quad exactly on
+                // the frame model's face z-fights with it at any distance.
+                let depth = if f.invisible { 0.498 } else { 0.4355 };
                 // A glow frame's map is 15728850 = 0xF000D2 (sky coordinate 240,
                 // block coordinate 210), not full bright.
                 let item_light = if f.glow { 240 | 210 << 8 } else { packed };
@@ -497,7 +500,10 @@ impl Game<'_> {
             };
             // `GlowItemFrame` items render full bright (15728880).
             let item_light = if f.glow { 0xFF } else { light };
-            let depth = if f.invisible { 0.5 } else { 0.4375 };
+            // The same 2 mm lift toward the viewer: flat items (paper, maps,
+            // posters) sit exactly on the frame model's front plane otherwise
+            // and flicker against it.
+            let depth = if f.invisible { 0.498 } else { 0.4355 };
             let m = pose
                 * glam::DMat4::from_translation(glam::DVec3::new(0.0, 0.0, depth))
                 * glam::DMat4::from_rotation_z((f64::from(f.rotation) * 45.0).to_radians())

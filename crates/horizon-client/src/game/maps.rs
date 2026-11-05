@@ -1260,7 +1260,10 @@ impl Game<'_> {
                 });
             }
         };
-        let z = -0.01;
+        // 2 mm behind the pose's depth plane (map units, /128 by the pose's
+        // scale): keeps the sheet clear of whatever it is mounted on at every
+        // distance a phone's reversed-Z depth buffer resolves.
+        let z = -0.25;
         quad(
             [
                 [0.0, 128.0, z],
@@ -1290,7 +1293,12 @@ impl Game<'_> {
             let Some(s) = self.gui.atlas.sprites.get(d.sprite).copied() else {
                 continue;
             };
-            let dm = decoration_pose(d, -0.02 - count as f32 * 0.001);
+            // Vanilla stacks decorations 0.02 + 0.001 map units off the sheet,
+            // under 0.2 mm apart: past a few metres the depth buffer cannot
+            // tell them from the map and they flicker (z-fighting). 4 mm off
+            // the sheet and 2 mm apart is invisible to the eye and stays
+            // resolvable across a room.
+            let dm = decoration_pose(d, -0.5 - count as f32 * 0.25);
             let p = |x: f32, y: f32| dm.transform_point3(glam::Vec3::new(x, y, 0.0)).to_array();
             let mut q = |corners: [[f32; 3]; 4], uv: [[f32; 2]; 4]| {
                 for (c, uv) in corners.into_iter().zip(uv) {
