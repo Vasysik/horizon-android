@@ -54,6 +54,7 @@ struct SenderStream {
     target_r: f32,
     pub kind: VoiceSourceKind,
     pub last_known_pos: Option<[f32; 3]>,
+    pub last_pos_time: Option<Instant>,
     last_push: Instant,
 }
 
@@ -75,6 +76,7 @@ impl SenderStream {
                 VoiceSourceKind::Location { pos, .. } => Some(pos),
                 _ => None,
             },
+            last_pos_time: None,
             last_push: Instant::now(),
         }
     }
@@ -201,6 +203,15 @@ impl VoiceMixer {
         true
     }
 
+    /// Checks if a sender has received voice audio packets within the last 350ms.
+    pub fn is_sender_talking(&self, sender_uuid: u128) -> bool {
+        if let Some(stream) = self.streams.get(&sender_uuid) {
+            Instant::now().duration_since(stream.last_push) <= Duration::from_millis(350)
+        } else {
+            false
+        }
+    }
+
     pub fn touch_culled_sender(&mut self, uuid: u128, kind: VoiceSourceKind) {
         let stream = self
             .streams
@@ -218,14 +229,16 @@ impl VoiceMixer {
         }
     }
 
-    /// Snapshot of every sender, its voice kind, last known 3D position, and whether it was active in the last 1s.
+    /// Snapshot of every sender, its voice kind, last known 3D position, and whether its position was updated in the last 2s.
     pub fn sources(&self) -> Vec<(u128, VoiceSourceKind, Option<[f32; 3]>, bool)> {
         let now = Instant::now();
         self.streams
             .iter()
             .map(|(u, s)| {
-                let active = now.duration_since(s.last_push) <= Duration::from_secs(1);
-                (*u, s.kind, s.last_known_pos, active)
+                let pos_recent = s.last_pos_time.map_or(false, |t| {
+                    now.duration_since(t) <= Duration::from_millis(2000)
+                });
+                (*u, s.kind, s.last_known_pos, pos_recent)
             })
             .collect()
     }
@@ -246,6 +259,7 @@ impl VoiceMixer {
                 stream.target_r = *right;
                 if let Some(p) = pos {
                     stream.last_known_pos = Some(*p);
+                    stream.last_pos_time = Some(now);
                 }
             }
         }

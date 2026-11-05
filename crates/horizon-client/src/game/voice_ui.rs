@@ -6,12 +6,42 @@
 use super::{Game, Screen};
 use horizon_client::hud::HudBatch;
 use horizon_client::ui;
+use horizon_client::voice::PlayerSvcStatus;
 use horizon_client::voice::udp_worker::UdpConnectionState;
 use horizon_client::voice::ui::VoiceHudStatus;
 use horizon_protocol::packets::configuration::CustomPayload;
 use horizon_protocol::packets::play::Serverbound as S;
 
 impl<'a> Game<'a> {
+    /// Compiles and sorts players for the Adjust Player Volumes menu based on filter setting.
+    pub(crate) fn voice_filtered_players(&self) -> Vec<(u128, String, PlayerSvcStatus)> {
+        let mut list: Vec<(u128, String, PlayerSvcStatus)> = self
+            .voice
+            .known_players
+            .iter()
+            .map(|(u, n)| (*u, n.clone(), self.voice.player_svc_status(*u, n)))
+            .filter(|(u, _, status)| {
+                if !self.voice.filter_svc_only {
+                    true
+                } else {
+                    *status != PlayerSvcStatus::NoSvc
+                        || self.voice.config.player_volumes.contains_key(u)
+                }
+            })
+            .collect();
+
+        list.sort_by(|a, b| {
+            let rank = |s: PlayerSvcStatus| match s {
+                PlayerSvcStatus::Talking => 0,
+                PlayerSvcStatus::Connected => 1,
+                PlayerSvcStatus::Disabled => 2,
+                PlayerSvcStatus::NoSvc => 3,
+            };
+            rank(a.2).cmp(&rank(b.2)).then_with(|| a.1.cmp(&b.1))
+        });
+        list
+    }
+
     /// Renders bottom-left voice chat status indicator badge.
     pub(super) fn draw_voice_hud_indicator(&mut self, batch: &mut HudBatch) {
         if self.screen != Screen::Playing {
@@ -145,7 +175,8 @@ impl<'a> Game<'a> {
                 true,
             );
 
-            let total_players = self.voice.known_players.len();
+            let filtered_players = self.voice_filtered_players();
+            let total_players = filtered_players.len();
             const PLAYERS_PER_PAGE: usize = 5;
             let total_pages = if total_players == 0 {
                 1
@@ -158,7 +189,7 @@ impl<'a> Game<'a> {
                 .min(total_pages.saturating_sub(1));
 
             let page_info = format!(
-                "Page {} of {} | {} player(s) detected",
+                "Page {} of {} | {} player(s)",
                 current_page + 1,
                 total_pages,
                 total_players
@@ -172,11 +203,36 @@ impl<'a> Game<'a> {
                 true,
             );
 
+            // Filter button toggle
+            let filter_lbl = if self.voice.filter_svc_only {
+                "Filter: SVC Users"
+            } else {
+                "Filter: All Players"
+            };
+            let filter_btn_w = 110.0;
+            let filter_btn_x = x + modal_w - 15.0 - filter_btn_w;
+            draw_btn(
+                batch,
+                &self.gui.atlas,
+                self.cursor,
+                filter_btn_x,
+                y + 20.0,
+                filter_btn_w,
+                16.0,
+                filter_lbl,
+                self.voice.filter_svc_only,
+            );
+
             let row_start_y = y + 40.0;
             if total_players == 0 {
+                let empty_msg = if self.voice.filter_svc_only {
+                    "No active SVC players detected (Click Filter: All)"
+                } else {
+                    "No players detected in voice chat yet"
+                };
                 batch.text(
                     &self.gui.atlas,
-                    "No players detected in voice chat yet",
+                    empty_msg,
                     x + 20.0,
                     y + 80.0,
                     0xFF888888,
@@ -184,23 +240,22 @@ impl<'a> Game<'a> {
                 );
             } else {
                 let start = current_page * PLAYERS_PER_PAGE;
-                let slice: Vec<(u128, String, f32, bool)> = self
-                    .voice
-                    .known_players
+                let slice: Vec<(u128, String, PlayerSvcStatus, f32, bool)> = filtered_players
                     .iter()
                     .skip(start)
                     .take(PLAYERS_PER_PAGE)
-                    .map(|&(u, ref n)| {
+                    .map(|(u, n, st)| {
                         (
-                            u,
+                            *u,
                             n.clone(),
-                            self.voice.config.player_volume(u),
-                            self.voice.config.is_player_muted(u),
+                            *st,
+                            self.voice.config.player_volume(*u),
+                            self.voice.config.is_player_muted(*u),
                         )
                     })
                     .collect();
 
-                for (idx, (uuid, name, vol, muted)) in slice.into_iter().enumerate() {
+                for (idx, (uuid, name, status, vol, muted)) in slice.into_iter().enumerate() {
                     let ry = row_start_y + (idx as f32) * 31.0;
                     batch.fill(&self.gui.atlas, x + 12.0, ry, 336.0, 27.0, 0x2A2A2A2A);
                     batch.fill(&self.gui.atlas, x + 12.0, ry + 26.0, 336.0, 1.0, 0xFF3A3A3A);
@@ -224,14 +279,30 @@ impl<'a> Game<'a> {
                     );
                     horizon_client::hud_layout::paint(batch, &self.gui.atlas, &face_draws);
 
-                    // 2. Gamertag & volume status
+                    // 2. Status badge, Gamertag & volume status
+                    let status_badge = match status {
+                        PlayerSvcStatus::Talking => "[LIVE] ",
+                        PlayerSvcStatus::Connected => "[SVC] ",
+                        PlayerSvcStatus::Disabled => "[OFF] ",
+                        PlayerSvcStatus::NoSvc => "",
+                    };
                     let label = format!(
-                        "{}: {:.0}%{}",
+                        "{}{}: {:.0}%{}",
+                        status_badge,
                         real_name,
                         vol * 100.0,
                         if muted { " [MUTED]" } else { "" }
                     );
-                    let text_color = if muted { 0xFFFF6666 } else { 0xFFFFFFFF };
+                    let text_color = if muted {
+                        0xFFFF6666
+                    } else {
+                        match status {
+                            PlayerSvcStatus::Talking => 0xFF55FF55,
+                            PlayerSvcStatus::Connected => 0xFFFFFFFF,
+                            PlayerSvcStatus::Disabled => 0xFFFFAA55,
+                            PlayerSvcStatus::NoSvc => 0xFFAAAAAA,
+                        }
+                    };
                     batch.text(
                         &self.gui.atlas,
                         &label,
@@ -607,6 +678,14 @@ impl<'a> Game<'a> {
         let y = ((h - modal_h) / 2.0).floor();
 
         if self.voice.show_player_volumes {
+            let filter_btn_w = 110.0;
+            let filter_btn_x = x + modal_w - 15.0 - filter_btn_w;
+            if ui::hovered(self.cursor, filter_btn_x, y + 20.0, filter_btn_w, 16.0) {
+                self.voice.filter_svc_only = !self.voice.filter_svc_only;
+                self.voice.player_list_page = 0;
+                return;
+            }
+
             // 1. Back button
             if ui::hovered(self.cursor, x + 15.0, y + 204.0, 95.0, 22.0) {
                 self.voice.show_player_volumes = false;
@@ -620,20 +699,20 @@ impl<'a> Game<'a> {
                 return;
             }
             // 3. Next button
+            let filtered_players = self.voice_filtered_players();
+            let total_players = filtered_players.len();
+            let total_pages = if total_players == 0 {
+                1
+            } else {
+                (total_players + 4) / 5
+            };
             if ui::hovered(self.cursor, x + 245.0, y + 204.0, 100.0, 22.0) {
-                let total_players = self.voice.known_players.len();
-                let total_pages = if total_players == 0 {
-                    1
-                } else {
-                    (total_players + 4) / 5
-                };
                 if self.voice.player_list_page + 1 < total_pages {
                     self.voice.player_list_page += 1;
                 }
                 return;
             }
             // 4. Per-player volume & mute buttons
-            let total_players = self.voice.known_players.len();
             let current_page = self.voice.player_list_page;
             let row_start_y = y + 40.0;
             for idx in 0..5 {
@@ -641,7 +720,7 @@ impl<'a> Game<'a> {
                 if player_idx >= total_players {
                     break;
                 }
-                let uuid = self.voice.known_players[player_idx].0;
+                let uuid = filtered_players[player_idx].0;
                 let ry = row_start_y + (idx as f32) * 31.0;
                 let btn_y = ry + 5.0;
                 let mute_btn_w = 48.0;

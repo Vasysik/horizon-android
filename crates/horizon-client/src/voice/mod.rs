@@ -20,6 +20,14 @@ use std::path::Path;
 use udp_worker::{UdpConnectionState, UdpWorker, UdpWorkerHandle};
 use ui::{VoiceChatScreenState, VoiceHudStatus};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerSvcStatus {
+    NoSvc,
+    Disabled,
+    Connected,
+    Talking,
+}
+
 pub struct VoiceChatClient {
     pub config: SvcProtocolConfig,
     pub udp_handle: Option<UdpWorkerHandle>,
@@ -39,6 +47,7 @@ pub struct VoiceChatClient {
     pub known_players: Vec<(u128, String)>,
     pub show_player_volumes: bool,
     pub player_list_page: usize,
+    pub filter_svc_only: bool,
 }
 
 impl VoiceChatClient {
@@ -64,6 +73,7 @@ impl VoiceChatClient {
             known_players: Vec::new(),
             show_player_volumes: false,
             player_list_page: 0,
+            filter_svc_only: true,
         }
     }
 
@@ -158,6 +168,7 @@ impl VoiceChatClient {
             CHANNEL_PLAYER_STATES | "voicechat:player_states" => {
                 if let Ok(pkt) = PlayerStatesPacket::from_bytes(data) {
                     let local_uuid = self.secret.as_ref().map(|s| s.player_uuid);
+                    self.player_states.clear();
                     for s in pkt.states {
                         if s.uuid != 0 && Some(s.uuid) != local_uuid {
                             self.register_known_player(s.uuid, s.name.clone());
@@ -399,7 +410,7 @@ impl VoiceChatClient {
                         );
                         (l, r, None)
                     } else {
-                        (0.50, 0.50, None)
+                        (0.85, 0.85, None)
                     }
                 }
             };
@@ -444,6 +455,51 @@ impl VoiceChatClient {
             name
         };
         self.known_players.push((uuid, display));
+    }
+
+    /// Looks up the player's true gamertag from official SVC states first, falling back to known_players.
+    pub fn sender_gamertag(&self, uuid: u128) -> Option<&str> {
+        if let Some(state) = self.player_states.get(&uuid) {
+            if !state.name.is_empty() {
+                return Some(&state.name);
+            }
+        }
+        for (id, name) in &self.known_players {
+            if *id == uuid && !name.is_empty() && !name.starts_with("Player ") {
+                return Some(name.as_str());
+            }
+        }
+        None
+    }
+
+    /// Returns the current SVC status of a player for UI filtering and badges.
+    pub fn player_svc_status(&self, uuid: u128, name: &str) -> PlayerSvcStatus {
+        let is_talking = self
+            .hardware_io
+            .mixer()
+            .lock()
+            .map(|m| m.is_sender_talking(uuid))
+            .unwrap_or(false);
+        if is_talking {
+            return PlayerSvcStatus::Talking;
+        }
+
+        let state = self.player_states.get(&uuid).or_else(|| {
+            if name.is_empty() {
+                None
+            } else {
+                self.player_states
+                    .values()
+                    .find(|st| st.name.eq_ignore_ascii_case(name))
+            }
+        });
+
+        match state {
+            Some(st) if st.disconnected => PlayerSvcStatus::NoSvc,
+            Some(st) if st.disabled => PlayerSvcStatus::Disabled,
+            Some(_) => PlayerSvcStatus::Connected,
+            None => PlayerSvcStatus::NoSvc,
+        }
     }
 
     pub fn set_output_volume(&mut self, volume: f32) {

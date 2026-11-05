@@ -9286,23 +9286,97 @@ impl Game<'_> {
         let listener_yaw = self.yaw;
         let uuids = &self.persist.uuids;
         let remote_ref = self.remote.as_ref();
+        let gamertag_map: std::collections::HashMap<u128, String> = self
+            .voice
+            .player_states
+            .iter()
+            .map(|(&u, st)| (u, st.name.clone()))
+            .chain(self.voice.known_players.iter().cloned())
+            .collect();
+
         self.voice
             .tick_audio(listener_pos, listener_yaw, |sender_uuid| {
                 let r = remote_ref?;
+                let target_u = [
+                    (sender_uuid >> 96) as i32,
+                    (sender_uuid >> 64) as i32,
+                    (sender_uuid >> 32) as i32,
+                    sender_uuid as i32,
+                ];
+
+                // Stage 1: Match by exact UUID across all alive entities in r.entities, pick the closest
+                let mut best_pos: Option<([f64; 3], f64)> = None;
                 for (&eid, &u) in uuids.iter() {
-                    if u == [
-                        (sender_uuid >> 96) as i32,
-                        (sender_uuid >> 64) as i32,
-                        (sender_uuid >> 32) as i32,
-                        sender_uuid as i32,
-                    ] {
+                    if u == target_u {
                         if let Some(tracked) = r.entities.get(&(eid as i32)) {
-                            let mut pos = tracked.position;
-                            pos[1] += 1.62;
+                            let mut p = tracked.position;
+                            p[1] += 1.62;
+                            let d2 = (p[0] - listener_pos[0]).powi(2)
+                                + (p[1] - listener_pos[1]).powi(2)
+                                + (p[2] - listener_pos[2]).powi(2);
+                            if best_pos.map_or(true, |(_, best_d2)| d2 < best_d2) {
+                                best_pos = Some((p, d2));
+                            }
+                        }
+                    }
+                }
+                if let Some((pos, _)) = best_pos {
+                    return Some(pos);
+                }
+
+                // Stage 2: Fallback for Offline-Mode / Proxy servers where sender_uuid differs from world entity UUID
+                if let Some(sender_name) = gamertag_map
+                    .get(&sender_uuid)
+                    .filter(|n| !n.is_empty() && !n.starts_with("Player "))
+                {
+                    let matched_u128 = r
+                        .tab_players
+                        .iter()
+                        .find_map(|(&u, tp)| {
+                            if tp.name.eq_ignore_ascii_case(sender_name) {
+                                Some(u)
+                            } else {
+                                None
+                            }
+                        })
+                        .or_else(|| {
+                            r.players.iter().find_map(|(&u, pname)| {
+                                if pname.eq_ignore_ascii_case(sender_name) {
+                                    Some(u)
+                                } else {
+                                    None
+                                }
+                            })
+                        });
+
+                    if let Some(world_uuid) = matched_u128 {
+                        let world_u = [
+                            (world_uuid >> 96) as i32,
+                            (world_uuid >> 64) as i32,
+                            (world_uuid >> 32) as i32,
+                            world_uuid as i32,
+                        ];
+                        let mut best_fallback: Option<([f64; 3], f64)> = None;
+                        for (&eid, &u) in uuids.iter() {
+                            if u == world_u {
+                                if let Some(tracked) = r.entities.get(&(eid as i32)) {
+                                    let mut p = tracked.position;
+                                    p[1] += 1.62;
+                                    let d2 = (p[0] - listener_pos[0]).powi(2)
+                                        + (p[1] - listener_pos[1]).powi(2)
+                                        + (p[2] - listener_pos[2]).powi(2);
+                                    if best_fallback.map_or(true, |(_, best_d2)| d2 < best_d2) {
+                                        best_fallback = Some((p, d2));
+                                    }
+                                }
+                            }
+                        }
+                        if let Some((pos, _)) = best_fallback {
                             return Some(pos);
                         }
                     }
                 }
+
                 None
             });
     }

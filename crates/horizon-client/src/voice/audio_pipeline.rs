@@ -344,13 +344,12 @@ impl VoicePlaybackPipeline {
             return (0.0, 0.0);
         }
 
-        let fade_distance = (max_distance * 0.32).max(8.0).min(max_distance * 0.8);
+        let fade_distance = (max_distance * 0.50).max(4.0);
         let attenuation = if distance <= fade_distance {
             1.0
         } else {
-            let norm = ((distance - fade_distance) / (max_distance - fade_distance).max(0.001))
-                .clamp(0.0, 1.0);
-            (1.0 - norm).max(0.0)
+            1.0 - ((distance - fade_distance) / (max_distance - fade_distance).max(0.001))
+                .clamp(0.0, 1.0)
         };
 
         let yaw_rad = -listener_yaw.to_radians();
@@ -423,8 +422,8 @@ mod tests {
         let sound_ahead = [0.0, 64.0, 24.0];
         let (left, right) =
             VoicePlaybackPipeline::calculate_spatial_gain(listener, yaw, sound_ahead, 48.0);
-        assert!((left - 0.735).abs() < 0.05);
-        assert_eq!(left, right);
+        assert_eq!(left, 1.0);
+        assert_eq!(right, 1.0);
 
         let sound_far = [0.0, 64.0, 100.0];
         let (left_far, right_far) =
