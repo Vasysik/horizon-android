@@ -625,6 +625,7 @@ mod tests {
             resolution: 2048,
             distance: 128.0,
             solid_materials: Vec::new(),
+            ..Settings::default()
         };
         let shadow = camera(&settings);
         let (view, projection) = super::super::pack_uniforms::shadow_camera(
@@ -646,6 +647,7 @@ mod tests {
             resolution: 2048,
             distance: 128.0,
             solid_materials: Vec::new(),
+            ..Settings::default()
         });
         let light = glam::Vec3::Y;
         for x in [5.5, -5.5, -2064.5, 2064.5] {

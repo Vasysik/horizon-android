@@ -11,6 +11,15 @@ on:
         description: Type-check all four Android ABIs (slower)
         type: boolean
         default: false
+      build_apk:
+        description: Build a public APK for one ABI and upload it as an artifact
+        type: boolean
+        default: false
+      abi:
+        description: ABI built when build_apk is enabled
+        type: choice
+        options: [arm64-v8a, armeabi-v7a, x86, x86_64]
+        default: arm64-v8a
 permissions:
   contents: read
 concurrency:
@@ -31,6 +40,8 @@ jobs:
       - run: python3 tools/test_android_diagnostics.py
       - run: python3 tools/test_android_performance.py
       - run: python3 tools/test_android_content.py
+      - run: python3 tools/test_android_session.py
+      - run: python3 tools/test_android_hotplug.py
       - run: python3 tools/test_android_appearance.py
       - name: Check workflow export matches the active workflow
         run: |

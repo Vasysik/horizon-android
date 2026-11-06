@@ -173,6 +173,25 @@ pub const NAMES: &[&str] = &[
     "playerLookVector",
     "playerBodyVector",
     "firstPersonCamera",
+    "endFlashIntensity",
+    "endFlashPosition",
+    "bedrockLevel",
+    "cloudHeight",
+    "isRightHanded",
+    "dhNearPlane",
+    "dhFarPlane",
+    "dhRenderDistance",
+    "currentPlayerArmor",
+    "maxBlindnessDarkness",
+    "isEyeInCave",
+    "lightningBoltPosition",
+    "normalMatrix",
+    "isNether",
+    "is_on_ground",
+    "heightLimit",
+    "logicalHeightLimit",
+    "hasSkylight",
+    "hasCeiling",
 ];
 
 /// Values carried from frame to frame.
@@ -402,8 +421,9 @@ impl FrameUniforms {
                 "viewHeight" => Value::f(&[size[1] as f32]),
                 "aspectRatio" => Value::f(&[aspect]),
                 "near" => Value::f(&[0.05]),
-                // The chunk render distance, not the distant terrain's reach.
-                "far" => Value::f(&[frame.detail_distance]),
+                // Match the perspective far plane so shaders reconstructing linear depth from depthtex0
+                // or fading shadows at `far` never cut off at 15 blocks on mobile render distances.
+                "far" => Value::f(&[frame.depth_far.max(frame.detail_distance)]),
                 "rainStrength" => Value::f(&[inputs.rain]),
                 "wetness" => Value::f(&[self.wetness]),
                 "thunderStrength" => Value::f(&[inputs.thunder]),
@@ -439,6 +459,24 @@ impl FrameUniforms {
                 "heldItemId2" => Value::i(&[inputs.held_items[1]]),
                 "heldBlockLightValue" => Value::i(&[inputs.held_light[0]]),
                 "heldBlockLightValue2" => Value::i(&[inputs.held_light[1]]),
+                "endFlashIntensity" => Value::f(&[0.0]),
+                "endFlashPosition" => Value::f(&[0.0, 100.0, 0.0]),
+                "bedrockLevel" => Value::i(&[-64]),
+                "cloudHeight" => Value::f(&[192.0]),
+                "isRightHanded" => Value::i(&[1]),
+                "dhNearPlane" => Value::f(&[frame.depth_far * 0.5]),
+                "dhFarPlane" => Value::f(&[frame.depth_far * 4.0]),
+                "dhRenderDistance" => Value::i(&[frame.depth_far as i32]),
+                "currentPlayerArmor" => Value::f(&[0.0]),
+                "maxBlindnessDarkness" => Value::f(&[inputs.blindness.max(frame.darkness.0)]),
+                "isEyeInCave" => Value::i(&[i32::from(eye[1] < 4.0 && frame.camera.y < 60.0)]),
+                "lightningBoltPosition" => Value::f(&[0.0, 10000.0, 0.0, 0.0]),
+                "normalMatrix" => m4(view),
+                "isNether" => Value::i(&[i32::from(inputs.biome_category == 16)]),
+                "is_on_ground" => Value::i(&[1]),
+                "heightLimit" | "logicalHeightLimit" => Value::i(&[384]),
+                "hasSkylight" => Value::i(&[i32::from(inputs.biome_category != 16 && inputs.biome_category != 8)]),
+                "hasCeiling" => Value::i(&[i32::from(inputs.biome_category == 16)]),
                 // renderStage is NONE outside gbuffers draws.
                 _ => Value::i(&[0]),
             }
@@ -505,8 +543,9 @@ fn components(name: &str) -> usize {
         | "shadowLightPosition"
         | "fogColor"
         | "skyColor" => 3,
+        "lightningBoltPosition" => 4,
         "eyeBrightness" | "eyeBrightnessSmooth" | "atlasSize" => 2,
-        n if n.starts_with("gbuffer") || n.starts_with("shadow") && n != "shadowAngle" => 16,
+        n if n == "normalMatrix" || n.starts_with("gbuffer") || n.starts_with("shadow") && n != "shadowAngle" => 16,
         _ => 1,
     }
 }

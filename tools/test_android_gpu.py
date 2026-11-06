@@ -31,7 +31,17 @@ glam = "0.30"
         for name in ('arena', 'upload', 'timing', 'frame_timing', 'opaque_output', 'terrain_source', 'entity_source')
     )
     (work / 'src/lib.rs').write_text('''#![allow(dead_code)]
-#[path = "C:/Users/vasia/Documents/Projects/horizon-main/crates/horizon-client-render/src/overlay.rs"] pub mod overlay;
+#[path = " + (ROOT / "crates/horizon-client-render/src/overlay.rs").as_posix() + "] pub mod overlay;
+mod android_runtime {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static GPU_BATCHING: AtomicBool = AtomicBool::new(false);
+    pub fn configure_gpu(batching: bool) {
+        GPU_BATCHING.store(batching, Ordering::Relaxed);
+    }
+    pub fn gpu_batching() -> bool {
+        GPU_BATCHING.load(Ordering::Relaxed)
+    }
+}
 mod spans {
     pub fn time<T>(_: &str, f: impl FnOnce() -> T) -> T { f() }
 }

@@ -193,6 +193,9 @@ impl Opt {
         match self {
             Opt::TouchMode => "Control scheme",
             Opt::TouchCrosshairGestures => "Touch gestures",
+            Opt::TouchControlHub => "Control hub button",
+            Opt::TouchUiVibration => "UI vibration",
+            Opt::TouchGameVibration => "Gameplay vibration",
             Opt::TouchAttackButtonLook => "Look while attacking",
             Opt::TouchMouseSensitivity => "Virtual mouse sensitivity",
             Opt::TouchAnalog => "360-degree movement",
@@ -566,6 +569,16 @@ impl Opt {
                 }
                 .into(),
             ),
+            Opt::TouchControlHub => Some(
+                if s.touch.show_control_hub {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+                .into(),
+            ),
+            Opt::TouchUiVibration => Some(if s.touch.ui_vibrate { "ON" } else { "OFF" }.into()),
+            Opt::TouchGameVibration => Some(if s.touch.vibrate { "ON" } else { "OFF" }.into()),
             Opt::TouchCrosshairGestures => Some(
                 if s.touch.crosshair_gestures {
                     "ON"
@@ -1126,6 +1139,9 @@ impl Opt {
             Opt::TouchInventoryControls => s.touch.inventory_controls ^= true,
             Opt::TouchDynamicJoystick => s.touch.dynamic_joystick ^= true,
             Opt::TouchCrosshairGestures => s.touch.crosshair_gestures ^= true,
+            Opt::TouchControlHub => s.touch.show_control_hub ^= true,
+            Opt::TouchUiVibration => s.touch.ui_vibrate ^= true,
+            Opt::TouchGameVibration => s.touch.vibrate ^= true,
             Opt::TouchAttackButtonLook => s.touch.attack_button_look ^= true,
             Opt::AndroidInputMode => {
                 let all = crate::android_gamepad::InputMode::ALL;
@@ -2770,32 +2786,44 @@ impl OptionsUi {
                 self.filter_option_rows(rows)
             }
             Page::Touch => {
-                let mut rows = vec![Row::Big(Opt::TouchMode)];
+                let mut rows = vec![Row::Header("Movement & Look Sensitivity")];
+                rows.push(Row::Big(Opt::TouchMode));
                 rows.extend(pairs(&[
                     Opt::TouchCrosshairGestures,
                     Opt::TouchAttackButtonLook,
                     Opt::TouchSensitivity,
                     Opt::TouchSensitivityHorizontal,
                     Opt::TouchSensitivityVertical,
+                ]));
+                rows.push(Row::Header("Control Hub & Feedback"));
+                rows.extend(pairs(&[
+                    Opt::TouchControlHub,
+                    Opt::TouchUiVibration,
+                    Opt::TouchGameVibration,
+                ]));
+                rows.push(Row::Header("HUD Buttons & Layout"));
+                rows.extend(pairs(&[
                     Opt::TouchOffhand,
                     Opt::TouchShield,
                     Opt::TouchButtonScale,
                     Opt::TouchCircleSize,
                     Opt::TouchAttackSide,
                     Opt::DebugGuiScale,
+                    Opt::TouchLeftHand,
+                    Opt::TouchSwapJumpSneak,
+                ]));
+                rows.push(Row::Header("Joystick, Actions & Gyroscope"));
+                rows.extend(pairs(&[
                     Opt::TouchAnalog,
                     Opt::TouchSprintButton,
                     Opt::TouchSprintToggle,
                     Opt::TouchInventoryControls,
                     Opt::TouchInteract,
-                    Opt::TouchMouseSensitivity,
                     Opt::TouchDynamicJoystick,
                     Opt::TouchDynamicAreaX,
                     Opt::TouchDynamicAreaY,
                     Opt::AndroidGyroscope,
                     Opt::AndroidGyroSensitivity,
-                    Opt::TouchLeftHand,
-                    Opt::TouchSwapJumpSneak,
                 ]));
                 #[cfg(target_os = "android")]
                 rows.push(Row::Buttons(
@@ -2803,7 +2831,7 @@ impl OptionsUi {
                         0.0,
                         0.0,
                         310.0,
-                        Text::literal("Customize layout..."),
+                        Text::literal("Customize Touch & GoyControl Layout..."),
                         Act::TouchControls,
                     ),
                     None,

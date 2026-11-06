@@ -119,6 +119,13 @@ impl Game<'_> {
     /// A menu, a screen, the title, a sign or a book is open: the pad drives
     /// it instead of the player.
     pub(super) fn pad_in_menu(&self) -> bool {
+        #[cfg(target_os = "android")]
+        let android_hub_open = self.pad.touch_ui.floating_menu
+            || self.pad.touch_ui.preset_dialog.is_some()
+            || self.pad.touch_ui.presets_modal_open
+            || self.pad.touch_ui.custom_input_picker != horizon_client::touch::PickerStep::None;
+        #[cfg(not(target_os = "android"))]
+        let android_hub_open = false;
         self.title.is_some()
             || self.screen != Screen::Playing
             || self.sign_edit.is_some()
@@ -127,12 +134,19 @@ impl Game<'_> {
             || self.server_packs.prompt.is_some()
             || self.link_prompt.is_some()
             || self.touch_editing()
+            || android_hub_open
     }
 
     pub(super) fn gui_scale(&self) -> Option<HudBatch> {
         self.renderer
             .as_ref()
             .map(|r| HudBatch::new([r.config.width, r.config.height]))
+            .or_else(|| {
+                self.window.as_ref().map(|w| {
+                    let s = w.inner_size();
+                    HudBatch::new([s.width, s.height])
+                })
+            })
     }
 
     /// Focus mode is on for the open screen (the keyboard always focuses).
@@ -332,7 +346,7 @@ impl Game<'_> {
     /// A click (press and release) at a point, the pointer staying there.
     /// A pointer event of the pad's or the keyboard's, as the window would
     /// send it (marked, so it isn't taken for the real mouse).
-    fn pad_synthetic_event(
+    pub(super) fn pad_synthetic_event(
         &mut self,
         event_loop: &dyn EventLoopCtl,
         id: WindowId,
@@ -1379,6 +1393,7 @@ impl Game<'_> {
             Output::Text(t) => (None, Some(t.as_str())),
             Output::Backspace => (Some(KeyCode::Backspace), None),
             Output::Enter => (Some(KeyCode::Enter), None),
+            Output::Key(code) => (Some(*code), None),
             Output::Close => {
                 self.pad.menu.osk = None;
                 self.pad.menu.osk_dismissed = true;
@@ -1462,10 +1477,16 @@ impl Game<'_> {
     /// The pad's cursor (pointer mode) or focus highlight (focus mode), and
     /// the on-screen keyboard, over everything else.
     pub(super) fn draw_pad_cursor(&self, batch: &mut HudBatch) {
-        if !self.pad_in_menu() {
+        #[cfg(target_os = "android")]
+        let virtual_mouse = self.pad.touch_ui.virtual_mouse;
+        #[cfg(not(target_os = "android"))]
+        let virtual_mouse = false;
+        if !self.pad_in_menu() && !virtual_mouse {
             return;
         }
-        if let Some(keyboard) = &self.pad.menu.osk {
+        if self.pad_in_menu()
+            && let Some(keyboard) = &self.pad.menu.osk
+        {
             let at_top = self
                 .pad
                 .menu
@@ -1478,9 +1499,11 @@ impl Game<'_> {
             return;
         }
         #[cfg(target_os = "android")]
-        let virtual_mouse = self.pad.touch_ui.virtual_mouse;
-        #[cfg(not(target_os = "android"))]
-        let virtual_mouse = false;
+        if virtual_mouse {
+            // On Android, the virtual mouse pointer is drawn once at the top of the HUD z-order
+            // in `game.rs` above all touch controls, floating menu, and editor overlays.
+            return;
+        }
         let pointer = if virtual_mouse {
             Some(self.cursor)
         } else {
@@ -1496,7 +1519,12 @@ impl Game<'_> {
             self.draw_pad_focus(batch, focus);
             return;
         }
-        horizon_client::touch_ui::draw_pointer(batch, &self.gui.atlas, (x, y));
+        horizon_client::touch_ui::draw_pointer(
+            batch,
+            &self.gui.atlas,
+            (x, y),
+            self.settings.touch.virtual_mouse_pointer_scale,
+        );
     }
 
     /// The focus highlight, as vanilla's keyboard focus looks: buttons,

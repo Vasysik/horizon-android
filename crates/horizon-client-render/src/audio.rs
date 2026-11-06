@@ -859,6 +859,9 @@ impl Audio {
     pub fn with_device(root: &Path, device_name: &str) -> Self {
         Self::with_output(root, true, device_name)
     }
+    pub fn with_registry(root: &Path, registry: SoundRegistry, device_name: &str) -> Self {
+        Self::with_loaded_registry(root, registry, true, device_name)
+    }
     /// No output device: the dedicated server.
     pub fn silent(root: &Path) -> Self {
         Self::with_output(root, false, "")
@@ -870,6 +873,14 @@ impl Audio {
     }
     fn with_output(root: &Path, output: bool, target_device: &str) -> Self {
         let registry = SoundRegistry::load(root);
+        Self::with_loaded_registry(root, registry, output, target_device)
+    }
+    fn with_loaded_registry(
+        root: &Path,
+        registry: SoundRegistry,
+        output: bool,
+        target_device: &str,
+    ) -> Self {
         if output && registry.is_empty() {
             // The game then plays nothing on a working output (#1035, #1076).
             log::warn!(
@@ -1196,6 +1207,7 @@ impl Audio {
                 }
             }
         }
+        #[cfg(not(target_os = "android"))]
         if self._stream.is_some()
             && self.device_probe.is_none()
             && self.device_probe_started.elapsed() >= std::time::Duration::from_secs(1)

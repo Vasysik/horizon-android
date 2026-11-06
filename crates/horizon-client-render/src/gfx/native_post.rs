@@ -86,6 +86,7 @@ pub struct NativePost {
     /// and a black 1×1 in its place before then.
     history: Option<wgpu::Texture>,
     history_blank: wgpu::Texture,
+    surface_blank: wgpu::Texture,
     /// One bind group per pass, for these world views and either the valid history or black.
     groups: Option<(WorldViews, bool, Vec<wgpu::BindGroup>)>,
     /// Whether `history` contains the last frame's input to the last pass.
@@ -652,6 +653,7 @@ impl NativePost {
             texture_entry(8, float),
             texture_entry(9, wgpu::TextureSampleType::Depth),
             texture_entry(10, float),
+            texture_entry(11, wgpu::TextureSampleType::Uint),
         ];
         entries.extend(pack_texture_entries(frame.textures.len()));
         entries
@@ -740,6 +742,20 @@ impl NativePost {
             targets: None,
             history: None,
             history_blank: history_target(device, "Native shader pack history blank", [1, 1]),
+            surface_blank: device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Native shader pack surface blank"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Uint,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }),
             groups: None,
             history_valid: false,
             scales: targets.iter().map(|t| t.1).collect(),
@@ -845,6 +861,7 @@ impl NativePost {
         }
         .create_view(&Default::default());
         let blank = self.history_blank.create_view(&Default::default());
+        let surface_blank = self.surface_blank.create_view(&Default::default());
         let groups = (0..self.passes.len())
             .map(|i| {
                 // The chain's picture so far: the world's before its first pass.
@@ -896,6 +913,10 @@ impl NativePost {
                     wgpu::BindGroupEntry {
                         binding: 10,
                         resource: wgpu::BindingResource::TextureView(&self.shadow.3),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: wgpu::BindingResource::TextureView(&surface_blank),
                     },
                 ];
                 entries.extend(pack_texture_group_entries(&self.textures));

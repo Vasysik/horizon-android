@@ -146,7 +146,8 @@ pub(super) const VERTEX_INPUTS: [&str; 6] = [
 ];
 /// Built-in functions naga's constant evaluator lacks: a `const` that calls one is evaluated
 /// where the program runs instead (GL drivers fold them; naga fails the program).
-pub(super) const NOT_CONSTANT: [&str; 25] = [
+pub(super) const NOT_CONSTANT: [&str; 26] = [
+    "dot",
     "mix",
     "smoothstep",
     "reflect",
@@ -314,9 +315,16 @@ impl<'p> Stage<'p> {
                         s.builtin_varying(format!("hz_TexCoord{n}"));
                     }
                 }
-                "gl_FrontColor" => s.builtin_varying("hz_FrontColor".into()),
+                "gl_FrontColor" | "gl_BackColor" => s.builtin_varying("hz_FrontColor".into()),
+                "gl_FrontSecondaryColor" | "gl_BackSecondaryColor" => {
+                    s.builtin_varying("hz_SecondaryColor".into())
+                }
+                "gl_FogFragCoord" => s.builtin_float_varying("hz_FogFragCoord".into()),
                 "gl_Color" if kind == ShaderStage::Fragment => {
                     s.builtin_varying("hz_FrontColor".into())
+                }
+                "gl_SecondaryColor" if kind == ShaderStage::Fragment => {
+                    s.builtin_varying("hz_SecondaryColor".into())
                 }
                 _ => {}
             }
@@ -353,6 +361,21 @@ impl<'p> Stage<'p> {
             list.push(Var {
                 name,
                 decl: "vec4 @;".into(),
+                structure: false,
+            });
+        }
+    }
+
+    pub(super) fn builtin_float_varying(&mut self, name: String) {
+        let list = if self.kind == ShaderStage::Vertex {
+            &mut self.outs
+        } else {
+            &mut self.ins
+        };
+        if !list.iter().any(|v| v.name == name) {
+            list.push(Var {
+                name,
+                decl: "float @;".into(),
                 structure: false,
             });
         }

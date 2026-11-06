@@ -137,13 +137,23 @@ pub fn keypad_enabled() -> bool {
     KEYPAD_ENABLED.load(Ordering::Relaxed)
 }
 pub fn keypad_key(key: winit::keyboard::KeyCode, down: bool) -> bool {
-    keypad_enabled() && KEYPAD.lock().unwrap().key(key, down)
+    keypad_enabled()
+        && KEYPAD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .key(key, down)
 }
 pub fn clear_keypad() {
-    KEYPAD.lock().unwrap().clear();
+    KEYPAD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
 }
 pub fn keypad_state() -> crate::gamepad::PadState {
-    KEYPAD.lock().unwrap().poll()
+    KEYPAD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .poll()
 }
 static OPEN_GL: AtomicBool = AtomicBool::new(cfg!(target_pointer_width = "32"));
 pub fn configure_graphics(open_gl: bool) {
@@ -153,11 +163,16 @@ pub fn graphics_api() -> crate::graphics::GraphicsApi {
     if OPEN_GL.load(Ordering::Relaxed) {
         crate::graphics::GraphicsApi::OpenGl
     } else {
-        crate::graphics::GraphicsApi::Vulkan
+        // Prefer Vulkan, but preserve the same GLES fallback as the launcher
+        // when the device has no Vulkan adapter (notably older ARMv7 GPUs).
+        crate::graphics::GraphicsApi::Auto
     }
 }
 pub fn configure_gpu(batching: bool) {
     GPU_BATCHING.store(batching, Ordering::Relaxed);
+}
+pub fn gpu_batching() -> bool {
+    GPU_BATCHING.load(Ordering::Relaxed)
 }
 pub fn compatibility() -> bool {
     cfg!(target_os = "android") && !GPU_BATCHING.load(Ordering::Relaxed)
@@ -245,4 +260,12 @@ mod cache_budget_tests {
             assert_eq!(mesh + sound, mib as usize * (1 << 20));
         }
     }
+}
+
+static EXPERIMENTAL_LEAF_CULLING: AtomicBool = AtomicBool::new(false);
+pub fn set_experimental_leaf_culling(enabled: bool) {
+    EXPERIMENTAL_LEAF_CULLING.store(enabled, Ordering::Relaxed);
+}
+pub fn experimental_leaf_culling() -> bool {
+    EXPERIMENTAL_LEAF_CULLING.load(Ordering::Relaxed)
 }

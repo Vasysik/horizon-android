@@ -2,15 +2,40 @@
 use crate::gamepad::{Button, PadState};
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
+    sync::atomic::{AtomicU32, Ordering},
     time::{Duration, Instant},
 };
 const HOLD_DELAY: Duration = Duration::from_millis(350);
-mod custom;
-mod editor;
+
+static LAST_HUD_OPACITY_BITS: AtomicU32 = AtomicU32::new(0x3f80_0000);
+
+pub fn current_hud_opacity_scale() -> f32 {
+    let v = f32::from_bits(LAST_HUD_OPACITY_BITS.load(Ordering::Relaxed));
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
+pub fn set_current_hud_opacity_scale(scale: f32) {
+    let clamped = if scale.is_finite() {
+        scale.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    LAST_HUD_OPACITY_BITS.store(clamped.to_bits(), Ordering::Relaxed);
+}
+
+pub mod custom;
+pub mod editor;
 pub use custom::CustomButton;
+pub use editor::{Editor, EditorDragKind, PickerStep};
 pub mod layout;
-pub use layout::{Control, Mode, Settings};
+pub use layout::{
+    Control, ControlStyle, JoystickMoveArea, JoystickStyle, Mode, Placement, PresetMeta, Settings,
+};
 /// Entity-placement items retain short-tap placement, like building blocks.
 pub fn item_places_entity_on_tap(item: &str) -> bool {
     let Some(id) = item.strip_prefix("minecraft:") else {
@@ -71,6 +96,42 @@ pub fn camera_delta(delta: [f32; 2], width: u32, height: u32, s: &Settings) -> [
     ]
 }
 
+/// Touch camera turn scaled by the in-game mouse sensitivity slider, axis inversion,
+/// and zoom turn scale, with a responsive mobile base multiplier.
+#[allow(clippy::too_many_arguments)]
+pub fn camera_delta_with_mouse(
+    delta: [f32; 2],
+    width: u32,
+    height: u32,
+    s: &Settings,
+    mouse_sensitivity: f32,
+    invert_x: bool,
+    invert_y: bool,
+    zoom_scale: f32,
+) -> [f32; 2] {
+    let base = camera_delta(delta, width, height, s);
+    let m = if mouse_sensitivity.is_finite() {
+        mouse_sensitivity.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    // Vanilla mouse sensitivity curve ((s * 0.6 + 0.2)^3 * 8.0), normalized to 1.0 at s = 0.5,
+    // combined with a 1.75x mobile thumb-turn responsiveness boost.
+    let ss = m * 0.6 + 0.2;
+    let mouse_scale = (ss * ss * ss * 8.0).max(0.15) * 1.75;
+    let zoom = if zoom_scale.is_finite() {
+        zoom_scale.clamp(0.05, 1.0)
+    } else {
+        1.0
+    };
+    let ix = if invert_x { -1.0 } else { 1.0 };
+    let iy = if invert_y || s.invert_y { -1.0 } else { 1.0 };
+    [
+        base[0] * mouse_scale * zoom * ix,
+        base[1] * mouse_scale * zoom * iy,
+    ]
+}
+
 /// In tap modes the crosshair is absent, so use Java's native hotbar gauge.
 pub fn attack_indicator(setting: u8, crosshair: bool) -> u8 {
     if setting == 1 && !crosshair {
@@ -120,9 +181,10 @@ enum Role {
     Shield,
     Button(Button),
 }
-#[derive(Default)]
+
 pub struct TouchControls {
     pub settings: Settings,
+    pub hud_opacity_scale: f32,
     pub force_crosshair: bool,
     pub projectile_crosshair: bool,
     pub shield_available: bool,
@@ -130,17 +192,25 @@ pub struct TouchControls {
     pub auxiliary_only: bool,
     /// Inventory utility buttons emit real modifier/mouse events, never movement.
     pub inventory_mode: bool,
+    /// True when a menu (Main Title Menu, Inventory, Pause, Options) is open so `visible_in_menu` controls apply.
+    pub in_menu: bool,
+    /// True when an inventory or container screen (`Screen::Inventory | Screen::Creative`) is open.
+    pub in_inventory: bool,
+    /// True when `touch_ui::draw_goy_hud` renders GoyControl with `Ui::mobile` so `TouchControls::draw` skips duplicate boxy drawing.
+    pub goy_rendered_by_ui: bool,
     pub inventory_shift: bool,
     pub editor: Option<editor::Editor>,
     fingers: BTreeMap<u64, (Role, [f32; 2])>,
+    passthrough_fingers: BTreeSet<u64>,
     custom_fingers: BTreeMap<u64, String>,
+    latched_custom: BTreeSet<String>,
+    latched_controls: u16,
     custom_events: Vec<(String, bool)>,
     pending: PadState,
     pub aim: Option<[f32; 2]>,
     tap_aim: Option<[f32; 2]>,
     pending_tap: Option<bool>,
     aspect: f32,
-    loaded: bool,
     pub chat_requested: bool,
     pub settings_requested: bool,
     pub debug_requested: bool,
@@ -151,6 +221,7 @@ pub struct TouchControls {
     pub swimming: bool,
     pub mounted: bool,
     pub sneaking: bool,
+    pub toggle_crouch: bool,
     /// Snapshotted by a world gesture; drift cannot turn eating into mining.
     pub hold_uses_item: bool,
     pub holding_use: bool,
@@ -160,19 +231,101 @@ pub struct TouchControls {
     last_sneak_tap: Option<Instant>,
     sprint_latched: bool,
 }
+
+impl Default for TouchControls {
+    fn default() -> Self {
+        Self {
+            settings: Settings::default(),
+            hud_opacity_scale: 1.0,
+            force_crosshair: false,
+            projectile_crosshair: false,
+            shield_available: false,
+            auxiliary_only: false,
+            inventory_mode: false,
+            inventory_shift: false,
+            in_menu: false,
+            in_inventory: false,
+            goy_rendered_by_ui: false,
+            editor: None,
+            fingers: BTreeMap::new(),
+            passthrough_fingers: BTreeSet::new(),
+            custom_fingers: BTreeMap::new(),
+            latched_custom: BTreeSet::new(),
+            latched_controls: 0,
+            custom_events: Vec::new(),
+            pending: PadState::default(),
+            aim: None,
+            tap_aim: None,
+            pending_tap: None,
+            aspect: 0.0,
+            chat_requested: false,
+            settings_requested: false,
+            debug_requested: false,
+            perspective_requested: false,
+            clicked: false,
+            context_use: false,
+            vertical_movement: false,
+            swimming: false,
+            mounted: false,
+            sneaking: false,
+            toggle_crouch: false,
+            hold_uses_item: false,
+            holding_use: false,
+            holding: false,
+            break_progress: 0.0,
+            last_marker: None,
+            last_sneak_tap: None,
+            sprint_latched: false,
+        }
+    }
+}
+
 impl TouchControls {
     pub fn crosshair(&self) -> bool {
         self.force_crosshair || self.settings.crosshair()
     }
 
-    pub fn viewport(&mut self, width: u32, height: u32) {
-        self.aspect = width.max(1) as f32 / height.max(1) as f32;
-        if !self.loaded {
-            self.settings = Settings::load();
-            self.loaded = true;
+    pub fn update_visibility(&mut self, touch_active: bool, dt: f32) {
+        let target = if touch_active || self.editor.is_some() {
+            1.0
+        } else {
+            0.0
+        };
+        let step = if target > self.hud_opacity_scale {
+            dt.clamp(0.001, 0.05) / 0.12
+        } else {
+            dt.clamp(0.001, 0.05) / 0.25
+        };
+        if (self.hud_opacity_scale - target).abs() <= step {
+            self.hud_opacity_scale = target;
+        } else if target > self.hud_opacity_scale {
+            self.hud_opacity_scale = (self.hud_opacity_scale + step).clamp(0.0, 1.0);
+        } else {
+            self.hud_opacity_scale = (self.hud_opacity_scale - step).clamp(0.0, 1.0);
+        }
+        set_current_hud_opacity_scale(self.hud_opacity_scale);
+        if self.hud_opacity_scale <= 0.001
+            && (!self.fingers.is_empty()
+                || !self.custom_fingers.is_empty()
+                || !self.latched_custom.is_empty())
+        {
+            self.clear();
         }
     }
-    fn aspect(&self) -> f32 {
+
+    pub fn move_anchor(&self) -> Option<[f32; 2]> {
+        self.fingers.values().find_map(|(role, _)| match role {
+            Role::Move(anchor) => Some(*anchor),
+            _ => None,
+        })
+    }
+
+    /// The surface size. The caller owns `settings`: the game and the launcher
+    /// assign them from the player's saved layout, so this never touches disk.
+    pub fn viewport(&mut self, width: u32, height: u32) {
+        self.aspect = width.max(1) as f32 / height.max(1) as f32;
+    }
+    pub fn aspect(&self) -> f32 {
         if self.aspect > 0.0 {
             self.aspect
         } else {
@@ -211,7 +364,12 @@ impl TouchControls {
     }
     pub fn control_at(&self, point: [f32; 2]) -> Option<Control> {
         Control::ALL.into_iter().rev().find(|c| {
-            if !self.visible(*c) {
+            let vis = if self.editor.is_some() || self.inventory_mode {
+                self.visible(*c)
+            } else {
+                self.visible_for_state(*c, self.in_menu)
+            };
+            if !vis {
                 return false;
             }
             if *c == Control::Move && self.dynamic_joystick() && self.editor.is_none() {
@@ -229,7 +387,9 @@ impl TouchControls {
         })
     }
     fn dynamic_joystick(&self) -> bool {
-        self.settings.dynamic_joystick && self.settings.mode != Mode::Dpad
+        self.settings.dynamic_joystick
+            && self.settings.mode != Mode::Dpad
+            && self.settings.joystick_style.move_area != JoystickMoveArea::AbsoluteFixed
     }
     pub fn control_at_point(&self, point: [f32; 2]) -> bool {
         self.custom_at(point).is_some() || self.control_at(point).is_some()
@@ -238,6 +398,7 @@ impl TouchControls {
     pub fn clear_world_gesture(&mut self) {
         self.fingers
             .retain(|_, (role, _)| matches!(role, Role::Ignore));
+        self.passthrough_fingers.clear();
         self.sprint_latched = false;
         self.pending = PadState::default();
         self.aim = None;
@@ -253,10 +414,61 @@ impl TouchControls {
     pub fn ignore(&mut self, id: u64) {
         self.fingers.insert(id, (Role::Ignore, [0.0; 2]));
     }
+    pub fn consume_ignored(&mut self, id: u64, ended: bool) -> bool {
+        if !self.custom_fingers.contains_key(&id)
+            && self
+                .fingers
+                .get(&id)
+                .is_some_and(|(role, _)| matches!(role, Role::Ignore))
+        {
+            if ended {
+                self.fingers.remove(&id);
+            }
+            return true;
+        }
+        false
+    }
     pub fn tap(&mut self, button: Button) {
         self.pending.set(button, true);
     }
-    fn visible(&self, c: Control) -> bool {
+    /// State-driven check for whether MCPE gameplay controls are currently visible on screen.
+    /// Used by the virtual mouse visibility controller so that whenever MCPE controls are visible
+    /// in gameplay, the virtual pointer is hidden, and whenever MCPE controls are hidden
+    /// (menus/overlays open, HUD hidden via F1, non-touch input mode, or all MCPE controls hidden),
+    /// the virtual pointer automatically appears if its authoritative toggle is enabled.
+    pub fn mcpe_controls_visible(&self, in_menu: bool, hide_gui: bool, touch_active: bool) -> bool {
+        if self.settings.control_style != ControlStyle::Mcpe {
+            return false;
+        }
+        if self.editor.is_some() || hide_gui || !touch_active || in_menu {
+            return false;
+        }
+        Control::ALL
+            .into_iter()
+            .any(|c| self.visible_for_state(c, false))
+    }
+
+    pub fn visible_for_state(&self, c: Control, in_menu: bool) -> bool {
+        if !self.visible(c) {
+            return false;
+        }
+        if self.editor.is_some() || self.inventory_mode {
+            return true;
+        }
+        let p = self.placement(c);
+        if in_menu {
+            if self.in_inventory
+                && self.settings.control_style == ControlStyle::Mcpe
+                && matches!(c, Control::Sneak | Control::Inventory)
+            {
+                return true;
+            }
+            p.visible_in_menu
+        } else {
+            p.visible_in_game
+        }
+    }
+    pub fn visible(&self, c: Control) -> bool {
         if c == Control::Shield && !self.shield_available && self.editor.is_none() {
             return false;
         }
@@ -272,6 +484,7 @@ impl TouchControls {
             return false;
         }
         if self.force_crosshair
+            && self.hud_opacity_scale > 0.01
             && matches!(c, Control::Attack | Control::Use)
             && self.settings.button_visibility[c as usize] == 0
         {
@@ -288,7 +501,15 @@ impl TouchControls {
                         .values()
                         .any(|(r, _)| matches!(r, Role::Button(Button::LeftTrigger)))))
     }
-    fn placement(&self, c: Control) -> layout::Placement {
+    pub fn opacity(&self, c: Control) -> f32 {
+        let p = self.placement(c);
+        if self.editor.is_some() {
+            p.opacity.max(0.25)
+        } else {
+            (p.opacity * self.hud_opacity_scale.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+        }
+    }
+    pub fn placement(&self, c: Control) -> layout::Placement {
         let mut p = self.settings.placement(c);
         let factory_swap = c == Control::Offhand
             && self.settings.layouts[self.settings.mode.index()][c as usize].center == [0.80, 0.96]
@@ -346,30 +567,73 @@ impl TouchControls {
         })
     }
     pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas) {
+        set_current_hud_opacity_scale(if self.editor.is_some() {
+            1.0
+        } else {
+            self.hud_opacity_scale
+        });
+        if self.hud_opacity_scale <= 0.001 && self.editor.is_none() {
+            return;
+        }
         let (w, h) = (b.width, b.height);
         if self.editor.is_some() {
             self.draw_editor_toolbar(b, a);
         }
         let state = self.state();
         for control in Control::ALL {
-            if !self.visible(control) {
+            if !self.visible_for_state(control, self.in_menu) {
+                continue;
+            }
+            let p = self.placement(control);
+            let opacity = self.opacity(control);
+            if opacity <= 0.001 {
+                continue;
+            }
+            if (self.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
+                && control != Control::Move
+            {
+                if self.goy_rendered_by_ui && self.editor.is_none() {
+                    continue;
+                }
+                let [nx, ny, nw, nh] = p.rect(self.aspect());
+                let rect = [nx * w, ny * h, nw * w, nh * h];
+                let held = Self::button(control).is_some_and(|bt| state.held(bt));
+                let toggled = (self.latched_controls & (1 << (control as u16))) != 0;
+                draw_goy_static_button(b, a, rect, &p, control.name(), held, toggled, opacity);
+                continue;
+            }
+            if control == Control::Move
+                && (self.settings.control_style == ControlStyle::GoyControl || p.use_goy_style)
+            {
+                if self.goy_rendered_by_ui && self.editor.is_none() {
+                    continue;
+                }
+                let size = p.size * h;
+                let center = if self.settings.mode != Mode::Dpad {
+                    self.move_anchor().unwrap_or(p.center)
+                } else {
+                    p.center
+                };
+                let (x, y) = (center[0] * w - size / 2.0, center[1] * h - size / 2.0);
+                let mut js = self.settings.joystick_style;
+                js.base_opacity *= self.hud_opacity_scale.clamp(0.0, 1.0);
+                js.stick_opacity *= self.hud_opacity_scale.clamp(0.0, 1.0);
+                draw_goy_joystick(b, a, [x, y, size, size], &js, state.left);
                 continue;
             }
             let p = self.placement(control);
             let size = p.size * h;
             let (x, y) = (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0);
-            let opacity = if self.editor.is_some() {
-                p.opacity.max(0.25)
-            } else {
-                p.opacity
-            };
             let color = rgba(255, 255, 255, (opacity * 255.0).round() as u8);
             let held = (self.inventory_mode
                 && Self::inventory_token(control)
                     .is_some_and(|token| self.held_custom_tokens().any(|held| held == token)))
                 || (control == Control::Sneak
-                    && if self.inventory_mode {
+                    && if self.inventory_mode || self.in_inventory {
                         self.inventory_shift
+                            || self
+                                .held_custom_tokens()
+                                .any(|held| held == "key.keyboard.left.shift")
                     } else {
                         self.sneaking
                     })
@@ -379,23 +643,15 @@ impl TouchControls {
                         || (bt == Button::RightTrigger && state.triggers[1] > 0.0)
                 });
             if control == Control::Move {
-                // The frame stays where the finger first landed; only the knob follows.
-                let anchor = self.fingers.values().find_map(|(role, _)| match role {
-                    Role::Move(anchor) => Some(*anchor),
-                    _ => None,
-                });
-                let dynamic = self.dynamic_joystick();
+                // When in analog/joystick mode, center the base at the active touch-origin anchor
+                // and return to p.center when released.
+                let anchor = self.move_anchor();
                 let (x, y) = match anchor {
-                    Some(anchor) if dynamic => {
+                    Some(anchor) if self.settings.mode != Mode::Dpad => {
                         (anchor[0] * w - size / 2.0, anchor[1] * h - size / 2.0)
                     }
                     _ => (p.center[0] * w - size / 2.0, p.center[1] * h - size / 2.0),
                 };
-                // A dynamic joystick only exists where the player touches; the
-                // editor still shows its home position so it can be moved.
-                if dynamic && anchor.is_none() && self.editor.is_none() {
-                    continue;
-                }
                 if self.settings.mode == Mode::Dpad {
                     let cell = size / 3.0;
                     for (dx, dy, name) in [
@@ -616,6 +872,7 @@ impl TouchControls {
             return [0.0; 2];
         }
         if ended {
+            self.passthrough_fingers.remove(&id);
             if let Some((
                 Role::Look {
                     start,
@@ -641,7 +898,37 @@ impl TouchControls {
             return [0.0; 2];
         }
         if started {
-            let control = self.control_at(point);
+            let mut control = self.control_at(point);
+            let has_move = self
+                .fingers
+                .values()
+                .any(|(r, _)| matches!(r, Role::Move(_)));
+            let joy_zone_supported = self.settings.control_style == ControlStyle::GoyControl
+                || self.settings.mode != Mode::Dpad;
+            if control.is_none() && !has_move && joy_zone_supported && self.visible(Control::Move) {
+                let zone_x = if self.settings.left_handed {
+                    1.0 - point[0]
+                } else {
+                    point[0]
+                };
+                match self.settings.joystick_style.move_area {
+                    JoystickMoveArea::MidBottomLeft if zone_x < 0.45 && point[1] > 0.35 => {
+                        control = Some(Control::Move);
+                    }
+                    JoystickMoveArea::RightSideAnywhere if zone_x >= 0.50 => {
+                        control = Some(Control::Move);
+                    }
+                    JoystickMoveArea::FollowFinger
+                        if (!self.dynamic_joystick()
+                            || self.settings.control_style == ControlStyle::GoyControl)
+                            && zone_x < 0.48
+                            && point[1] > 0.25 =>
+                    {
+                        control = Some(Control::Move);
+                    }
+                    _ => {}
+                }
+            }
             let role = match control {
                 Some(Control::Move)
                     if !self
@@ -649,14 +936,22 @@ impl TouchControls {
                         .values()
                         .any(|(r, _)| matches!(r, Role::Move(_))) =>
                 {
-                    let anchor = if self.dynamic_joystick() {
-                        point
+                    let anchor = if self.settings.mode != Mode::Dpad
+                        && (self.dynamic_joystick()
+                            || (joy_zone_supported
+                                && self.settings.joystick_style.move_area
+                                    != JoystickMoveArea::AbsoluteFixed))
+                    {
+                        [point[0].clamp(0.02, 0.98), point[1].clamp(0.02, 0.98)]
                     } else {
                         self.placement(Control::Move).center
                     };
                     Role::Move(anchor)
                 }
                 Some(Control::Shield) => {
+                    if self.placement(Control::Shield).passthrough {
+                        self.passthrough_fingers.insert(id);
+                    }
                     self.clicked = true;
                     self.pending.triggers[0] = 1.0;
                     Role::Shield
@@ -687,6 +982,7 @@ impl TouchControls {
                 }
                 Some(Control::Sneak)
                     if self.settings.mode == Mode::Dpad
+                        && self.toggle_crouch
                         && !self.vertical_movement
                         && !self.swimming
                         && !self.mounted =>
@@ -704,11 +1000,23 @@ impl TouchControls {
                         Role::Ignore
                     }
                 }
-                Some(Control::Sprint) if self.settings.sprint_toggle => {
+                Some(Control::Sprint)
+                    if self.settings.sprint_toggle
+                        || self.placement(Control::Sprint).toggleable =>
+                {
                     self.sprint_latched = !self.sprint_latched;
                     Role::Ignore
                 }
-                Some(c) => Self::button(c).map_or(Role::Ignore, Role::Button),
+                Some(c) if self.placement(c).toggleable => {
+                    self.latched_controls ^= 1 << (c as u16);
+                    Role::Ignore
+                }
+                Some(c) => {
+                    if self.placement(c).passthrough {
+                        self.passthrough_fingers.insert(id);
+                    }
+                    Self::button(c).map_or(Role::Ignore, Role::Button)
+                }
                 None => Role::Look {
                     start: point,
                     since: Instant::now(),
@@ -728,6 +1036,10 @@ impl TouchControls {
             return [0.0; 2];
         }
         let aspect = self.aspect();
+        let passthrough_at_point = self.passthrough_fingers.contains(&id)
+            || self
+                .control_at(point)
+                .is_some_and(|c| self.placement(c).passthrough);
         let attack_look =
             self.settings.attack_button_look && self.crosshair() && !self.inventory_mode;
         if let Some((role, previous)) = self.fingers.get_mut(&id) {
@@ -739,29 +1051,41 @@ impl TouchControls {
                 ..
             } = role
             {
+                *dragged |= ((point[0] - start[0]) * aspect).hypot(point[1] - start[1]) > 0.010;
                 if !*dragged && since.elapsed() >= HOLD_DELAY {
                     *committed = true;
                 }
-                *dragged |= ((point[0] - start[0]) * aspect).hypot(point[1] - start[1]) > 0.018;
                 if *dragged {
-                    [point[0] - previous[0], point[1] - previous[1]]
+                    let d = [point[0] - previous[0], point[1] - previous[1]];
+                    *previous = point;
+                    d
                 } else {
                     [0.0; 2]
                 }
-            } else if attack_look && matches!(role, Role::Button(Button::RightTrigger)) {
-                [point[0] - previous[0], point[1] - previous[1]]
+            } else if (matches!(role, Role::Button(_) | Role::Shield)
+                && passthrough_at_point
+                && (!matches!(role, Role::Button(Button::RightTrigger))
+                    || self.settings.attack_button_look))
+                || (attack_look && matches!(role, Role::Button(Button::RightTrigger)))
+            {
+                let d = [point[0] - previous[0], point[1] - previous[1]];
+                *previous = point;
+                d
             } else {
+                *previous = point;
                 [0.0; 2]
             };
-            *previous = point;
             return delta;
         }
         [0.0; 2]
     }
     pub fn clear(&mut self) {
+        self.cancel_editor_gesture();
         self.inventory_shift = false;
         self.clear_custom();
         self.fingers.clear();
+        self.passthrough_fingers.clear();
+        self.latched_controls = 0;
         self.last_sneak_tap = None;
         self.sprint_latched = false;
         self.pending = PadState::default();
@@ -835,8 +1159,24 @@ impl TouchControls {
     }
     pub fn state(&self) -> PadState {
         let mut state = PadState::default();
-        if self.settings.sprint_toggle && self.settings.sprint_button && self.sprint_latched {
+        if (self.settings.sprint_toggle || self.placement(Control::Sprint).toggleable)
+            && self.settings.sprint_button
+            && self.sprint_latched
+        {
             state.set(Button::LeftStick, true);
+        }
+        if self.latched_controls != 0 {
+            for c in Control::ALL {
+                if (self.latched_controls & (1 << (c as u16))) != 0
+                    && let Some(bt) = Self::button(c)
+                {
+                    match bt {
+                        Button::LeftTrigger => state.triggers[0] = 1.0,
+                        Button::RightTrigger => state.triggers[1] = 1.0,
+                        other => state.set(other, true),
+                    }
+                }
+            }
         }
         for (role, point) in self.fingers.values() {
             match role {
@@ -867,6 +1207,28 @@ impl TouchControls {
                 Role::Button(Button::RightTrigger) => state.triggers[1] = 1.0,
                 Role::Button(b) => state.set(*b, true),
                 _ => {}
+            }
+        }
+        if !self.inventory_mode && !self.in_menu {
+            for token in self.held_custom_tokens() {
+                match token {
+                    "key.keyboard.space" | "action:key.jump" => {
+                        state.set(Button::South, true);
+                    }
+                    "key.keyboard.w" | "action:key.forward" => {
+                        state.left[1] = state.left[1].max(1.0);
+                    }
+                    "key.keyboard.s" | "action:key.back" => {
+                        state.left[1] = state.left[1].min(-1.0);
+                    }
+                    "key.keyboard.a" | "action:key.left" => {
+                        state.left[0] = state.left[0].min(-1.0);
+                    }
+                    "key.keyboard.d" | "action:key.right" => {
+                        state.left[0] = state.left[0].max(1.0);
+                    }
+                    _ => {}
+                }
             }
         }
         state
@@ -928,6 +1290,18 @@ pub fn theme_button(
     true
 }
 
+/// Renders an MCPE-styled custom button with stone bevel border and centered label.
+pub fn draw_mcpe_custom_button(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    bounds: [f32; 4],
+    label: &str,
+    pressed: bool,
+    color: u32,
+) {
+    text_button(b, a, bounds, label, pressed, color, true);
+}
+
 /// Shared text controls: keep the raised frame at rest, visibly depress it while held.
 fn text_button(
     b: &mut HudBatch,
@@ -969,8 +1343,83 @@ fn text_button(
     b.scale_since(start, x + w / 2.0, y + h / 2.0 + offset, scale, scale);
 }
 
+fn draw_mcpe_bevel_button(b: &mut HudBatch, a: &HudAtlas, [x, y, w, h]: [f32; 4], color: u32) {
+    let Some(white) = a.sprites.get("horizon/white") else {
+        return;
+    };
+    let uv = [[(white.u0 + white.u1) / 2.0, (white.v0 + white.v1) / 2.0]; 4];
+    let border = 2.0;
+    let [r, g, bl, a] = color.to_le_bytes();
+    let top = rgba(
+        r.saturating_add(40),
+        g.saturating_add(40),
+        bl.saturating_add(40),
+        a,
+    );
+    let bottom = rgba(
+        r.saturating_sub(40),
+        g.saturating_sub(40),
+        bl.saturating_sub(40),
+        a,
+    );
+    b.quad(
+        [
+            [x, y],
+            [x + w, y],
+            [x + w - border, y + border],
+            [x + border, y + border],
+        ],
+        uv,
+        top,
+    );
+    b.quad(
+        [
+            [x, y + h],
+            [x + border, y + h - border],
+            [x + w - border, y + h - border],
+            [x + w, y + h],
+        ],
+        uv,
+        bottom,
+    );
+    b.quad(
+        [
+            [x, y],
+            [x + border, y + border],
+            [x + border, y + h - border],
+            [x, y + h],
+        ],
+        uv,
+        top,
+    );
+    b.quad(
+        [
+            [x + w, y],
+            [x + w, y + h],
+            [x + w - border, y + h - border],
+            [x + w - border, y + border],
+        ],
+        uv,
+        bottom,
+    );
+    b.quad(
+        [
+            [x + border, y + border],
+            [x + w - border, y + border],
+            [x + w - border, y + h - border],
+            [x + border, y + h - border],
+        ],
+        uv,
+        color,
+    );
+}
+
 /// Reuse Chat's complete 18x18 border, including its bottommost pixel row.
 fn menu_frame(b: &mut HudBatch, a: &HudAtlas, [x, y, w, h]: [f32; 4], color: u32) {
+    if !a.sprites.contains_key("gui/bedrock/gui") {
+        draw_mcpe_bevel_button(b, a, [x, y, w, h], color);
+        return;
+    }
     let border = (w / 18.0 * 2.0).min(h / 2.0);
     let xs = [200.0, 202.0, 216.0, 218.0];
     let ys = [82.0, 84.0, 96.0, 100.0];
@@ -1081,9 +1530,250 @@ fn ring(b: &mut HudBatch, a: &HudAtlas, center: [f32; 2], radius: f32, color: u3
 }
 /// Glyphs such as the inventory ellipsis are deliberately wide and short.
 /// Fit their original pixels inside the hit target without stretching them.
+/// Renders a single MCPE control using bedrock sprites when loaded or authentic
+/// MCPE pixel-art bevel buttons + pixel icons when in the Launcher editor.
+pub fn draw_single_mcpe_control(
+    tc: &TouchControls,
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    control: Control,
+    [x, y, w, h]: [f32; 4],
+    color: u32,
+    pressed: bool,
+) {
+    let size = w.min(h);
+    let cx = x + (w - size) * 0.5;
+    let cy = y + (h - size) * 0.5;
+    if control == Control::Move {
+        if tc.settings.mode == Mode::Dpad {
+            let cell = size / 3.0;
+            for (dx, dy, name) in [
+                (0, -1, "up"),
+                (-1, 0, "left"),
+                (1, 0, "right"),
+                (0, 1, "down"),
+            ] {
+                fitted_sprite(
+                    b,
+                    a,
+                    &format!("controls/{name}"),
+                    [
+                        cx + cell * (dx + 1) as f32,
+                        cy + cell * (dy + 1) as f32,
+                        cell,
+                        cell,
+                    ],
+                    color,
+                );
+            }
+        } else {
+            sprite(b, a, "ui/joystick_frame", [cx, cy, size, size], color);
+            sprite(
+                b,
+                a,
+                "ui/joystick_knob",
+                [cx + size * 0.33, cy + size * 0.33, size * 0.34, size * 0.34],
+                color,
+            );
+        }
+        return;
+    }
+    let bounds = [cx, cy, size, size];
+    let themed = match control {
+        Control::Chat => Some("chat"),
+        Control::Pause => Some("pause"),
+        Control::Settings => Some("settings"),
+        Control::Debug => Some("debug"),
+        Control::Perspective => Some("perspective"),
+        _ => None,
+    };
+    if themed.is_some_and(|name| theme_button(b, a, name, bounds, pressed, color, false)) {
+        return;
+    }
+    let name = match control {
+        Control::Sprint => "ui/sprint",
+        Control::Attack => "ui/attack",
+        Control::Use => "ui/interact",
+        Control::Jump if tc.swimming => "controls/waterascend",
+        Control::Sneak if tc.swimming => "controls/waterdescend",
+        Control::Jump if tc.vertical_movement => "controls/flyingascend",
+        Control::Sneak if tc.vertical_movement => "controls/flyingdescend",
+        Control::Sneak if tc.mounted => "controls/dismount",
+        Control::Jump if tc.settings.mode == Mode::Dpad => "controls/jump_dpad",
+        Control::Sneak if tc.settings.mode == Mode::Dpad => "controls/sneak_dpad",
+        Control::Jump => "ui/jump",
+        Control::Sneak => "ui/sneak",
+        Control::Pause => "ui/pause_icon",
+        Control::Chat => "ui/chat_icon",
+        Control::Debug => "ui/debug_icon",
+        Control::Perspective => "ui/perspective_icon",
+        Control::Inventory => "ui/more-dots",
+        Control::Settings => "ui/gear",
+        Control::Offhand => "ui/offhand_icon",
+        Control::Shield => "ui/shield_icon",
+        Control::Move => "ui/joystick_frame",
+    };
+    match control {
+        Control::Chat if a.sprites.contains_key("gui/bedrock/gui") => {
+            region(b, a, "gui", [200.0, 82.0, 18.0, 18.0], bounds, color)
+        }
+        Control::Debug if a.sprites.contains_key("gui/bedrock/gui") => {
+            region(b, a, "gui", [236.0, 82.0, 18.0, 18.0], bounds, color)
+        }
+        Control::Perspective if a.sprites.contains_key("gui/bedrock/gui") => {
+            region(b, a, "gui", [236.0, 46.0, 18.0, 18.0], bounds, color)
+        }
+        Control::Offhand | Control::Shield => {
+            let label = if control == Control::Offhand {
+                "Swap"
+            } else {
+                "Shield"
+            };
+            text_button(b, a, bounds, label, pressed, color, false);
+        }
+        Control::Inventory if a.sprites.contains_key("gui/bedrock/ui/joystick_knob") => {
+            sprite(b, a, "ui/joystick_knob", bounds, color);
+            fitted_sprite(
+                b,
+                a,
+                name,
+                [cx + size * 0.2, cy + size * 0.2, size * 0.6, size * 0.6],
+                color,
+            );
+        }
+        Control::Pause | Control::Settings => {
+            menu_frame(b, a, bounds, color);
+            fitted_sprite(
+                b,
+                a,
+                name,
+                [cx + size * 0.23, cy + size * 0.23, size * 0.54, size * 0.54],
+                color,
+            );
+        }
+        _ => fitted_sprite(
+            b,
+            a,
+            &format!("{name}{}", if pressed { "_pressed" } else { "" }),
+            bounds,
+            color,
+        ),
+    }
+}
+
+fn scale_alpha(c: u32, opacity: f32) -> u32 {
+    let a = ((c >> 24) as f32 * opacity.clamp(0.0, 1.0)).round() as u32;
+    (c & 0x00FF_FFFF) | (a << 24)
+}
+
+/// Renders a GoyControl Static Button in-game using HudBatch primitives.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_goy_static_button(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    [x, y, w, h]: [f32; 4],
+    p: &Placement,
+    label: &str,
+    held: bool,
+    toggled: bool,
+    opacity: f32,
+) {
+    let fill_c = if held {
+        scale_alpha(p.on_click_color, opacity)
+    } else if toggled {
+        scale_alpha(p.on_toggle_color, opacity)
+    } else {
+        scale_alpha(p.button_color, opacity)
+    };
+    let stroke_c = if held {
+        scale_alpha(p.on_click_stroke_color, opacity)
+    } else if toggled {
+        scale_alpha(p.on_toggle_stroke_color, opacity)
+    } else {
+        scale_alpha(p.stroke_color, opacity)
+    };
+    // Flat 2D GoyControl button: no 3D drop shadow pass
+    b.fill(a, x, y, w, h, fill_c);
+    if p.stroke_size > 0.1 {
+        let sm = p.stroke_margin;
+        let sx = x - sm;
+        let sy = y - sm;
+        let sw = (w + sm * 2.0).max(2.0);
+        let sh = (h + sm * 2.0).max(2.0);
+        let t = (p.stroke_size * 0.75).clamp(1.0, 5.0);
+        b.fill(a, sx, sy, sw, t, stroke_c);
+        b.fill(a, sx, sy + sh - t, sw, t, stroke_c);
+        b.fill(a, sx, sy, t, sh, stroke_c);
+        b.fill(a, sx + sw - t, sy, t, sh, stroke_c);
+    }
+    if !label.is_empty() && a.sprites.contains_key("font/ascii") {
+        let width = HudBatch::text_width(a, label);
+        let start = b.vertices.len();
+        b.text(
+            a,
+            label,
+            x + (w - width) / 2.0,
+            y + (h - 8.0) / 2.0,
+            rgba(245, 243, 255, (opacity.clamp(0.2, 1.0) * 255.0) as u8),
+            true,
+        );
+        let scale = ((w - 6.0).max(1.0) / width.max(1.0)).min(((h - 6.0).max(1.0) / 8.0).min(1.0));
+        b.scale_since(start, x + w / 2.0, y + h / 2.0, scale, scale);
+    }
+}
+
+fn disc(b: &mut HudBatch, a: &HudAtlas, center: [f32; 2], radius: f32, color: u32) {
+    if radius <= 0.5 || (color >> 24) == 0 {
+        return;
+    }
+    let Some(white) = a.sprites.get("horizon/white") else {
+        return;
+    };
+    let uv = [[(white.u0 + white.u1) / 2.0, (white.v0 + white.v1) / 2.0]; 4];
+    for segment in circle_points().windows(2) {
+        let p0 = [
+            center[0] + segment[0][0] * radius,
+            center[1] + segment[0][1] * radius,
+        ];
+        let p1 = [
+            center[0] + segment[1][0] * radius,
+            center[1] + segment[1][1] * radius,
+        ];
+        b.quad([center, p0, p1, center], uv, color);
+    }
+}
+
+/// Renders the GoyControl customizable Joystick (Base analog area + Stick knob) using smooth circular geometry.
+pub fn draw_goy_joystick(
+    b: &mut HudBatch,
+    a: &HudAtlas,
+    [x, y, w, h]: [f32; 4],
+    js: &JoystickStyle,
+    stick_vec: [f32; 2],
+) {
+    let base_fill = scale_alpha(js.base_color, js.base_opacity);
+    let base_stroke = scale_alpha(js.base_stroke_color, js.base_opacity);
+    let center = [x + w * 0.5, y + h * 0.5];
+    let radius = w.min(h) * 0.5;
+    disc(b, a, center, radius, base_fill);
+    if js.base_stroke > 0.1 {
+        ring(b, a, center, radius, base_stroke);
+    }
+    let kr = (w.min(h) * js.stick_size.clamp(0.20, 0.85)) * 0.5;
+    let kcenter = [
+        center[0] + stick_vec[0] * (w * 0.25),
+        center[1] - stick_vec[1] * (h * 0.25),
+    ];
+    let stick_fill = scale_alpha(js.stick_color, js.stick_opacity);
+    let stick_stroke = scale_alpha(js.stick_stroke_color, js.stick_opacity);
+    disc(b, a, kcenter, kr, stick_fill);
+    if js.stick_stroke > 0.1 {
+        ring(b, a, kcenter, kr, stick_stroke);
+    }
+}
+
 fn fitted_sprite(b: &mut HudBatch, a: &HudAtlas, name: &str, [x, y, w, h]: [f32; 4], color: u32) {
-    let key = format!("gui/bedrock/{name}");
-    if let Some(rect) = a.sprites.get(&key).copied() {
+    if let Some(rect) = a.sprites.get(&format!("gui/bedrock/{name}")).copied() {
         let scale = (w / rect.w as f32).min(h / rect.h as f32);
         let (width, height) = (rect.w as f32 * scale, rect.h as f32 * scale);
         control_quad(
@@ -1096,6 +1786,87 @@ fn fitted_sprite(b: &mut HudBatch, a: &HudAtlas, name: &str, [x, y, w, h]: [f32;
             rect,
             color,
         );
+    } else {
+        // Authentic MCPE classic double-bevel stone plate + pixel-art icon when bedrock atlas is unloaded.
+        let alpha = (color >> 24) as u8;
+        let bg = rgba(58, 58, 62, (u16::from(alpha) * 185 / 255) as u8);
+        let hi = rgba(215, 215, 222, (u16::from(alpha) * 210 / 255) as u8);
+        let lo = rgba(28, 28, 32, (u16::from(alpha) * 220 / 255) as u8);
+        let fg = rgba(242, 242, 246, alpha);
+        let bw = (w.min(h) * 0.065).clamp(1.2, 3.0);
+        b.fill(a, x, y, w, h, lo);
+        b.fill(
+            a,
+            x + bw,
+            y + bw,
+            (w - bw * 2.0).max(1.0),
+            (h - bw * 2.0).max(1.0),
+            bg,
+        );
+        b.fill(a, x + bw, y + bw, (w - bw * 2.0).max(1.0), bw, hi);
+        b.fill(a, x + bw, y + bw, bw, (h - bw * 2.0).max(1.0), hi);
+        let cx = x + w * 0.5;
+        let cy = y + h * 0.5;
+        let u = w.min(h) * 0.08;
+        if name.contains("up") || name.contains("jump") || name.contains("ascend") {
+            // Pixel-art upward chevron / arrow
+            b.fill(a, cx - u, cy - u * 2.5, u * 2.0, u, fg);
+            b.fill(a, cx - u * 2.0, cy - u * 1.5, u * 4.0, u, fg);
+            b.fill(a, cx - u * 3.0, cy - u * 0.5, u * 6.0, u, fg);
+            b.fill(a, cx - u, cy + u * 0.5, u * 2.0, u * 2.2, fg);
+        } else if name.contains("down") || name.contains("descend") {
+            b.fill(a, cx - u, cy - u * 2.5, u * 2.0, u * 2.2, fg);
+            b.fill(a, cx - u * 3.0, cy - u * 0.3, u * 6.0, u, fg);
+            b.fill(a, cx - u * 2.0, cy + u * 0.7, u * 4.0, u, fg);
+            b.fill(a, cx - u, cy + u * 1.7, u * 2.0, u, fg);
+        } else if name.contains("left") {
+            b.fill(a, cx - u * 2.5, cy - u, u, u * 2.0, fg);
+            b.fill(a, cx - u * 1.5, cy - u * 2.0, u, u * 4.0, fg);
+            b.fill(a, cx - u * 0.5, cy - u * 3.0, u, u * 6.0, fg);
+            b.fill(a, cx + u * 0.5, cy - u, u * 2.2, u * 2.0, fg);
+        } else if name.contains("right") {
+            b.fill(a, cx - u * 2.7, cy - u, u * 2.2, u * 2.0, fg);
+            b.fill(a, cx - u * 0.5, cy - u * 3.0, u, u * 6.0, fg);
+            b.fill(a, cx + u * 0.5, cy - u * 2.0, u, u * 4.0, fg);
+            b.fill(a, cx + u * 1.5, cy - u, u, u * 2.0, fg);
+        } else if name.contains("sneak") {
+            // MCPE center diamond / sneak icon
+            b.fill(a, cx - u, cy - u * 2.2, u * 2.0, u * 4.4, fg);
+            b.fill(a, cx - u * 2.2, cy - u, u * 4.4, u * 2.0, fg);
+            b.fill(a, cx - u * 0.8, cy - u * 0.8, u * 1.6, u * 1.6, bg);
+        } else if name.contains("attack") {
+            // MCPE diagonal sword icon
+            for step in -2..=2 {
+                let sf = step as f32 * u;
+                b.fill(
+                    a,
+                    cx + sf - u * 0.6,
+                    cy - sf - u * 0.6,
+                    u * 1.3,
+                    u * 1.3,
+                    fg,
+                );
+            }
+            b.fill(a, cx - u * 2.4, cy + u * 0.4, u * 2.6, u * 0.9, fg);
+        } else if name.contains("interact") {
+            // MCPE split-crosshair / use icon
+            b.fill(a, cx - u * 2.8, cy - u * 0.45, u * 5.6, u * 0.9, fg);
+            b.fill(a, cx - u * 0.45, cy - u * 2.8, u * 0.9, u * 5.6, fg);
+        } else if name.contains("sprint") {
+            // Double forward chevrons
+            b.fill(a, cx - u * 2.2, cy - u * 2.0, u * 1.4, u * 4.0, fg);
+            b.fill(a, cx + u * 0.4, cy - u * 2.0, u * 1.4, u * 4.0, fg);
+        } else if name.contains("more-dots") {
+            // 3 inventory ellipsis dots
+            for dx in [-2.2, 0.0, 2.2] {
+                b.fill(a, cx + dx * u - u * 0.6, cy - u * 0.6, u * 1.2, u * 1.2, fg);
+            }
+        } else if name.contains("pause") {
+            b.fill(a, cx - u * 1.8, cy - u * 2.2, u * 1.2, u * 4.4, fg);
+            b.fill(a, cx + u * 0.6, cy - u * 2.2, u * 1.2, u * 4.4, fg);
+        } else {
+            b.fill(a, cx - u * 1.6, cy - u * 1.6, u * 3.2, u * 3.2, fg);
+        }
     }
 }
 fn region(
@@ -1162,6 +1933,37 @@ fn line(
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn joystick_active_zones_mirror_with_left_handed_layouts() {
+        for (area, start) in [
+            (JoystickMoveArea::MidBottomLeft, [0.25, 0.42]),
+            (JoystickMoveArea::RightSideAnywhere, [0.70, 0.20]),
+            (JoystickMoveArea::FollowFinger, [0.25, 0.42]),
+        ] {
+            for left_handed in [false, true] {
+                let mut touch = TouchControls::default();
+                touch.viewport(1920, 1080);
+                touch.settings.control_style = ControlStyle::GoyControl;
+                touch.settings.mode = Mode::Crosshair;
+                touch.settings.left_handed = left_handed;
+                touch.settings.joystick_style.move_area = area;
+                let x = if left_handed {
+                    1.0 - start[0]
+                } else {
+                    start[0]
+                };
+                touch.update(1, [x, start[1]], true, false);
+                touch.update(1, [x + 0.05, start[1]], false, false);
+                assert!(
+                    touch.poll_state().left[0] > 0.0,
+                    "{area:?}, left_handed={left_handed}"
+                );
+                touch.update(1, [x + 0.05, start[1]], false, true);
+                assert_eq!(touch.poll_state().left, [0.0; 2]);
+            }
+        }
+    }
+
     #[test]
     fn factory_swap_stays_beside_inventory_without_covering_action_buttons() {
         for (w, h) in [(2560, 1600), (2400, 1080), (1080, 2400), (240, 320)] {
@@ -1280,6 +2082,8 @@ mod tests {
     #[test]
     fn dynamic_joystick_keeps_fixed_and_dpad_controls_and_button_priority() {
         let mut t = TouchControls::default();
+        t.settings.dynamic_joystick = false;
+        t.settings.joystick_style.move_area = JoystickMoveArea::AbsoluteFixed;
         let home = t.placement(Control::Move).center;
         let start = [home[0] + 0.01, home[1]];
         t.update(1, start, true, false);
@@ -1287,6 +2091,7 @@ mod tests {
         t.clear();
 
         t.settings.dynamic_joystick = true;
+        t.settings.joystick_style.move_area = JoystickMoveArea::FollowFinger;
         t.settings.mode = Mode::Dpad;
         let home = t.placement(Control::Move).center;
         let up = [home[0], home[1] - t.placement(Control::Move).size / 3.0];
@@ -1500,7 +2305,6 @@ mod tests {
     #[test]
     fn sprint_toggle_survives_finger_release_and_clears_on_focus_loss() {
         let mut t = TouchControls {
-            loaded: true,
             aspect: 16.0 / 9.0,
             ..Default::default()
         };
@@ -1540,7 +2344,6 @@ mod tests {
     fn oversized_controls_can_be_dragged_on_narrow_portrait_surfaces() {
         let mut touch = TouchControls {
             aspect: 0.4,
-            loaded: true,
             ..Default::default()
         };
         touch.settings.layouts[0][Control::Move as usize].size = 0.45;
@@ -1888,8 +2691,29 @@ mod tests {
         assert!(t.settings.left_handed);
     }
     #[test]
+    fn hold_crouch_starts_on_first_touch_and_ends_on_release() {
+        for mode in [Mode::Crosshair, Mode::Dpad] {
+            let mut t = TouchControls::default();
+            t.settings.mode = mode;
+            t.toggle_crouch = false;
+            let point = t.settings.placement(Control::Sneak).center;
+            t.update(1, point, true, false);
+            assert!(t.poll_state().held(Button::RightStick), "{mode:?}");
+            t.update(1, point, false, true);
+            assert!(!t.poll_state().held(Button::RightStick), "{mode:?}");
+            t.update(2, point, true, false);
+            assert!(
+                t.poll_state().held(Button::RightStick),
+                "second hold {mode:?}"
+            );
+            t.clear();
+            assert!(!t.poll_state().held(Button::RightStick));
+        }
+    }
+    #[test]
     fn dpad_can_slide_between_directions_and_mirror() {
         let mut t = TouchControls::default();
+        t.toggle_crouch = true;
         t.settings.mode = Mode::Dpad;
         t.update(1, [0.13, 0.66], true, false);
         assert_eq!(t.state().left, [0.0, 1.0]);

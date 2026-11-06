@@ -12,6 +12,7 @@ bindings and no entry points, and no names starting with `horizon_`.
 | Stage | In `horizon-shaders.toml` | Your function |
 | --- | --- | --- |
 | sky | `[sky]` | `fn sky(input: SkyInput) -> vec4<f32>` |
+| vertex | `[vertex]` | `fn vertex(input: VertexInput) -> vec3<f32>` |
 | material | `[material]` | `fn material(input: MaterialInput) -> Surface` |
 | weather | `[weather]` | `fn weather(input: WeatherInput) -> vec4<f32>` |
 | post | `[[post]]` | `fn post(input: PostInput) -> vec4<f32>` |
@@ -28,6 +29,33 @@ One direction of the sky, for `fn sky(input: SkyInput) -> vec4<f32>`. The sun, m
 | --- | --- | --- |
 | `direction` | `vec3<f32>` | Unit view ray, camera-relative world axes. |
 | `color` | `vec4<f32>` | Vanilla's sky colour along the ray (sky, fog and sunrise). |
+
+Resources (bind group 3):
+
+| Binding | Declaration | Meaning |
+| --- | --- | --- |
+| 0 | `var<uniform> frame: Frame` | The frame (`Frame`). |
+
+## vertex
+
+`fn vertex(input: VertexInput) -> vec3<f32>`
+
+### `VertexInput`
+
+One corner of a block's surface, for `fn vertex(input: VertexInput) -> vec3<f32>`, which returns where it is drawn (camera-relative, in blocks; `input.position` where it stays).
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `position` | `vec3<f32>` | The corner, camera-relative, in blocks (`+ frame.camera_position` for the world's). |
+| `uv` | `vec2<f32>` | The texture coordinate inside the block's sprite. |
+| `material` | `u32` | The `[[materials]]` id of the block's sprite (0 when none matches). |
+| `light` | `vec2<f32>` | Block and sky light, 0..1. |
+| `tint` | `vec4<f32>` | The vertex colour (biome tint, face shade, ambient occlusion); alpha 1. |
+| `face` | `u32` | For a fluid, the face of the block the corner is on (as `MaterialInput.face`), else 0. |
+| `fluid` | `u32` | 1 on a fluid's surface (water or lava), else 0. |
+| `block_position` | `vec3<f32>` | The corner inside its 16×16×16 section, 0..16, before the section's offset is added. |
+| `tags` | `u32` | The pack's sprite tags this quad's sprite has: bit i for the manifest's i-th `[[tags]]`. |
+| `emission` | `f32` | How strongly the block itself shines, 0..1, by its kind of light; 0 for most blocks. |
 
 Resources (bind group 3):
 
@@ -60,6 +88,8 @@ One point of a block's surface, for `fn material(input: MaterialInput) -> Surfac
 | `emission` | `f32` | How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks. |
 | `normal` | `vec3<f32>` | The surface's geometric normal, a unit vector in world axes, facing the camera. A normal within about 3.6 degrees of an axis is that axis exactly, so distant block faces do not shimmer; flowing water's slopes are steeper and keep theirs. |
 | `tangent` | `vec4<f32>` | The surface's tangent: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). With `normal` it turns a normal map's normals into world axes. |
+| `colored_light` | `vec3<f32>` | The frame's coloured lights at this point (`[[particle_lights]]`, held and dropped items in their `[[lights]]` colour while dynamic lights are on, and mods' visual lights), 0..1, to light the surface with as the pack likes; 0 where none reaches. |
+| `displaced` | `f32` | How much of the surface's relief came from `[displacement]`, 0..1 (0 without `[displacement]`). |
 
 ### `Surface`
 
@@ -153,6 +183,7 @@ Resources (bind group 3):
 | 8 | `var history: texture_2d<f32>` | Last frame's input to the last pass (what the pass before it wrote), for temporal passes (TAA, denoising): put such a pass second to last and it reads its own previous output; reproject with `frame.previous_view_projection`. Black on the first frame, after a gap of over half a second, and with a single pass. |
 | 9 | `var shadow_map_translucent: texture_depth_2d` | `shadow_map` with the translucent terrain (water, stained glass, ice) the light passes through drawn in too, read with `shadow_sampler` the same way: a point lit in `shadow_map` but not here lies under such a surface, which `shadow_color` gives the colour of. |
 | 10 | `var shadow_color: texture_2d<f32>` | The texture colour times the vertex colour (rgb: the tint, the face's directional shade and ambient occlusion) of the nearest translucent surface the light passes through at each texel of `shadow_map_translucent`, white where there is none; alpha is 1 on a fluid (water) and the texture's alpha, at most 0.99, on anything else. Read it with `textureLoad` at `shadow_position`'s xy times `textureDimensions(shadow_color)`. |
+| 11 | `var scene_surface: texture_2d<u32>` | What the material stage's `set_surface` stored for the solid terrain at each pixel, unfiltered (`textureLoad`): read it through the prelude's `surface_at`, which knows its layout and where it no longer shows. Blank without a material stage that calls `set_surface`. |
 
 Helpers:
 

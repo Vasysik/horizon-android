@@ -42,6 +42,8 @@ pub struct Manifest {
     /// WGSL files put before every stage's own file, in order.
     pub shared: Vec<String>,
     pub sky: Option<Stage>,
+    /// Moves terrain vertices (waving leaves, plants, water).
+    pub vertex: Option<Stage>,
     pub material: Option<Stage>,
     /// The colour of rain and snow streaks (Minecraft's own when absent).
     pub weather: Option<Stage>,
@@ -60,11 +62,14 @@ pub struct Manifest {
     /// The colour of block light by the block giving it off: the first entry with a matching
     /// pattern wins (`Manifest::light_of`).
     pub lights: Vec<LightColor>,
+    pub particle_lights: Vec<ParticleLight>,
     pub budget: Budget,
     /// When the material stage's water mirror (`reflection`) is drawn.
     pub reflection: Option<Reflection>,
     /// The shadow map the material and post stages read, if the pack asks for one.
     pub shadow: Option<Shadow>,
+    /// Optional LabPBR relief subdivision near the camera.
+    pub displacement: Option<Displacement>,
 }
 
 /// `[shadow]`: the renderer draws the solid terrain and entities as the sun (the moon by night)
@@ -82,6 +87,63 @@ pub struct Shadow {
     /// a full shadow, say, whatever holes they show.
     #[serde(default)]
     pub solid_materials: Vec<u32>,
+    #[serde(default)]
+    pub option: Option<String>,
+    #[serde(default)]
+    pub resolution_option: Option<String>,
+    #[serde(default)]
+    pub distance_option: Option<String>,
+}
+
+impl Default for Shadow {
+    fn default() -> Self {
+        Self {
+            resolution: default_shadow_resolution(),
+            distance: default_shadow_distance(),
+            solid_materials: Vec::new(),
+            option: None,
+            resolution_option: None,
+            distance_option: None,
+        }
+    }
+}
+
+/// `[[particle_lights]]`: particles that join the frame's coloured lights.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ParticleLight {
+    pub particles: Vec<String>,
+    pub color: [f32; 3],
+    #[serde(default = "default_particle_light_reach")]
+    pub reach: f32,
+}
+
+fn default_particle_light_reach() -> f32 {
+    4.0
+}
+
+/// `[displacement]`: LabPBR relief as geometry near the camera.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Displacement {
+    #[serde(default = "default_displacement_distance")]
+    pub distance: f32,
+    #[serde(default = "default_displacement_cells")]
+    pub cells: u32,
+    #[serde(default)]
+    pub option: Option<String>,
+    #[serde(default)]
+    pub cells_option: Option<String>,
+    #[serde(default)]
+    pub steps_option: Option<String>,
+}
+
+fn default_displacement_distance() -> f32 {
+    12.0
+}
+
+fn default_displacement_cells() -> u32 {
+    16
 }
 
 /// The shadow map's side, in texels.
@@ -161,7 +223,14 @@ pub struct Material {
     pub id: u32,
     /// Sprite names such as `minecraft:block/oak_leaves` (the namespace defaults to
     /// `minecraft`), each with any number of `*` matching any run of characters.
+    #[serde(default)]
     pub sprites: Vec<String>,
+    /// Optional block names whose model sprites receive this material id.
+    #[serde(default)]
+    pub blocks: Vec<String>,
+    /// Optional flag moving this material id's sprites into the translucent pass.
+    #[serde(default)]
+    pub translucent: Option<bool>,
 }
 
 impl Material {
@@ -313,6 +382,8 @@ struct Raw {
     #[serde(default)]
     shared: Vec<String>,
     sky: Option<Stage>,
+    #[serde(default)]
+    vertex: Option<Stage>,
     material: Option<Stage>,
     #[serde(default)]
     weather: Option<Stage>,
@@ -331,9 +402,12 @@ struct Raw {
     #[serde(default)]
     lights: Vec<LightColor>,
     #[serde(default)]
+    particle_lights: Vec<ParticleLight>,
+    #[serde(default)]
     budget: RawBudget,
     reflection: Option<Reflection>,
     shadow: Option<Shadow>,
+    displacement: Option<Displacement>,
 }
 
 #[derive(Deserialize)]
@@ -457,20 +531,22 @@ impl Manifest {
             return Err(err("name and version can't be empty".into()));
         }
         if raw.sky.is_none()
+            && raw.vertex.is_none()
             && raw.material.is_none()
             && raw.weather.is_none()
             && raw.post.is_empty()
         {
             return Err(err(
-                "no stage: give it a [sky], a [material], a [weather] or a [[post]]".into(),
+                "no stage: give it a [sky], a [vertex], a [material], a [weather] or a [[post]]".into(),
             ));
         }
-        if raw.sky.iter().chain(&raw.post).any(|s| s.fog.is_some()) {
+        if raw.sky.iter().chain(&raw.vertex).chain(&raw.post).any(|s| s.fog.is_some()) {
             return Err(err("`fog` is a key of [material] only".into()));
         }
         if raw
             .sky
             .iter()
+            .chain(&raw.vertex)
             .chain(&raw.material)
             .any(|s| s.scale.is_some() || s.output.is_some())
         {
@@ -486,6 +562,7 @@ impl Manifest {
         let stages = raw
             .sky
             .iter()
+            .chain(&raw.vertex)
             .chain(&raw.material)
             .chain(&raw.weather)
             .chain(&raw.post);
@@ -499,7 +576,7 @@ impl Manifest {
             }
         }
         let sky_only = |s: &Stage| s.clouds.is_some() || s.sun.is_some() || s.stars.is_some();
-        if raw.material.iter().chain(&raw.post).any(sky_only) {
+        if raw.vertex.iter().chain(&raw.material).chain(&raw.post).any(sky_only) {
             return Err(err(
                 "`clouds`, `sun` and `stars` are keys of [sky] only".into()
             ));
@@ -519,9 +596,9 @@ impl Manifest {
             }
             options.push(option);
         }
-        if !raw.tags.is_empty() && raw.material.is_none() {
+        if !raw.tags.is_empty() && raw.material.is_none() && raw.vertex.is_none() {
             return Err(err(
-                "tags are read by the material stage: give it a [material]".into(),
+                "tags are read by the vertex and material stages: give it a [vertex] or [material]".into(),
             ));
         }
         if raw.tags.len() > MAX_TAGS {
@@ -546,7 +623,7 @@ impl Manifest {
             }
         }
         let solid_ids = raw.shadow.iter().any(|s| !s.solid_materials.is_empty());
-        if !raw.materials.is_empty() && raw.material.is_none() && !solid_ids {
+        if !raw.materials.is_empty() && raw.material.is_none() && raw.vertex.is_none() && !solid_ids {
             return Err(err(
                 "materials are read by the material stage and shadow.solid_materials: \
                  give it a [material] or use them there"
@@ -563,7 +640,10 @@ impl Manifest {
             if !(1..=65535).contains(&m.id) {
                 return Err(err(format!("material id {} is not in 1..=65535", m.id)));
             }
-            if m.sprites.is_empty() || m.sprites.iter().any(String::is_empty) {
+            if (m.sprites.is_empty() && m.blocks.is_empty())
+                || m.sprites.iter().any(String::is_empty)
+                || m.blocks.iter().any(String::is_empty)
+            {
                 return Err(err(format!("material {}: needs sprites", m.id)));
             }
         }
@@ -685,6 +765,7 @@ impl Manifest {
             license: raw.license,
             shared: raw.shared,
             sky: raw.sky,
+            vertex: raw.vertex,
             material: raw.material,
             weather: raw.weather,
             post: raw.post,
@@ -694,9 +775,11 @@ impl Manifest {
             materials: raw.materials,
             textures,
             lights: raw.lights,
+            particle_lights: raw.particle_lights,
             budget: Budget { gpu_ms },
             reflection: raw.reflection,
             shadow: raw.shadow,
+            displacement: raw.displacement,
         })
     }
 
@@ -773,6 +856,7 @@ impl Manifest {
         let stages = self
             .sky
             .iter()
+            .chain(&self.vertex)
             .chain(&self.material)
             .chain(&self.weather)
             .chain(&self.post);

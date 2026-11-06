@@ -28,6 +28,7 @@ pub(super) fn show(looked_in: &std::path::Path, settings: &Settings) -> Result<(
                 size: 1,
                 pixels: [0u8; 4].repeat(6),
             }),
+            sounds: None,
         },
         screen: NoResources::new(looked_in),
         pointer: (0.0, 0.0),

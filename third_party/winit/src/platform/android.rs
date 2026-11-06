@@ -238,6 +238,12 @@ pub fn native_device_id(id: crate::event::DeviceId) -> i32 {
     id.0.native_id()
 }
 
+/// Update connected Android input IDs so the event loop can report hot-unplug events.
+#[cfg(android_platform)]
+pub fn set_native_input_devices(ids: &[i32]) {
+    crate::platform_impl::set_input_devices(ids);
+}
+
 /// Known controller devices, including their separately reported D-pad key events.
 #[cfg(android_platform)]
 pub fn set_native_gamepads(ids: &[i32]) {

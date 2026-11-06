@@ -124,8 +124,8 @@ pub(super) struct Split<'a> {
     cursor: PhysicalPosition<f64>,
     limiter: horizon_client::window::FramerateLimiter,
     clock: horizon_client::window::SystemClock,
-    /// P1's resources, shared by the other players' games for the process's lifetime.
-    res: Option<&'static Arc<super::Resources>>,
+    /// The session owns this bundle until every player has been dropped.
+    res: &'a Arc<super::Resources>,
     /// Whose game runs now (0 = P1), and P1's buttons while another's does.
     turn: usize,
     host_widgets: widgets::Saved,
@@ -141,7 +141,7 @@ pub(super) struct Split<'a> {
 }
 
 impl<'a> Split<'a> {
-    pub(super) fn new(host: Game<'a>) -> Self {
+    pub(super) fn new(host: Game<'a>, res: &'a Arc<super::Resources>) -> Self {
         let split = std::env::var("HORIZON_SPLIT").ok();
         let test_players = split
             .as_ref()
@@ -170,7 +170,7 @@ impl<'a> Split<'a> {
             cursor: PhysicalPosition::new(0.0, 0.0),
             limiter: horizon_client::window::FramerateLimiter::new(0),
             clock: Default::default(),
-            res: None,
+            res,
             turn: 0,
             host_widgets: Default::default(),
             pads: Default::default(),

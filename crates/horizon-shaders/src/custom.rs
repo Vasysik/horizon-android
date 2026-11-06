@@ -202,8 +202,11 @@ impl Custom {
             Expr::Name(name, component) => {
                 let v = match name.as_str() {
                     "pi" => Some(Val::scalar(std::f64::consts::PI)),
-                    "true" => Some(Val::scalar(1.0)),
-                    "false" => Some(Val::scalar(0.0)),
+                    "true" | "isRightHanded" | "is_on_ground" | "hasSkylight" => Some(Val::scalar(1.0)),
+                    "false" | "isNether" | "hasCeiling" => Some(Val::scalar(0.0)),
+                    "bedrockLevel" => Some(Val::scalar(-64.0)),
+                    "heightLimit" | "logicalHeightLimit" => Some(Val::scalar(384.0)),
+                    "lightningBoltPosition" => Some(Val::vector(&[0.0, 10000.0, 0.0, 0.0])),
                     n => vars
                         .get(n)
                         .copied()
@@ -424,6 +427,9 @@ impl<'a> Parser<'a> {
         hit
     }
     fn expr_all(&mut self) -> Result<Expr, String> {
+        while self.tokens.last().is_some_and(|t| t == ";") {
+            self.tokens.pop();
+        }
         let e = self.binary(0)?;
         match self.peek() {
             None => Ok(e),

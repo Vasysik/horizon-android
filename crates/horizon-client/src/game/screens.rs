@@ -526,24 +526,12 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         // fillGradient(0x60500000 -> 0xA0803030).
-        let rows = h.ceil() as i32;
-        for y in 0..rows {
-            let t = y as f32 / h.max(1.0);
-            let lerp = |a: f32, b: f32| (a + (b - a) * t) as u8;
-            batch.fill(
-                atlas,
-                0.0,
-                y as f32,
-                w,
-                1.0,
-                rgba(
-                    lerp(80.0, 128.0),
-                    lerp(0.0, 48.0),
-                    lerp(0.0, 48.0),
-                    lerp(96.0, 160.0),
-                ),
-            );
-        }
+        batch.fill_gradient(
+            atlas,
+            (0.0, 0.0, w, h),
+            rgba(80, 0, 0, 96),
+            rgba(128, 48, 48, 160),
+        );
         // DeathScreen.handleExitToTitleScreen: the TitleConfirmScreen takes the
         // screen over, on the same background.
         if let Some(opened) = self.ui.death_confirm {

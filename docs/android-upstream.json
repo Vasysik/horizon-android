@@ -36,5 +36,11 @@
     ],
     "moving_main_merged": false,
     "notes": "Reviewed newer account-save reporting and desktop encrypted-file storage changes. Android retains its Keystore AES/GCM store and reports sign-in save failures through the existing shared task. The selected stable nightly baseline is unchanged; no experimental UI branches were merged."
+  },
+  "android_stability_review": {
+    "date": "2026-11-05",
+    "fetched_main": "2266c4de14561146044c422e6c525b3ce52b0f79",
+    "moving_main_merged": false,
+    "notes": "Reviewed the current upstream loading handoff: it still leaks its resource owner for the process lifetime and has no Android lifecycle or GLES preparation path to transplant. Retained the Android baseline; this change owns resources per session, publishes background pause without redraws, and keeps native events flowing during exclusive GLES world preparation. No upstream deployment workflows were enabled."
   }
 }

@@ -47,6 +47,11 @@ pub(super) struct Launcher {
     mouse_down: bool,
     feedback: Option<(pages::Action, Instant)>,
     install: Arc<Mutex<horizon_client::official_install::InstallProgress>>,
+    install_paused: Arc<std::sync::atomic::AtomicBool>,
+    install_cancelled: Arc<std::sync::atomic::AtomicBool>,
+    install_transfer: crate::catalog::TransferTracker,
+    pub(super) anim: pages::AnimState,
+    pub(super) control_editor: Option<horizon_client::touch::TouchControls>,
     worker: Option<mpsc::Receiver<std::result::Result<(), String>>>,
     error: Option<String>,
     catalog: Catalog,
@@ -62,6 +67,9 @@ pub(super) struct Launcher {
     session_worker: Option<mpsc::Receiver<std::result::Result<PreparedAccount, String>>>,
     session_ready: bool,
     prepared_session: Option<PathBuf>,
+    pub(super) launching: bool,
+    pub(super) launch_pending_tick: bool,
+    pub(super) diagnostics_modal_open: bool,
     focus: Option<usize>,
     diagnostic_export: Option<mpsc::Receiver<std::result::Result<String, String>>>,
 }
@@ -70,14 +78,29 @@ impl Launcher {
     pub(super) fn refresh_wardrobe_account(&mut self) {
         if self.catalog.page == Page::Skins {
             self.catalog.scroll = 0.0;
-            self.wardrobe.open(
-                &self.catalog.config.name,
-                &self.catalog.config.microsoft_client_id,
-            );
         }
+        // The header shows this appearance even when another page is open.
+        self.wardrobe.open(
+            &self.catalog.config.name,
+            &self.catalog.config.microsoft_client_id,
+        );
     }
 
     fn edit_text(&mut self, output: horizon_client::osk::Output) {
+        if let Some(tc) = &mut self.control_editor
+            && horizon_client::touch_ui::apply_editor_or_preset_output(
+                tc.editor.as_mut(),
+                None,
+                &output,
+            )
+        {
+            let game_home = self.catalog.config.game_home(&self.home);
+            let _ = tc.settings.save_to(&game_home.join("horizon-touch.json"));
+            if horizon_client::touch_ui::output_dismisses(&output) {
+                crate::platform::hide();
+            }
+            return;
+        }
         if self.login.edit(self.catalog.editing, &output) {
             if matches!(
                 output,
@@ -90,14 +113,24 @@ impl Launcher {
             self.catalog.edit(output, &self.home);
         }
     }
+
     pub(super) fn new(home: PathBuf) -> Self {
-        // Upgrade existing installations that retained the old download cache.
+        // Upgrade existing installations and pre-verify structure transforms in the background
+        // so pressing Play launches immediately without main-thread I/O stalls.
         let cleanup_home = home.clone();
         std::thread::spawn(move || {
             if let Err(error) =
                 horizon_client::official_install::cleanup_completed_downloads(&cleanup_home)
             {
                 log::warn!("Could not clean completed Minecraft downloads: {error}");
+            }
+            if horizon_client::official_install::ready(&cleanup_home) {
+                let _ = horizon_client::android_resources::repair_structure_transforms(
+                    &cleanup_home.join("engine-data.zip"),
+                    &cleanup_home
+                        .join(".local/horizon-client")
+                        .join(horizon_core::VANILLA_VERSION),
+                );
             }
         });
         let mut catalog = Catalog::new(&home);
@@ -106,16 +139,81 @@ impl Launcher {
         }
         horizon_client::android_runtime::graphics_startup::configure(home.clone());
         if horizon_client::android_runtime::graphics_startup::recover(&home) {
-            catalog.config.renderer = crate::catalog::RendererMode::OpenGl;
+            catalog.config.renderer = crate::catalog::RendererMode::VulkanCompatibility;
             if let Err(error) = catalog.config.save(&home) {
                 log::warn!("Could not save graphics recovery choice: {error}");
             }
-            catalog.status = "Previous Vulkan startup was interrupted. Using OpenGL ES recovery; you can change Rendering mode in Settings.".into();
+            catalog.status = "Previous Vulkan startup was interrupted. Using Vulkan compatibility; you can change Rendering mode in Settings.".into();
         }
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
+        horizon_client::ui_theme::set_ui_scale_percent(catalog.config.ui_scale_percent);
+        horizon_client::ui_theme::motion::set_launcher_animations_disabled(
+            catalog.config.disable_launcher_animations,
+        );
+        horizon_client::ui_theme::motion::set_game_animations_disabled(
+            catalog.config.disable_game_animations,
+        );
+        // First run: ensure independent MCPE and GoyControl storage directories exist,
+        // and initialize MCPE Controls as the default active control system on fresh installs.
+        let game_home = catalog.config.game_home(&home);
+        horizon_client::touch::Settings::ensure_system_storage(
+            &game_home,
+            horizon_client::touch::ControlStyle::Mcpe,
+        );
+        horizon_client::touch::Settings::ensure_system_storage(
+            &game_home,
+            horizon_client::touch::ControlStyle::GoyControl,
+        );
+        let touch_file = game_home.join("horizon-touch.json");
+        if !touch_file.exists() {
+            let touch = horizon_client::touch::Settings::default_mcpe();
+            if let Some(dir) = touch_file.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Err(error) = touch.save_to(&touch_file) {
+                log::warn!("Cannot write the factory touch layout: {error}");
+            }
+        }
+        // Pre-warm Microsoft session in background at startup so pressing Play doesn't stall.
+        let prewarm_session_worker = if crate::account::Accounts::load().selected().is_some() {
+            let id = catalog.config.microsoft_client_id.clone();
+            let game_home = catalog.config.game_home(&home);
+            let wardrobe_home = home.join("wardrobe");
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let res = (|| {
+                    let (account, secrets) = login::Login::session(&id)?
+                        .ok_or("The selected account changed. Choose Play again.")?;
+                    let appearance = crate::skins::cloud::fetch(&account, &secrets, &wardrobe_home)
+                        .unwrap_or_default();
+                    let file = crate::account::write_session_file(
+                        &game_home.join("sessions"),
+                        &account,
+                        &secrets,
+                    )?;
+                    Ok(PreparedAccount {
+                        key: account.key(),
+                        file,
+                        appearance,
+                    })
+                })();
+                if let Err(unsent) = tx.send(res)
+                    && let Ok(prepared) = unsent.0
+                {
+                    let _ = std::fs::remove_file(prepared.file);
+                }
+            });
+            Some(rx)
+        } else {
+            None
+        };
+        // Load the selected wardrobe and its last head before the first draw:
+        // the account pill must have the real face instantly, not after a page visit.
+        let mut wardrobe = wardrobe::Wardrobe::new(&home);
+        wardrobe.open(&catalog.config.name, &catalog.config.microsoft_client_id);
         Self {
-            wardrobe: wardrobe::Wardrobe::new(&home),
+            wardrobe,
             home,
             controller_edges: Default::default(),
             controller_repeat: None,
@@ -128,6 +226,11 @@ impl Launcher {
             mouse_down: false,
             feedback: None,
             install: Arc::default(),
+            install_paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            install_cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            install_transfer: Default::default(),
+            anim: Default::default(),
+            control_editor: None,
             worker: None,
             error: None,
             catalog,
@@ -139,9 +242,12 @@ impl Launcher {
             chooser: None,
             exit_confirmation: false,
             login: login::Login::new(),
-            session_worker: None,
+            session_worker: prewarm_session_worker,
             session_ready: false,
             prepared_session: None,
+            launching: false,
+            launch_pending_tick: false,
+            diagnostics_modal_open: false,
             focus: None,
             diagnostic_export: None,
         }
@@ -158,10 +264,13 @@ impl Launcher {
         crate::game::android_reset_bundled_mods();
         crate::document_store::set_game_active(false);
         crate::performance::stop();
+        let _ = crate::platform::capture_mouse(false);
         crate::platform::hide();
         horizon_client::auth::clear_current();
         self.session_ready = false;
         self.prepared_session = None;
+        self.launching = false;
+        self.launch_pending_tick = false;
         horizon_client::discord_presence::stop();
         horizon_client::ui_theme::reset_atlas();
         self.cursor = (0.0, 0.0);
@@ -201,6 +310,8 @@ impl Launcher {
     }
     fn fail(&mut self, error: impl std::fmt::Display) {
         log::error!("{error}");
+        self.launching = false;
+        self.launch_pending_tick = false;
         crate::diagnostics::record_error(&error.to_string());
         self.error = Some(error.to_string());
         let _ = std::fs::write(self.home.join("android-error.txt"), error.to_string());
@@ -209,14 +320,16 @@ impl Launcher {
     fn open(&mut self, events: &ActiveEventLoop) -> Result<()> {
         crate::platform::set_orientation(self.catalog.config.orientation);
         self.configure_screen();
+        horizon_client::ui_theme::set_android_dpi(crate::platform::display_density());
+        horizon_client::ui_theme::set_ui_scale_percent(self.catalog.config.ui_scale_percent);
         crate::display::set_scale(self.catalog.config.render_scale);
         horizon_client::android_runtime::configure_gpu(false);
-        if let Some(renderer) = &mut self.renderer {
-            if let Some(size) = crate::display::prepare(self.window.as_ref().unwrap())? {
+        if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+            if let Some(size) = crate::display::prepare(window)? {
                 renderer.resize(size[0], size[1]);
             }
             renderer.recreate_surface()?;
-            let size = self.window.as_ref().unwrap().inner_size();
+            let size = window.inner_size();
             renderer.resize(size.width, size.height);
             return Ok(());
         }
@@ -224,38 +337,91 @@ impl Launcher {
             events.create_window(Window::default_attributes().with_title("Horizon Android"))?,
         );
         crate::display::prepare(&window)?;
-        let gui = game::UiResources {
-            atlas: HudAtlas::build(&self.home.join("installer"))?,
-            panorama: Arc::new(horizon_client::gfx::panorama::Faces {
-                size: 1,
-                pixels: [0u8; 4].repeat(6),
-            }),
+        let vanilla_dir = self
+            .home
+            .join(".local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        let atlas_root = if vanilla_dir.join("assets/minecraft/textures/gui").is_dir() {
+            vanilla_dir
+        } else {
+            self.home.join("installer")
         };
-        self.renderer = Some(game::loading_renderer(
+        // Discover the adapter limit before packing any shared sprites.
+        let mut renderer = game::loading_renderer(
             window.clone(),
             false,
-            Some(&gui.atlas),
-            Some(gui.panorama.as_ref()),
+            None,
+            None,
             None,
             if self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl {
                 horizon_client::graphics::GraphicsApi::OpenGl
             } else {
                 horizon_client::graphics::GraphicsApi::Auto
             },
-        )?);
+        )?;
+        let gui = game::UiResources {
+            atlas: HudAtlas::build(&atlas_root)?,
+            panorama: Arc::new(horizon_client::gfx::panorama::Faces {
+                size: 1,
+                pixels: [0u8; 4].repeat(6),
+            }),
+            sounds: Some(horizon_client::sound_events::SoundRegistry::load(
+                &atlas_root,
+            )),
+        };
+        renderer.set_loading_ui(&gui.atlas, gui.panorama.as_ref())?;
+        self.renderer = Some(renderer);
         self.window = Some(window);
         self.gui = Some(gui);
         Ok(())
     }
 
     fn request_back(&mut self) {
+        if crate::platform::active() && self.control_editor.is_some() {
+            crate::platform::hide();
+            return;
+        }
         crate::platform::hide();
-        if self.exit_confirmation {
+        if let Some(tc) = &mut self.control_editor {
+            let game_home = self.catalog.config.game_home(&self.home);
+            if tc.request_editor_back() {
+                let _ = tc.settings.save_to(&game_home.join("horizon-touch.json"));
+                self.control_editor = None;
+            }
+            return;
+        }
+        if !self.anim.intro_done {
+            self.anim.intro_done = true;
+            return;
+        }
+        if self.diagnostics_modal_open {
+            self.diagnostics_modal_open = false;
+        } else if self.exit_confirmation {
             self.exit_confirmation = false;
+        } else if self.catalog.fm_modal.take().is_some() {
+            self.catalog.editing = None;
+        } else if self.catalog.project_modal.take().is_some() {
+            self.catalog.scroll = 0.0;
         } else if self.login.visible {
             self.login.hide();
         } else if self.chooser.take().is_some() {
             // Back dismisses the current dialog, including the exit question.
+        } else if self.catalog.page == Page::Installed
+            && self.catalog.installed_sub_tab == crate::catalog::InstalledSubTab::FileManager
+            && self.catalog.fm_back(&self.home)
+        {
+            // Back in File Manager pops the directory history stack.
+        } else if self.catalog.page == Page::Settings
+            && self.catalog.settings_category != crate::catalog::SettingsCategory::Overview
+        {
+            self.catalog.settings_category =
+                if self.catalog.settings_category == crate::catalog::SettingsCategory::Theme {
+                    crate::catalog::SettingsCategory::Launcher
+                } else {
+                    crate::catalog::SettingsCategory::Overview
+                };
+            self.catalog.scroll = 0.0;
+            self.anim.trigger_page_transition();
         } else if self.catalog.editing.take().is_none() {
             self.exit_confirmation = true;
         }
@@ -274,6 +440,7 @@ impl Launcher {
             || self.chooser.is_some()
             || self.worker.is_some()
             || self.session_worker.is_some()
+            || self.launch_pending_tick
         {
             return Ok(());
         }
@@ -291,6 +458,52 @@ impl Launcher {
         crate::configure_input_mode(self.catalog.config.input_host);
         crate::device_runtime::configure(self.catalog.config.device);
         if horizon_client::official_install::ready(&self.home) {
+            if !self.launching {
+                self.launching = true;
+                self.error = None;
+                self.catalog.status = "Launching Minecraft 26.3...".into();
+                let game_home = self.catalog.config.game_home(&self.home);
+                if !self.session_ready && crate::account::Accounts::load().selected().is_some() {
+                    let id = self.catalog.config.microsoft_client_id.clone();
+                    let wardrobe_home = self.home.join("wardrobe");
+                    let (sender, receiver) = mpsc::channel();
+                    self.session_worker = Some(receiver);
+                    self.catalog.status = "Preparing account session and appearance...".into();
+                    std::thread::spawn(move || {
+                        let result = (|| {
+                            let (account, secrets) = login::Login::session(&id)?
+                                .ok_or("The selected account changed. Choose Play again.")?;
+                            let appearance =
+                                crate::skins::cloud::fetch(&account, &secrets, &wardrobe_home)
+                                    .unwrap_or_default();
+                            let file = crate::account::write_session_file(
+                                &game_home.join("sessions"),
+                                &account,
+                                &secrets,
+                            )?;
+                            Ok(PreparedAccount {
+                                key: account.key(),
+                                file,
+                                appearance,
+                            })
+                        })();
+                        if let Err(unsent) = sender.send(result)
+                            && let Ok(prepared) = unsent.0
+                        {
+                            let _ = std::fs::remove_file(prepared.file);
+                        }
+                    });
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return Ok(());
+                }
+                self.launch_pending_tick = true;
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return Ok(());
+            }
             horizon_client::android_resources::repair_structure_transforms(
                 &self.home.join("engine-data.zip"),
                 &self
@@ -300,6 +513,7 @@ impl Launcher {
             )?;
             crate::platform::hide();
             self.catalog.config.save(&self.home)?;
+            self.catalog.config.apply_experimental_to_game(&self.home);
             // Migrate the earlier launcher preset once; subsequent edits belong to Key Binds.
             let keypad_path = self
                 .catalog
@@ -423,15 +637,32 @@ impl Launcher {
                 );
             }
             self.error = None;
-            *self.install.lock().unwrap() = Default::default();
+            *self
+                .install
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Default::default();
+            self.install_paused
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            self.install_cancelled
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            self.install_transfer.reset();
             let home = self.home.clone();
             let install = self.install.clone();
+            let paused = self.install_paused.clone();
+            let cancelled = self.install_cancelled.clone();
             let (sender, receiver) = mpsc::channel();
             self.worker = Some(receiver);
             std::thread::spawn(move || {
                 let result =
                     horizon_client::official_install::install_with_progress(&home, |update| {
-                        let mut current = install.lock().unwrap();
+                        while paused.load(std::sync::atomic::Ordering::Relaxed)
+                            && !cancelled.load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                        let mut current = install
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         let done = if current.stage == update.stage {
                             current.done.max(update.done)
                         } else {
@@ -563,8 +794,7 @@ impl ApplicationHandler for Launcher {
                 }
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
-                self.catalog
-                    .edit(horizon_client::osk::Output::Text(text), &self.home);
+                self.edit_text(horizon_client::osk::Output::Text(text));
                 Ok(())
             }
             _ => Ok(()),
@@ -574,6 +804,10 @@ impl ApplicationHandler for Launcher {
         }
     }
     fn device_event(&mut self, events: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
+        if matches!(event, DeviceEvent::Removed) {
+            self.mouse_down = false;
+            self.drag = None;
+        }
         if let Some(game) = &mut self.game {
             game.device_event(events, id, event);
         } else {
@@ -627,6 +861,17 @@ impl ApplicationHandler for Launcher {
                 }
             }
         }
+        if let Some(tc) = &mut self.control_editor
+            && let Some(ed) = &mut tc.editor
+            && std::mem::take(&mut ed.keyboard_request)
+        {
+            let text = if ed.editing_save_desc {
+                ed.save_desc_input.clone()
+            } else {
+                ed.save_name_input.clone()
+            };
+            crate::platform::show(&text);
+        }
         for out in crate::platform::poll() {
             if matches!(out, horizon_client::osk::Output::Enter) {
                 crate::platform::hide();
@@ -656,15 +901,18 @@ impl ApplicationHandler for Launcher {
             self.refresh_wardrobe_account();
         }
         if let Some(result) = self.session_worker.as_ref().and_then(|w| w.try_recv().ok()) {
+            let launch_pending = self.launching
+                || self.catalog.status == "Preparing account session and appearance...";
             self.session_worker = None;
             match result {
                 Ok(prepared) => {
-                    // Only the current selection may publish the game handoff. A canceled
-                    // worker downloads public cache images but cannot overwrite a new profile.
+                    // Only the current selection may publish the game handoff.
                     if crate::account::Accounts::load()
                         .selected()
                         .is_none_or(|a| a.key() != prepared.key)
                     {
+                        self.launching = false;
+                        self.launch_pending_tick = false;
                         let _ = std::fs::remove_file(prepared.file);
                         self.catalog.status =
                             "The selected account changed. Choose Play again.".into();
@@ -690,8 +938,11 @@ impl ApplicationHandler for Launcher {
                             Ok(()) => {
                                 self.prepared_session = Some(prepared.file);
                                 self.session_ready = true;
-                                if let Err(e) = self.action(events) {
-                                    self.fail(e);
+                                if launch_pending {
+                                    self.catalog.status.clear();
+                                    if let Err(e) = self.action(events) {
+                                        self.fail(e);
+                                    }
                                 }
                             }
                             Err(error) => {
@@ -701,15 +952,52 @@ impl ApplicationHandler for Launcher {
                         }
                     }
                 }
-                Err(e) => self.fail(e),
+                Err(e) => {
+                    if launch_pending {
+                        self.fail(e);
+                    } else {
+                        log::warn!("Background session pre-warm notice: {e}");
+                    }
+                }
             }
         }
 
+        if self.launch_pending_tick {
+            self.launch_pending_tick = false;
+            if let Err(error) = self.action(events) {
+                self.fail(error);
+            }
+            if self.game.is_some() {
+                return;
+            }
+        }
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+        let frame_ms = if self.worker.is_some()
+            || self.launching
+            || self.session_worker.is_some()
+            || self.catalog.busy()
+            || self.drag.is_some()
+            || self.login.pending()
+            || self.control_editor.is_some()
+            || self
+                .catalog
+                .project_modal
+                .as_ref()
+                .is_some_and(|m| m.loading)
+            || self.anim.is_active()
+            || (self.catalog.page == Page::Skins && self.wardrobe.is_animating())
+            || self
+                .feedback
+                .is_some_and(|(_, t)| t.elapsed() < Duration::from_millis(180))
+        {
+            16
+        } else {
+            33
+        };
         events.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + Duration::from_millis(100),
+            Instant::now() + Duration::from_millis(frame_ms),
         ));
     }
     fn exiting(&mut self, events: &ActiveEventLoop) {

@@ -29,7 +29,7 @@ serde_json = "1"
 sha1 = "0.10"
 sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
-zip = { version = "=2.4.2", default-features = false, features = ["deflate"] }
+zip = { version = "=9.1.3", default-features = false, features = ["deflate"] }
 horizon-mods = { path = "../../../crates/horizon-mods", default-features = false, features = ["index"] }
 ''', encoding='utf-8')
     browser = (ROOT / 'launcher/src/browser.rs').read_text(encoding='utf-8')

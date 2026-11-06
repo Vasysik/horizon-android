@@ -403,25 +403,32 @@ impl Game<'_> {
         for s in self.inventory.iter().flatten() {
             (&s.item, s.count, s.damage).hash(&mut h);
         }
+        let crafting = self.active_book() == Some(BookType::Crafting);
         for slot in [
             100usize, 101, 102, 103, 104, 105, 106, 107, 108, 300, 301, 302,
         ] {
-            let stack =
-                if slot < 109 && self.active_book() == Some(BookType::Crafting) || slot >= 300 {
-                    self.slot_mut(slot).clone()
+            if (slot < 109 && crafting) || slot >= 300 {
+                if let Some(s) = self.slot_mut(slot).as_ref() {
+                    (true, &*s.item, s.count, s.damage).hash(&mut h);
                 } else {
-                    None
-                };
-            stack.map(|s| (s.item, s.count)).hash(&mut h);
+                    false.hash(&mut h);
+                }
+            } else {
+                false.hash(&mut h);
+            }
         }
         self.craft_size.hash(&mut h);
         self.recipe_ui.client_version.hash(&mut h);
         self.book_filtering(book_type).hash(&mut h);
-        self.recipe_ui.tab.map(|t| format!("{t:?}")).hash(&mut h);
+        self.recipe_ui
+            .tab
+            .as_ref()
+            .map(std::mem::discriminant)
+            .hash(&mut h);
         self.recipe_ui
             .search
             .as_ref()
-            .map(|s| s.value.clone())
+            .map(|s| s.value.as_str())
             .hash(&mut h);
         book_type.index().hash(&mut h);
         let key = h.finish();

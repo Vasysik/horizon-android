@@ -42,33 +42,31 @@ struct HorizonMaterialOut {
 }
 fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
     light: vec2<u32>, origin: vec3<f32>) -> HorizonMaterialOut {
-    let pos = position + origin;
+    let flags = u32(round(color.a * 255.0));
+    let high = flags >> 4u;
+    let fluid = high >= 8u && (high & 7u) < 6u;
+    let face = select(0u, high & 7u, fluid);
+    let tier = 15u - (flags & 15u);
+    let emission = select(min(f32(tier) * 7.0 / 15.0, 1.0), 0.0, tier == 0u);
+    let block = max(f32(light.y), horizon_terrain_dynamic_block_light(position + origin));
+    let sky = f32(light.x);
+    let light_norm = min(vec2(block, sky) / 240.0, vec2(1.0));
+    let pos = horizon_vertex_move(VertexInput(position + origin, uv,
+        horizon_sprite_material(layer & 0x7fffu), light_norm, vec4(color.rgb, 1.0), face, u32(fluid),
+        position, horizon_sprite_tags(layer & 0x7fffu), emission));
     var out: HorizonMaterialOut;
     out.clip = horizon_terrain_globals.view_proj * vec4(pos, 1.0);
     out.uv = uv;
     out.layer = layer;
     out.tint = vec4(color.rgb, 1.0);
-    let block = max(f32(light.y), horizon_terrain_dynamic_block_light(pos));
-    let sky = f32(light.x);
-    // 16 per level, 15 levels.
-    out.light = min(vec2(block, sky) / 240.0, vec2(1.0));
+    out.light = light_norm;
     out.lightmap = horizon_terrain_sample_lightmap(sky / 16.0, block / 16.0).rgb;
     out.position = pos;
     out.spherical = length(pos);
     out.cylindrical = max(length(pos.xz), abs(pos.y));
-    // The colour's alpha byte (mesher.rs's `fluid_face` and `emitting`): a fluid quad's
-    // high nibble is 8 + its face (0..5), every other quad keeps 0xF there; the low nibble
-    // is 15 minus the face's HDR tier. Every corner of a quad carries the same byte, so the
-    // interpolated value rounds back exactly.
-    let flags = u32(round(color.a * 255.0));
-    let high = flags >> 4u;
-    let fluid = high >= 8u && (high & 7u) < 6u;
-    out.face = select(0u, high & 7u, fluid);
+    out.face = face;
     out.fluid_quad = u32(fluid);
-    // The tier (0 none, 1 low, 2 incandescent, 3 bright, 4 very bright) as how strongly the
-    // face shines: a redstone torch 7/15, a torch 14/15, glowstone 1.
-    let tier = 15u - (flags & 15u);
-    out.emission = select(min(f32(tier) * 7.0 / 15.0, 1.0), 0.0, tier == 0u);
+    out.emission = emission;
     return out;
 }
 @vertex fn horizon_material_vs(
@@ -91,6 +89,12 @@ fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color
 // in the pack's frame group (3), one array each, a blank 1x1 without them.
 @group(3) @binding(12) var horizon_pbr_normals: texture_2d_array<f32>;
 @group(3) @binding(13) var horizon_pbr_specular: texture_2d_array<f32>;
+fn horizon_block_sprite(uv: vec2<f32>, layer: u32, lod: f32) -> vec4<f32> {
+    return horizon_terrain_sprite(uv, layer & 0x7fffu);
+}
+fn horizon_block_sprite_size() -> vec2<f32> {
+    return vec2<f32>(textureDimensions(horizon_terrain_sprites).xy);
+}
 fn horizon_block_pbr_present() -> bool {
     return textureDimensions(horizon_pbr_normals).x > 1u;
 }
@@ -118,10 +122,11 @@ fn horizon_material_color(in: HorizonMaterialOut, translucent: bool) -> vec4<f32
     let fluid = select(0u, select(2u, 1u, translucent), in.fluid_quad != 0u);
     let normal = horizon_material_normal(in.position);
     let tangent = horizon_material_tangent(in.position, in.uv, normal);
+    let colored_light = horizon_terrain_native_colored_light(in.position);
     return material(MaterialInput(albedo, in.tint, in.light, in.lightmap, in.position, in.uv,
         translucent, horizon_sprite_tags(in.layer & 0x7fffu),
         horizon_sprite_material(in.layer & 0x7fffu), in.clip.xy / frame.resolution,
-        in.face, fluid, in.emission, normal, tangent)).color;
+        in.face, fluid, in.emission, normal, tangent, colored_light, 0.0)).color;
 }
 @fragment fn horizon_material_fs_solid(in: HorizonMaterialOut) -> @location(0) vec4<f32> {
     let color = horizon_material_color(in, false);
@@ -198,9 +203,26 @@ fn layer_table(name: &str, table: &[(u32, u32)]) -> String {
 
 /// The terrain shader for the pack's material stage `source`, with its sprite `tags` and
 /// `materials`.
-fn shader_source(source: &str, tags: &[(u32, u32)], materials: &[(u32, u32)]) -> String {
+/// The checked material already contains the complete vertex module. Add only
+/// the renderer entry wrapper, avoiding duplicate structs, helpers and overrides.
+fn vertex_shim(vertex_stage: Option<&CheckedStage>) -> String {
+    if vertex_stage.is_some() {
+        "fn horizon_vertex_move(input: VertexInput) -> vec3<f32> { return vertex(input); }\n".into()
+    } else {
+        "fn horizon_vertex_move(input: VertexInput) -> vec3<f32> { return input.position; }\n"
+            .into()
+    }
+}
+
+fn shader_source(
+    source: &str,
+    vertex: Option<&CheckedStage>,
+    tags: &[(u32, u32)],
+    materials: &[(u32, u32)],
+) -> String {
     format!(
-        "{source}\n// Horizon's terrain (terrain.wgsl)\n{}{}{}{ENTRIES}",
+        "{source}\n{}\n// Horizon's terrain (terrain.wgsl)\n{}{}{}{ENTRIES}",
+        vertex_shim(vertex),
         vanilla_terrain(),
         layer_table("horizon_sprite_tags", tags),
         layer_table("horizon_sprite_material", materials)
@@ -210,10 +232,11 @@ fn shader_source(source: &str, tags: &[(u32, u32)], materials: &[(u32, u32)]) ->
 /// The material's naga module, its errors in the stage's file.
 fn module(
     stage: &CheckedStage,
+    vertex: Option<&CheckedStage>,
     tags: &[(u32, u32)],
     materials: &[(u32, u32)],
 ) -> Result<naga::Module, String> {
-    let text = shader_source(&stage.source, tags, materials);
+    let text = shader_source(&stage.source, vertex, tags, materials);
     naga::front::wgsl::parse_str(&text)
         .map_err(|e| format!("{}: {}", stage.file, e.emit_to_string(&text)))
 }
@@ -225,10 +248,16 @@ impl NativeMaterial {
         shape: &TerrainShape<'_>,
         frame: &NativeFrame,
         stage: &CheckedStage,
+        vertex_stage: Option<&CheckedStage>,
         constants: &[(String, f64)],
         fog: bool,
     ) -> Result<Self, String> {
-        let module = module(stage, shape.sprite_tags, shape.sprite_materials)?;
+        let module = module(
+            stage,
+            vertex_stage,
+            shape.sprite_tags,
+            shape.sprite_materials,
+        )?;
         let mut constants = present_constants(&module, constants);
         let sprite_names = [
             "horizon_terrain_SPRITE_ARRAYS",
@@ -371,6 +400,63 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires HORIZON_TEST_SHADER_PACK pointing to a local shader pack"]
+    fn downloaded_material_pack_validates_with_the_runtime_terrain() {
+        let path = std::env::var_os("HORIZON_TEST_SHADER_PACK").expect("set fixture path");
+        let report = check(&Pack::read(std::path::Path::new(&path)).unwrap()).unwrap();
+        let material = report
+            .stages
+            .iter()
+            .find(|s| s.kind == StageKind::Material)
+            .unwrap();
+        let vertex = report.stages.iter().find(|s| s.kind == StageKind::Vertex);
+        let shader = module(material, vertex, &[], &[]).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&shader)
+        .unwrap();
+    }
+
+    #[test]
+    fn material_and_vertex_share_helpers_and_overrides_without_duplicate_declarations() {
+        let manifest = r#"schema = 1
+id = "paired"
+name = "Paired"
+version = "1"
+api = "0.1"
+[vertex]
+file = "vertex.wgsl"
+[material]
+file = "material.wgsl"
+"#;
+        let files = [
+            (MANIFEST, manifest),
+            ("vertex.wgsl", "override waves: bool = true;\nfn offset(p: vec3<f32>) -> vec3<f32> { return select(p, p + vec3<f32>(0.0, 0.1, 0.0), waves); }\nfn vertex(input: VertexInput) -> vec3<f32> { return offset(input.position); }"),
+            ("material.wgsl", "fn material(input: MaterialInput) -> Surface { return Surface(input.albedo * vec4<f32>(offset(vec3<f32>(1.0)), 1.0)); }"),
+        ].map(|(n,t)| (n.to_owned(),t.as_bytes().to_vec())).into();
+        let report = check(&Pack::from_files(files).unwrap()).unwrap();
+        let material = report
+            .stages
+            .iter()
+            .find(|s| s.kind == StageKind::Material)
+            .unwrap();
+        let vertex = report
+            .stages
+            .iter()
+            .find(|s| s.kind == StageKind::Vertex)
+            .unwrap();
+        let module = module(material, Some(vertex), &[], &[]).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+    }
+
+    #[test]
     fn the_terrain_takes_a_prefix_and_validates_with_a_pack() {
         let terrain = vanilla_terrain();
         for name in [
@@ -402,7 +488,7 @@ mod tests {
         let tags = [(7, 1), (3, 1), (9, 2)];
         let materials = [(5, 1000)];
         assert!(layer_table("t", &tags).contains("case 3u, 7u: { return 1u; }"));
-        let module = module(&stage, &tags, &materials).unwrap();
+        let module = module(&stage, None, &tags, &materials).unwrap();
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -411,7 +497,7 @@ mod tests {
         .unwrap_or_else(|e| {
             panic!(
                 "{}",
-                e.emit_to_string(&shader_source(&stage.source, &tags, &materials))
+                e.emit_to_string(&shader_source(&stage.source, None, &tags, &materials))
             )
         });
         let entries: Vec<&str> = module

@@ -494,8 +494,20 @@ impl Graphics {
                     g.lod_distance = number(g.lod_distance).min(crate::lod::MAX_CHUNKS)
                 }
                 "farDetail" => g.far_detail = FarDetail::parse(value),
-                "caveCulling" => g.cave_culling = flag(g.cave_culling),
-                "entityCulling" => g.entity_culling = flag(g.entity_culling),
+                "caveCulling" => {
+                    g.cave_culling = if cfg!(target_os = "android") {
+                        true
+                    } else {
+                        flag(g.cave_culling)
+                    }
+                }
+                "entityCulling" => {
+                    g.entity_culling = if cfg!(target_os = "android") {
+                        true
+                    } else {
+                        flag(g.entity_culling)
+                    }
+                }
                 "chunkUpdates" => g.chunk_updates = number(g.chunk_updates).min(512),
                 "uploadBudgetKiB" => g.upload_budget_kib = number(g.upload_budget_kib).min(65536),
                 "textureBudgetMiB" => {
@@ -515,7 +527,7 @@ impl Graphics {
                     }
                 }
                 "workers" => g.workers = number(g.workers).min(64),
-                "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
+                "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(25, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "taa" => g.taa = flag(g.taa),
                 "upscaling" => g.upscaling = Upscaling::parse(value),
@@ -650,11 +662,14 @@ impl Graphics {
         // and render threads are raised above four cores, where vanilla
         // raises its server thread). Leaving two idled a core of a 4-thread
         // laptop while a world loaded: a teleport there took ~15% longer.
-        let auto = std::thread::available_parallelism()
-            .map_or(2, |n| n.get())
-            // Preserve the Android fork's render/server headroom until phone profiling.
-            .saturating_sub(if cfg!(target_os = "android") { 2 } else { 1 })
-            .max(1);
+        let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+        let auto = if cfg!(target_os = "android") {
+            // Mobile big.LITTLE SoCs (e.g. 2x Cortex-A75 + 6x Cortex-A55 on Helio G85)
+            // need 4 cores free for android_main, integrated Server, Audio, and Vulkan driver.
+            cores.saturating_sub(2).clamp(1, 4)
+        } else {
+            cores.saturating_sub(1).max(1)
+        };
         if self.battery { auto.div_ceil(2) } else { auto }
     }
     /// The frame cap battery mode adds: 60 in a world, 30 in menus without a

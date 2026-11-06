@@ -567,7 +567,7 @@ impl Game<'_> {
     /// while invisible, only its armour and held items).
     pub(super) fn player_model_shown(&self) -> bool {
         // A shader pack's shadow pass draws the player in first person too (shadowPlayer).
-        (self.own_body_in_view() || self.pack_shadow_casters.1)
+        (self.own_body_in_view() || self.pack_shadow_casters.0)
             && self
                 .player
                 .as_ref()
@@ -619,7 +619,7 @@ impl Game<'_> {
         // visibility (set by player_model_visibility) hides body parts, and
         // translucent_body marks the body OIT for the ghostly look. Only first
         // person and dead players skip it.
-        let render = if body || self.spectator() {
+        let render = if body || self.spectator() || self.pack_shadow_casters.0 {
             horizon_client::mobs::render::render_with
         } else {
             horizon_client::mobs::render::render_layers

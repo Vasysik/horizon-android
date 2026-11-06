@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use android_activity::input::{
@@ -27,9 +27,15 @@ use crate::window::{
     WindowButtons, WindowLevel,
 };
 
+mod input_devices;
 mod keycodes;
 mod mouse_state;
 
+static INPUT_DEVICES: std::sync::LazyLock<Mutex<input_devices::Devices>> =
+    std::sync::LazyLock::new(|| Mutex::new(input_devices::Devices::default()));
+pub(crate) fn set_input_devices(ids: &[i32]) {
+    INPUT_DEVICES.lock().unwrap().update(ids);
+}
 static POINTER_DEVICES: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 pub(crate) fn pointer_device(id: i32) -> bool {
     POINTER_DEVICES.lock().unwrap().contains(&id)
@@ -42,6 +48,10 @@ static NATIVE_TEXT_INPUT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn set_native_text_input_active(active: bool) {
     NATIVE_TEXT_INPUT_ACTIVE.store(active, Ordering::Release);
+}
+
+pub(crate) fn text_input_active() -> bool {
+    NATIVE_TEXT_INPUT_ACTIVE.load(Ordering::Acquire)
 }
 
 pub(crate) mod viewport;
@@ -227,6 +237,7 @@ pub struct EventLoop<T: 'static> {
     cause: StartCause,
     ignore_volume_keys: bool,
     combining_accent: Option<char>,
+    modifiers: crate::keyboard::ModifiersState,
     mouse: mouse_state::MouseState,
 }
 
@@ -280,6 +291,7 @@ impl<T: 'static> EventLoop<T> {
             cause: StartCause::Init,
             ignore_volume_keys: attributes.ignore_volume_keys,
             combining_accent: None,
+            modifiers: crate::keyboard::ModifiersState::empty(),
             mouse: mouse_state::MouseState::default(),
         })
     }
@@ -323,6 +335,7 @@ impl<T: 'static> EventLoop<T> {
                 }
                 MainEvent::LostFocus => {
                     self.mouse = mouse_state::MouseState::default();
+                    self.modifiers = crate::keyboard::ModifiersState::empty();
                     HAS_FOCUS.store(false, Ordering::Relaxed);
                     callback(
                         event::Event::WindowEvent {
@@ -362,6 +375,13 @@ impl<T: 'static> EventLoop<T> {
                 MainEvent::Resume { .. } => {
                     debug!("App Resumed - is running");
                     self.running = true;
+                    callback(
+                        event::Event::WindowEvent {
+                            window_id: window::WindowId(WindowId),
+                            event: event::WindowEvent::Occluded(false),
+                        },
+                        self.window_target(),
+                    );
                 }
                 MainEvent::SaveState { .. } => {
                     // XXX: how to forward this state to applications?
@@ -371,6 +391,13 @@ impl<T: 'static> EventLoop<T> {
                 MainEvent::Pause => {
                     debug!("App Paused - stopped running");
                     self.running = false;
+                    callback(
+                        event::Event::WindowEvent {
+                            window_id: window::WindowId(WindowId),
+                            event: event::WindowEvent::Occluded(true),
+                        },
+                        self.window_target(),
+                    );
                 }
                 MainEvent::Stop => {
                     // XXX: how to forward this state to applications?
@@ -396,6 +423,23 @@ impl<T: 'static> EventLoop<T> {
         // temporarily decouple `android_app` from `self` so we aren't holding
         // a borrow of `self` while iterating
         let android_app = self.android_app.clone();
+
+        let removed = INPUT_DEVICES.lock().unwrap().take_removed();
+        for id in removed {
+            let mut pointers = POINTER_DEVICES.lock().unwrap();
+            if pointers.contains(&id) {
+                self.mouse = mouse_state::MouseState::default();
+                pointers.retain(|pointer| *pointer != id);
+            }
+            drop(pointers);
+            callback(
+                event::Event::DeviceEvent {
+                    device_id: event::DeviceId(DeviceId(id)),
+                    event: event::DeviceEvent::Removed,
+                },
+                self.window_target(),
+            );
+        }
 
         // Process input events
         match android_app.input_events_iter() {
@@ -477,15 +521,17 @@ impl<T: 'static> EventLoop<T> {
                     }
                     let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
                     let window_id = window::WindowId(WindowId);
-                    callback(
-                        event::Event::WindowEvent {
-                            window_id,
-                            event: event::WindowEvent::ModifiersChanged(
-                                modifiers(motion_event.meta_state()).into(),
-                            ),
-                        },
-                        self.window_target(),
-                    );
+                    let mods = modifiers(motion_event.meta_state());
+                    if self.modifiers != mods {
+                        self.modifiers = mods;
+                        callback(
+                            event::Event::WindowEvent {
+                                window_id,
+                                event: event::WindowEvent::ModifiersChanged(mods.into()),
+                            },
+                            self.window_target(),
+                        );
+                    }
                     let Some(pointer) = motion_event.pointers().next() else {
                         self.mouse = mouse_state::MouseState::default();
                         return InputStatus::Handled;
@@ -494,6 +540,8 @@ impl<T: 'static> EventLoop<T> {
                         action: motion_event.action().into(),
                         x: f64::from(pointer.x()),
                         y: f64::from(pointer.y()),
+                        rel_x: f64::from(pointer.axis_value(Axis::RelativeX)),
+                        rel_y: f64::from(pointer.axis_value(Axis::RelativeY)),
                         buttons: motion_event.button_state().0,
                         wheel: (
                             pointer.axis_value(Axis::Hscroll),
@@ -502,7 +550,10 @@ impl<T: 'static> EventLoop<T> {
                         relative: source == Source::MouseRelative,
                         touchpad: source == Source::Touchpad,
                     };
-                    for mouse in self.mouse.update(sample) {
+                    let history = pointer
+                        .history()
+                        .map(|point| (f64::from(point.x()), f64::from(point.y())));
+                    for mouse in self.mouse.update_with_history(sample, history) {
                         use mouse_state::Event as M;
                         let event = match mouse {
                             M::Relative(x, y) => {
@@ -616,6 +667,27 @@ impl<T: 'static> EventLoop<T> {
                         }
                         let location =
                             native_pointer_position(pointer.x() as f64, pointer.y() as f64);
+                        static LAST_TOUCH: std::sync::Mutex<[(u64, f64, f64); 10]> =
+                            std::sync::Mutex::new([(u64::MAX, 0.0, 0.0); 10]);
+                        let pid = pointer.pointer_id() as u64;
+                        if let Ok(mut table) = LAST_TOUCH.lock() {
+                            let slot = (pid as usize) % table.len();
+                            if phase == event::TouchPhase::Moved
+                                && table[slot].0 == pid
+                                && (table[slot].1 - location.x).abs() < 0.05
+                                && (table[slot].2 - location.y).abs() < 0.05
+                            {
+                                continue;
+                            }
+                            if matches!(
+                                phase,
+                                event::TouchPhase::Ended | event::TouchPhase::Cancelled
+                            ) {
+                                table[slot] = (u64::MAX, 0.0, 0.0);
+                            } else {
+                                table[slot] = (pid, location.x, location.y);
+                            }
+                        }
                         trace!(
                             "Input event {device_id:?}, {phase:?}, loc={location:?}, \
                              pointer={pointer:?}"
@@ -706,15 +778,17 @@ impl<T: 'static> EventLoop<T> {
                             None
                         };
 
-                        callback(
-                            event::Event::WindowEvent {
-                                window_id: window::WindowId(WindowId),
-                                event: event::WindowEvent::ModifiersChanged(
-                                    modifiers(key.meta_state()).into(),
-                                ),
-                            },
-                            self.window_target(),
-                        );
+                        let mods = modifiers(key.meta_state());
+                        if self.modifiers != mods {
+                            self.modifiers = mods;
+                            callback(
+                                event::Event::WindowEvent {
+                                    window_id: window::WindowId(WindowId),
+                                    event: event::WindowEvent::ModifiersChanged(mods.into()),
+                                },
+                                self.window_target(),
+                            );
+                        }
                         let event = event::Event::WindowEvent {
                             window_id: window::WindowId(WindowId),
                             event: event::WindowEvent::KeyboardInput {
@@ -832,18 +906,8 @@ impl<T: 'static> EventLoop<T> {
 
             match poll_event {
                 android_activity::PollEvent::Wake => {
-                    // In the X11 backend it's noted that too many false-positive wake ups
-                    // would cause the event loop to run continuously. They handle this by
-                    // re-checking for pending events (assuming they cover all
-                    // valid reasons for a wake up).
-                    //
-                    // For now, user_events and redraw_requests are the only reasons to expect
-                    // a wake up here so we can ignore the wake up if there are no events/requests.
-                    // We also ignore wake ups while suspended.
                     self.pending_redraw |= self.redraw_flag.get_and_reset();
-                    if !self.running
-                        || (!self.pending_redraw && !self.user_events_receiver.has_incoming())
-                    {
+                    if !self.running {
                         return;
                     }
                 }

@@ -245,6 +245,7 @@ fn translate(
     // One uniform block and one set of samplers for both stages.
     let mut uniforms: BTreeMap<String, String> = BTreeMap::new();
     if gbuffers.is_some() {
+        uniforms.insert("normalMatrix".to_owned(), "mat3".to_owned());
         for name in [
             "gbufferModelView",
             "gbufferModelViewInverse",

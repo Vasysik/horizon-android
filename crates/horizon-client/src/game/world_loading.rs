@@ -385,6 +385,24 @@ pub(super) fn preload_world_data(
     }
 }
 
+/// Reads the same world data as `preload_world_data` on the calling thread.
+/// Android's loading worker runs this before the title menu takes over, so
+/// the first world handoff never waits for the worldgen bundle or loot data.
+pub(super) fn preload_world_data_now(
+    resources: &std::path::Path,
+    registry: &'static horizon_world::registry::BlockRegistry,
+) {
+    if let Ok(data) = horizon_client::vanillagen::shared_data(&resources.join("worldgen"), registry)
+    {
+        let _ = data.prepare_decoration("minecraft:normal", "minecraft:overworld");
+    }
+    let _ = horizon_client::structure_blocks::loot_data(
+        resources,
+        &horizon_world::loot::PackOverlay::NONE,
+    );
+    let _ = super::lan::sync_data(resources, &horizon_world::loot::PackOverlay::NONE);
+}
+
 /// A launch that names a world (`--world`, `--quickPlaySingleplayer`): the
 /// same preload, started as soon as the block registry and the biomes are
 /// loaded, so it overlaps the rest of the startup instead of the world's
@@ -678,6 +696,13 @@ pub(super) fn make_streaming(
             }
         }
     });
+    let worker_threads = if cfg!(target_os = "android") && !options.execution_role.is_client() {
+        (res.threads() / 2).max(2)
+    } else if cfg!(target_os = "android") {
+        res.threads().min(4)
+    } else {
+        res.threads()
+    };
     let mut streaming = if let Some(inner) = debug {
         Streaming::new(
             Arc::new(Persistent {
@@ -687,7 +712,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     } else if let Some(inner) = flat_vanilla {
         inner.search_rings_behind();
@@ -710,7 +735,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     } else if let Some(inner) = flat {
         Streaming::new(
@@ -721,7 +746,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     } else if options.test_terrain && dim == Dim::Overworld {
         let inner = Arc::new(TestTerrain::new(pack.assets.registry, res.biomes())?);
@@ -733,7 +758,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     } else {
         // WorldOptions.generateStructures, from the world's settings.
@@ -780,7 +805,7 @@ pub(super) fn make_streaming(
                 biomes: biomes.clone(),
             }),
             pack.context.clone(),
-            res.threads(),
+            worker_threads,
         )
     };
     streaming.forced = save.load_forced_chunks();

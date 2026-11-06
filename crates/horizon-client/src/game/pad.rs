@@ -29,6 +29,10 @@ pub(super) struct Pads {
     #[cfg(target_os = "android")]
     pub(super) custom_keys: std::collections::HashSet<KeyCode>,
     #[cfg(target_os = "android")]
+    pub(super) custom_pressed_at: std::collections::HashMap<String, u64>,
+    #[cfg(target_os = "android")]
+    pub(super) late_custom_releases: Vec<String>,
+    #[cfg(target_os = "android")]
     pub(super) hardware_keys: std::collections::HashSet<KeyCode>,
     #[cfg(target_os = "android")]
     last_input_mode: Option<horizon_client::android_gamepad::InputMode>,
@@ -139,7 +143,7 @@ mod hardware {
         }
         pub(super) fn pad_output_frame(&mut self) {
             #[cfg(target_os = "android")]
-            if !self.settings.controller.vibration {
+            if !self.settings.controller.vibration || !self.pad.touch.settings.vibrate {
                 crate::platform::cancel_vibration();
             }
         }
@@ -159,8 +163,49 @@ mod hardware {
 }
 
 impl Pads {
-    /// Include releases delayed until the next simulation tick.
+    /// Include releases delayed until the next simulation tick, plus Android custom touch holds/latches.
     pub(super) fn holds_action(&self, settings: &gamepad::PadSettings, action: &str) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            let custom_held = match action {
+                "key.sneak" => {
+                    self.custom_keys.contains(&KeyCode::ShiftLeft)
+                        || self.custom_keys.contains(&KeyCode::ShiftRight)
+                        || self
+                            .touch
+                            .held_custom_tokens()
+                            .chain(self.late_custom_releases.iter().map(String::as_str))
+                            .any(|t| {
+                                matches!(
+                                    t,
+                                    "key.keyboard.left.shift"
+                                        | "key.keyboard.right.shift"
+                                        | "action:key.sneak"
+                                )
+                            })
+                }
+                "key.sprint" => {
+                    self.custom_keys.contains(&KeyCode::ControlLeft)
+                        || self.custom_keys.contains(&KeyCode::ControlRight)
+                        || self
+                            .touch
+                            .held_custom_tokens()
+                            .chain(self.late_custom_releases.iter().map(String::as_str))
+                            .any(|t| {
+                                matches!(
+                                    t,
+                                    "key.keyboard.left.control"
+                                        | "key.keyboard.right.control"
+                                        | "action:key.sprint"
+                                )
+                            })
+                }
+                _ => false,
+            };
+            if custom_held {
+                return true;
+            }
+        }
         settings.binding(action).is_some_and(|button| {
             self.edges.is_held(button) || self.late_releases.contains(&button)
         })
@@ -189,7 +234,7 @@ impl Game<'_> {
     /// Once per loop iteration: read the pads and act on button changes.
     pub(super) fn poll_pads(&mut self, event_loop: &dyn EventLoopCtl) {
         #[cfg(target_os = "android")]
-        if !matches!(self.screen, Screen::Playing | Screen::Options)
+        if !matches!(self.screen, Screen::Playing | Screen::Options | Screen::Paused)
             && self.pad.touch.editor.is_some()
         {
             self.pad.touch.cancel_editor();
@@ -200,8 +245,11 @@ impl Game<'_> {
                 crate::device_runtime::preferences().gpu_profile,
                 &crate::backend::game_home(),
             );
+            self.pad.touch.toggle_crouch = self.settings.toggle_crouch;
+            self.pad.touch.in_inventory =
+                matches!(self.screen, Screen::Inventory | Screen::Creative);
             self.pad.touch.inventory_mode = self.android_inventory_controls();
-            if !self.pad.touch.inventory_mode {
+            if !self.pad.touch.in_inventory {
                 self.pad.touch.inventory_shift = false;
             }
             self.android_virtual_mouse_clicks(event_loop);
@@ -214,18 +262,16 @@ impl Game<'_> {
                 }
                 horizon_client::android_runtime::clear_keypad();
             }
-            if (self.pad_in_menu() && !self.android_inventory_controls())
-                || !self.focused
-                || (!crate::touch_visible() && !self.settings.keypad.enabled)
-            {
+            if !self.focused {
                 self.pad.touch.clear();
                 horizon_client::android_runtime::clear_keypad();
+            } else if self.pad_in_menu() {
+                self.pad.touch.clear_world_gesture();
+                if !self.android_inventory_controls() {
+                    horizon_client::android_runtime::clear_keypad();
+                }
             }
             self.android_custom_events();
-        }
-        #[cfg(target_os = "android")]
-        if self.pad_in_menu() && self.android_inventory_controls() {
-            self.pad.touch.clear_world_gesture();
         }
         let settings = &self.settings.controller;
         if !settings.enabled && !cfg!(target_os = "android") {
@@ -262,7 +308,7 @@ impl Game<'_> {
             // dismounting once the player swims, flies or rides; there the
             // button holds, so the toggle ends.
             if crate::touch_visible()
-                && self.android_touch_descending()
+                && (!self.settings.toggle_crouch || self.android_touch_descending())
                 && self.toggles.drop_pad_toggle(SNEAK)
             {
                 self.sync_toggle(SNEAK);
@@ -337,6 +383,14 @@ impl Game<'_> {
                 self.pad_button_logged(event_loop, button, false);
             } else {
                 self.pad.late_releases.push(button);
+            }
+        }
+        #[cfg(target_os = "android")]
+        for token in std::mem::take(&mut self.pad.late_custom_releases) {
+            if !ticking || self.pad.custom_pressed_at.get(&token) != Some(&self.ticks) {
+                self.android_dispatch_custom_token(&token, false);
+            } else {
+                self.pad.late_custom_releases.push(token);
             }
         }
         for (button, down) in edges {
@@ -514,7 +568,7 @@ impl Game<'_> {
     /// Touch fly/swim down and dismount are held even when ground sneaking
     /// is toggled. Any water counts, not only the sprint-swim pose: a toggled
     /// crouch there sinks the player (#71).
-    fn android_touch_descending(&self) -> bool {
+    pub(super) fn android_touch_descending(&self) -> bool {
         #[cfg(target_os = "android")]
         {
             self.pad.touch.vertical_movement
@@ -544,7 +598,8 @@ impl Game<'_> {
             }
             #[cfg(target_os = "android")]
             "key.sprint" => {
-                self.mapped_key(KeyCode::ControlLeft, down, false)?;
+                // The touch button must always land, screen or not.
+                self.hold_toggle(1, down)?;
                 if !down
                     && crate::touch_visible()
                     && self.settings.touch.sprint_toggle
@@ -556,6 +611,16 @@ impl Game<'_> {
             }
             "key.sneak"
                 if self.settings.controller.toggle_sneak
+                    && {
+                        #[cfg(target_os = "android")]
+                        {
+                            !crate::touch_visible()
+                        }
+                        #[cfg(not(target_os = "android"))]
+                        {
+                            true
+                        }
+                    }
                     && !self.settings.toggle_crouch
                     && !self.android_touch_descending() =>
             {
@@ -570,6 +635,8 @@ impl Game<'_> {
                 self.sync_toggle(SNEAK);
                 self.key_pressed(KeyCode::ShiftLeft)
             }
+            // The touch button must always land, screen or not.
+            "key.sneak" => self.hold_toggle(0, down),
             _ => {
                 let default = KeyBinds::default_of(action);
                 if let Some(button) = mouse_button(default) {
@@ -685,6 +752,10 @@ impl Game<'_> {
     /// playing (a pad lying idle while the mouse plays stays still).
     pub(super) fn pad_rumble(&mut self, rumble: Rumble) {
         let settings = &self.settings.controller;
+        #[cfg(target_os = "android")]
+        if !self.pad.touch.settings.vibrate {
+            return;
+        }
         if (!settings.enabled && !cfg!(target_os = "android"))
             || !settings.vibration
             || !self.pad.in_use

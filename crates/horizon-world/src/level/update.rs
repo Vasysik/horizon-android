@@ -307,7 +307,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if current == state {
             return None;
         }
-        let old = self.level.set_raw(pos, state)?;
+        let old = self.level.set_raw_with_flags(pos, state, update_flags)?;
         if old == state {
             return None;
         }

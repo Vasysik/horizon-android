@@ -160,6 +160,7 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
         .sky
         .iter()
         .map(|s| (StageKind::Sky, s))
+        .chain(m.vertex.iter().map(|s| (StageKind::Vertex, s)))
         .chain(m.material.iter().map(|s| (StageKind::Material, s)))
         .chain(m.weather.iter().map(|s| (StageKind::Weather, s)))
         .chain(m.post.iter().map(|s| (StageKind::Post, s)));
@@ -180,7 +181,18 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
                     .overrides
                     .iter()
                     .any(|(_, o)| o.name.as_deref() == Some(&option.id))
-            });
+            }) || m.reflection.as_ref().and_then(|r| r.option.as_deref())
+                == Some(option.id.as_str())
+                || m.shadow.as_ref().is_some_and(|s| {
+                    s.option.as_deref() == Some(option.id.as_str())
+                        || s.resolution_option.as_deref() == Some(option.id.as_str())
+                        || s.distance_option.as_deref() == Some(option.id.as_str())
+                })
+                || m.displacement.as_ref().is_some_and(|d| {
+                    d.option.as_deref() == Some(option.id.as_str())
+                        || d.cells_option.as_deref() == Some(option.id.as_str())
+                        || d.steps_option.as_deref() == Some(option.id.as_str())
+                });
             if !used {
                 problems.push(problem(
                     crate::MANIFEST,

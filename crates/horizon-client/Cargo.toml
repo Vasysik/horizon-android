@@ -8,6 +8,7 @@ rust-version = "1.90"
 description = "Horizon native development client"
 
 [dependencies]
+self_cell = "1.3"
 horizon-assets = { path = "../horizon-assets" }
 horizon-client-core = { path = "../horizon-client-core" }
 horizon-client-input = { path = "../horizon-client-input" }

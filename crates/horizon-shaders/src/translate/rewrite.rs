@@ -32,7 +32,11 @@ impl Stage<'_> {
     /// Declarations of ours this stage uses (after the uniform block, samplers and varyings).
     pub(super) fn prelude(&self) -> String {
         let mut p = String::from(
-            "float hz_modf(float x, out float i) { i = trunc(x); return x - i; }\n\
+            "float hz_dot(float a, float b) { return a * b; }\n\
+             float hz_dot(vec2 a, vec2 b) { return dot(a, b); }\n\
+             float hz_dot(vec3 a, vec3 b) { return dot(a, b); }\n\
+             float hz_dot(vec4 a, vec4 b) { return dot(a, b); }\n\
+             float hz_modf(float x, out float i) { i = trunc(x); return x - i; }\n\
              vec2 hz_modf(vec2 x, out vec2 i) { i = trunc(x); return x - i; }\n\
              vec3 hz_modf(vec3 x, out vec3 i) { i = trunc(x); return x - i; }\n\
              vec4 hz_modf(vec4 x, out vec4 i) { i = trunc(x); return x - i; }\n\
@@ -60,7 +64,7 @@ impl Stage<'_> {
         if self.kind == ShaderStage::Vertex {
             p.push_str(
                 "const vec2 hz_quad[6] = vec2[6](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));\n\
-                 vec4 hz_Vertex; vec4 hz_Color; vec4 hz_SecondaryColor; vec3 hz_Normal; float hz_FogCoord;\n\
+                 vec4 hz_Vertex; vec4 hz_Color; vec4 hz_SecondaryColor; vec3 hz_Normal; float hz_FogCoord; vec4 hz_ClipVertex;\n\
                  vec4 hz_MultiTexCoord0; vec4 hz_MultiTexCoord1; vec4 hz_MultiTexCoord2; vec4 hz_MultiTexCoord3;\n\
                  vec4 hz_MultiTexCoord4; vec4 hz_MultiTexCoord5; vec4 hz_MultiTexCoord6; vec4 hz_MultiTexCoord7;\n",
             );
@@ -201,13 +205,13 @@ impl Stage<'_> {
             }
             // `float specular`: a variable of the same name as a sampler, from here to the
             // function's end; `.specular` a member.
-            if sampler_ty.contains_key(t) && !params.contains_key(t) {
+            if (sampler_ty.contains_key(t) || uniforms.contains_key(t)) && !params.contains_key(t) {
                 let before = prev(i).map(|j| self.tokens[j]);
                 if before == Some(".") {
                     out.push_str(t);
                     continue;
                 }
-                if before.is_some_and(|b| is_ident(b) && !matches!(b, "return" | "case" | "else")) {
+                if before.is_some_and(|b| is_ident(b) && !matches!(b, "return" | "case" | "else" | "in" | "out" | "inout")) {
                     hidden.push(t);
                 }
             }
@@ -242,10 +246,22 @@ impl Stage<'_> {
                 // naga's frontend leaves the code after an unconditional `discard` or `return;`
                 // unreachable but half-built (a module that fails validation): behind an `if`
                 // it stays reachable as far as naga knows.
-                "discard" => Some("if (true) discard".into()),
-                "return" if next(i).is_some_and(|j| self.tokens[j] == ";") => {
-                    Some("if (true) return".into())
-                }
+                "discard" => Some(
+                    if next(i).and_then(&next).is_some_and(|k| self.tokens[k] == "else") {
+                        "{ if (true) discard; }".into()
+                    } else {
+                        "if (true) discard".into()
+                    },
+                ),
+                "return" if next(i).is_some_and(|j| self.tokens[j] == ";") => Some(
+                    if next(i).and_then(&next).is_some_and(|k| self.tokens[k] == "else") {
+                        "{ if (true) return; }".into()
+                    } else {
+                        "if (true) return".into()
+                    },
+                ),
+                "dot" if called => Some("hz_dot".into()),
+                "normalMatrix" if !uniforms.contains_key("normalMatrix") => Some("hz_NormalMatrix".into()),
                 // GLSL's `modf`, which naga's frontend lacks.
                 "modf" if called => Some("hz_modf".into()),
                 // Matrix inverse, which naga writes for neither Metal nor WGSL.
@@ -285,9 +301,15 @@ impl Stage<'_> {
                     None => None,
                 },
                 "gl_Color" if fragment => Some("hz_FrontColor".into()),
+                "gl_SecondaryColor" if fragment => Some("hz_SecondaryColor".into()),
                 "gl_FragCoord" if !fragment => None,
                 "gl_FragCoord" => Some("hz_FragCoord".into()),
-                "gl_FrontColor" => Some("hz_FrontColor".into()),
+                "gl_FrontColor" | "gl_BackColor" => Some("hz_FrontColor".into()),
+                "gl_FrontSecondaryColor" | "gl_BackSecondaryColor" => {
+                    Some("hz_SecondaryColor".into())
+                }
+                "gl_FogFragCoord" => Some("hz_FogFragCoord".into()),
+                "gl_ClipVertex" if !fragment => Some("hz_ClipVertex".into()),
                 "gl_Fog" => Some("hz_Fog".into()),
                 // Before the compatibility inputs, of which `gl_Vertex` is a prefix.
                 "gl_VertexID" => Some("gl_VertexIndex".into()),

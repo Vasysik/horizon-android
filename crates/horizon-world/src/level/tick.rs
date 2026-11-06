@@ -594,7 +594,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let mut state = state;
         if age != new_age {
             state = b.table.set_int(state, p.age, new_age);
-            self.set_block(pos, state, 260);
+            self.set_block(pos, state, 260 | super::flags::UPDATE_KNOWN_SHAPE);
         }
         if !infini {
             if !self.is_valid_fire_location(pos) {

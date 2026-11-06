@@ -847,10 +847,17 @@ impl Game<'_> {
             }
         };
         let player_type = super::perspective::player_type(&root);
+        let streaming_threads = if cfg!(target_os = "android") && self.integrated.is_some() {
+            (self.res.threads() / 2).max(2)
+        } else if cfg!(target_os = "android") {
+            self.res.threads().min(4)
+        } else {
+            self.res.threads()
+        };
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),
             self.pack.context.clone(),
-            self.res.threads(),
+            streaming_threads,
         );
         streaming.remote = true;
         streaming.radius = self.settings.render_distance;
@@ -1676,9 +1683,10 @@ impl Game<'_> {
         });
         if loaded && self.remote.as_ref().is_some_and(|r| !r.loaded_sent) {
             self.send(S::PlayerLoaded(Empty));
-            let r = self.remote.as_mut().unwrap();
-            r.loaded_sent = true;
-            r.level_load.finish();
+            if let Some(r) = self.remote.as_mut() {
+                r.loaded_sent = true;
+                r.level_load.finish();
+            }
         }
         Ok(())
     }
@@ -1715,8 +1723,12 @@ impl Game<'_> {
         // a decoder that needed >50 ms otherwise turns its whole queue into
         // one long main-thread stall. Boost progress without changing order.
         let bounded = cfg!(target_os = "android") || !overdue;
-        let chunk_budget = if cfg!(target_os = "android") && overdue {
-            Duration::from_millis(4)
+        let chunk_budget = if cfg!(target_os = "android") {
+            if overdue {
+                Duration::from_millis(2)
+            } else {
+                Duration::from_micros(1200)
+            }
         } else {
             CHUNK_PACKETS_PER_FRAME
         };
@@ -2037,10 +2049,17 @@ impl Game<'_> {
         if !same {
             // A new ClientLevel: Minecraft.setLevel stops every sound.
             self.stop_sounds_for_new_level();
+            let streaming_threads = if cfg!(target_os = "android") && self.integrated.is_some() {
+                (self.res.threads() / 2).max(2)
+            } else if cfg!(target_os = "android") {
+                self.res.threads().min(4)
+            } else {
+                self.res.threads()
+            };
             let mut streaming = Streaming::new(
                 Arc::new(NoTerrain),
                 self.pack.context.clone(),
-                self.res.threads(),
+                streaming_threads,
             );
             streaming.remote = true;
             streaming.radius = self.streaming.radius;

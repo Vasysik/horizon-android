@@ -5,7 +5,7 @@ use horizon_client::gamepad::PadState;
 /// The `Game` `start` makes (~67 KB, by value) into a box, in a frame of its own that is gone
 /// once it is: the copies stay out of the caller's frame, deep in the event loop.
 #[inline(never)]
-fn boxed(start: impl FnOnce() -> Result<Option<Game<'static>>>) -> Result<Box<Game<'static>>> {
+fn boxed<'a>(start: impl FnOnce() -> Result<Option<Game<'a>>>) -> Result<Box<Game<'a>>> {
     match start() {
         Ok(Some(game)) => Ok(Box::new(game)),
         Ok(None) => Err("the player's game did not start".into()),
@@ -13,7 +13,7 @@ fn boxed(start: impl FnOnce() -> Result<Option<Game<'static>>>) -> Result<Box<Ga
     }
 }
 
-impl Split<'_> {
+impl<'a> Split<'a> {
     /// The first seat free (2 to `MAX_PLAYERS`).
     fn free_seat(&self) -> Option<usize> {
         (2..=MAX_PLAYERS).find(|n| self.guests.iter().all(|g| g.seat != *n))
@@ -89,12 +89,8 @@ impl Split<'_> {
         seat: usize,
         options_file: &Path,
         settings: horizon_client::settings::Settings,
-    ) -> Result<Box<Game<'static>>> {
-        // The players' games borrow P1's resources for the process's lifetime: one copy for all.
-        if self.res.is_none() {
-            self.res = Some(Box::leak(Box::new(self.host.res.clone())));
-        }
-        let res = self.res.ok_or("no resources")?;
+    ) -> Result<Box<Game<'a>>> {
+        let res = self.res;
         let host = &mut self.host;
         std::fs::create_dir_all(options_file.parent().ok_or("bad options path")?)?;
         let mut options = host.options.clone();

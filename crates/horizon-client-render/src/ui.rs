@@ -222,7 +222,7 @@ fn draw_nine_slice(
         if dst[2] <= 0.0 || dst[3] <= 0.0 {
             return;
         }
-        if n.stretch_inner {
+        if n.stretch_inner || src[2] <= 2.0 || src[3] <= 2.0 {
             batch.rect_uv(dst[0], dst[1], dst[2], dst[3], sub(r, size, src), color);
         } else {
             tile(batch, r, size, src, dst, color);

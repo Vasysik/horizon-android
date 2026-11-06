@@ -206,7 +206,7 @@ pub(crate) fn with_context<R>(
         let app = app.as_ref()?;
         let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }.ok()?;
         let mut env = vm.attach_current_thread().ok()?;
-        let result = env.with_local_frame(16, |env| {
+        let result = env.with_local_frame(64, |env| {
             let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
             f(env, &activity)
         });
@@ -475,39 +475,18 @@ pub fn finish() {
 }
 
 pub fn capture_mouse(capture: bool) -> bool {
-    if crate::native_ime::capture_mouse(capture) {
-        return true;
-    }
-    with_context(|env, activity| {
-        let window = env
-            .call_method(activity, "getWindow", "()Landroid/view/Window;", &[])?
-            .l()?;
-        let view = env
-            .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
-            .l()?;
-        env.call_method(
-            &view,
-            if capture {
-                "requestPointerCapture"
-            } else {
-                "releasePointerCapture"
-            },
-            "()V",
-            &[],
-        )?;
-        Ok(())
-    })
-    .is_some()
+    crate::native_ime::capture_mouse(capture)
 }
 
-pub fn show(text: &str) {
-    show_editor(text, false);
-}
 pub fn show_secret(text: &str) {
     MULTILINE.with(|mode| mode.set(false));
     if crate::native_ime::show_secret(text) {
         EDIT.with(|e| *e.borrow_mut() = Some(text.into()));
     }
+}
+
+pub fn show(text: &str) {
+    show_editor(text, false);
 }
 pub fn show_multiline(text: &str) {
     show_editor(text, true);
@@ -672,6 +651,7 @@ pub fn poll_gamepad_connections() {
     }) {
         return;
     }
+    thread_local! { static LAST_IDS: std::cell::RefCell<Option<(Vec<i32>, Vec<i32>)>> = const { std::cell::RefCell::new(None) }; }
     let ids = with_context(|env, _| {
         let ids = env
             .call_static_method("android/view/InputDevice", "getDeviceIds", "()[I", &[])?
@@ -679,6 +659,14 @@ pub fn poll_gamepad_connections() {
         let ids = jni::objects::JIntArray::from(ids);
         let mut values = vec![0; env.get_array_length(&ids)? as usize];
         env.get_int_array_region(&ids, 0, &mut values)?;
+        if let Some(cached) = LAST_IDS.with(|c| {
+            c.borrow()
+                .as_ref()
+                .filter(|(prev, _)| *prev == values)
+                .cloned()
+        }) {
+            return Ok(cached);
+        }
         let mut controllers = Vec::new();
         for id in &values {
             let device = env
@@ -697,15 +685,49 @@ pub fn poll_gamepad_connections() {
                 env.delete_local_ref(device)?;
             }
         }
+        LAST_IDS.with(|c| *c.borrow_mut() = Some((values.clone(), controllers.clone())));
         Ok((values, controllers))
     });
     if let Some((ids, controllers)) = ids {
+        winit::platform::android::set_native_input_devices(&ids);
         horizon_client::android_runtime::retain_gamepads(&ids);
         if horizon_client::android_runtime::active_gamepad_id().is_none() {
             cancel_gamepad_vibration();
         }
         winit::platform::android::set_native_gamepads(&controllers);
     }
+}
+
+/// Hardware display density (dp scale factor) from Android DisplayMetrics, queried once.
+pub fn display_density() -> f32 {
+    static CACHED_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let cached = f32::from_bits(CACHED_BITS.load(std::sync::atomic::Ordering::Relaxed));
+    if cached >= 1.0 && cached <= 6.0 {
+        return cached;
+    }
+    let queried = with_context(|env, activity| {
+        let resources = env
+            .call_method(
+                activity,
+                "getResources",
+                "()Landroid/content/res/Resources;",
+                &[],
+            )?
+            .l()?;
+        let metrics = env
+            .call_method(
+                resources,
+                "getDisplayMetrics",
+                "()Landroid/util/DisplayMetrics;",
+                &[],
+            )?
+            .l()?;
+        env.get_field(metrics, "density", "F")?.f()
+    })
+    .unwrap_or(2.65)
+    .clamp(1.0, 5.0);
+    CACHED_BITS.store(queried.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    queried
 }
 
 /// Display rotation is queried only while gyro aiming is enabled.

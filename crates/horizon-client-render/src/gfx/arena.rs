@@ -96,6 +96,7 @@ const COMPACT_MIN_FREE: u64 = 128 << 20;
 /// buffer sizes): a section's vertices sit in one page.
 pub struct Arena {
     pages: Vec<Option<Page>>,
+    spare: Vec<(wgpu::Buffer, u64, bool)>,
     stride: u64,
     page_limit: u64,
     initial_capacity: u64,
@@ -146,7 +147,11 @@ impl Arena {
             bytes = bytes.min(limits.max_storage_buffer_binding_size);
         }
         let page_limit = (bytes / stride) / GRAIN * GRAIN;
-        let growth_limit = if cfg!(target_os = "android") {
+        let growth_limit = if cfg!(all(target_os = "android", target_pointer_width = "64")) {
+            ((32 * 1024 * 1024 / stride) / GRAIN * GRAIN)
+                .max(GRAIN)
+                .min(page_limit)
+        } else if cfg!(target_os = "android") {
             ((8 * 1024 * 1024 / stride) / GRAIN * GRAIN)
                 .max(GRAIN)
                 .min(page_limit)
@@ -156,6 +161,7 @@ impl Arena {
         let capacity = capacity.next_multiple_of(GRAIN).min(growth_limit);
         Self {
             pages: Vec::new(),
+            spare: Vec::new(),
             stride,
             page_limit,
             initial_capacity: capacity,
@@ -171,7 +177,33 @@ impl Arena {
     /// and the device allows it, in system memory: Vulkan drivers fail an
     /// allocation rather than page like OpenGL ones, and wgpu's default error
     /// handler panics. `None` when neither has room.
+    /// Pre-allocates a spare page buffer during loading so the first chunk upload in-world
+    /// does not stall the render thread in `vkCreateBuffer`.
+    pub fn prewarm(&mut self, device: &wgpu::Device) {
+        if self.pages.is_empty() && self.spare.is_empty() {
+            let cap = self
+                .initial_capacity
+                .min(self.growth_limit)
+                .min(self.page_limit);
+            if let Some((buffer, host)) = self.create(device, cap) {
+                self.spare.push((buffer, cap, host));
+            }
+        }
+    }
     fn create(&mut self, device: &wgpu::Device, capacity: u64) -> Option<(wgpu::Buffer, bool)> {
+        #[cfg(test)]
+        let allow_local = !self.video_memory_full;
+        #[cfg(not(test))]
+        let allow_local = true;
+        if allow_local
+            && let Some(idx) = self
+                .spare
+                .iter()
+                .position(|(_, cap, host)| !*host && *cap == capacity)
+        {
+            let (buffer, _, host) = self.spare.swap_remove(idx);
+            return Some((buffer, host));
+        }
         let usage = self.usage | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
         #[cfg(test)]
         let local = (!self.video_memory_full)
@@ -441,7 +473,13 @@ impl Arena {
                 && p.free.0.len() == 1
                 && p.free.0.get(&0) == Some(&p.capacity)
             {
-                *page = None;
+                if let Some(removed) = page.take()
+                    && !removed.host
+                    && self.spare.len() < 2
+                {
+                    self.spare
+                        .push((removed.buffer, removed.capacity, removed.host));
+                }
             }
         }
         if self.closing.is_some_and(|page| !self.has_page(page)) {
@@ -454,6 +492,7 @@ impl Arena {
     }
     pub fn clear(&mut self) {
         self.pages.clear();
+        self.spare.clear();
         self.closing = None;
     }
 }

@@ -31,9 +31,16 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
     (root / 'src/lib.rs').write_text('''#![allow(dead_code)]
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 mod osk { pub enum Output { Text(String), Backspace, Enter, Close } }
+mod android_runtime {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static GPU_BATCHING: AtomicBool = AtomicBool::new(false);
+    pub fn configure_gpu(batching: bool) { GPU_BATCHING.store(batching, Ordering::Relaxed); }
+    pub fn gpu_batching() -> bool { GPU_BATCHING.load(Ordering::Relaxed) }
+}
 #[path = "../../../../crates/horizon-client/src/ime_edit.rs"] mod ime_edit;
 #[path = "../../../../crates/horizon-client/src/content_files.rs"] mod content_files;
 #[path = "../../../../crates/horizon-client/src/official_install_cache.rs"] mod official_install_cache;
+#[path = "../../../../third_party/winit/src/platform_impl/android/mouse_state.rs"] mod mouse_state;
 #[path = "../../../../crates/horizon-client-render/src/gfx/upload_budget.rs"] mod upload_budget;
 #[path = "../../../../crates/horizon-client-render/src/zip.rs"] mod archive_reader;
 #[path = "../../../../crates/horizon-client/src/android/search_queue.rs"] mod search_queue;
