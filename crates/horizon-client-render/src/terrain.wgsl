@@ -411,11 +411,11 @@ fn brightness(c: vec3<f32>) -> f32 {
 // Selecting this entrypoint is a CPU-side proof, never a quality option.
 @fragment fn fs_cutout_static(in: TerrainOut) -> @location(0) vec4<f32> {
     let texel = sprite(in.uv, in.layer & 0x7fffu);
+    if texel.a * in.color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
     var color = texel * in.color;
     if !TERRAIN_FULLY_VISIBLE {
         color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
     }
-    if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
     return solid_finish(in, texel, color);
 }
 fn solid_color(in: TerrainOut) -> vec4<f32> {
@@ -424,10 +424,10 @@ fn solid_color(in: TerrainOut) -> vec4<f32> {
     if faded(in.fade, in.local, dx, dy) { discard; }
     // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
     let texel = sprite(in.uv, in.layer & 0x7fffu);
+    if texel.a * in.color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
     var color = texel * in.color;
     // terrain.fsh: the fade-in mixes toward the fog colour.
     color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, color.a), color, in.visibility);
-    if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
     return solid_finish(in, texel, color);
 }
 // The non-discarding path is used only for proven opaque, non-dithered quads.

@@ -42,33 +42,30 @@ struct HorizonMaterialOut {
 }
 fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
     light: vec2<u32>, origin: vec3<f32>) -> HorizonMaterialOut {
-    let pos = position + origin;
+    let flags = u32(round(color.a * 255.0));
+    let high = flags >> 4u;
+    let fluid = high >= 8u && (high & 7u) < 6u;
+    let face = select(0u, high & 7u, fluid);
+    let tier = 15u - (flags & 15u);
+    let emission = select(min(f32(tier) * 7.0 / 15.0, 1.0), 0.0, tier == 0u);
+    let block = max(f32(light.y), horizon_terrain_dynamic_block_light(position + origin));
+    let sky = f32(light.x);
+    let light_norm = min(vec2(block, sky) / 240.0, vec2(1.0));
+    let pos = horizon_vertex_move(VertexInput(position + origin, position, uv, color.rgb, light_norm,
+        horizon_sprite_tags(layer & 0x7fffu), horizon_sprite_material(layer & 0x7fffu), face, fluid, emission));
     var out: HorizonMaterialOut;
     out.clip = horizon_terrain_globals.view_proj * vec4(pos, 1.0);
     out.uv = uv;
     out.layer = layer;
     out.tint = vec4(color.rgb, 1.0);
-    let block = max(f32(light.y), horizon_terrain_dynamic_block_light(pos));
-    let sky = f32(light.x);
-    // 16 per level, 15 levels.
-    out.light = min(vec2(block, sky) / 240.0, vec2(1.0));
+    out.light = light_norm;
     out.lightmap = horizon_terrain_sample_lightmap(sky / 16.0, block / 16.0).rgb;
     out.position = pos;
     out.spherical = length(pos);
     out.cylindrical = max(length(pos.xz), abs(pos.y));
-    // The colour's alpha byte (mesher.rs's `fluid_face` and `emitting`): a fluid quad's
-    // high nibble is 8 + its face (0..5), every other quad keeps 0xF there; the low nibble
-    // is 15 minus the face's HDR tier. Every corner of a quad carries the same byte, so the
-    // interpolated value rounds back exactly.
-    let flags = u32(round(color.a * 255.0));
-    let high = flags >> 4u;
-    let fluid = high >= 8u && (high & 7u) < 6u;
-    out.face = select(0u, high & 7u, fluid);
+    out.face = face;
     out.fluid_quad = u32(fluid);
-    // The tier (0 none, 1 low, 2 incandescent, 3 bright, 4 very bright) as how strongly the
-    // face shines: a redstone torch 7/15, a torch 14/15, glowstone 1.
-    let tier = 15u - (flags & 15u);
-    out.emission = select(min(f32(tier) * 7.0 / 15.0, 1.0), 0.0, tier == 0u);
+    out.emission = emission;
     return out;
 }
 @vertex fn horizon_material_vs(
@@ -198,9 +195,27 @@ fn layer_table(name: &str, table: &[(u32, u32)]) -> String {
 
 /// The terrain shader for the pack's material stage `source`, with its sprite `tags` and
 /// `materials`.
-fn shader_source(source: &str, tags: &[(u32, u32)], materials: &[(u32, u32)]) -> String {
+/// Extracts the pack's `[vertex]` stage code after `<prelude>` so it can be linked with material.
+fn vertex_shim(vertex_stage: Option<&CheckedStage>) -> String {
+    let mut out = horizon_shader_api::inputs::VERTEX_INPUT.wgsl();
+    if let Some(vs) = vertex_stage {
+        let body = vs
+            .source
+            .find("fn vertex(")
+            .map(|idx| &vs.source[idx..])
+            .unwrap_or(&vs.source);
+        out += body;
+        out += "\nfn horizon_vertex_move(input: VertexInput) -> vec3<f32> { return vertex(input); }\n";
+    } else {
+        out += "fn horizon_vertex_move(input: VertexInput) -> vec3<f32> { return input.position; }\n";
+    }
+    out
+}
+
+fn shader_source(source: &str, vertex: Option<&CheckedStage>, tags: &[(u32, u32)], materials: &[(u32, u32)]) -> String {
     format!(
-        "{source}\n// Horizon's terrain (terrain.wgsl)\n{}{}{}{ENTRIES}",
+        "{source}\n{}\n// Horizon's terrain (terrain.wgsl)\n{}{}{}{ENTRIES}",
+        vertex_shim(vertex),
         vanilla_terrain(),
         layer_table("horizon_sprite_tags", tags),
         layer_table("horizon_sprite_material", materials)
@@ -210,10 +225,11 @@ fn shader_source(source: &str, tags: &[(u32, u32)], materials: &[(u32, u32)]) ->
 /// The material's naga module, its errors in the stage's file.
 fn module(
     stage: &CheckedStage,
+    vertex: Option<&CheckedStage>,
     tags: &[(u32, u32)],
     materials: &[(u32, u32)],
 ) -> Result<naga::Module, String> {
-    let text = shader_source(&stage.source, tags, materials);
+    let text = shader_source(&stage.source, vertex, tags, materials);
     naga::front::wgsl::parse_str(&text)
         .map_err(|e| format!("{}: {}", stage.file, e.emit_to_string(&text)))
 }
@@ -225,10 +241,11 @@ impl NativeMaterial {
         shape: &TerrainShape<'_>,
         frame: &NativeFrame,
         stage: &CheckedStage,
+        vertex_stage: Option<&CheckedStage>,
         constants: &[(String, f64)],
         fog: bool,
     ) -> Result<Self, String> {
-        let module = module(stage, shape.sprite_tags, shape.sprite_materials)?;
+        let module = module(stage, vertex_stage, shape.sprite_tags, shape.sprite_materials)?;
         let mut constants = present_constants(&module, constants);
         let sprite_names = [
             "horizon_terrain_SPRITE_ARRAYS",

@@ -48,7 +48,65 @@ pub use entity_batch::{
     TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
     WATER_MASK_OVERLAY, mark_oit,
 };
+pub use pack_post::PackPost;
 pub use view::{View, ViewSet};
+
+/// Cloneable GPU state for building `pack_post::PackPost` off the Android UI thread.
+pub struct ShaderPackBuildContext {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    adapter: wgpu::Adapter,
+    screen_format: wgpu::TextureFormat,
+    atlas: Option<(wgpu::TextureView, [u32; 2])>,
+    lightmap: wgpu::TextureView,
+    flat_layout: Option<wgpu::BindGroupLayout>,
+    pack_terrain_flat: bool,
+    celestial: Option<wgpu::TextureView>,
+    clouds: wgpu::BindGroupLayout,
+}
+
+impl ShaderPackBuildContext {
+    pub fn build(self, post: horizon_shaders::Post, block_ids: &[i32]) -> pack_post::PackPost {
+        let instance = wgpu::vertex_attr_array![5=>Float32x4];
+        let vertex = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TerrainVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &TERRAIN_ATTRIBUTES,
+        };
+        let instances = wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &instance,
+        };
+        let buffers = [Some(vertex), Some(instances)];
+        let flat = self.pack_terrain_flat;
+        let world = pack_post::World {
+            atlas: self.atlas.clone(),
+            lightmap: self.lightmap,
+            terrain: self.atlas.as_ref().map(|_| pack_post::Geometry {
+                buffers: if flat { &buffers[..1] } else { &buffers },
+                table: self.flat_layout.as_ref().filter(|_| flat),
+                depth_write: true,
+                atlas: None,
+                ids: None,
+                cull: true,
+            }),
+            block_ids,
+            celestial: self.celestial,
+            clouds: Some(&self.clouds),
+            weather: true,
+            hand: true,
+        };
+        pack_post::PackPost::new(
+            &self.device,
+            &self.queue,
+            &self.adapter,
+            post,
+            self.screen_format,
+            world,
+        )
+    }
+}
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -533,6 +591,8 @@ pub struct Frame<'a> {
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
+    /// Reuse `MenuBlur`'s cached blurred world backdrop while a pausing menu is open.
+    pub menu_blur_cache: bool,
     /// `Options.chunkSectionFadeInTime`, in seconds: how long a section takes to fade in once
     /// uploaded (0 draws it whole at once).
     pub chunk_fade: f32,
@@ -706,6 +766,7 @@ pub struct Renderer {
     panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
     border_pipeline: wgpu::RenderPipeline,
+    border_bindings: wgpu::BindGroupLayout,
     border_group: wgpu::BindGroup,
     border_uniform: wgpu::Buffer,
     border_vertices: wgpu::Buffer,
@@ -879,6 +940,7 @@ pub struct Renderer {
     /// panics when such a surface is acquired from (it never had one that
     /// worked), so frames configure it again first and skip until it takes.
     surface_unconfigured: bool,
+    surface_extent: std::sync::atomic::AtomicU64,
     pub drawn_sections: usize,
     /// Last frame's section draws (face ranges and translucent sections),
     /// and the draw calls the backend issued for them.
@@ -1524,14 +1586,14 @@ async fn open_backend(
     let mobile = cfg!(target_os = "android");
     let compatibility = crate::android_runtime::compatibility();
     let features = timing::GpuTimer::features(&adapter)
-        | if compatibility {
+        | if compatibility || mobile {
             wgpu::Features::empty()
         } else {
             cull::Cull::features(&adapter)
         }
         | oit::features(&adapter)
         | (adapter.features()
-            & (if compatibility {
+            & (if compatibility || mobile {
                 wgpu::Features::empty()
             } else {
                 wgpu::Features::INDIRECT_FIRST_INSTANCE
@@ -1811,7 +1873,12 @@ impl Renderer {
                 .map(|renderer| renderer.config.present_mode)
                 .filter(|mode| caps.present_modes.contains(mode))
                 .unwrap_or_else(|| {
-                    if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                    // Android GPU drivers can stall inside a mailbox present for
+                    // seconds (seen on Mali), which ANRs the activity before the
+                    // first world frame. Present through the vsync queue there.
+                    if cfg!(not(target_os = "android"))
+                        && caps.present_modes.contains(&wgpu::PresentMode::Mailbox)
+                    {
                         wgpu::PresentMode::Mailbox
                     } else {
                         wgpu::PresentMode::Fifo
@@ -3527,9 +3594,10 @@ impl Renderer {
             .get_downlevel_capabilities()
             .flags
             .contains(wgpu::DownlevelFlags::BASE_VERTEX);
-        let multi_draw = device
-            .features()
-            .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+        let multi_draw = !cfg!(target_os = "android")
+            && device
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
             && adapter
                 .get_downlevel_capabilities()
                 .flags
@@ -3554,6 +3622,7 @@ impl Renderer {
         let cull_env = std::env::var("HORIZON_GPU_CULL");
         let adapter_info = adapter.get_info();
         let cull = cull::Cull::supported(&adapter, &device)
+            .filter(|_| !cfg!(target_os = "android"))
             .filter(|_| !crate::android_runtime::compatibility())
             .filter(|_| gpu_culling_requested(&adapter_info, cull_env.as_deref().ok()))
             .map(|depth_test| match cull_env.as_deref() {
@@ -3600,6 +3669,17 @@ impl Renderer {
                 on_off(gpu_timer.is_some()),
             ));
         }
+        let surface_extent = {
+            #[cfg(target_os = "android")]
+            {
+                let p = window.outer_size();
+                (u64::from(p.width.max(1)) << 32) | u64::from(p.height.max(1))
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                (u64::from(config.width) << 32) | u64::from(config.height)
+            }
+        };
         Ok(Self {
             display: DisplayWatch::default(),
             display_fresh: false,
@@ -3684,6 +3764,7 @@ impl Renderer {
             entity_outline,
             panorama,
             border_pipeline,
+            border_bindings,
             border_group,
             border_uniform,
             border_vertices,
@@ -3789,6 +3870,7 @@ impl Renderer {
             suspended: !drawable_size(size.width, size.height, max_side),
             acquire_validation_failures: 0,
             surface_unconfigured: false,
+            surface_extent: std::sync::atomic::AtomicU64::new(surface_extent),
             drawn_sections: 0,
             section_draws: 0,
             section_draw_calls: 0,
@@ -3878,6 +3960,8 @@ impl Renderer {
         if previous.suspended {
             return Err("cannot attach a renderer while the window is suspended".into());
         }
+        let _ = previous.device.poll(wgpu::PollType::wait_indefinitely());
+        previous.in_flight.clear();
         previous.release_surface();
         self.surface = previous
             .spare_surface
@@ -3946,9 +4030,435 @@ impl Renderer {
                 "Horizon renderer: the new window surface did not configure ({e}); retrying"
             );
         }
+        if configured.is_ok() {
+            let sc = self.surface_config();
+            self.surface_extent.store(
+                (u64::from(sc.width) << 32) | u64::from(sc.height),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
         self.surface_unconfigured = configured.is_err();
         self.surface = Some(surface);
         self.suspended = false;
+        Ok(())
+    }
+    /// Update the loading/title screen's HUD atlas, glint and panorama textures
+    /// in place without tearing down the live swapchain surface or recompiling
+    /// the world's pipelines.
+    pub fn set_loading_ui(
+        &mut self,
+        atlas: &crate::hud::HudAtlas,
+        panorama_faces: &panorama::Faces,
+    ) -> Result<()> {
+        let limit = self.device.limits().max_texture_dimension_2d;
+        if atlas.width.max(atlas.height) > limit {
+            return Err(format!(
+                "the shared atlas is {}x{}; this GPU allows {limit}x{limit}",
+                atlas.width, atlas.height
+            )
+            .into());
+        }
+        atlas.font.reset_cache();
+        let atlas_tex = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Shared atlas"),
+                size: wgpu::Extent3d {
+                    width: atlas.width,
+                    height: atlas.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &atlas.pixels,
+        );
+        let atlas_view = atlas_tex.create_view(&Default::default());
+        let (glint_pixels, glint_width, glint_height) =
+            (&atlas.glint.0, atlas.glint.1, atlas.glint.2);
+        let glint_texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Enchanted glint"),
+                size: wgpu::Extent3d {
+                    width: glint_width,
+                    height: glint_height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            glint_pixels,
+        );
+        let glint_view = glint_texture.create_view(&Default::default());
+        let glint_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Glint"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let (glint_armor_pixels, glint_armor_width, glint_armor_height) = (
+            &atlas.glint_armor.0,
+            atlas.glint_armor.1,
+            atlas.glint_armor.2,
+        );
+        let glint_armor_texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Enchanted armor glint"),
+                size: wgpu::Extent3d {
+                    width: glint_armor_width,
+                    height: glint_armor_height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            glint_armor_pixels,
+        );
+        let glint_armor_view = glint_armor_texture.create_view(&Default::default());
+        let mut hud = HudRenderer::new(
+            &self.device,
+            self.config.format.remove_srgb_suffix(),
+            &atlas_view,
+            &glint_view,
+            &glint_sampler,
+        )?;
+        hud.atlas_texture = Some(atlas_tex);
+        hud.sprite_animations = atlas
+            .sprite_animations
+            .iter()
+            .map(|(rect, animation)| (*rect, animation.clone(), (usize::MAX, 0, 0)))
+            .collect();
+        hud.set_text_shader(&self.device, atlas.text_shader.as_deref());
+        self.hud = hud;
+        let atlas_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Atlas"),
+            ..Default::default()
+        });
+        self.entity_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Entity resources"),
+            layout: &self.entity_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.lightmap_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&glint_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
+                },
+            ],
+        });
+        self.hand_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("First-person hand resources"),
+            layout: &self.entity_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.hand_globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.lightmap_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&glint_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
+                },
+            ],
+        });
+        self.panorama = panorama::Panorama::new(
+            &self.device,
+            &self.queue,
+            self.config.format.remove_srgb_suffix(),
+            panorama_faces,
+        );
+        Ok(())
+    }
+    /// Returns true if `layers` uses the same `(SPRITE_ARRAYS, SPRITE_SPLIT)` specialization
+    /// constants as the terrain pipelines already compiled on `self`.
+    pub fn matches_sprite_layout(&self, layers: u32) -> bool {
+        let Ok(split) = check_layers(&self.adapter, layers) else {
+            return false;
+        };
+        let sprite_arrays = layers.div_ceil(split).max(1);
+        self.terrain_sprites == [f64::from(sprite_arrays), f64::from(split)]
+    }
+    /// Upgrade a loading/menu renderer in place with the world's block sprites, LabPBR maps,
+    /// sprite animator, and world border texture without recompiling pipelines, spawning a
+    /// competing GPU worker thread, or detaching the live Android swapchain surface.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_world_assets(
+        &mut self,
+        sprite_pixels: &[u8],
+        sprite_size: u32,
+        sprite_minimum_size: u32,
+        layers: u32,
+        sprite_mips: &[crate::mipmap::Settings],
+        animations: &[SpriteAnimation],
+        forcefield: (&[u8], u32),
+        prepared: Option<PreparedTextures>,
+    ) -> Result<()> {
+        let split = check_layers(&self.adapter, layers)?;
+        let prepared = match prepared {
+            Some(prepared) => prepared.resplit(layers, split),
+            None => PreparedTextures::with_split(
+                sprite_pixels,
+                sprite_size,
+                layers,
+                sprite_mips,
+                forcefield,
+                split,
+            ),
+        };
+        let mut mip_levels = 1;
+        let sprite_compute = animate::SpriteAnimator::compute(&self.adapter, &self.device);
+        let sprite_storage = if sprite_compute {
+            wgpu::TextureUsages::STORAGE_BINDING
+        } else {
+            wgpu::TextureUsages::empty()
+        };
+        let gl = self.info.backend == wgpu::Backend::Gl;
+        let pbr_maps = prepared
+            .pbr
+            .map(|(normals, specular, levels, pbr_layers, size)| {
+                let kept = pbr_layers.min(self.device.limits().max_texture_array_layers);
+                let count = array_layers(kept, gl);
+                [("LabPBR normals", normals), ("LabPBR specular", specular)].map(
+                    |(label, mut data)| {
+                        let layer_bytes = data.len() / pbr_layers as usize;
+                        data.resize(layer_bytes * count as usize, 0);
+                        self.device.create_texture_with_data(
+                            &self.queue,
+                            &wgpu::TextureDescriptor {
+                                label: Some(label),
+                                size: wgpu::Extent3d {
+                                    width: size,
+                                    height: size,
+                                    depth_or_array_layers: count,
+                                },
+                                mip_level_count: levels,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                                view_formats: &[],
+                            },
+                            wgpu::util::TextureDataOrder::LayerMajor,
+                            &data,
+                        )
+                    },
+                )
+            });
+        let sprite_textures: Vec<wgpu::Texture> = prepared
+            .sprites
+            .into_iter()
+            .enumerate()
+            .map(|(array, (mut mips, levels))| {
+                let first = array as u32 * split;
+                let used = layers.saturating_sub(first).clamp(1, split);
+                let count = array_layers(used, gl);
+                mips.resize(mips.len() / used as usize * count as usize, 0);
+                mip_levels = levels;
+                self.device.create_texture_with_data(
+                    &self.queue,
+                    &wgpu::TextureDescriptor {
+                        label: Some("Block sprites"),
+                        size: wgpu::Extent3d {
+                            width: sprite_size,
+                            height: sprite_size,
+                            depth_or_array_layers: count,
+                        },
+                        mip_level_count: levels,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_DST
+                            | wgpu::TextureUsages::COPY_SRC
+                            | sprite_storage,
+                        view_formats: &[],
+                    },
+                    wgpu::util::TextureDataOrder::LayerMajor,
+                    &mips,
+                )
+            })
+            .collect();
+        let animations = animate::SpriteAnimator::new(
+            &self.device,
+            animations,
+            sprite_size,
+            sprite_mips,
+            &sprite_textures,
+            split,
+            sprite_compute,
+        );
+        let active_layer_words = animations.active_layer_words();
+        let sprite_views = sprite_views(&sprite_textures, &self.sprite_unused, None);
+        let emission_stats =
+            hdr_stats::EmissionStats::new(&self.device, split, sprite_textures.len() as u32, gl);
+        self.group = terrain_group(
+            &self.device,
+            "Horizon terrain resources",
+            &self.terrain_layout,
+            &self.globals,
+            &sprite_views,
+            &self.sprite_sampler,
+            &self.lightmap_view,
+            &self.lightmap_sampler,
+            &emission_stats.view,
+        );
+        self.crosshair_group = terrain_group(
+            &self.device,
+            "Debug crosshair resources",
+            &self.terrain_layout,
+            &self.crosshair_globals,
+            &sprite_views,
+            &self.sprite_sampler,
+            &self.lightmap_view,
+            &self.lightmap_sampler,
+            &emission_stats.view,
+        );
+        self.mirror_group = terrain_group(
+            &self.device,
+            "Water mirror resources",
+            &self.terrain_layout,
+            &self.mirror_globals,
+            &sprite_views,
+            &self.sprite_sampler,
+            &self.lightmap_view,
+            &self.lightmap_sampler,
+            &emission_stats.view,
+        );
+        let forcefield_size = forcefield.1;
+        let (forcefield_mips, forcefield_levels) = prepared.forcefield;
+        let forcefield_texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Forcefield"),
+                size: wgpu::Extent3d {
+                    width: forcefield_size,
+                    height: forcefield_size,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: forcefield_levels,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &forcefield_mips,
+        );
+        let forcefield_view = forcefield_texture.create_view(&Default::default());
+        let forcefield_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Forcefield"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        self.border_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("World border resources"),
+            layout: &self.border_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&forcefield_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&forcefield_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.border_uniform.as_entire_binding(),
+                },
+            ],
+        });
+        self.pbr_maps = pbr_maps;
+        self.sprite_textures = sprite_textures;
+        self.mip_levels = mip_levels;
+        self.mipmaps = mip_levels - 1;
+        self.sprite_split = split;
+        self.animations = animations;
+        self.active_animated_layers = vec![0; active_layer_words];
+        self.sprite_minimum_size = sprite_minimum_size;
+        self.emission_stats = emission_stats;
+        self.arena.prewarm(&self.device);
+        self.queue.submit([]);
+        let _ = self.device.poll(wgpu::PollType::Poll);
         Ok(())
     }
     /// The world's depth, which occlusion culling's test and post effects may read.
@@ -4026,14 +4536,47 @@ impl Renderer {
         if self.suspended {
             return;
         }
+        let size_changed = [self.config.width, self.config.height] != [width, height];
         self.config.width = width;
         self.config.height = height;
         if self.surface.is_some() {
-            self.configure_surface();
-        } else {
+            #[cfg(target_os = "android")]
+            let need_surface = {
+                let p = self.window.outer_size();
+                let extent = (u64::from(p.width.max(1)) << 32) | u64::from(p.height.max(1));
+                self.surface_unconfigured
+                    || self
+                        .surface_extent
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        != extent
+            };
+            #[cfg(not(target_os = "android"))]
+            let need_surface = size_changed;
+            if need_surface {
+                self.configure_surface();
+            }
+        } else if size_changed {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
-        self.depth = Self::depth(&self.device, &self.config);
+        if size_changed {
+            self.depth = Self::depth(&self.device, &self.config);
+            self.invalidate_menu_blur();
+        }
+    }
+    /// Marks the cached blurred menu backdrop invalid (e.g. when entering a menu from gameplay).
+    pub fn invalidate_menu_blur(&mut self) {
+        if let Some(blur) = &mut self.menu_blur {
+            blur.invalidate();
+        }
+    }
+    /// Whether `MenuBlur` holds a valid cached blurred backdrop for the current window and radius.
+    pub fn has_cached_menu_blur(&self, radius: f32) -> bool {
+        self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+            && self.screenshot.is_none()
+            && self
+                .menu_blur
+                .as_ref()
+                .is_some_and(|b| b.is_cached([self.config.width, self.config.height], radius))
     }
     /// Whether sections are drawn as one index list per frame (`flat`).
     pub fn flat_draws(&self) -> bool {
@@ -4645,16 +5188,25 @@ impl Renderer {
     /// Configures the window surface again. One that fails is still the one
     /// wgpu configured before, which acquisition reports as a validation error.
     fn configure_surface(&self) {
-        if let Some(surface) = &self.surface
-            && let Err(e) = Self::configure(
+        if let Some(surface) = &self.surface {
+            let sc = self.surface_config();
+            match Self::configure(
                 &self.device,
                 surface,
-                &self.surface_config(),
+                &sc,
                 self.hdr.as_ref(),
                 &self.device_lost,
-            )
-        {
-            log::warn!("Horizon renderer: the window surface did not configure ({e})");
+            ) {
+                Ok(()) => {
+                    self.surface_extent.store(
+                        (u64::from(sc.width) << 32) | u64::from(sc.height),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+                Err(e) => {
+                    log::warn!("Horizon renderer: the window surface did not configure ({e})");
+                }
+            }
         }
     }
     /// HDR calibration's test picture (`crate::hdr_calibration`) while it runs, else None.
@@ -4862,6 +5414,39 @@ impl Renderer {
                 world,
             )
         });
+        self.install_built_shader_pack(dimension, post)
+    }
+
+    /// Captures the cloneable GPU handles needed to build `pack_post::PackPost` on a background
+    /// worker thread on Android so `vkCreateGraphicsPipelines` never stalls `android_main`.
+    pub fn shader_pack_build_context(&self) -> ShaderPackBuildContext {
+        ShaderPackBuildContext {
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+            adapter: self.adapter.clone(),
+            screen_format: self.config.format.remove_srgb_suffix(),
+            atlas: self.pack_atlas.as_ref().map(|a| (a.view.clone(), a.size())),
+            lightmap: self.lightmap_view.clone(),
+            flat_layout: self.flat.as_ref().map(|f| f.draw_layout.clone()),
+            pack_terrain_flat: self.pack_terrain_flat,
+            celestial: self
+                .hud
+                .atlas_texture
+                .as_ref()
+                .map(|t| t.create_view(&Default::default())),
+            clouds: self.cloud_bindings.clone(),
+        }
+    }
+
+    /// Installs a `PackPost` built on a background worker thread.
+    pub fn install_built_shader_pack(
+        &mut self,
+        dimension: i32,
+        post: Option<pack_post::PackPost>,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        if post.is_none() {
+            self.pack_atlas = None;
+        }
         let report = post.as_ref().map(|p| {
             let programs = p.programs().into_iter().map(str::to_owned).collect();
             (programs, p.notes.clone())
@@ -4870,13 +5455,22 @@ impl Renderer {
         if self.pack_post.as_ref().is_some_and(|p| p.1.is_some()) {
             self.native = None;
         }
+        self.invalidate_menu_blur();
         report
+    }
+    /// Whether the loaded `shaders/` pack has at least one active pass.
+    pub fn has_active_shader_pack(&self) -> bool {
+        self.pack_post
+            .as_ref()
+            .and_then(|(_, p)| p.as_ref())
+            .is_some_and(pack_post::PackPost::has_any_pass)
     }
     /// Drops the running shader pack, of either kind.
     pub fn drop_shader_packs(&mut self) {
         self.pack_post = None;
         self.native = None;
         self.pack_atlas = None;
+        self.invalidate_menu_blur();
     }
     /// Runs the sky, material and post stages of one of Horizon's own shader packs from now
     /// on (`None`: no pack), with its options' values; replaces a `shaders/` pack. Returns the
@@ -4971,11 +5565,19 @@ impl Renderer {
         }
         // Flat draws whenever the device has them (`render` keeps them on with a pack).
         self.pack_terrain_flat = self.flat.is_some() && self.flat_on;
-        Some(
-            self.pack_atlas
-                .as_ref()?
-                .terrain_inputs(self.pack_terrain_flat),
-        )
+        let vertex_storage = self
+            .adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+            && !std::env::var("HORIZON_SHADER_PACK_WITHOUT")
+                .unwrap_or_default()
+                .split(',')
+                .any(|w| w.trim() == "vertex-storage");
+        Some(self.pack_atlas.as_ref()?.terrain_inputs_with_ids(
+            self.pack_terrain_flat,
+            self.pack_terrain_flat || vertex_storage,
+        ))
     }
     /// Times the shader pack's passes on the GPU while `on` (the F3 overlay is open), or always
     /// with `HORIZON_SHADER_PACK_TIMING`.
@@ -5053,7 +5655,13 @@ impl Renderer {
     /// (linear, clamped, `bit` anisotropy when anisotropic) and terrain.wgsl's sampleNearest,
     /// or sampleRGSS for RGSS.
     pub fn set_texture_filtering(&mut self, filtering: i32, bit: i32) {
-        let filtering = filtering.clamp(0, 2) as u32;
+        // Mobile TBDR GPUs (e.g. Mali-G52) stall heavily on 9-tap RGSS across
+        // overlapping foliage layers; use standard mipmapped sampling there.
+        let filtering = if cfg!(target_os = "android") && filtering == 1 {
+            0
+        } else {
+            filtering.clamp(0, 2) as u32
+        };
         let anisotropy = if filtering == 2 {
             sampler_anisotropy(bit)
         } else {
@@ -5345,7 +5953,16 @@ impl Renderer {
         let (surface_frame, reconfigure) = match acquired {
             None => (None, false),
             Some(wgpu::CurrentSurfaceTexture::Success(f)) => (Some(f), false),
-            Some(wgpu::CurrentSurfaceTexture::Suboptimal(f)) => (Some(f), true),
+            Some(wgpu::CurrentSurfaceTexture::Suboptimal(f)) => {
+                #[cfg(target_os = "android")]
+                let reconfigure = {
+                    let p = self.window.outer_size();
+                    [f.texture.width(), f.texture.height()] != [p.width.max(1), p.height.max(1)]
+                };
+                #[cfg(not(target_os = "android"))]
+                let reconfigure = true;
+                (Some(f), reconfigure)
+            }
             Some(wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded) => {
                 return Ok(false);
             }
@@ -5426,6 +6043,90 @@ impl Renderer {
                     label: Some("Horizon frame"),
                 })
         });
+        let menu_blur = frame.menu_blur.filter(|radius| {
+            (*radius > 0.0 || frame.menu_blur_cache)
+                && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+        });
+        if menu_blur.is_none() {
+            self.invalidate_menu_blur();
+        }
+        if frame.menu_blur_cache
+            && self.screenshot.is_none()
+            && menu_blur.is_some_and(|r| self.has_cached_menu_blur(r))
+        {
+            self.hud.prepare(
+                &self.device,
+                &mut self.uploads,
+                &mut encoder,
+                frame.hud,
+                [self.config.width, self.config.height],
+            );
+            let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.config.format.remove_srgb_suffix()),
+                ..Default::default()
+            });
+            if let Some(blur) = &self.menu_blur {
+                let _ = blur.blit_cached(&self.queue, &mut encoder, &view_target);
+            }
+            let blur_at = frame.hud.blur_at;
+            self.hud.draw_range(
+                &mut encoder,
+                &view_target,
+                &self.depth,
+                frame.hud,
+                [self.config.width, self.config.height],
+                blur_at..frame.hud.vertices.len() as u32,
+            );
+            self.uploads.finish(&encoder);
+            if has_section_copies {
+                self.section_copy_bytes = 0;
+                self.section_uploads.finish(&encoder);
+            }
+            if let Some(f) = &surface_frame {
+                self.readback
+                    .present(&self.device, &mut encoder, &f.texture);
+            }
+            if let (Some(hdr), Some(f)) = (&self.hdr, &surface_frame) {
+                hdr.present(&self.queue, &mut encoder, &f.texture, !frame.title);
+            }
+            #[cfg(target_os = "android")]
+            if let (Some(scale), Some(frame)) = (&self.frame_scale, &surface_frame) {
+                scale.present(&mut encoder, &frame.texture);
+            }
+            #[cfg(target_os = "android")]
+            if self.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque
+                && let Some(surface) = &surface_frame
+            {
+                let format = self.surface_config().format.remove_srgb_suffix();
+                let output = self
+                    .opaque_output
+                    .get_or_insert_with(|| opaque_output::OpaqueOutput::new(&self.device, format));
+                if output.format != format {
+                    *output = opaque_output::OpaqueOutput::new(&self.device, format);
+                }
+                output.present(&mut encoder, &surface.texture);
+            }
+            let commands = crate::spans::time("encode", || encoder.finish());
+            let submission = crate::spans::time("submit", || self.queue.submit([commands]));
+            let present = Instant::now();
+            if let Some(surface_frame) = surface_frame {
+                if self.config.present_mode == wgpu::PresentMode::Fifo {
+                    self.window.pre_present_notify();
+                }
+                self.queue.present(surface_frame);
+                if reconfigure {
+                    self.configure_surface();
+                }
+            } else {
+                self.in_flight.push_back(submission);
+                if !self.paced_elsewhere {
+                    self.wait_in_flight();
+                }
+            }
+            self.last_wait += present.elapsed();
+            self.last_encode = started.elapsed().saturating_sub(self.last_wait);
+            return Ok(true);
+        }
         #[cfg(target_os = "android")]
         if let Some(timer) = &mut self.gpu_timer {
             timer.begin(&mut encoder);
@@ -6057,7 +6758,9 @@ impl Renderer {
         let section_translucent = self.translucent_draws.len();
         for (i, v) in visible_lods.iter().enumerate() {
             let instance = visible.len() + i;
-            let tile = self.lods.get_mut(&v.key).expect("visible resident tile");
+            let Some(tile) = self.lods.get_mut(&v.key) else {
+                continue;
+            };
             let s = tile.drawn_mut();
             if let Some((index_page, index_start)) = s.sorted_indices {
                 let scheduled = (instance + count - self.translucency_cursor) % count < budget;
@@ -7707,7 +8410,7 @@ impl Renderer {
                 |rp: &mut wgpu::RenderPass<'_>,
                  list: pack_post::TerrainList,
                  page: &dyn Fn(&mut wgpu::RenderPass<'_>, u32),
-                 geometry: Option<(u32, &wgpu::BindGroupLayout)>| {
+                 geometry: Option<(u32, u32, &wgpu::BindGroupLayout)>| {
                     use pack_post::TerrainList as L;
                     let shadow = matches!(list, L::ShadowSolid | L::ShadowTranslucent);
                     if !(if shadow {
@@ -7727,17 +8430,20 @@ impl Renderer {
                                 L::ShadowTranslucent => &flat.calls[shadow_translucent..],
                             };
                             match geometry {
-                                Some((instances, layout)) => {
-                                    let indices =
-                                        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                            label: Some("Shader pack geometry indices"),
-                                            layout,
-                                            entries: &[wgpu::BindGroupEntry {
-                                                binding: 0,
-                                                resource: flat.indices.as_entire_binding(),
-                                            }],
-                                        });
-                                    rp.set_bind_group(5, &indices, &[]);
+                                Some((instances, group_slot, layout)) => {
+                                    if group_slot != 3 {
+                                        let indices = self.device.create_bind_group(
+                                            &wgpu::BindGroupDescriptor {
+                                                label: Some("Shader pack geometry indices"),
+                                                layout,
+                                                entries: &[wgpu::BindGroupEntry {
+                                                    binding: 0,
+                                                    resource: flat.indices.as_entire_binding(),
+                                                }],
+                                            },
+                                        );
+                                        rp.set_bind_group(group_slot, &indices, &[]);
+                                    }
                                     let vertices = |p| self.arena.buffer(p);
                                     flat.draw_geometry(rp, calls, vertices, page, instances);
                                 }
@@ -7767,6 +8473,7 @@ impl Renderer {
                 indices: self.indices.clone(),
                 quads: cloud_quads,
             }));
+            let flat_indices = flat.map(|f| &f.indices);
             post.run(
                 &self.device,
                 &self.queue,
@@ -7779,6 +8486,7 @@ impl Renderer {
                 size,
                 [self.config.width, self.config.height],
                 &pages,
+                flat_indices,
                 &mut terrain,
             );
             self.pack_post = Some((dimension, Some(post)));
@@ -7960,9 +8668,6 @@ impl Renderer {
             let first = debug_depth + debug_top;
             pass.draw(0..4, first..first + crosshair);
         }
-        let menu_blur = frame.menu_blur.filter(|radius| {
-            *radius > 0.0 && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
-        });
         let blur_at = menu_blur.map_or(0, |_| frame.hud.blur_at);
         self.hud.draw_range(
             &mut encoder,

@@ -1,7 +1,65 @@
-use android_activity::input::{KeyAction, KeyEvent, KeyMapChar, Keycode};
+use android_activity::input::{KeyAction, KeyCharacterMap, KeyEvent, KeyMapChar, Keycode};
 use android_activity::AndroidApp;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use crate::keyboard::{Key, KeyCode, KeyLocation, NamedKey, NativeKey, NativeKeyCode, PhysicalKey};
+
+thread_local! {
+    static KEY_CHARACTER_MAPS: RefCell<HashMap<i32, KeyCharacterMap>> =
+        RefCell::new(HashMap::new());
+}
+
+fn is_non_printable_gameplay_key(keycode: Keycode) -> bool {
+    matches!(
+        keycode,
+        Keycode::ShiftLeft
+            | Keycode::ShiftRight
+            | Keycode::CtrlLeft
+            | Keycode::CtrlRight
+            | Keycode::AltLeft
+            | Keycode::AltRight
+            | Keycode::MetaLeft
+            | Keycode::MetaRight
+            | Keycode::Space
+            | Keycode::Escape
+            | Keycode::Enter
+            | Keycode::NumpadEnter
+            | Keycode::Tab
+            | Keycode::Del
+            | Keycode::ForwardDel
+            | Keycode::DpadUp
+            | Keycode::DpadDown
+            | Keycode::DpadLeft
+            | Keycode::DpadRight
+            | Keycode::DpadCenter
+            | Keycode::PageUp
+            | Keycode::PageDown
+            | Keycode::MoveHome
+            | Keycode::MoveEnd
+            | Keycode::Insert
+            | Keycode::CapsLock
+            | Keycode::ScrollLock
+            | Keycode::NumLock
+            | Keycode::F1
+            | Keycode::F2
+            | Keycode::F3
+            | Keycode::F4
+            | Keycode::F5
+            | Keycode::F6
+            | Keycode::F7
+            | Keycode::F8
+            | Keycode::F9
+            | Keycode::F10
+            | Keycode::F11
+            | Keycode::F12
+            | Keycode::Back
+            | Keycode::Home
+            | Keycode::VolumeUp
+            | Keycode::VolumeDown
+            | Keycode::VolumeMute
+    )
+}
 
 pub fn to_physical_key(keycode: Keycode) -> PhysicalKey {
     PhysicalKey::Code(match keycode {
@@ -167,58 +225,78 @@ pub fn character_map_and_combine_key(
     key_event: &KeyEvent<'_>,
     combining_accent: &mut Option<char>,
 ) -> Option<KeyMapChar> {
+    if key_event.action() == KeyAction::Up && combining_accent.is_none() {
+        return None;
+    }
+    if !super::text_input_active()
+        && combining_accent.is_none()
+        && is_non_printable_gameplay_key(key_event.key_code())
+    {
+        return None;
+    }
+
     let device_id = key_event.device_id();
 
-    let key_map = match app.device_key_character_map(device_id) {
-        Ok(key_map) => key_map,
-        Err(err) => {
-            tracing::warn!("Failed to look up `KeyCharacterMap` for device {device_id}: {err:?}");
-            return None;
-        },
-    };
+    KEY_CHARACTER_MAPS.with(|maps| {
+        let mut maps = maps.borrow_mut();
+        if !maps.contains_key(&device_id) {
+            match app.device_key_character_map(device_id) {
+                Ok(key_map) => {
+                    maps.insert(device_id, key_map);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to look up `KeyCharacterMap` for device {device_id}: {err:?}"
+                    );
+                    return None;
+                }
+            }
+        }
+        let key_map = maps.get(&device_id)?;
 
-    match key_map.get(key_event.key_code(), key_event.meta_state()) {
-        Ok(KeyMapChar::Unicode(unicode)) => {
-            // Only do dead key combining on key down
-            if key_event.action() == KeyAction::Down {
-                let combined_unicode = if let Some(accent) = combining_accent {
-                    match key_map.get_dead_char(*accent, unicode) {
-                        Ok(Some(key)) => Some(key),
-                        Ok(None) => None,
-                        Err(err) => {
-                            tracing::warn!(
-                                "KeyEvent: Failed to combine 'dead key' accent '{accent}' with \
-                                 '{unicode}': {err:?}"
-                            );
-                            None
-                        },
-                    }
+        match key_map.get(key_event.key_code(), key_event.meta_state()) {
+            Ok(KeyMapChar::Unicode(unicode)) => {
+                // Only do dead key combining on key down
+                if key_event.action() == KeyAction::Down {
+                    let combined_unicode = if let Some(accent) = combining_accent {
+                        match key_map.get_dead_char(*accent, unicode) {
+                            Ok(Some(key)) => Some(key),
+                            Ok(None) => None,
+                            Err(err) => {
+                                tracing::warn!(
+                                    "KeyEvent: Failed to combine 'dead key' accent '{accent}' with \
+                                     '{unicode}': {err:?}"
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        Some(unicode)
+                    };
+                    *combining_accent = None;
+                    combined_unicode.map(KeyMapChar::Unicode)
                 } else {
-                    Some(unicode)
-                };
+                    Some(KeyMapChar::Unicode(unicode))
+                }
+            }
+            Ok(KeyMapChar::CombiningAccent(accent)) => {
+                if key_event.action() == KeyAction::Down {
+                    *combining_accent = Some(accent);
+                }
+                Some(KeyMapChar::CombiningAccent(accent))
+            }
+            Ok(KeyMapChar::None) => {
+                // Leave any combining_accent state in tact (seems to match how other
+                // Android apps work)
+                None
+            }
+            Err(err) => {
+                tracing::warn!("KeyEvent: Failed to get key map character: {err:?}");
                 *combining_accent = None;
-                combined_unicode.map(KeyMapChar::Unicode)
-            } else {
-                Some(KeyMapChar::Unicode(unicode))
+                None
             }
-        },
-        Ok(KeyMapChar::CombiningAccent(accent)) => {
-            if key_event.action() == KeyAction::Down {
-                *combining_accent = Some(accent);
-            }
-            Some(KeyMapChar::CombiningAccent(accent))
-        },
-        Ok(KeyMapChar::None) => {
-            // Leave any combining_accent state in tact (seems to match how other
-            // Android apps work)
-            None
-        },
-        Err(err) => {
-            tracing::warn!("KeyEvent: Failed to get key map character: {err:?}");
-            *combining_accent = None;
-            None
-        },
-    }
+        }
+    })
 }
 
 pub fn to_logical(key_char: Option<KeyMapChar>, keycode: Keycode) -> Key {

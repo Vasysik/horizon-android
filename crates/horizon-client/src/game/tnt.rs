@@ -472,8 +472,9 @@ impl FluidFlowWorld for TntFluidWorld<'_> {
     }
     fn blocks_fluid_flow(&self, s: Self::Block) -> bool {
         self.assets
-            .blocks_fluid_flow
-            .contains(&self.assets.registry.state(s).unwrap().name)
+            .registry
+            .state(s)
+            .is_some_and(|st| self.assets.blocks_fluid_flow.contains(&st.name))
     }
     fn is_ice_class(&self, s: Self::Block) -> bool {
         self.facts

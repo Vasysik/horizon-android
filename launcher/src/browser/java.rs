@@ -291,7 +291,14 @@ pub fn remove(home: &Path, entry: &Entry) -> Result<(), String> {
     let Some(id) = entry.file.strip_prefix("horizon-mods/") else {
         return Err(format!("{} isn't in {MODS_DIR}/.", entry.file));
     };
-    match fs::remove_dir_all(home.join(&entry.file)) {
+    let id = id.strip_suffix(".jar").unwrap_or(id);
+    let path = home.join(&entry.file);
+    let removed = if path.is_dir() {
+        fs::remove_dir_all(&path)
+    } else {
+        fs::remove_file(&path)
+    };
+    match removed {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("{}: {e}", entry.file)),

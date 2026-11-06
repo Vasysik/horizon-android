@@ -613,9 +613,6 @@ fn install_version(
         return Err(format!("{} was taken down: {}", p.name, r.reason));
     }
     let native = p.kind == index::Kind::NativeMod;
-    if native && cfg!(target_os = "android") {
-        return Err("Source-only .hnmod builds are not supported on Android".into());
-    }
     let relative = match native {
         true => format!("{}/{}.hnmod", native_mods_dir(), p.id),
         false => relative(project.kind, &p.id, &v.file.name)?,

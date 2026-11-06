@@ -2,7 +2,9 @@
 //! that Horizon calls inside its own passes, and the WGSL put around a
 //! pack's files to build a stage: the prelude before (the inputs and the
 //! resources), the entry points after.
-use crate::inputs::{Frame, MATERIAL_INPUT, POST_INPUT, SKY_INPUT, SURFACE, Struct, WEATHER_INPUT};
+use crate::inputs::{
+    Frame, MATERIAL_INPUT, POST_INPUT, SKY_INPUT, SURFACE, Struct, VERTEX_INPUT, WEATHER_INPUT,
+};
 use crate::package::Pack;
 
 /// The bind group of a pack's resources; groups 0 to 2 are the renderer's.
@@ -12,6 +14,8 @@ pub const GROUP: u32 = 3;
 pub enum StageKind {
     /// The sky's colour along each view ray, before the sun, moon and stars.
     Sky,
+    /// Moves terrain vertices (waving leaves, plants, water).
+    Vertex,
     /// The colour of block surfaces (terrain), before the alpha test and fog.
     Material,
     /// The colour of rain and snow streaks.
@@ -349,6 +353,26 @@ struct HorizonMaterialIn {
 ",
 );
 
+/// An entry point with the vertex stage's inputs: the renderer calls `vertex` from its own
+/// terrain vertex shader in the same way.
+const VERTEX_ENTRIES: &str = "\
+@vertex fn horizon_vs_vertex(
+    @location(0) position: vec3<f32>,
+    @location(1) block_position: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) tint: vec3<f32>,
+    @location(4) light: vec2<f32>,
+    @location(5) tags: u32,
+    @location(6) material: u32,
+    @location(7) face: u32,
+    @location(8) fluid: u32,
+    @location(9) emission: f32,
+) -> @builtin(position) vec4<f32> {
+    let moved = vertex(VertexInput(position, block_position, uv, tint, light, tags, material, face, fluid != 0u, emission));
+    return frame.projection * frame.view * vec4<f32>(moved, 1.0);
+}
+";
+
 /// Entry points with the sky stage's inputs: the renderer calls `sky` from
 /// its own sky shader in the same way.
 const SKY_ENTRIES: &str = "\
@@ -378,8 +402,9 @@ struct HorizonWeatherIn {
 ";
 
 impl StageKind {
-    pub const ALL: [StageKind; 4] = [
+    pub const ALL: [StageKind; 5] = [
         StageKind::Sky,
+        StageKind::Vertex,
         StageKind::Material,
         StageKind::Weather,
         StageKind::Post,
@@ -389,6 +414,7 @@ impl StageKind {
     pub fn name(self) -> &'static str {
         match self {
             StageKind::Sky => "sky",
+            StageKind::Vertex => "vertex",
             StageKind::Material => "material",
             StageKind::Weather => "weather",
             StageKind::Post => "post",
@@ -403,6 +429,7 @@ impl StageKind {
     pub fn input(self) -> &'static Struct {
         match self {
             StageKind::Sky => &SKY_INPUT,
+            StageKind::Vertex => &VERTEX_INPUT,
             StageKind::Material => &MATERIAL_INPUT,
             StageKind::Weather => &WEATHER_INPUT,
             StageKind::Post => &POST_INPUT,
@@ -412,6 +439,7 @@ impl StageKind {
     /// The type the function returns.
     pub fn output(self) -> &'static str {
         match self {
+            StageKind::Vertex => "vec3<f32>",
             StageKind::Material => SURFACE.name,
             StageKind::Sky | StageKind::Weather | StageKind::Post => "vec4<f32>",
         }
@@ -430,7 +458,7 @@ impl StageKind {
     pub fn resources(self) -> &'static [Resource] {
         match self {
             StageKind::Post => &POST_RESOURCES,
-            StageKind::Sky | StageKind::Weather => std::slice::from_ref(&FRAME),
+            StageKind::Sky | StageKind::Vertex | StageKind::Weather => std::slice::from_ref(&FRAME),
             StageKind::Material => &MATERIAL_RESOURCES,
         }
     }
@@ -456,7 +484,7 @@ impl StageKind {
                 out += MATERIAL_HELPERS;
                 out += SHADOW_HELPERS;
             }
-            StageKind::Sky | StageKind::Weather => {}
+            StageKind::Sky | StageKind::Vertex | StageKind::Weather => {}
         }
         out
     }
@@ -465,6 +493,7 @@ impl StageKind {
     pub fn entries(self) -> &'static str {
         match self {
             StageKind::Sky => SKY_ENTRIES,
+            StageKind::Vertex => VERTEX_ENTRIES,
             StageKind::Material => MATERIAL_ENTRIES,
             StageKind::Weather => WEATHER_ENTRIES,
             StageKind::Post => POST_ENTRIES,
@@ -564,6 +593,7 @@ pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
     let m = &pack.manifest;
     let stage = match kind {
         StageKind::Sky => m.sky.as_ref(),
+        StageKind::Vertex => m.vertex.as_ref(),
         StageKind::Material => m.material.as_ref(),
         StageKind::Weather => m.weather.as_ref(),
         StageKind::Post => m.post.iter().find(|s| s.file == file),

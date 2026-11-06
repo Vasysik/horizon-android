@@ -55,7 +55,7 @@ enum Bucket {
 
 /// Whether meshes sorted from now on put every bucket's opaque quads before
 /// any cutout ones: set by the renderer when it draws them in two passes.
-static GROUPED: AtomicBool = AtomicBool::new(false);
+static GROUPED: AtomicBool = AtomicBool::new(cfg!(all(target_os = "android", not(test))));
 
 /// Sorts later meshes for two solid passes (`true`) or one.
 pub fn group_parts(on: bool) {
@@ -253,7 +253,7 @@ fn partition_safe(solid: &[TerrainVertex]) -> bool {
                     // A non-axis plane cannot overlap an axis plane over an area.
                     // Of two sloped quads, only coplanar overlapping bounds need
                     // the original order. Line intersections are resolved by depth.
-                    if comparisons > 4096 {
+                    if comparisons > 32768 {
                         return false;
                     }
                     if previous
@@ -288,7 +288,7 @@ fn partition_safe(solid: &[TerrainVertex]) -> bool {
         } else if let Some(previous) = cutouts.get(&key) {
             for a in previous {
                 comparisons += 1;
-                if comparisons > 4096
+                if comparisons > 32768
                     || (a[0] < rect[2] && rect[0] < a[2] && a[1] < rect[3] && rect[1] < a[3])
                 {
                     return false;

@@ -12,6 +12,7 @@ bindings and no entry points, and no names starting with `horizon_`.
 | Stage | In `horizon-shaders.toml` | Your function |
 | --- | --- | --- |
 | sky | `[sky]` | `fn sky(input: SkyInput) -> vec4<f32>` |
+| vertex | `[vertex]` | `fn vertex(input: VertexInput) -> vec3<f32>` |
 | material | `[material]` | `fn material(input: MaterialInput) -> Surface` |
 | weather | `[weather]` | `fn weather(input: WeatherInput) -> vec4<f32>` |
 | post | `[[post]]` | `fn post(input: PostInput) -> vec4<f32>` |
@@ -28,6 +29,33 @@ One direction of the sky, for `fn sky(input: SkyInput) -> vec4<f32>`. The sun, m
 | --- | --- | --- |
 | `direction` | `vec3<f32>` | Unit view ray, camera-relative world axes. |
 | `color` | `vec4<f32>` | Vanilla's sky colour along the ray (sky, fog and sunrise). |
+
+Resources (bind group 3):
+
+| Binding | Declaration | Meaning |
+| --- | --- | --- |
+| 0 | `var<uniform> frame: Frame` | The frame (`Frame`). |
+
+## vertex
+
+`fn vertex(input: VertexInput) -> vec3<f32>`
+
+### `VertexInput`
+
+One corner of a block's quad, for `fn vertex(input: VertexInput) -> vec3<f32>`, which returns the camera-relative position to draw it at (`input.position` for no change).
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `position` | `vec3<f32>` | The corner, camera-relative, in blocks. |
+| `block_position` | `vec3<f32>` | The corner inside its 16×16×16 section, 0..16, before the section's offset is added. |
+| `uv` | `vec2<f32>` | The texture coordinate inside the block atlas, 0..1. |
+| `tint` | `vec3<f32>` | The vertex colour: biome tint, face shade and ambient occlusion. |
+| `light` | `vec2<f32>` | Block and sky light at this corner, 0..1. |
+| `tags` | `u32` | The pack's sprite tags this quad's sprite has: bit i for the manifest's i-th `[[tags]]`. |
+| `material` | `u32` | The `[[materials]]` id of this quad's sprite (0 when no entry names it). |
+| `face` | `u32` | For a fluid, which face of the block the quad is on, `Direction` order: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east. 0 elsewhere. |
+| `fluid` | `bool` | A water or lava quad. |
+| `emission` | `f32` | How strongly the block itself shines, 0..1, by its kind of light; 0 for most blocks. |
 
 Resources (bind group 3):
 

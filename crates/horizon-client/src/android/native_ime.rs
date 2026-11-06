@@ -124,12 +124,30 @@ pub unsafe fn initialize(
                     &[JValue::Object(&service)],
                 )?
                 .l()?;
+            env.call_method(&native, "setFocusable", "(Z)V", &[JValue::Bool(1)])?;
             env.call_method(
                 &native,
                 "setFocusableInTouchMode",
                 "(Z)V",
                 &[JValue::Bool(1)],
             )?;
+            let sdk = env
+                .get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
+                .and_then(|v| v.i())
+                .unwrap_or(0);
+            if sdk >= 26 {
+                if env
+                    .call_method(
+                        &native,
+                        "setDefaultFocusHighlightEnabled",
+                        "(Z)V",
+                        &[JValue::Bool(0)],
+                    )
+                    .is_err()
+                {
+                    let _ = env.exception_clear();
+                }
+            }
             env.call_method(&native, "requestFocus", "()Z", &[])?;
             Ok((
                 env.new_global_ref(edit)?,
@@ -165,7 +183,7 @@ pub unsafe fn initialize(
         keyboard_request: Mutex::new(None),
         last_bounds: Mutex::new(None),
         avoid_cutout: AtomicBool::new(false),
-        immersive: AtomicBool::new(true),
+        immersive: AtomicBool::new(false),
     });
     let looper = unsafe { ALooper_forThread() };
     if looper.is_null() {
@@ -274,11 +292,15 @@ impl Ui {
             )?;
         }
         if sdk >= 30 {
+            // Keep DecorView edge-to-edge in both modes so toggling immersive
+            // system bars never resizes the live ANativeWindow while Vulkan
+            // frames are in flight; navigation bar insets are handled via
+            // set_native_content_insets below.
             env.call_method(
                 &window,
                 "setDecorFitsSystemWindows",
                 "(Z)V",
-                &[JValue::Bool(u8::from(!immersive))],
+                &[JValue::Bool(0)],
             )?;
             let controller = env
                 .call_method(
@@ -310,7 +332,7 @@ impl Ui {
                 decor,
                 "setSystemUiVisibility",
                 "(I)V",
-                &[JValue::Int(if immersive { 0x1706 } else { 0x0004 })],
+                &[JValue::Int(if immersive { 0x1706 } else { 0x0704 })],
             )?;
         }
         Ok(())
@@ -560,24 +582,20 @@ impl Ui {
                         .call_method(&self.native, "getHeight", "()I", &[])?
                         .i()?
                         .max(0);
-                    let metrics = env
-                        .call_method(
-                            &self.activity,
-                            "getResources",
-                            "()Landroid/content/res/Resources;",
-                            &[],
-                        )?
+                    let window = env
+                        .call_method(&self.activity, "getWindow", "()Landroid/view/Window;", &[])?
                         .l()?;
-                    let metrics = env
-                        .call_method(
-                            metrics,
-                            "getDisplayMetrics",
-                            "()Landroid/util/DisplayMetrics;",
-                            &[],
-                        )?
+                    let decor = env
+                        .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
                         .l()?;
-                    let dw = env.get_field(&metrics, "widthPixels", "I")?.i()?;
-                    let dh = env.get_field(&metrics, "heightPixels", "I")?.i()?;
+                    let dw = env
+                        .call_method(&decor, "getWidth", "()I", &[])?
+                        .i()?
+                        .max(width);
+                    let dh = env
+                        .call_method(&decor, "getHeight", "()I", &[])?
+                        .i()?
+                        .max(height);
                     safe[0] = safe[0].saturating_sub(origin[0].max(0) as u32);
                     safe[1] = safe[1].saturating_sub(origin[1].max(0) as u32);
                     safe[2] = safe[2].saturating_sub((dw - origin[0] - width).max(0) as u32);
@@ -586,16 +604,20 @@ impl Ui {
                 winit::platform::android::set_native_content_insets(safe);
             }
             Command::Capture(capture) => {
-                env.call_method(
-                    &self.native,
-                    if capture {
-                        "requestPointerCapture"
-                    } else {
-                        "releasePointerCapture"
-                    },
-                    "()V",
-                    &[],
-                )?;
+                if capture {
+                    env.call_method(&self.edit, "clearFocus", "()V", &[])?;
+                    env.call_method(&self.native, "setFocusable", "(Z)V", &[JValue::Bool(1)])?;
+                    env.call_method(
+                        &self.native,
+                        "setFocusableInTouchMode",
+                        "(Z)V",
+                        &[JValue::Bool(1)],
+                    )?;
+                    env.call_method(&self.native, "requestFocus", "()Z", &[])?;
+                    env.call_method(&self.native, "requestPointerCapture", "()V", &[])?;
+                } else {
+                    env.call_method(&self.native, "releasePointerCapture", "()V", &[])?;
+                }
             }
         }
         Ok(())
@@ -633,11 +655,8 @@ fn callback_inner(ui: &Ui) -> i32 {
             for c in commands {
                 if let Err(e) = env.with_local_frame(16, |env| ui.apply(env, c)) {
                     let _ = env.exception_clear();
-                    log::error!("IME command: {e}");
-                    ui.failed.store(true, Ordering::Release);
-                    ui.active.store(false, Ordering::Release);
-                    winit::platform::android::set_native_text_input_active(false);
-                    return 0;
+                    log::warn!("IME command: {e}");
+                    continue;
                 }
             }
         }

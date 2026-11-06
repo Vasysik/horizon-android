@@ -98,7 +98,36 @@ inputs, caches, saves, build products and signing material. Upstream workflows
 remain under `.github/upstream-workflows/*.disabled`; the Android source workflow
 runs source checks on pushes and pull requests to `android`, with read-only
 permissions. A manual run with `native_checks` enabled also type-checks all four
-Android ABIs. It does not build APKs, use signing keys or publish releases.
+Android ABIs, and one with `build_apk` enabled prepares the pinned engine tables,
+builds that ABI's public APK and uploads it as a workflow artifact. The workflow
+never publishes releases.
+
+### The permanent Android signing key
+
+Every CI build signs with one permanent certificate, so each APK updates the
+installed app in place: Android requires the same certificate and a higher
+`versionCode`, and it no longer asks for an uninstall between builds. The key is
+an RSA-4096 PKCS12 keystore, valid 100 years, alias `horizon-release`.
+
+It lives only in four repository secrets, never in Git and never in an artifact:
+
+| Secret | Holds |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | The whole keystore, base64-encoded |
+| `ANDROID_KEYSTORE_PASSWORD` | The keystore password |
+| `ANDROID_KEY_ALIAS` | `horizon-release` |
+| `ANDROID_KEY_PASSWORD` | The key password (the same one) |
+
+The build job writes them to `.local/android/release.keystore`, and
+`packaging/android/build.gradle` signs the release variant with it whenever
+`HORIZON_ANDROID_KEYSTORE` and the three companion variables are set. Without them
+(a developer's local build) the throwaway development key is used, and the APK
+cannot update a CI install. The job fails rather than silently falling back when
+the secret is missing.
+
+Keep a copy of the keystore and its password outside GitHub: without them, no
+future build can update an installed app. `--print-certs` in the build log names
+the certificate each APK carries.
 
 ## Upstream maintenance
 

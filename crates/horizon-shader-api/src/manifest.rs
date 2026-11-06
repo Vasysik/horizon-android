@@ -42,6 +42,8 @@ pub struct Manifest {
     /// WGSL files put before every stage's own file, in order.
     pub shared: Vec<String>,
     pub sky: Option<Stage>,
+    /// Moves terrain vertices (waving leaves, plants, water).
+    pub vertex: Option<Stage>,
     pub material: Option<Stage>,
     /// The colour of rain and snow streaks (Minecraft's own when absent).
     pub weather: Option<Stage>,
@@ -313,6 +315,8 @@ struct Raw {
     #[serde(default)]
     shared: Vec<String>,
     sky: Option<Stage>,
+    #[serde(default)]
+    vertex: Option<Stage>,
     material: Option<Stage>,
     #[serde(default)]
     weather: Option<Stage>,
@@ -457,20 +461,22 @@ impl Manifest {
             return Err(err("name and version can't be empty".into()));
         }
         if raw.sky.is_none()
+            && raw.vertex.is_none()
             && raw.material.is_none()
             && raw.weather.is_none()
             && raw.post.is_empty()
         {
             return Err(err(
-                "no stage: give it a [sky], a [material], a [weather] or a [[post]]".into(),
+                "no stage: give it a [sky], a [vertex], a [material], a [weather] or a [[post]]".into(),
             ));
         }
-        if raw.sky.iter().chain(&raw.post).any(|s| s.fog.is_some()) {
+        if raw.sky.iter().chain(&raw.vertex).chain(&raw.post).any(|s| s.fog.is_some()) {
             return Err(err("`fog` is a key of [material] only".into()));
         }
         if raw
             .sky
             .iter()
+            .chain(&raw.vertex)
             .chain(&raw.material)
             .any(|s| s.scale.is_some() || s.output.is_some())
         {
@@ -486,6 +492,7 @@ impl Manifest {
         let stages = raw
             .sky
             .iter()
+            .chain(&raw.vertex)
             .chain(&raw.material)
             .chain(&raw.weather)
             .chain(&raw.post);
@@ -499,7 +506,7 @@ impl Manifest {
             }
         }
         let sky_only = |s: &Stage| s.clouds.is_some() || s.sun.is_some() || s.stars.is_some();
-        if raw.material.iter().chain(&raw.post).any(sky_only) {
+        if raw.vertex.iter().chain(&raw.material).chain(&raw.post).any(sky_only) {
             return Err(err(
                 "`clouds`, `sun` and `stars` are keys of [sky] only".into()
             ));
@@ -519,9 +526,9 @@ impl Manifest {
             }
             options.push(option);
         }
-        if !raw.tags.is_empty() && raw.material.is_none() {
+        if !raw.tags.is_empty() && raw.material.is_none() && raw.vertex.is_none() {
             return Err(err(
-                "tags are read by the material stage: give it a [material]".into(),
+                "tags are read by the vertex and material stages: give it a [vertex] or [material]".into(),
             ));
         }
         if raw.tags.len() > MAX_TAGS {
@@ -546,7 +553,7 @@ impl Manifest {
             }
         }
         let solid_ids = raw.shadow.iter().any(|s| !s.solid_materials.is_empty());
-        if !raw.materials.is_empty() && raw.material.is_none() && !solid_ids {
+        if !raw.materials.is_empty() && raw.material.is_none() && raw.vertex.is_none() && !solid_ids {
             return Err(err(
                 "materials are read by the material stage and shadow.solid_materials: \
                  give it a [material] or use them there"
@@ -685,6 +692,7 @@ impl Manifest {
             license: raw.license,
             shared: raw.shared,
             sky: raw.sky,
+            vertex: raw.vertex,
             material: raw.material,
             weather: raw.weather,
             post: raw.post,
@@ -773,6 +781,7 @@ impl Manifest {
         let stages = self
             .sky
             .iter()
+            .chain(&self.vertex)
             .chain(&self.material)
             .chain(&self.weather)
             .chain(&self.post);

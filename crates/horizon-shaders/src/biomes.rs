@@ -56,6 +56,7 @@ pub fn constants(biomes: &[&str]) -> HashMap<String, f64> {
         .enumerate()
         .map(|(i, c)| (format!("CAT_{c}"), i as f64))
         .collect();
+    out.insert("CAT_OVERWORLD".to_owned(), 0.0);
     for (i, p) in ["NONE", "RAIN", "SNOW"].iter().enumerate() {
         out.insert(format!("PPT_{p}"), i as f64);
     }

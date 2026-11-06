@@ -221,6 +221,24 @@ pub const POST_INPUT: Struct = Struct {
     },
 };
 
+/// The vertex stage's input: one corner of a block's quad.
+pub const VERTEX_INPUT: Struct = Struct {
+    name: "VertexInput",
+    doc: "One corner of a block's quad, for `fn vertex(input: VertexInput) -> vec3<f32>`, which returns the camera-relative position to draw it at (`input.position` for no change).",
+    fields: fields! {
+        position: "vec3<f32>" = "The corner, camera-relative, in blocks.",
+        block_position: "vec3<f32>" = "The corner inside its 16×16×16 section, 0..16, before the section's offset is added.",
+        uv: "vec2<f32>" = "The texture coordinate inside the block atlas, 0..1.",
+        tint: "vec3<f32>" = "The vertex colour: biome tint, face shade and ambient occlusion.",
+        light: "vec2<f32>" = "Block and sky light at this corner, 0..1.",
+        tags: "u32" = "The pack's sprite tags this quad's sprite has: bit i for the manifest's i-th `[[tags]]`.",
+        material: "u32" = "The `[[materials]]` id of this quad's sprite (0 when no entry names it).",
+        face: "u32" = "For a fluid, which face of the block the quad is on, `Direction` order: 0 down, 1 up, 2 north, 3 south, 4 west, 5 east. 0 elsewhere.",
+        fluid: "bool" = "A water or lava quad.",
+        emission: "f32" = "How strongly the block itself shines, 0..1, by its kind of light; 0 for most blocks.",
+    },
+};
+
 /// The material stage's input: one point of a block's surface.
 pub const MATERIAL_INPUT: Struct = Struct {
     name: "MaterialInput",

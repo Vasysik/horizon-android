@@ -27,6 +27,7 @@ fn validate(text: &str) -> naga::Module {
 fn vanilla(kind: StageKind) -> &'static str {
     match kind {
         StageKind::Sky => "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n",
+        StageKind::Vertex => "fn vertex(input: VertexInput) -> vec3<f32> { return input.position; }\n",
         StageKind::Material => {
             "fn material(input: MaterialInput) -> Surface {\n    \
              return Surface(input.albedo * input.tint * vec4<f32>(input.lightmap, 1.0));\n}\n"
