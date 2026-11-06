@@ -57,6 +57,23 @@ impl Login {
                 .is_some_and(|s| serde_json::from_str::<Secrets>(&s).is_ok())
         });
     }
+    /// The name on the top bar's account chip.
+    pub fn chip_name(&self, offline_name: &str) -> String {
+        match &self.profile {
+            Some(name) => name.clone(),
+            None if !offline_name.trim().is_empty() => offline_name.to_owned(),
+            None => "Player".into(),
+        }
+    }
+    /// What the chip says under the name.
+    pub fn chip_how(&self) -> String {
+        match (&self.profile, self.signed_in) {
+            (Some(_), true) => "Signed in".into(),
+            (Some(_), false) => "Sign in required".into(),
+            _ if self.pending() => "Signing in...".into(),
+            _ => "Offline".into(),
+        }
+    }
     pub fn status(&self, offline_name: &str) -> String {
         match (&self.profile, self.signed_in) {
             (Some(name), true) => format!("Signed in: {name}"),
@@ -223,21 +240,28 @@ impl Login {
     }
     pub fn draw(
         &self,
+        art: &crate::launcher_glass::Art,
         ui: &mut Ui,
         targets: &mut Vec<([f32; 4], Action)>,
         offline_name: &str,
         editing: Option<&str>,
     ) {
         targets.clear();
-        let w = (ui.w - 32.0).min(720.0);
+        crate::launcher_view::scrim(ui);
+        let w = (ui.w - 32.0).min(560.0);
         let h = (ui.h - 24.0).min(550.0);
         let x = (ui.w - w) / 2.0;
         let y = (ui.h - h) / 2.0;
-        ui.rounded(x, y, w, h, 8.0, color::BG);
+        art.plate(
+            ui,
+            [x, y, w, h],
+            crate::launcher_tokens::radius::MODAL,
+            crate::launcher_glass::Plate::Float,
+        );
         if self.providers {
             ui.text(
-                Face::Medium,
-                24.0,
+                Face::Display,
+                26.0,
                 x + 20.0,
                 y + 20.0,
                 color::TEXT,
@@ -273,8 +297,8 @@ impl Login {
         }
         if self.choosing {
             ui.text(
-                Face::Medium,
-                24.0,
+                Face::Display,
+                26.0,
                 x + 20.0,
                 y + 20.0,
                 color::TEXT,
@@ -346,8 +370,8 @@ impl Login {
         }
         if self.ely {
             ui.text(
-                Face::Medium,
-                24.0,
+                Face::Display,
+                26.0,
                 x + 20.0,
                 y + 18.0,
                 color::TEXT,
@@ -456,8 +480,8 @@ impl Login {
         }
         if self.offline {
             ui.text(
-                Face::Medium,
-                24.0,
+                Face::Display,
+                26.0,
                 x + 20.0,
                 y + 20.0,
                 color::TEXT,
@@ -503,8 +527,8 @@ impl Login {
         }
 
         ui.text(
-            Face::Medium,
-            24.0,
+            Face::Display,
+            26.0,
             x + 20.0,
             y + 18.0,
             color::TEXT,

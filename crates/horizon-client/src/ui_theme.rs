@@ -86,9 +86,11 @@ pub enum Face {
     SemiBold,
     /// Counts, timestamps and the boot screen's console lines.
     Mono,
+    /// Page and instance names in the Android launcher: Bricolage Grotesque's display cut.
+    Display,
 }
 struct Fonts {
-    faces: [FontRef<'static>; 4],
+    faces: [FontRef<'static>; 5],
 }
 impl Fonts {
     fn load() -> Self {
@@ -99,6 +101,9 @@ impl Fonts {
                 f(horizon_theme::fonts::GEIST_MEDIUM),
                 f(horizon_theme::fonts::GEIST_SEMIBOLD),
                 f(horizon_theme::fonts::GEIST_MONO),
+                f(include_bytes!(
+                    "android/assets/BricolageGrotesqueDisplay-SemiBold.ttf"
+                )),
             ],
         }
     }
@@ -117,6 +122,8 @@ enum Key {
     Glyph(Face, u16, u16),
     /// A quarter disc (`false`) or a 1px quarter ring of this radius in pixels.
     Corner(u16, bool),
+    /// A picture [`Ui::image`] uploaded under this id.
+    Image(u64),
 }
 #[derive(Clone, Copy)]
 struct Cached {
@@ -192,6 +199,30 @@ impl Cache {
             .iter()
             .flat_map(|a| [255, 255, 255, (a.clamp(0.0, 1.0) * 255.0).round() as u8])
             .collect();
+        self.pending.push(crate::font::Patch {
+            x: ax,
+            y: ay,
+            width: w,
+            height: h,
+            rgba,
+        });
+        let (aw, ah) = (atlas.width as f32, atlas.height as f32);
+        Some(Rect {
+            u0: ax as f32 / aw,
+            v0: ay as f32 / ah,
+            u1: (ax + w) as f32 / aw,
+            v1: (ay + h) as f32 / ah,
+            w,
+            h,
+        })
+    }
+    /// Like [`Self::upload`], for colour pixels.
+    fn upload_rgba(&mut self, atlas: &HudAtlas, w: u32, h: u32, rgba: Vec<u8>) -> Option<Rect> {
+        let (x, y, region) = self.place(atlas, w, h)?;
+        let (ax, ay) = (
+            (region.u0 * atlas.width as f32).round() as u32 + x,
+            (region.v0 * atlas.height as f32).round() as u32 + y,
+        );
         self.pending.push(crate::font::Patch {
             x: ax,
             y: ay,
@@ -356,6 +387,33 @@ impl<'a> Ui<'a> {
                 let id = font.glyph_id(ch);
                 previous.map_or(0.0, |p| scaled.kern(font.glyph_id(p), id)) + scaled.h_advance(id)
             })
+        })
+    }
+    /// A picture beside the glyphs: `make` gives its size and RGBA the first time `key` is
+    /// asked for, and again if the region was full and started over. None until it fits.
+    pub fn image(
+        &mut self,
+        key: u64,
+        make: impl FnOnce() -> Option<(u32, u32, Vec<u8>)>,
+    ) -> Option<Rect> {
+        let atlas = self.atlas;
+        with_cache(atlas, |c| {
+            if let Some(found) = c.entries.get(&Key::Image(key)) {
+                return found.rect;
+            }
+            let (w, h, rgba) = make()?;
+            let rect = c.upload_rgba(atlas, w, h, rgba);
+            if rect.is_some() {
+                c.entries.insert(
+                    Key::Image(key),
+                    Cached {
+                        rect,
+                        left: 0.0,
+                        top: 0.0,
+                    },
+                );
+            }
+            rect
         })
     }
     /// Move rasterized glyphs into the batch's atlas uploads (real frames only).
