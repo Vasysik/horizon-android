@@ -234,7 +234,7 @@ impl Game<'_> {
     /// Once per loop iteration: read the pads and act on button changes.
     pub(super) fn poll_pads(&mut self, event_loop: &dyn EventLoopCtl) {
         #[cfg(target_os = "android")]
-        if !matches!(self.screen, Screen::Playing | Screen::Options)
+        if !matches!(self.screen, Screen::Playing | Screen::Options | Screen::Paused)
             && self.pad.touch.editor.is_some()
         {
             self.pad.touch.cancel_editor();
