@@ -15092,7 +15092,9 @@ impl Game<'_> {
                     || self.pad.touch.in_inventory
                     || self.pad.touch.settings.layouts[self.pad.touch.settings.mode.index()]
                         .iter()
-                        .any(|p| p.visible_in_menu))
+                        .any(|p| p.visible_in_menu)
+                    || (0..self.pad.touch.settings.custom_buttons.len())
+                        .any(|i| self.pad.touch.custom_visible_for_state(i, hud_in_menu)))
             {
                 self.pad.touch.context_use =
                     self.pad.touch.settings.contextual_interact && self.touch_context_use();

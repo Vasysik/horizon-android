@@ -3,7 +3,8 @@
 //! pack's files to build a stage: the prelude before (the inputs and the
 //! resources), the entry points after.
 use crate::inputs::{
-    Frame, MATERIAL_INPUT, POST_INPUT, SKY_INPUT, SURFACE, Struct, VERTEX_INPUT, WEATHER_INPUT,
+    DISPLACEMENT_INPUT, Frame, MATERIAL_INPUT, POST_INPUT, SKY_INPUT, SURFACE, SURFACE_DATA,
+    Struct, VERTEX_INPUT, WEATHER_INPUT,
 };
 use crate::package::Pack;
 
@@ -97,7 +98,7 @@ fn shadow_position(position: vec3<f32>) -> vec3<f32> {
 }
 ";
 
-const POST_RESOURCES: [Resource; 11] = [
+const POST_RESOURCES: [Resource; 12] = [
     FRAME,
     Resource {
         binding: 1,
@@ -139,6 +140,12 @@ const POST_RESOURCES: [Resource; 11] = [
     },
     shadow_map_translucent(9),
     shadow_color(10),
+    Resource {
+        binding: 11,
+        name: "scene_surface",
+        ty: "var scene_surface: texture_2d<u32>",
+        doc: "What the material stage's `set_surface` stored for the solid terrain at each pixel, unfiltered (`textureLoad`): read it through the prelude's `surface_at`, which knows its layout and where it no longer shows. Blank without a material stage that calls `set_surface`.",
+    },
 ];
 
 /// The material stage's resources: the frame, and the world as it was before translucent
@@ -201,6 +208,22 @@ fn view_position(uv: vec2<f32>, depth: f32) -> vec3<f32> {
     let view = frame.projection_inverse * clip;
     return (frame.view_inverse * vec4<f32>(view.xyz / view.w, 0.0)).xyz;
 }
+// The solid terrain's surface at `texel`, as the material stage's `set_surface` left it.
+fn surface_at(texel: vec2<i32>) -> SurfaceData {
+    let size = vec2<i32>(textureDimensions(scene_surface));
+    if any(texel < vec2<i32>(0)) || any(texel >= size) {
+        return SurfaceData(false, vec3<f32>(0.0, 1.0, 0.0), 0.0, 0.0);
+    }
+    let raw = textureLoad(scene_surface, texel, 0);
+    if raw.x == 0u && raw.y == 0u && raw.z == 0u && raw.w == 0u {
+        return SurfaceData(false, vec3<f32>(0.0, 1.0, 0.0), 0.0, 0.0);
+    }
+    let f = bitcast<vec4<f32>>(raw);
+    let n_len = length(f.xyz);
+    let normal = select(vec3<f32>(0.0, 1.0, 0.0), f.xyz / n_len, n_len > 1e-5);
+    let smoothness = clamp(n_len - 1.0, 0.0, 1.0);
+    return SurfaceData(true, normal, smoothness, f.w);
+}
 ";
 
 /// What the material entries (the checker's below and the renderer's) share: the
@@ -221,6 +244,33 @@ fn block_light_color(position: vec3<f32>) -> vec4<f32> {
 // The point being shaded: its layer and mip level in the LabPBR maps (the entries set them).
 var<private> horizon_block_layer: u32;
 var<private> horizon_block_lod: f32;
+var<private> horizon_surface_written: bool = false;
+var<private> horizon_surface_normal: vec3<f32> = vec3<f32>(0.0, 1.0, 0.0);
+var<private> horizon_surface_smoothness: f32 = 0.0;
+var<private> horizon_surface_data: f32 = 0.0;
+// The surface's own block sprite at `uv`.
+fn block_texture(uv: vec2<f32>) -> vec4<f32> {
+    return horizon_block_sprite(uv, horizon_block_layer, horizon_block_lod);
+}
+// `block_texture` at mip level `lod` (0 the full-size sprite).
+fn block_texture_level(uv: vec2<f32>, lod: f32) -> vec4<f32> {
+    return horizon_block_sprite(uv, horizon_block_layer, lod);
+}
+// The block sprite's size, in texels.
+fn block_texture_size() -> vec2<f32> {
+    return horizon_block_sprite_size();
+}
+// The mip level `block_texture` reads at this point.
+fn block_texture_lod() -> f32 {
+    return horizon_block_lod;
+}
+// Stores what the post stage's `surface_at` reads for this point of solid terrain.
+fn set_surface(normal: vec3<f32>, smoothness: f32, data: f32) {
+    horizon_surface_written = true;
+    horizon_surface_normal = normal;
+    horizon_surface_smoothness = smoothness;
+    horizon_surface_data = data;
+}
 // LabPBR: whether the resource packs ship normal (`_n`) or specular (`_s`) maps beside their
 // block textures. Without them `block_normal_map` and `block_specular_map` give the defaults
 // below.
@@ -308,7 +358,13 @@ struct HorizonPostOut {
 /// check and the entries below put a stand-in in its place.
 macro_rules! pbr_stub {
     () => {
-        "fn horizon_block_pbr(uv: vec2<f32>, layer: u32, lod: f32, map: u32) -> vec4<f32> {
+        "fn horizon_block_sprite(uv: vec2<f32>, layer: u32, lod: f32) -> vec4<f32> {
+    return vec4<f32>(1.0);
+}
+fn horizon_block_sprite_size() -> vec2<f32> {
+    return vec2<f32>(16.0);
+}
+fn horizon_block_pbr(uv: vec2<f32>, layer: u32, lod: f32, map: u32) -> vec4<f32> {
     return select(vec4<f32>(0.5, 0.5, 1.0, 1.0), vec4<f32>(0.0), map == 1u);
 }
 fn horizon_block_pbr_present() -> bool {
@@ -347,7 +403,7 @@ struct HorizonMaterialIn {
     let normal = horizon_material_normal(in.world);
     let tangent = horizon_material_tangent(in.world, in.uv, normal);
     let input = MaterialInput(in.albedo, in.tint, in.light, in.lightmap, in.world, in.uv, in.translucent != 0u, in.tags, in.material,
-        in.position.xy / frame.resolution, in.face, fluid, in.emission, normal, tangent);
+        in.position.xy / frame.resolution, in.face, fluid, in.emission, normal, tangent, vec3<f32>(0.0), 0.0);
     return material(input).color;
 }
 ",
@@ -360,7 +416,7 @@ const VERTEX_ENTRIES: &str = "\
     @location(0) position: vec3<f32>,
     @location(1) block_position: vec3<f32>,
     @location(2) uv: vec2<f32>,
-    @location(3) tint: vec3<f32>,
+    @location(3) tint: vec4<f32>,
     @location(4) light: vec2<f32>,
     @location(5) tags: u32,
     @location(6) material: u32,
@@ -368,7 +424,7 @@ const VERTEX_ENTRIES: &str = "\
     @location(8) fluid: u32,
     @location(9) emission: f32,
 ) -> @builtin(position) vec4<f32> {
-    let moved = vertex(VertexInput(position, block_position, uv, tint, light, tags, material, face, fluid != 0u, emission));
+    let moved = vertex(VertexInput(position, uv, material, light, tint, face, fluid, block_position, tags, emission));
     return frame.projection * frame.view * vec4<f32>(moved, 1.0);
 }
 ";
@@ -471,6 +527,10 @@ impl StageKind {
         out += &self.input().wgsl();
         if self == StageKind::Material {
             out += &SURFACE.wgsl();
+            out += &DISPLACEMENT_INPUT.wgsl();
+        }
+        if self == StageKind::Post {
+            out += &SURFACE_DATA.wgsl();
         }
         for r in self.resources() {
             out += &format!("@group({GROUP}) @binding({}) {};\n", r.binding, r.ty);
@@ -484,7 +544,10 @@ impl StageKind {
                 out += MATERIAL_HELPERS;
                 out += SHADOW_HELPERS;
             }
-            StageKind::Sky | StageKind::Vertex | StageKind::Weather => {}
+            StageKind::Vertex => {
+                out += SHADOW_HELPERS;
+            }
+            StageKind::Sky | StageKind::Weather => {}
         }
         out
     }

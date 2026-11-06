@@ -146,7 +146,8 @@ pub(super) const VERTEX_INPUTS: [&str; 6] = [
 ];
 /// Built-in functions naga's constant evaluator lacks: a `const` that calls one is evaluated
 /// where the program runs instead (GL drivers fold them; naga fails the program).
-pub(super) const NOT_CONSTANT: [&str; 25] = [
+pub(super) const NOT_CONSTANT: [&str; 26] = [
+    "dot",
     "mix",
     "smoothstep",
     "reflect",

@@ -32,7 +32,11 @@ impl Stage<'_> {
     /// Declarations of ours this stage uses (after the uniform block, samplers and varyings).
     pub(super) fn prelude(&self) -> String {
         let mut p = String::from(
-            "float hz_modf(float x, out float i) { i = trunc(x); return x - i; }\n\
+            "float hz_dot(float a, float b) { return a * b; }\n\
+             float hz_dot(vec2 a, vec2 b) { return dot(a, b); }\n\
+             float hz_dot(vec3 a, vec3 b) { return dot(a, b); }\n\
+             float hz_dot(vec4 a, vec4 b) { return dot(a, b); }\n\
+             float hz_modf(float x, out float i) { i = trunc(x); return x - i; }\n\
              vec2 hz_modf(vec2 x, out vec2 i) { i = trunc(x); return x - i; }\n\
              vec3 hz_modf(vec3 x, out vec3 i) { i = trunc(x); return x - i; }\n\
              vec4 hz_modf(vec4 x, out vec4 i) { i = trunc(x); return x - i; }\n\
