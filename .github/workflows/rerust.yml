@@ -1,0 +1,174 @@
+name: ReRust Launcher APK
+run-name: ReRust Launcher · ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      all_abis:
+        description: Also build ARMv7, x86 and x86_64
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+concurrency:
+  group: rerust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/android'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: ${{ fromJSON(inputs.all_abis && '["arm64-v8a","armeabi-v7a","x86","x86_64"]' || '["arm64-v8a"]') }}
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.local/ci-target
+      HORIZON_TELEMETRY_URL: 'off'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - name: Apply the ReRust look and name
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          ROOT = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else '.')
+
+
+          def sub1(s, old, new):
+              if old not in s:
+                  raise SystemExit('ReRust patch: text not found: ' + repr(old[:70]))
+              return s.replace(old, new, 1)
+
+
+          def edit(rel, fn):
+              p = ROOT / rel
+              s = p.read_text(encoding='utf-8')
+              p.write_text(fn(s), encoding='utf-8')
+
+
+          PALETTE = {
+              'page': '0x0e0a24', 'side': '0x0a0719', 'panel': '0x1a1433', 'raised': '0x241b47',
+              'button': '0x2b2450', 'button_bevel': '0x3d3470', 'well': '0x0a0818', 'bevel': '0x3a2f66',
+              'lip': '0x06040f', 'outline': '0x04030a', 'rule': '0x120e22', 'muted': '0xb0a9cc',
+              'accent': '0xa99bff', 'face': '0x6a58e8', 'face_bevel': '0x9a8bff', 'face_lip': '0x4338b0',
+          }
+
+
+          def theme(s):
+              s = sub1(s, 'pub const RADIUS: f32 = 8.;', 'pub const RADIUS: f32 = 14.;')
+              s = sub1(s, 'pub const RADIUS_PLATE: f32 = 12.;', 'pub const RADIUS_PLATE: f32 = 20.;')
+              s = sub1(s, 'name: "quick",\n    ms: 150,', 'name: "quick",\n    ms: 180,')
+              s = sub1(s, 'name: "move",\n    ms: 240,', 'name: "move",\n    ms: 380,')
+              s = sub1(s, 'name: "enter",\n    ms: 600,', 'name: "enter",\n    ms: 760,')
+              s = sub1(s, 'pub const STAGGER: Duration = Duration::from_millis(40);',
+                       'pub const STAGGER: Duration = Duration::from_millis(60);')
+              s = sub1(s, 'pub const RISE: f32 = 8.;', 'pub const RISE: f32 = 16.;')
+              start = s.index('pub const BLOCKS_DARK: Blocks = Blocks {')
+              end = s.index('};', start)
+              body = s[start:end]
+              for key, value in PALETTE.items():
+                  body, n = re.subn(r'(\n    ' + key + r': )0x[0-9a-fA-F]+,', lambda m: m.group(1) + value + ',', body)
+                  if n != 1:
+                      raise SystemExit('ReRust patch: palette field not found: ' + key)
+              return s[:start] + body + s[end:]
+
+
+          edit('crates/horizon-theme/src/lib.rs', theme)
+          edit('crates/horizon-client/src/android/launcher.rs',
+               lambda s: sub1(s, 'with_title("Horizon Android")', 'with_title("ReRust Launcher")'))
+          edit('packaging/android/AndroidManifest.xml',
+               lambda s: sub1(sub1(s, 'android:label="Horizon Android"', 'android:label="ReRust Launcher"'),
+                              'android:icon="@drawable/launcher_icon"', 'android:icon="@drawable/rerust_icon"'))
+          (ROOT / 'packaging/android/res/drawable').mkdir(parents=True, exist_ok=True)
+          (ROOT / 'packaging/android/res/drawable/rerust_icon.xml').write_text(
+              '<?xml version="1.0" encoding="utf-8"?>\n'
+              '<vector xmlns:android="http://schemas.android.com/apk/res/android"\n'
+              '    android:width="108dp" android:height="108dp"\n'
+              '    android:viewportWidth="108" android:viewportHeight="108">\n'
+              '    <path android:fillColor="#1A1433" android:pathData="M0,0h108v108h-108z" />\n'
+              '    <path android:fillColor="#A99BFF" android:pathData="M34,26h12v56h-12z M46,26h28v12h-28z '
+              'M70,38h12v14h-12z M46,50h28v12h-28z M62,62h12v20h-12z" />\n'
+              '</vector>\n', encoding='utf-8')
+          print('ReRust patch applied')
+          PY
+      - name: Restore signing key from cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .local/android/debug.keystore
+          key: rerust-signing-key-v1
+      - name: Create signing key if there is none
+        run: |
+          mkdir -p .local/android
+          if [ ! -f .local/android/debug.keystore ]; then
+            keytool -genkeypair -keystore .local/android/debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ReRust Launcher"
+          fi
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          gradle-version: '8.14'
+      - name: Install Android toolchain
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then
+            sdkmanager=$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -n 1)
+          fi
+          test -x "$sdkmanager"
+          "$sdkmanager" --sdk_root="$ANDROID_HOME" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+          rustup show
+          case "$ABI" in
+            arm64-v8a) target=aarch64-linux-android ;;
+            armeabi-v7a) target=armv7-linux-androideabi ;;
+            x86) target=i686-linux-android ;;
+            x86_64) target=x86_64-linux-android ;;
+          esac
+          rustup target add "$target"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .local/ci-target
+          key: rerust-${{ runner.os }}-${{ matrix.abi }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'packaging/android/build.gradle') }}-${{ github.sha }}
+          restore-keys: |
+            rerust-${{ runner.os }}-${{ matrix.abi }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'packaging/android/build.gradle') }}-
+      - name: Prepare private engine inputs from official downloads
+        run: python3 tools/android_prepare.py --java-home "$JAVA_HOME"
+      - name: Build optimized APK
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          python3 tools/android_build.py --abi "$ABI" --public --profile release \
+            --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME_17_X64" --gradle "$(command -v gradle)" \
+            --ndk-version 28.2.13676358 --build-tools-version 35.0.0 \
+            --dev-build "${GITHUB_RUN_NUMBER}.${GITHUB_SHA:0:12}" \
+            --dev-version-code "$((1000 + GITHUB_RUN_NUMBER))"
+      - name: Collect the APK
+        env:
+          ABI: ${{ matrix.abi }}
+        run: |
+          mkdir dist
+          cp ".local/android/apk/$ABI/horizon-android-public.apk" "dist/ReRust-Launcher-$ABI.apk"
+          cp LICENSE dist/LICENSE.txt
+          cp THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_NOTICES.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ReRust-Launcher-${{ matrix.abi }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
