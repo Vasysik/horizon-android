@@ -149,6 +149,12 @@ impl TouchControls {
             back_confirm_open: false,
         });
     }
+    pub fn cancel_editor_gesture(&mut self) {
+        if let Some(editor) = &mut self.editor {
+            editor.drag = None;
+            editor.active_drag = None;
+        }
+    }
     pub fn cancel_editor(&mut self) {
         if let Some(e) = self.editor.take() {
             self.settings = e.original;
@@ -951,4 +957,32 @@ impl TouchControls {
 }
 fn key_rect(i: usize) -> [f32; 4] {
     [0.15, 0.25 + i as f32 * 0.072, 0.7, 0.06]
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    #[test]
+    fn interrupted_drag_preserves_editor_changes_and_does_not_accept_picker() {
+        let mut tc = TouchControls::default();
+        tc.open_editor();
+        tc.settings.left_handed = !tc.settings.left_handed;
+        let expected = tc.settings.clone();
+        let ed = tc.editor.as_mut().unwrap();
+        ed.picker_step = PickerStep::Keyboard { event_slot: 0 };
+        ed.active_drag = Some((
+            7,
+            EditorDragKind::KeyboardScroll {
+                last_x: 0.0,
+                moved: false,
+            },
+        ));
+        tc.clear();
+        assert_eq!(tc.settings, expected);
+        let ed = tc.editor.as_ref().unwrap();
+        assert!(ed.active_drag.is_none());
+        assert_eq!(ed.picker_step, PickerStep::Keyboard { event_slot: 0 });
+        tc.cancel_editor();
+        assert_ne!(tc.settings.left_handed, expected.left_handed);
+    }
 }

@@ -1432,8 +1432,9 @@ impl Loading {
                 use winit::event::TouchPhase;
                 let size = self.menu_size();
                 self.menu.controls.viewport(size[0], size[1]);
+                let ended = t.phase == TouchPhase::Ended;
                 if t.phase == TouchPhase::Cancelled {
-                    self.menu.controls.cancel_editor();
+                    self.menu.controls.cancel_editor_gesture();
                 } else if let Some(gui) = self.gui.as_ref() {
                     let mut b = HudBatch::new(size);
                     horizon_client::touch_ui::touch_hud_editor(
@@ -1446,7 +1447,7 @@ impl Loading {
                             t.location.y as f32 / size[1].max(1) as f32,
                         ],
                         t.phase == TouchPhase::Started,
-                        t.phase == TouchPhase::Ended,
+                        ended,
                     );
                 }
                 if let Some(ed) = self.menu.controls.editor.as_mut()

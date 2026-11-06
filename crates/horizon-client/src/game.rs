@@ -16610,24 +16610,24 @@ impl Game<'_> {
             self.pad.touch.viewport(size.width, size.height);
             if self.pad.touch.editor.is_some() {
                 if touch.phase == TouchPhase::Cancelled {
-                    self.pad.touch.cancel_editor();
+                    self.pad.touch.cancel_editor_gesture();
+                    return;
+                }
+                let ended = touch.phase == TouchPhase::Ended;
+                let mut b = HudBatch::new([size.width, size.height]);
+                if horizon_client::touch_ui::touch_hud_editor(
+                    &mut self.pad.touch,
+                    &mut b,
+                    &self.gui.atlas,
+                    touch.id,
+                    [
+                        touch.location.x as f32 / size.width.max(1) as f32,
+                        touch.location.y as f32 / size.height.max(1) as f32,
+                    ],
+                    touch.phase == TouchPhase::Started,
+                    ended,
+                ) {
                     self.pause = false;
-                } else {
-                    let mut b = HudBatch::new([size.width, size.height]);
-                    if horizon_client::touch_ui::touch_hud_editor(
-                        &mut self.pad.touch,
-                        &mut b,
-                        &self.gui.atlas,
-                        touch.id,
-                        [
-                            touch.location.x as f32 / size.width.max(1) as f32,
-                            touch.location.y as f32 / size.height.max(1) as f32,
-                        ],
-                        touch.phase == TouchPhase::Started,
-                        touch.phase == TouchPhase::Ended,
-                    ) {
-                        self.pause = false;
-                    }
                 }
                 self.settings.touch = self.pad.touch.settings.clone();
                 if std::mem::take(&mut self.pad.touch.clicked) {

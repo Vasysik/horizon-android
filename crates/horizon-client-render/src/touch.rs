@@ -1080,6 +1080,7 @@ impl TouchControls {
         [0.0; 2]
     }
     pub fn clear(&mut self) {
+        self.cancel_editor_gesture();
         self.inventory_shift = false;
         self.clear_custom();
         self.fingers.clear();

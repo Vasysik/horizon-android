@@ -1371,10 +1371,6 @@ impl Game<'_> {
             crate::platform::cancel_vibration();
             self.pad.touch.clear();
             self.pad.touch_aim = None;
-            if self.pad.touch.editor.is_some() {
-                self.pad.touch.cancel_editor();
-                self.pause = false;
-            }
         }
         self.android_custom_events();
         for key in self.pad.touch_ui.release_keys() {
