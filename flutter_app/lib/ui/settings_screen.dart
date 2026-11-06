@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/app_state.dart';
 import '../core/app_strings.dart';
 import '../core/theme.dart';
-import 'widgets/app_card.dart';
+import 'widgets/horizon_toast.dart';
 import 'widgets/pixel_backdrop.dart';
 import 'widgets/section_header.dart';
 import 'widgets/settings_tile.dart';
@@ -131,6 +131,14 @@ class SettingsScreen extends StatelessWidget {
                         _chooseInput(context, state);
                       },
                     ),
+                    SettingsTile(
+                      icon: Icons.sports_esports_outlined,
+                      title: strings.t('editControls'),
+                      subtitle: strings.t('editControlsHint'),
+                      onTap: () {
+                        _openControlEditor(context, state);
+                      },
+                    ),
                   ],
                 ),
                 SectionHeader(title: strings.t('settingsGroupDownload')),
@@ -152,7 +160,6 @@ class SettingsScreen extends StatelessWidget {
                       subtitle: strings.t('notificationPermission'),
                       onTap: () {
                         state.requestNotifications();
-                        _snack(context, strings.t('permissionRequested'));
                       },
                     ),
                   ],
@@ -197,43 +204,6 @@ class SettingsScreen extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
-                AppCard(
-                  padding: const EdgeInsets.all(18),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.verified_user_outlined,
-                        size: 19,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              strings.t('legalTitle'),
-                              style: textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              strings.t('legal'),
-                              style: textTheme.labelSmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                                height: 1.5,
-                                letterSpacing: 0.1,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ],
             ),
           ),
@@ -243,10 +213,20 @@ class SettingsScreen extends StatelessWidget {
   }
 
   void _snack(BuildContext context, String message) {
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(SnackBar(content: Text(message)));
+    showHorizonToast(context, message);
   }
+}
+
+Future<void> _openControlEditor(BuildContext context, AppState state) async {
+  final layout = await state.loadTouchLayout();
+  if (!context.mounted) {
+    return;
+  }
+  await Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => ControlEditorScreen(state: state, layout: layout),
+    ),
+  );
 }
 
 Future<void> _chooseLanguage(BuildContext context, AppState state) {

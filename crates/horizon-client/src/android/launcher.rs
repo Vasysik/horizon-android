@@ -378,7 +378,7 @@ impl Launcher {
             }
             self.session_ready = false;
             std::fs::create_dir_all(&game_home)?;
-            if crate::account::Accounts::load().selected().is_none() {
+            if crate::account::Accounts::load().selected().is_none() && !self.direct_play {
                 self.wardrobe
                     .prepare_game(&self.catalog.config.name, &game_home)?;
             }

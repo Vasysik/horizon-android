@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import 'app_settings.dart';
 import 'bridge.dart';
+import 'control_layout.dart';
 import 'install_status.dart';
 import 'native_installer.dart';
 
@@ -16,6 +17,7 @@ class AppState extends ChangeNotifier {
   Bridge? _bridge;
   AppSettings settings = AppSettings();
   InstallStatus? status;
+  TouchLayout? touchLayout;
   final ValueNotifier<int> appearanceRevision = ValueNotifier<int>(0);
   bool initializing = true;
   bool installed = false;
@@ -182,6 +184,7 @@ class AppState extends ChangeNotifier {
     _notify();
     try {
       await syncLauncherConfig();
+      await syncLaunchExtras();
       await bridge.launchGame();
       await HapticFeedback.mediumImpact();
       await Future<void>.delayed(const Duration(milliseconds: 900));
@@ -223,6 +226,108 @@ class AppState extends ChangeNotifier {
   String get displayName {
     final trimmed = settings.name.trim();
     return trimmed.isEmpty ? 'Steve' : trimmed;
+  }
+
+  Future<TouchLayout> loadTouchLayout() async {
+    if (_bridge == null) {
+      return TouchLayout.defaults();
+    }
+    touchLayout ??= await TouchLayout.load(bridge.filesDir);
+    return touchLayout!;
+  }
+
+  Future<void> saveTouchLayout(TouchLayout layout) async {
+    if (_bridge == null) {
+      return;
+    }
+    await layout.save(bridge.filesDir);
+    touchLayout = layout;
+    settings.controlsInitialized = true;
+    await _save();
+  }
+
+  Future<void> syncLaunchExtras() async {
+    await syncTouchConfig();
+    await syncAppearance();
+  }
+
+  Future<void> syncTouchConfig() async {
+    if (_bridge == null) {
+      return;
+    }
+    final file = File('${bridge.filesDir}/horizon-touch.json');
+    if (settings.controlsInitialized && await file.exists()) {
+      return;
+    }
+    final layout = touchLayout ?? TouchLayout.defaults();
+    await layout.save(bridge.filesDir);
+    touchLayout = layout;
+    settings.controlsInitialized = true;
+    await settings.save(bridge.filesDir);
+  }
+
+  Future<void> syncAppearance() async {
+    if (_bridge == null) {
+      return;
+    }
+    final raw = settings.skinPath.trim();
+    final skin = raw.isNotEmpty && await File(raw).exists() ? raw : null;
+    final file = File('${bridge.filesDir}/horizon-appearance.json');
+    final partial = File('${file.path}.partial');
+    await partial.writeAsString(
+      jsonEncode({
+        'schema': 1,
+        'skin': skin,
+        'slim': settings.skinSlim,
+        'hide_cape': false,
+      }),
+      flush: true,
+    );
+    await partial.rename(file.path);
+  }
+
+  bool get hasSkin {
+    final path = settings.skinPath.trim();
+    return path.isNotEmpty;
+  }
+
+  Future<bool> pickSkin() async {
+    if (_bridge == null) {
+      return false;
+    }
+    errorMessage = null;
+    try {
+      final path = await bridge.pickSkin();
+      if (path == null || path.isEmpty) {
+        return false;
+      }
+      settings.skinPath = path;
+      await _save();
+      await syncAppearance();
+      return true;
+    } catch (_) {
+      errorMessage = 'invalid-skin';
+      _notify();
+      return false;
+    }
+  }
+
+  Future<void> clearSkin() async {
+    if (_bridge == null) {
+      return;
+    }
+    try {
+      await bridge.clearSkin();
+    } catch (_) {}
+    settings.skinPath = '';
+    await _save();
+    await syncAppearance();
+  }
+
+  Future<void> setSkinSlim(bool value) async {
+    settings.skinSlim = value;
+    await _save();
+    await syncAppearance();
   }
 
   Future<void> setLocale(String value) async {

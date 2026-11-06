@@ -1,8 +1,10 @@
 package dev.horizon.android.ui;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 
@@ -20,6 +22,8 @@ import java.util.Map;
 public final class MainActivity extends FlutterActivity {
     private static final String CHANNEL = "dev.horizon.ui/bridge";
     private static final int NOTIFICATION_PERMISSION = 71;
+    private static final int PICK_SKIN = 72;
+    private MethodChannel.Result pendingSkinResult;
 
     @Override
     public void configureFlutterEngine(FlutterEngine flutterEngine) {
@@ -73,6 +77,13 @@ public final class MainActivity extends FlutterActivity {
                         result.success(null);
                         break;
                     }
+                    case "pickSkin":
+                        pickSkin(result);
+                        break;
+                    case "clearSkin":
+                        clearSkin();
+                        result.success(null);
+                        break;
                     default:
                         result.notImplemented();
                 }
@@ -99,6 +110,83 @@ public final class MainActivity extends FlutterActivity {
         }
         if (!partial.renameTo(target)) {
             throw new IllegalStateException("engine-data.zip could not be prepared");
+        }
+    }
+
+    private void pickSkin(MethodChannel.Result result) {
+        if (pendingSkinResult != null) {
+            result.error("skin_picker_busy", "A skin picker is already open", null);
+            return;
+        }
+        pendingSkinResult = result;
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/png");
+        startActivityForResult(intent, PICK_SKIN);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_SKIN) {
+            return;
+        }
+        MethodChannel.Result result = pendingSkinResult;
+        pendingSkinResult = null;
+        if (result == null) {
+            return;
+        }
+        if (resultCode != Activity.RESULT_OK || data == null || data.getData() == null) {
+            result.success(null);
+            return;
+        }
+        File target = new File(getFilesDir(), "horizon-skin.png");
+        File partial = new File(getFilesDir(), "horizon-skin.partial");
+        try (InputStream input = getContentResolver().openInputStream(data.getData());
+             OutputStream output = new FileOutputStream(partial)) {
+            if (input == null) {
+                throw new IllegalStateException("The selected file could not be opened");
+            }
+            byte[] buffer = new byte[16384];
+            long total = 0;
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                total += count;
+                if (total > 1024 * 1024) {
+                    throw new IllegalStateException("The skin is larger than 1 MiB");
+                }
+                output.write(buffer, 0, count);
+            }
+        } catch (Throwable error) {
+            partial.delete();
+            result.error("invalid_skin", error.getMessage(), null);
+            return;
+        }
+        if (target.exists() && !target.delete()) {
+            partial.delete();
+            result.error("invalid_skin", "The old skin could not be replaced", null);
+            return;
+        }
+        if (!partial.renameTo(target)) {
+            partial.delete();
+            result.error("invalid_skin", "The skin could not be saved", null);
+            return;
+        }
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(target.getAbsolutePath(), options);
+        if (!(options.outWidth == 64 && (options.outHeight == 64 || options.outHeight == 32))) {
+            target.delete();
+            result.error("invalid_skin", "Skin must be a 64x64 or 64x32 PNG", null);
+            return;
+        }
+        result.success(target.getAbsolutePath());
+    }
+
+    private void clearSkin() {
+        File target = new File(getFilesDir(), "horizon-skin.png");
+        if (target.exists()) {
+            target.delete();
         }
     }
 

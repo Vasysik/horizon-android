@@ -133,7 +133,7 @@ pub struct TouchControls {
     pub inventory_shift: bool,
     pub editor: Option<editor::Editor>,
     fingers: BTreeMap<u64, (Role, [f32; 2])>,
-    custom_fingers: BTreeMap<u64, String>,
+    custom_fingers: BTreeMap<u64, Vec<String>>,
     custom_events: Vec<(String, bool)>,
     pending: PadState,
     pub aim: Option<[f32; 2]>,

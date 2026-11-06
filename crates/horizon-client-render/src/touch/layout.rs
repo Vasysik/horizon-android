@@ -352,9 +352,9 @@ impl Settings {
             32.0
         };
         self.custom_buttons.truncate(32);
-        self.custom_buttons
-            .retain(|b| super::CustomButton::valid_token(&b.key));
+        self.custom_buttons.retain(super::CustomButton::valid);
         for button in &mut self.custom_buttons {
+            button.sanitize();
             for p in &mut button.layouts {
                 p.sanitize();
             }

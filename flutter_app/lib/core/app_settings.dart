@@ -12,6 +12,9 @@ class AppSettings {
     this.backgroundDownloads = true,
     this.name = 'Steve',
     this.server = '',
+    this.skinPath = '',
+    this.skinSlim = false,
+    this.controlsInitialized = false,
   });
 
   String locale;
@@ -23,6 +26,9 @@ class AppSettings {
   bool backgroundDownloads;
   String name;
   String server;
+  String skinPath;
+  bool skinSlim;
+  bool controlsInitialized;
 
   static const fileName = 'horizon-ui-settings.json';
 
@@ -39,6 +45,11 @@ class AppSettings {
           : true,
       name: _string(json['name'], 'Steve'),
       server: _string(json['server'], ''),
+      skinPath: _string(json['skinPath'], ''),
+      skinSlim: json['skinSlim'] is bool ? json['skinSlim'] as bool : false,
+      controlsInitialized: json['controlsInitialized'] is bool
+          ? json['controlsInitialized'] as bool
+          : false,
     );
   }
 
@@ -57,6 +68,9 @@ class AppSettings {
       'backgroundDownloads': backgroundDownloads,
       'name': name,
       'server': server,
+      'skinPath': skinPath,
+      'skinSlim': skinSlim,
+      'controlsInitialized': controlsInitialized,
     };
   }
 

@@ -5,12 +5,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CustomButton {
     pub key: String,
+    #[serde(default)]
+    pub keys: Vec<String>,
+    /// An empty string intentionally leaves the button unlabelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub layouts: [Placement; 3],
 }
 impl CustomButton {
     pub fn new(key: String, index: usize) -> Self {
         Self {
             key,
+            keys: Vec::new(),
+            label: None,
             layouts: [Placement::new(
                 0.68 + (index % 3) as f32 * 0.1,
                 0.35 + (index / 3 % 3) as f32 * 0.12,
@@ -25,14 +32,62 @@ impl CustomButton {
                 .strip_prefix("action:")
                 .is_some_and(|name| crate::keybinds::MAPPINGS.iter().any(|m| m.0 == name))
     }
+    pub fn tokens(&self) -> Vec<String> {
+        let mut tokens: Vec<String> = self
+            .keys
+            .iter()
+            .filter(|key| key.as_str() != "key.keyboard.unknown" && Self::valid_token(key.as_str()))
+            .cloned()
+            .collect();
+        if tokens.is_empty() && self.key != "key.keyboard.unknown" && Self::valid_token(&self.key) {
+            tokens.push(self.key.clone());
+        }
+        tokens
+    }
+    pub fn valid(&self) -> bool {
+        self.key == "key.keyboard.unknown"
+            || Self::valid_token(&self.key)
+            || self.keys.iter().any(|key| Self::valid_token(key.as_str()))
+    }
+    pub fn sanitize(&mut self) {
+        self.keys.retain(|key| {
+            key.as_str() != "key.keyboard.unknown" && Self::valid_token(key.as_str())
+        });
+        self.keys.dedup();
+        if self.keys.len() > 8 {
+            self.keys.truncate(8);
+        }
+        if !Self::valid_token(&self.key) {
+            self.key = "key.keyboard.unknown".into();
+        }
+        if self.key == "key.keyboard.unknown" && !self.keys.is_empty() {
+            self.key = self.keys[0].clone();
+        }
+        if let Some(label) = &mut self.label {
+            if label.chars().count() > 32 {
+                *label = label.chars().take(32).collect();
+            }
+        }
+    }
     pub fn label(&self) -> String {
-        if self.key == "key.keyboard.unknown" {
+        if let Some(label) = &self.label {
+            return label.clone();
+        }
+        let tokens = self.tokens();
+        if tokens.is_empty() {
             return "Button".into();
         }
-        if let Some(name) = self.key.strip_prefix("action:") {
-            return crate::text::Text::translate(name, &[]).plain();
-        }
-        crate::keybinds::display_name(&self.key).plain()
+        tokens
+            .iter()
+            .map(|key| {
+                if let Some(name) = key.strip_prefix("action:") {
+                    crate::text::Text::translate(name, &[]).plain()
+                } else {
+                    crate::keybinds::display_name(key).plain()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" + ")
     }
 }
 pub(super) fn choices(raw_keys: bool) -> Vec<(String, String)> {
@@ -77,8 +132,8 @@ impl TouchControls {
             && self.custom_at(point).is_none()
             && let Some(token) = self.control_at(point).and_then(Self::inventory_token)
         {
-            let pressed = !self.custom_fingers.values().any(|v| v == token);
-            self.custom_fingers.insert(id, token.into());
+            let pressed = !self.custom_fingers.values().flatten().any(|v| v == token);
+            self.custom_fingers.insert(id, vec![token.into()]);
             self.fingers.insert(id, (Role::Ignore, point));
             if pressed {
                 self.custom_events.push((token.into(), true));
@@ -116,26 +171,33 @@ impl TouchControls {
         started: bool,
         ended: bool,
     ) -> bool {
-        if let Some(key) = self.custom_fingers.get(&id).cloned() {
+        if let Some(keys) = self.custom_fingers.get(&id).cloned() {
             if ended {
                 self.custom_fingers.remove(&id);
                 self.fingers.remove(&id);
-                if !self.custom_fingers.values().any(|k| *k == key) {
-                    self.custom_events.push((key, false));
+                let remaining: std::collections::BTreeSet<_> =
+                    self.custom_fingers.values().flatten().cloned().collect();
+                for key in keys {
+                    if !remaining.contains(&key) {
+                        self.custom_events.push((key, false));
+                    }
                 }
             }
             return true;
         }
         if started && let Some(index) = self.custom_at(point) {
-            let key = self.settings.custom_buttons[index].key.clone();
-            if key == "key.keyboard.unknown" {
+            let keys = self.settings.custom_buttons[index].tokens();
+            if keys.is_empty() {
                 return false;
             }
-            let pressed = !self.custom_fingers.values().any(|k| *k == key);
-            self.custom_fingers.insert(id, key.clone());
+            let pressed: std::collections::BTreeSet<_> =
+                self.custom_fingers.values().flatten().cloned().collect();
+            self.custom_fingers.insert(id, keys.clone());
             self.fingers.insert(id, (Role::Ignore, point));
-            if pressed {
-                self.custom_events.push((key, true));
+            for key in keys {
+                if !pressed.contains(&key) {
+                    self.custom_events.push((key, true));
+                }
             }
             self.clicked = true;
             return true;
@@ -143,7 +205,7 @@ impl TouchControls {
         false
     }
     pub fn held_custom_tokens(&self) -> impl Iterator<Item = &str> {
-        self.custom_fingers.values().map(String::as_str)
+        self.custom_fingers.values().flatten().map(String::as_str)
     }
     pub fn key_events(&mut self) -> Vec<(String, bool)> {
         std::mem::take(&mut self.custom_events)
@@ -151,11 +213,18 @@ impl TouchControls {
     pub(super) fn clear_custom(&mut self) {
         let keys: std::collections::BTreeSet<_> = std::mem::take(&mut self.custom_fingers)
             .into_values()
+            .flatten()
             .collect();
         self.custom_events
             .extend(keys.into_iter().map(|k| (k, false)));
     }
     pub(super) fn draw_custom(&self, b: &mut HudBatch, a: &HudAtlas) {
+        let held: std::collections::BTreeSet<&str> = self
+            .custom_fingers
+            .values()
+            .flatten()
+            .map(String::as_str)
+            .collect();
         for (i, button) in self.settings.custom_buttons.iter().enumerate() {
             let p = self.custom_placement(i);
             let size = p.size * b.height;
@@ -165,7 +234,10 @@ impl TouchControls {
                 size,
                 size,
             ];
-            let pressed = self.custom_fingers.values().any(|key| *key == button.key);
+            let pressed = button
+                .tokens()
+                .iter()
+                .any(|key| held.contains(key.as_str()));
             let opacity = if self.editor.is_some() {
                 p.opacity.max(0.25)
             } else {

@@ -51,4 +51,12 @@ class Bridge {
   Future<void> openUrl(String url) {
     return _channel.invokeMethod<void>('openUrl', {'url': url});
   }
+
+  Future<String?> pickSkin() {
+    return _channel.invokeMethod<String>('pickSkin');
+  }
+
+  Future<void> clearSkin() {
+    return _channel.invokeMethod<void>('clearSkin');
+  }
 }
