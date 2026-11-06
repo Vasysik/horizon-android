@@ -28,6 +28,7 @@ pub(super) enum CloudAction {
 pub(super) struct Wardrobe {
     pub root: PathBuf,
     default_skin: PathBuf,
+    default_worker: Option<mpsc::Receiver<Result<Vec<u8>, String>>>,
     library: Library,
     key: String,
     provider: Option<Provider>,
@@ -60,6 +61,7 @@ impl Wardrobe {
                 .join(".local/horizon-client")
                 .join(horizon_core::VANILLA_VERSION)
                 .join("assets/minecraft/textures/entity/player/wide/steve.png"),
+            default_worker: None,
             library: loaded.unwrap_or_default(),
             key: String::new(),
             provider: None,
@@ -78,10 +80,68 @@ impl Wardrobe {
             tab_changed_at: None,
             selection_changed_at: None,
         };
+        value.ensure_default_skin();
         value.preview();
         value
     }
+    // Fresh/older installations may not have vanilla player textures yet. Fetch
+    // the official template once in the background; never ship Mojang's pixels.
+    fn ensure_default_skin(&mut self) {
+        if skins::read_file(&self.default_skin)
+            .ok()
+            .and_then(|b| skins::read_skin(&b).ok())
+            .is_some()
+        {
+            return;
+        }
+        let cached = self.root.join("default-steve.png");
+        if skins::read_file(&cached)
+            .ok()
+            .and_then(|b| skins::read_skin(&b).ok())
+            .is_some()
+        {
+            self.default_skin = cached;
+            return;
+        }
+        if self.default_worker.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.default_worker = Some(rx);
+        std::thread::spawn(move || {
+            use sha2::{Digest, Sha256};
+            use std::io::Read;
+            let result = (|| {
+                let url = "https://assets.mojang.com/SkinTemplates/steve.png";
+                let agent = crate::proxy::agent(
+                    ureq::AgentBuilder::new()
+                        .timeout_connect(std::time::Duration::from_secs(10))
+                        .timeout_read(std::time::Duration::from_secs(15)),
+                    url,
+                )
+                .build();
+                let mut bytes = Vec::new();
+                agent
+                    .get(url)
+                    .call()
+                    .map_err(|e| e.to_string())?
+                    .into_reader()
+                    .take(skins::MAX_IMPORT_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| e.to_string())?;
+                skins::read_skin(&bytes)?;
+                if format!("{:x}", Sha256::digest(&bytes))
+                    != "4c7b0468044bfecacc43d00a3a69335a834b73937688292c20d3988cae58248d"
+                {
+                    return Err("Official default skin checksum mismatch".into());
+                }
+                Ok(bytes)
+            })();
+            let _ = tx.send(result);
+        });
+    }
     pub fn open(&mut self, offline: &str, client_id: &str) {
+        self.ensure_default_skin();
         let account = Accounts::load().selected().cloned();
         let name = account
             .as_ref()
@@ -126,6 +186,26 @@ impl Wardrobe {
         }
     }
     pub fn poll(&mut self) {
+        if let Some(result) = self
+            .default_worker
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.default_worker = None;
+            match result {
+                Ok(bytes) => {
+                    let path = self.root.join("default-steve.png");
+                    if std::fs::create_dir_all(&self.root)
+                        .and_then(|_| std::fs::write(&path, bytes))
+                        .is_ok()
+                    {
+                        self.default_skin = path;
+                        self.preview();
+                    }
+                }
+                Err(error) => log::warn!("Default skin unavailable: {error}"),
+            }
+        }
         if let Some((key, result)) = self.worker.as_ref().and_then(|r| r.try_recv().ok()) {
             self.worker = None;
             if key != self.key {
@@ -375,13 +455,15 @@ impl Wardrobe {
             .or_else(|| self.cache.skin.clone())
             .and_then(|p| skins::read_file(&p).ok())
             .and_then(|b| skins::read_skin(&b).ok());
-        let skin = chosen
-            .clone()
-            .or_else(|| {
-                let bytes = skins::read_file(&self.default_skin).ok()?;
-                skins::read_skin(&bytes).ok()
-            })
-            .unwrap_or_else(preview::mannequin);
+        let skin = chosen.clone().or_else(|| {
+            let bytes = skins::read_file(&self.default_skin).ok()?;
+            skins::read_skin(&bytes).ok()
+        });
+        let Some(skin) = skin else {
+            // Do not present a gray checkerboard as the player's default skin.
+            self.bitmap.clear();
+            return;
+        };
         // A real selection owns the head; with none, keep the cached cloud
         // head until the cloud fetch answers, rather than flashing Steve.
         if let Some(image) = &chosen {
@@ -692,6 +774,24 @@ impl Wardrobe {
         let scale = ((preview_w / 160.0).min((preview_h - 18.0) / 200.0)) * pop;
         let ox = px + (preview_w - 160.0 * scale) * 0.5;
         let oy = preview_y + (preview_h - 14.0 - 200.0 * scale) * 0.5;
+        if self.bitmap.is_empty() {
+            ui.centered_fit(
+                Face::Regular,
+                11.0,
+                [
+                    px + 8.0,
+                    preview_y + preview_h * 0.45,
+                    preview_w - 16.0,
+                    36.0,
+                ],
+                theme.text_muted,
+                if self.default_worker.is_some() {
+                    "Loading default skin..."
+                } else {
+                    "Default skin unavailable offline"
+                },
+            );
+        }
         for ([bx, by, bw, bh], col) in &self.bitmap {
             ui.rounded(
                 ox + bx * scale,

@@ -1124,6 +1124,9 @@ impl Catalog {
         self.status = "Download cancelled.".into();
     }
     pub fn download_label(&self, project: &Project) -> Option<String> {
+        if source_only_mod(project) {
+            return Some("Unsupported".into());
+        }
         if self
             .downloading
             .as_ref()
@@ -1263,7 +1266,10 @@ impl Catalog {
                     self.status = s;
                     self.show_installed(Some(kind));
                 }
-                Err(e) => self.status = e,
+                Err(e) => {
+                    log::warn!("Add-on operation failed: {e}");
+                    self.status = e;
+                }
             }
             self.refresh(home);
         }
@@ -1674,6 +1680,10 @@ impl Catalog {
             return;
         };
 
+        if source_only_mod(&project) {
+            self.status = "Native .hnmod mods are temporarily unsupported on Android. Built-in mods remain available.".into();
+            return;
+        }
         if self.busy() || self.download_label(&project).is_some() {
             return;
         }

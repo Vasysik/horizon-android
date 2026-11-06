@@ -93,7 +93,7 @@ fn horizon_block_sprite(uv: vec2<f32>, layer: u32, lod: f32) -> vec4<f32> {
     return horizon_terrain_sprite(uv, layer & 0x7fffu);
 }
 fn horizon_block_sprite_size() -> vec2<f32> {
-    return vec2<f32>(textureDimensions(horizon_terrain_sprites_0).xy);
+    return vec2<f32>(textureDimensions(horizon_terrain_sprites).xy);
 }
 fn horizon_block_pbr_present() -> bool {
     return textureDimensions(horizon_pbr_normals).x > 1u;
@@ -203,24 +203,23 @@ fn layer_table(name: &str, table: &[(u32, u32)]) -> String {
 
 /// The terrain shader for the pack's material stage `source`, with its sprite `tags` and
 /// `materials`.
-/// Extracts the pack's `[vertex]` stage code after `<prelude>` so it can be linked with material.
+/// The checked material already contains the complete vertex module. Add only
+/// the renderer entry wrapper, avoiding duplicate structs, helpers and overrides.
 fn vertex_shim(vertex_stage: Option<&CheckedStage>) -> String {
-    let mut out = horizon_shader_api::inputs::VERTEX_INPUT.wgsl();
-    if let Some(vs) = vertex_stage {
-        let body = vs
-            .source
-            .find("fn vertex(")
-            .map(|idx| &vs.source[idx..])
-            .unwrap_or(&vs.source);
-        out += body;
-        out += "\nfn horizon_vertex_move(input: VertexInput) -> vec3<f32> { return vertex(input); }\n";
+    if vertex_stage.is_some() {
+        "fn horizon_vertex_move(input: VertexInput) -> vec3<f32> { return vertex(input); }\n".into()
     } else {
-        out += "fn horizon_vertex_move(input: VertexInput) -> vec3<f32> { return input.position; }\n";
+        "fn horizon_vertex_move(input: VertexInput) -> vec3<f32> { return input.position; }\n"
+            .into()
     }
-    out
 }
 
-fn shader_source(source: &str, vertex: Option<&CheckedStage>, tags: &[(u32, u32)], materials: &[(u32, u32)]) -> String {
+fn shader_source(
+    source: &str,
+    vertex: Option<&CheckedStage>,
+    tags: &[(u32, u32)],
+    materials: &[(u32, u32)],
+) -> String {
     format!(
         "{source}\n{}\n// Horizon's terrain (terrain.wgsl)\n{}{}{}{ENTRIES}",
         vertex_shim(vertex),
@@ -253,7 +252,12 @@ impl NativeMaterial {
         constants: &[(String, f64)],
         fog: bool,
     ) -> Result<Self, String> {
-        let module = module(stage, vertex_stage, shape.sprite_tags, shape.sprite_materials)?;
+        let module = module(
+            stage,
+            vertex_stage,
+            shape.sprite_tags,
+            shape.sprite_materials,
+        )?;
         let mut constants = present_constants(&module, constants);
         let sprite_names = [
             "horizon_terrain_SPRITE_ARRAYS",
@@ -393,6 +397,63 @@ mod tests {
         let mut report = check(&Pack::from_files(files).unwrap()).unwrap();
         assert_eq!(report.stages[0].kind, StageKind::Material);
         report.stages.remove(0)
+    }
+
+    #[test]
+    #[ignore = "requires HORIZON_TEST_SHADER_PACK pointing to a local shader pack"]
+    fn downloaded_material_pack_validates_with_the_runtime_terrain() {
+        let path = std::env::var_os("HORIZON_TEST_SHADER_PACK").expect("set fixture path");
+        let report = check(&Pack::read(std::path::Path::new(&path)).unwrap()).unwrap();
+        let material = report
+            .stages
+            .iter()
+            .find(|s| s.kind == StageKind::Material)
+            .unwrap();
+        let vertex = report.stages.iter().find(|s| s.kind == StageKind::Vertex);
+        let shader = module(material, vertex, &[], &[]).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&shader)
+        .unwrap();
+    }
+
+    #[test]
+    fn material_and_vertex_share_helpers_and_overrides_without_duplicate_declarations() {
+        let manifest = r#"schema = 1
+id = "paired"
+name = "Paired"
+version = "1"
+api = "0.1"
+[vertex]
+file = "vertex.wgsl"
+[material]
+file = "material.wgsl"
+"#;
+        let files = [
+            (MANIFEST, manifest),
+            ("vertex.wgsl", "override waves: bool = true;\nfn offset(p: vec3<f32>) -> vec3<f32> { return select(p, p + vec3<f32>(0.0, 0.1, 0.0), waves); }\nfn vertex(input: VertexInput) -> vec3<f32> { return offset(input.position); }"),
+            ("material.wgsl", "fn material(input: MaterialInput) -> Surface { return Surface(input.albedo * vec4<f32>(offset(vec3<f32>(1.0)), 1.0)); }"),
+        ].map(|(n,t)| (n.to_owned(),t.as_bytes().to_vec())).into();
+        let report = check(&Pack::from_files(files).unwrap()).unwrap();
+        let material = report
+            .stages
+            .iter()
+            .find(|s| s.kind == StageKind::Material)
+            .unwrap();
+        let vertex = report
+            .stages
+            .iter()
+            .find(|s| s.kind == StageKind::Vertex)
+            .unwrap();
+        let module = module(material, Some(vertex), &[], &[]).unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
     }
 
     #[test]

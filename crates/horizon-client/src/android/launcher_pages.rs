@@ -1847,11 +1847,12 @@ impl Launcher {
 
                 let text_max = (content_w - 190.0).max(80.0);
                 let title = ui.fit_text(Face::SemiBold, 15.0, &p.title, text_max);
-                let rich_summary = self
-                    .catalog
-                    .enriched_summaries
-                    .get(&p.id)
-                    .map_or(p.summary.as_str(), String::as_str);
+                let rich_summary = if crate::catalog::source_only_mod(p) {
+                    "Native .hnmod temporarily unsupported on Android; built-in mods are available."
+                } else {
+                    self.catalog.enriched_summaries.get(&p.id)
+                        .map_or(p.summary.as_str(), String::as_str)
+                };
                 let summary = ui.fit_text(Face::Regular, 12.5, rich_summary, text_max);
                 ui.text(
                     Face::SemiBold,
@@ -3238,6 +3239,8 @@ impl Launcher {
                 } else {
                     format!("Enable Built-in ({version})")
                 }
+            } else if crate::catalog::source_only_mod(&modal.project) {
+                "Native .hnmod temporarily unsupported on Android".to_owned()
             } else if let Some(state) = self.catalog.download_label(&modal.project) {
                 state
             } else {

@@ -163,7 +163,9 @@ pub fn graphics_api() -> crate::graphics::GraphicsApi {
     if OPEN_GL.load(Ordering::Relaxed) {
         crate::graphics::GraphicsApi::OpenGl
     } else {
-        crate::graphics::GraphicsApi::Vulkan
+        // Prefer Vulkan, but preserve the same GLES fallback as the launcher
+        // when the device has no Vulkan adapter (notably older ARMv7 GPUs).
+        crate::graphics::GraphicsApi::Auto
     }
 }
 pub fn configure_gpu(batching: bool) {

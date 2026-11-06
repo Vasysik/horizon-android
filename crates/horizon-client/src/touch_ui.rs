@@ -819,7 +819,7 @@ impl TouchUi {
             }
         }
         if (self.expanded || !self.goy_mode) && (3.0..23.0).contains(&p[1]) {
-            if (3.0..36.0).contains(&p[0]) {
+            if (39.0..72.0).contains(&p[0]) {
                 return Some(Action::More);
             }
             if self.expanded && (75.0..108.0).contains(&p[0]) {
@@ -859,12 +859,12 @@ impl TouchUi {
         }
         if !self.expanded {
             if !self.goy_mode && crate::touch::current_hud_opacity_scale() > 0.01 {
-                button(b, a, "...", 3.0, 3.0, 33.0);
+                button(b, a, "...", 39.0, 3.0, 33.0);
             }
             return;
         }
         for (label, x, width) in [
-            ("...", 3.0, 33.0),
+            ("...", 39.0, 33.0),
             ("F3", 75.0, 33.0),
             ("F5", 111.0, 33.0),
             ("Chat", 147.0, 33.0),
@@ -931,7 +931,12 @@ fn button(b: &mut HudBatch, a: &HudAtlas, label: &str, x: f32, y: f32, w: f32) {
     if !crate::touch::theme_button(b, a, "button", [x, y, w, 20.0], false, u32::MAX, true) {
         b.fill(a, x, y, w, 20.0, rgba(16, 18, 24, 180));
     }
-    b.text(a, label, x + 4.0, y + 6.0, rgba(245, 245, 245, 255), true);
+    let text_x = if label == "..." {
+        x + (w - HudBatch::text_width(a, label)) * 0.5
+    } else {
+        x + 4.0
+    };
+    b.text(a, label, text_x, y + 6.0, rgba(245, 245, 245, 255), true);
 }
 
 /// Whether a physical left click takes part in the pad's utility buttons
@@ -1651,7 +1656,7 @@ impl TouchUi {
             )
         } else {
             (
-                39.0 * gui_unit,
+                3.0 * gui_unit,
                 3.0 * gui_unit,
                 33.0 * gui_unit,
                 20.0 * gui_unit,
@@ -2546,7 +2551,7 @@ impl TouchUi {
             let gui_unit = ui.batch.scale / ui.density;
             let (bx, by, bw, bh) = if settings.control_style == ControlStyle::Mcpe {
                 (
-                    39.0 * gui_unit,
+                    3.0 * gui_unit,
                     3.0 * gui_unit,
                     33.0 * gui_unit,
                     20.0 * gui_unit,
@@ -7875,8 +7880,8 @@ mod tests {
     #[test]
     fn mcpe_extra_keys_leave_a_separate_slot_for_the_control_hub() {
         let mut ui = TouchUi::default();
-        assert!(matches!(ui.action(400.0, 240.0, [10.0, 10.0], false), Some(Action::More)));
-        assert!(ui.action(400.0, 240.0, [50.0, 10.0], false).is_none());
+        assert!(matches!(ui.action(400.0, 240.0, [50.0, 10.0], false), Some(Action::More)));
+        assert!(ui.action(400.0, 240.0, [10.0, 10.0], false).is_none());
         ui.expanded = true;
         assert!(matches!(ui.action(400.0, 240.0, [80.0, 10.0], false), Some(Action::Key(KeyCode::F3))));
         assert!(matches!(ui.action(400.0, 240.0, [160.0, 30.0], false), Some(Action::Key(KeyCode::F4))));

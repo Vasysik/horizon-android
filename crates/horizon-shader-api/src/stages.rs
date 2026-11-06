@@ -526,6 +526,7 @@ impl StageKind {
         out += &Frame::WGSL.wgsl();
         out += &self.input().wgsl();
         if self == StageKind::Material {
+            out += &VERTEX_INPUT.wgsl();
             out += &SURFACE.wgsl();
             out += &DISPLACEMENT_INPUT.wgsl();
         }
@@ -667,6 +668,20 @@ pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
         }
     }
     push(file, pack.source(file).unwrap_or_default());
+    // Terrain vertex and material functions share a module at runtime. Check the
+    // same module here, including helpers/overrides used by both (e.g. water waves).
+    if kind == StageKind::Material
+        && let Some(vertex) = &m.vertex
+    {
+        for extra in vertex.files.iter().chain(std::iter::once(&vertex.file)) {
+            if extra != file
+                && !stage.is_some_and(|s| s.files.contains(extra))
+                && !m.shared.contains(extra)
+            {
+                push(extra, pack.source(extra).unwrap_or_default());
+            }
+        }
+    }
     push("<entries>", kind.entries());
     composed
 }
