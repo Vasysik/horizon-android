@@ -256,14 +256,6 @@ impl Launcher {
                 self.catalog.remove_local(&self.home);
                 self.chooser = None;
             }
-            Some(Action::Repository) => {
-                self.catalog.status = if crate::platform::open_repository() {
-                    "Repository opened in browser."
-                } else {
-                    "No browser available to open the repository."
-                }
-                .into();
-            }
             Some(Action::Account) => {
                 self.catalog.editing = None;
                 crate::platform::hide();
@@ -398,6 +390,7 @@ impl Launcher {
                 self.catalog.offset = 0;
                 self.catalog.browse(&self.home);
                 self.close_overlay();
+                self.chooser = None;
                 if page == Page::Play {
                     self.catalog.refresh(&self.home);
                     self.reload_home();

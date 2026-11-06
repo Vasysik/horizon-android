@@ -219,6 +219,23 @@ impl Launcher {
     }
 }
 impl Chooser {
+    /// A list made by the caller.
+    pub(super) fn list(
+        title: &'static str,
+        help: &'static str,
+        choices: Vec<(String, String, Action, bool)>,
+    ) -> Self {
+        Self {
+            title,
+            help,
+            device: None,
+            choices,
+            scroll: 0.0,
+            top: 0.0,
+            bottom: 0.0,
+            frame: [0.0, 0.0],
+        }
+    }
     pub(super) fn confirm_delete(name: String) -> Self {
         Self {
             title: "Remove add-on?",
@@ -296,7 +313,14 @@ impl Chooser {
             }
             let rect = [x + 12.0, row, w - 24.0, ROW - 2.0];
             if *selected {
-                ui.rounded(rect[0], rect[1], rect[2], rect[3], radius::ROW, white(fill::SELECTED));
+                ui.rounded(
+                    rect[0],
+                    rect[1],
+                    rect[2],
+                    rect[3],
+                    radius::ROW,
+                    white(fill::SELECTED),
+                );
                 art.icon(
                     ui,
                     "tick-02",
@@ -307,8 +331,21 @@ impl Chooser {
                 );
             }
             let room = rect[2] - 56.0;
-            let text_y = if detail.is_empty() { row + 16.0 } else { row + 7.0 };
-            fitted(ui, Face::Medium, 15.0, x + 24.0, text_y, room, white(ink::FULL), label);
+            let text_y = if detail.is_empty() {
+                row + 16.0
+            } else {
+                row + 7.0
+            };
+            fitted(
+                ui,
+                Face::Medium,
+                15.0,
+                x + 24.0,
+                text_y,
+                room,
+                white(ink::FULL),
+                label,
+            );
             fitted(
                 ui,
                 Face::Regular,

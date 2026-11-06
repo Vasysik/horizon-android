@@ -130,7 +130,11 @@ impl Instances {
             name: "Horizon".into(),
             ..Meta::default()
         });
-        for entry in fs::read_dir(home.join("profiles")).into_iter().flatten().flatten() {
+        for entry in fs::read_dir(home.join("profiles"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let id = entry
                 .file_name()
                 .to_str()
@@ -143,7 +147,8 @@ impl Instances {
                 });
             }
         }
-        me.list.retain(|id, _| *id == 0 || instance_home(home, *id).is_dir());
+        me.list
+            .retain(|id, _| *id == 0 || instance_home(home, *id).is_dir());
         me
     }
 
@@ -365,7 +370,8 @@ pub struct Asset {
 }
 
 /// This app's releases, the Android fork's: the launcher's own builds come from there.
-pub const RELEASES: &str = "https://api.github.com/repos/Vasysik/horizon-android/releases?per_page=12";
+pub const RELEASES: &str =
+    "https://api.github.com/repos/Vasysik/horizon-android/releases?per_page=12";
 const RELEASES_CACHE: &str = "android-releases.json";
 
 impl Release {
@@ -598,7 +604,13 @@ mod tests {
     fn game_arguments_keep_quoted_words() {
         assert_eq!(
             split_args("--server-thread  --world 'My World' --name \"Two Words\""),
-            ["--server-thread", "--world", "My World", "--name", "Two Words"]
+            [
+                "--server-thread",
+                "--world",
+                "My World",
+                "--name",
+                "Two Words"
+            ]
         );
         assert!(split_args("   ").is_empty());
     }
@@ -614,7 +626,9 @@ mod tests {
     #[test]
     fn release_notes_read_as_text() {
         assert_eq!(
-            plain_markdown("## What's new\n\n- **Fix** `this`\n- see [the docs](https://x.y/z) now\n```\ncode\n```"),
+            plain_markdown(
+                "## What's new\n\n- **Fix** `this`\n- see [the docs](https://x.y/z) now\n```\ncode\n```"
+            ),
             "What's new\n\n• Fix this\n• see the docs now\ncode"
         );
     }

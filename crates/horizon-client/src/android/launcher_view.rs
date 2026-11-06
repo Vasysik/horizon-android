@@ -124,7 +124,6 @@ pub enum Action {
     CopyLoginCode,
     CancelLogin,
     ReviewApp,
-    Repository,
     SignOut,
     LoginLink,
     CloseLogin,
@@ -189,7 +188,6 @@ pub enum Action {
     CloseShot,
     // Console.
     CopyLog,
-    FollowLog,
     // Versions and notes.
     RefreshReleases,
     OpenRelease(usize),
@@ -313,7 +311,6 @@ pub struct View {
     pub minecraft: String,
     pub page: Page,
     pub home_tab: HomeTab,
-    pub drawer: bool,
     pub account_name: String,
     pub account_how: String,
     pub instances: Vec<InstanceRow>,
@@ -330,7 +327,6 @@ pub struct View {
     pub bundled: Vec<BundledRow>,
     pub shots: Vec<ShotRow>,
     pub log: Vec<String>,
-    pub follow: bool,
     pub query: String,
     pub source: Option<crate::shader_catalog::Origin>,
     pub search_hint: String,
@@ -387,7 +383,14 @@ pub fn area(ui: &Ui) -> Area {
 pub fn head(ui: &mut Ui, x: f32, y: f32, w: f32, title: &str, note: &str) -> f32 {
     let lines = wrapped(ui, Face::Display, 26., title, w);
     for (i, l) in lines.iter().enumerate() {
-        ui.text(Face::Display, 26., x, y + i as f32 * 32., white(ink::FULL), l);
+        ui.text(
+            Face::Display,
+            26.,
+            x,
+            y + i as f32 * 32.,
+            white(ink::FULL),
+            l,
+        );
     }
     let mut bottom = y + lines.len() as f32 * 32. + 2.;
     if !note.is_empty() {
@@ -399,7 +402,14 @@ pub fn head(ui: &mut Ui, x: f32, y: f32, w: f32, title: &str, note: &str) -> f32
 /// A page's head: its name in Bricolage, the note under it.
 fn page_head(ui: &mut Ui, area: [f32; 4], y: f32, title: &str, note: &str) -> f32 {
     let size = if area[2] < 520. { 34. } else { 46. };
-    ui.text(Face::Display, size, area[0] + 4., y, white(ink::FULL), title);
+    ui.text(
+        Face::Display,
+        size,
+        area[0] + 4.,
+        y,
+        white(ink::FULL),
+        title,
+    );
     let mut bottom = y + size * 1.45;
     if !note.is_empty() {
         bottom += paragraph(
@@ -636,7 +646,14 @@ impl View {
         ] {
             let r = [x + 8., link_y, w - 16., 34.];
             art.icon(ui, icon, r[0] + 8., r[1] + 8., 18., white(ink::MUTED));
-            ui.text(Face::Regular, 14., r[0] + 36., r[1] + 7., white(ink::BODY), label);
+            ui.text(
+                Face::Regular,
+                14.,
+                r[0] + 36.,
+                r[1] + 7.,
+                white(ink::BODY),
+                label,
+            );
             out.targets.push((r, Action::Link(link)));
             link_y += 34.;
         }
@@ -875,10 +892,28 @@ impl View {
                 Some(self.servers.len()),
             ),
             (HomeTab::Packs, "", "Packs", Some(self.packs_count())),
-            (HomeTab::Screenshots, "", "Screenshots", Some(self.shots.len())),
+            (
+                HomeTab::Screenshots,
+                "",
+                "Screenshots",
+                Some(self.shots.len()),
+            ),
             (HomeTab::Console, "computer-terminal-01", "Console", None),
         ];
+        let measure = |ui: &Ui, icons: bool| -> f32 {
+            tabs.iter()
+                .map(|(_, icon, label, count)| {
+                    28. + if icons && !icon.is_empty() { 22. } else { 0. }
+                        + ui.measure(Face::Medium, 14., label)
+                        + count
+                            .filter(|n| *n > 0)
+                            .map_or(0., |n| ui.measure(Face::Regular, 12., &n.to_string()) + 8.)
+                })
+                .sum()
+        };
+        let icons = w < 620. || measure(ui, true) <= w - 16.;
         for (tab, icon, label, count) in tabs {
+            let icon = if icons { icon } else { "" };
             let width = 24.
                 + if icon.is_empty() { 0. } else { 22. }
                 + ui.measure(Face::Medium, 14., label)
@@ -920,11 +955,17 @@ impl View {
     }
 
     fn mods_count(&self) -> usize {
-        self.local.iter().filter(|l| l.kind == Content::Mods).count()
+        self.local
+            .iter()
+            .filter(|l| l.kind == Content::Mods)
+            .count()
             + self.bundled.iter().filter(|b| b.enabled).count()
     }
     fn packs_count(&self) -> usize {
-        self.local.iter().filter(|l| l.kind != Content::Mods).count()
+        self.local
+            .iter()
+            .filter(|l| l.kind != Content::Mods)
+            .count()
     }
 
     fn friend_field(&self, art: &Art, ui: &mut Ui, t: &mut Targets<Action>, r: [f32; 4]) {
@@ -932,7 +973,12 @@ impl View {
         art.field(
             ui,
             t,
-            [r[0], r[1], r[2] - if self.friend_valid { 76. } else { 0. }, r[3]],
+            [
+                r[0],
+                r[1],
+                r[2] - if self.friend_valid { 76. } else { 0. },
+                r[3],
+            ],
             Some("user-add-01"),
             &self.friend,
             "Paste a friend's invite code",
@@ -974,7 +1020,16 @@ impl View {
             y += 8.;
             art.bar(ui, [x, y, w, 5.], g.overall);
             y += 14.;
-            y += paragraph(ui, Face::Regular, 13., x, y, w, white(ink::QUIET), &g.detail);
+            y += paragraph(
+                ui,
+                Face::Regular,
+                13.,
+                x,
+                y,
+                w,
+                white(ink::QUIET),
+                &g.detail,
+            );
             return y;
         }
         let wide = w >= 560.;
@@ -990,17 +1045,18 @@ impl View {
                     "F2 in the game saves one. They show here and in the Screenshots tab.",
                 );
             } else {
-                let cols = 3.;
+                let columns = ((left_w / 200.).ceil() as usize).clamp(3, 6);
+                let cols = columns as f32;
                 let gap = 8.;
                 let tw = (left_w - gap * (cols - 1.)) / cols;
                 let th = tw * 9. / 16.;
-                for (i, s) in self.shots.iter().take(6).enumerate() {
-                    let (c, r) = ((i % 3) as f32, (i / 3) as f32);
+                for (i, s) in self.shots.iter().take(columns * 2).enumerate() {
+                    let (c, r) = ((i % columns) as f32, (i / columns) as f32);
                     let rect = [x + c * (tw + gap), cy + r * (th + gap), tw, th];
                     shot_tile(ui, s, rect);
                     t.push((rect, Action::OpenShot(i)));
                 }
-                cy += (self.shots.len().min(6).div_ceil(3)) as f32 * (th + gap);
+                cy += self.shots.len().min(columns * 2).div_ceil(columns) as f32 * (th + gap);
             }
             cy
         };
@@ -1062,11 +1118,27 @@ impl View {
                 Some(("Download", Action::Play)),
             )
         };
-        ui.text(Face::Medium, 14., x, y + 10., white(ink::STRONG), "Resources");
+        ui.text(
+            Face::Medium,
+            14.,
+            x,
+            y + 10.,
+            white(ink::STRONG),
+            "Resources",
+        );
         let note_x = if wide { x + 140. } else { x };
         let note_y = if wide { y + 10. } else { y + 34. };
         let room = w - (note_x - x) - if action.is_some() { 110. } else { 0. };
-        let h = paragraph(ui, Face::Regular, 14., note_x, note_y, room, white(ink::BODY), state);
+        let h = paragraph(
+            ui,
+            Face::Regular,
+            14.,
+            note_x,
+            note_y,
+            room,
+            white(ink::BODY),
+            state,
+        );
         if let Some((label, a)) = action {
             art.button(
                 ui,
@@ -1155,9 +1227,7 @@ impl View {
             ],
         );
         for m in &self.bundled {
-            list_row(
-                art, ui, x, y, w, 60., None, "puzzle", &m.title, &m.note,
-            );
+            list_row(art, ui, x, y, w, 60., None, "puzzle", &m.title, &m.note);
             art.toggle(
                 ui,
                 t,
@@ -1217,7 +1287,7 @@ impl View {
             "This instance's single-player worlds.",
             &[
                 ("Folder", "folder-01", Action::WorldsFolder),
-                ("Backups", "archive-box", Action::BackupsFolder),
+                ("Backups", "download-04", Action::BackupsFolder),
             ],
         );
         if self.worlds.is_empty() {
@@ -1421,7 +1491,12 @@ impl View {
         }
         let strip_h = ty + 44. - y;
         under(ui, start, |ui| {
-            art.plate(ui, [strip[0], strip[1], w, strip_h], radius::LARGE, Plate::Glass);
+            art.plate(
+                ui,
+                [strip[0], strip[1], w, strip_h],
+                radius::LARGE,
+                Plate::Glass,
+            );
         });
         y += strip_h + 10.;
         let panel_top = y;
@@ -1489,7 +1564,16 @@ impl View {
                 Some(world) => format!("Into world: {world}"),
                 None => "Make a world first: data packs go into one world".to_owned(),
             };
-            fitted(ui, Face::Regular, 13., px, y, pw - 120., white(ink::BODY), &label);
+            fitted(
+                ui,
+                Face::Regular,
+                13.,
+                px,
+                y,
+                pw - 120.,
+                white(ink::BODY),
+                &label,
+            );
             if self.data_world.is_some() {
                 art.button(
                     ui,
@@ -1542,9 +1626,7 @@ impl View {
         }
         if self.page == Page::Mods {
             for m in &self.bundled {
-                list_row(
-                    art, ui, px, y, pw, 60., None, "puzzle", &m.title, &m.note,
-                );
+                list_row(art, ui, px, y, pw, 60., None, "puzzle", &m.title, &m.note);
                 art.toggle(
                     ui,
                     t,
@@ -1557,7 +1639,16 @@ impl View {
         }
         for p in &self.results {
             list_row(
-                art, ui, px, y, pw, 120., None, "package-01", &p.title, &p.note,
+                art,
+                ui,
+                px,
+                y,
+                pw,
+                120.,
+                None,
+                "package-01",
+                &p.title,
+                &p.note,
             );
             if let Some(state) = &p.state {
                 let width = ui.measure(Face::Medium, 13., state);
@@ -1604,12 +1695,24 @@ impl View {
         }
         y += 52.;
         under(ui, start, |ui| {
-            art.plate(ui, [x, panel_top, w, y - panel_top], radius::PANEL, Plate::Glass);
+            art.plate(
+                ui,
+                [x, panel_top, w, y - panel_top],
+                radius::PANEL,
+                Plate::Glass,
+            );
         });
         y
     }
 
-    fn versions(&self, art: &Art, ui: &mut Ui, a: [f32; 4], y: f32, t: &mut Targets<Action>) -> f32 {
+    fn versions(
+        &self,
+        art: &Art,
+        ui: &mut Ui,
+        a: [f32; 4],
+        y: f32,
+        t: &mut Targets<Action>,
+    ) -> f32 {
         let [x, _, w, _] = a;
         let mut y = page_head(
             ui,
@@ -1653,7 +1756,16 @@ impl View {
         }
         for (i, r) in self.releases.iter().enumerate() {
             list_row(
-                art, ui, px, y, pw, 100., None, "download-04", &r.name, &r.note,
+                art,
+                ui,
+                px,
+                y,
+                pw,
+                100.,
+                None,
+                "download-04",
+                &r.name,
+                &r.note,
             );
             if r.current {
                 ui.text(
@@ -1685,7 +1797,13 @@ impl View {
 
     fn notes(&self, art: &Art, ui: &mut Ui, a: [f32; 4], y: f32, t: &mut Targets<Action>) -> f32 {
         let [x, _, w, _] = a;
-        let mut y = page_head(ui, a, y + 8., "Patch notes", "Each release's notes, newest first.");
+        let mut y = page_head(
+            ui,
+            a,
+            y + 8.,
+            "Patch notes",
+            "Each release's notes, newest first.",
+        );
         let top = y;
         let start = ui.batch.vertices.len();
         let (px, pw) = (x + 16., w - 32.);
@@ -1697,7 +1815,11 @@ impl View {
             let row_top = y;
             art.icon(
                 ui,
-                if r.open { "arrow-down-01" } else { "arrow-right-01" },
+                if r.open {
+                    "arrow-down-01"
+                } else {
+                    "arrow-right-01"
+                },
                 px,
                 y + 12.,
                 18.,
@@ -1726,8 +1848,16 @@ impl View {
             t.push(([x, row_top, w, 50.], Action::OpenNote(i)));
             y += 50.;
             if r.open {
-                y += paragraph(ui, Face::Regular, 14., px + 26., y, pw - 26., white(ink::BODY), &r.body)
-                    + 10.;
+                y += paragraph(
+                    ui,
+                    Face::Regular,
+                    14.,
+                    px + 26.,
+                    y,
+                    pw - 26.,
+                    white(ink::BODY),
+                    &r.body,
+                ) + 10.;
             }
             rule(ui, px, y, pw);
             y += 4.;
@@ -1739,7 +1869,14 @@ impl View {
         y
     }
 
-    fn settings(&self, art: &Art, ui: &mut Ui, a: [f32; 4], y: f32, t: &mut Targets<Action>) -> f32 {
+    fn settings(
+        &self,
+        art: &Art,
+        ui: &mut Ui,
+        a: [f32; 4],
+        y: f32,
+        t: &mut Targets<Action>,
+    ) -> f32 {
         let [x, _, w, _] = a;
         let s = &self.settings;
         let mut y = page_head(ui, a, y + 8., "Settings", "");
@@ -1777,44 +1914,308 @@ impl View {
         y += 6.;
         match s.tab {
             SettingsTab::Launcher => {
-                y = setting(ui, px, y, pw, "Accent", "The main colour, the sky's hue with it.", 244., |ui, r| {
-                    for (i, (_, c)) in ACCENTS.iter().enumerate() {
-                        let rect = [r[0] + i as f32 * 35., r[1] + 8., 32., 32.];
-                        ui.rounded(rect[0], rect[1], 32., 32., 16., hex(*c, 255));
-                        if s.accent == i {
-                            art.icon(ui, "tick-02", rect[0] + 7., rect[1] + 7., 18., white(ink::FULL));
+                y = setting(
+                    ui,
+                    px,
+                    y,
+                    pw,
+                    "Accent",
+                    "The main colour, the sky's hue with it.",
+                    244.,
+                    |ui, r| {
+                        for (i, (_, c)) in ACCENTS.iter().enumerate() {
+                            let rect = [r[0] + i as f32 * 35., r[1] + 8., 32., 32.];
+                            ui.rounded(rect[0], rect[1], 32., 32., 16., hex(*c, 255));
+                            if s.accent == i {
+                                art.icon(
+                                    ui,
+                                    "tick-02",
+                                    rect[0] + 7.,
+                                    rect[1] + 7.,
+                                    18.,
+                                    white(ink::FULL),
+                                );
+                            }
+                            t.push((rect, Action::Accent(i)));
                         }
-                        t.push((rect, Action::Accent(i)));
-                    }
-                });
-                y = switch(art, ui, t, px, y, pw, "Plain plates", "Solid plates without the scene: lighter on the GPU and battery.", s.plain, Action::PlainGlass);
-                y = switch(art, ui, t, px, y, pw, "Still sky", "Hold the stars and fireflies.", s.still, Action::StillScene);
-                y = text_setting(art, ui, t, px, y, pw, "Proxy", "http://host:port or socks5://host:port for every download. Empty: none.", &s.proxy, "No proxy", self.editing == Some("proxy"), Action::Field("proxy"));
-                y = pick(art, ui, t, px, y, pw, "Files", "Worlds, mods, packs and reports in the system's Files app.", "Open", Action::GameFiles);
+                    },
+                );
+                y = switch(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Plain plates",
+                    "Solid plates without the scene: lighter on the GPU and battery.",
+                    s.plain,
+                    Action::PlainGlass,
+                );
+                y = switch(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Still sky",
+                    "Hold the stars and fireflies.",
+                    s.still,
+                    Action::StillScene,
+                );
+                y = text_setting(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Proxy",
+                    "http://host:port or socks5://host:port for every download. Empty: none.",
+                    &s.proxy,
+                    "No proxy",
+                    self.editing == Some("proxy"),
+                    Action::Field("proxy"),
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Files",
+                    "Worlds, mods, packs and reports in the system's Files app.",
+                    "Open",
+                    Action::GameFiles,
+                );
             }
             SettingsTab::Game => {
-                y = pick(art, ui, t, px, y, pw, "Rendering", "Applies on the next Play.", &s.renderer, Action::Renderer);
-                y = pick(art, ui, t, px, y, pw, "Client resolution", "Scales the whole picture, menus too.", &s.resolution, Action::RenderScale);
-                y = pick(art, ui, t, px, y, pw, "Chunk worker limit", "Ceiling for generation and meshing.", &s.workers, Action::WorkerLimit);
-                y = pick(art, ui, t, px, y, pw, "Reusable RAM cache", "Decoded sounds and empty mesh buffers.", &s.cache, Action::CacheBudget);
-                y = pick(art, ui, t, px, y, pw, "Input", "Touch, or a physical keyboard and mouse.", &s.input, Action::InputHost);
-                y = text_setting(art, ui, t, px, y, pw, "Game arguments", "Extra arguments for the game, passed as they are. Applies on the next Play.", &s.game_args, "For example --server-thread", self.editing == Some("game_args"), Action::Field("game_args"));
-                y = text_setting(art, ui, t, px, y, pw, "Join at start", "A server address the game connects to on Play.", &s.server, "Single player", self.editing == Some("server"), Action::Field("server"));
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Rendering",
+                    "Applies on the next Play.",
+                    &s.renderer,
+                    Action::Renderer,
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Client resolution",
+                    "Scales the whole picture, menus too.",
+                    &s.resolution,
+                    Action::RenderScale,
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Chunk worker limit",
+                    "Ceiling for generation and meshing.",
+                    &s.workers,
+                    Action::WorkerLimit,
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Reusable RAM cache",
+                    "Decoded sounds and empty mesh buffers.",
+                    &s.cache,
+                    Action::CacheBudget,
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Input",
+                    "Touch, or a physical keyboard and mouse.",
+                    &s.input,
+                    Action::InputHost,
+                );
+                y = text_setting(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Game arguments",
+                    "Extra arguments for the game, passed as they are. Applies on the next Play.",
+                    &s.game_args,
+                    "For example --server-thread",
+                    self.editing == Some("game_args"),
+                    Action::Field("game_args"),
+                );
+                y = text_setting(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Join at start",
+                    "A server address the game connects to on Play.",
+                    &s.server,
+                    "Single player",
+                    self.editing == Some("server"),
+                    Action::Field("server"),
+                );
             }
             SettingsTab::Screen => {
-                y = pick(art, ui, t, px, y, pw, "Orientation", "The launcher and the game.", &s.orientation, Action::Orientation);
-                y = switch(art, ui, t, px, y, pw, "Immersive fullscreen", "Hide the system bars.", s.immersive, Action::Immersive);
-                y = switch(art, ui, t, px, y, pw, "Avoid camera cutout", "Keep the picture clear of the camera.", s.cutout, Action::Cutout);
-                y = pick(art, ui, t, px, y, pw, "Aspect ratio", "Fits the entire picture without stretching.", &s.aspect, Action::Aspect);
-                y = pick(art, ui, t, px, y, pw, "Display refresh rate", "A display preference, not an FPS cap.", &s.display, Action::DisplayHz);
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Orientation",
+                    "The launcher and the game.",
+                    &s.orientation,
+                    Action::Orientation,
+                );
+                y = switch(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Immersive fullscreen",
+                    "Hide the system bars.",
+                    s.immersive,
+                    Action::Immersive,
+                );
+                y = switch(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Avoid camera cutout",
+                    "Keep the picture clear of the camera.",
+                    s.cutout,
+                    Action::Cutout,
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Aspect ratio",
+                    "Fits the entire picture without stretching.",
+                    &s.aspect,
+                    Action::Aspect,
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Display refresh rate",
+                    "A display preference, not an FPS cap.",
+                    &s.display,
+                    Action::DisplayHz,
+                );
             }
             SettingsTab::Reports => {
-                y = switch(art, ui, t, px, y, pw, "Performance hints", "ADPF: frame-work hints to Android, on supported devices.", s.hints, Action::PerformanceHints);
-                y = switch(art, ui, t, px, y, pw, "GPU profiling", "Records GPU timings in the report. Has overhead.", s.gpu_profile, Action::GpuProfile);
-                y = switch(art, ui, t, px, y, pw, "Performance recording", "Up to 30 minutes from the next Play.", s.recording, Action::RecordPerformance);
-                y = pick(art, ui, t, px, y, pw, "Diagnostics", "The last run's summary and error.", "Show", Action::Logs);
-                y = pick(art, ui, t, px, y, pw, "Diagnostic report", "One ZIP in Reports. Nothing is uploaded.", "Export", Action::ExportDiagnostics);
-                y = pick(art, ui, t, px, y, pw, "Raw performance data", "Timing files, in Reports.", "Open", Action::ExportPerformance);
+                y = switch(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Performance hints",
+                    "ADPF: frame-work hints to Android, on supported devices.",
+                    s.hints,
+                    Action::PerformanceHints,
+                );
+                y = switch(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "GPU profiling",
+                    "Records GPU timings in the report. Has overhead.",
+                    s.gpu_profile,
+                    Action::GpuProfile,
+                );
+                y = switch(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Performance recording",
+                    "Up to 30 minutes from the next Play.",
+                    s.recording,
+                    Action::RecordPerformance,
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Diagnostics",
+                    "The last run's summary and error.",
+                    "Show",
+                    Action::Logs,
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Diagnostic report",
+                    "One ZIP in Reports. Nothing is uploaded.",
+                    "Export",
+                    Action::ExportDiagnostics,
+                );
+                y = pick(
+                    art,
+                    ui,
+                    t,
+                    px,
+                    y,
+                    pw,
+                    "Raw performance data",
+                    "Timing files, in Reports.",
+                    "Open",
+                    Action::ExportPerformance,
+                );
             }
         }
         y += 6.;
@@ -1837,7 +2238,18 @@ pub const ACCENTS: [(&str, u32); 7] = [
 ];
 
 fn shot_tile(ui: &mut Ui, s: &ShotRow, rect: [f32; 4]) {
-    ui.rounded(rect[0], rect[1], rect[2], rect[3], radius::ROW, white(fill::FIELD));
+    // Only what's on screen goes to the atlas: it holds a few dozen thumbnails, not hundreds.
+    if rect[1] + rect[3] < 0. || rect[1] > ui.h {
+        return;
+    }
+    ui.rounded(
+        rect[0],
+        rect[1],
+        rect[2],
+        rect[3],
+        radius::ROW,
+        white(fill::FIELD),
+    );
     if let Some((key, pixels)) = &s.thumb {
         picture(ui, *key, pixels, rect);
     }
@@ -1986,7 +2398,16 @@ fn list_head(
     let total: f32 = widths.iter().sum::<f32>() + 8. * (buttons.len() as f32 - 1.);
     let beside = w - total >= 240.;
     let room = if beside { w - total - 16. } else { w };
-    let h = paragraph(ui, Face::Regular, 13., x, y + 4., room, white(ink::QUIET), note);
+    let h = paragraph(
+        ui,
+        Face::Regular,
+        13.,
+        x,
+        y + 4.,
+        room,
+        white(ink::QUIET),
+        note,
+    );
     let by = if beside { y } else { y + h + 12. };
     let mut bx = if beside { x + w - total } else { x };
     let scale = if beside { 1. } else { (w / total).min(1.) };
@@ -1996,7 +2417,7 @@ fn list_head(
             ui,
             t,
             [bx, by, bw - if scale < 1. { 8. } else { 0. }, 40.],
-            (*icon != "archive-box").then_some(*icon),
+            Some(*icon),
             label,
             *action,
             Kind::Secondary,
@@ -2044,8 +2465,6 @@ impl Menu {
         let x = (ui.w - w) / 2.;
         let y = (ui.h - h) / 2.;
         art.plate(ui, [x, y, w, h], radius::POPOVER, Plate::Float);
-        out.targets.push(([x, y, w, h], Action::Page(Page::Play)));
-        out.targets.pop();
         fitted(
             ui,
             Face::SemiBold,
@@ -2098,9 +2517,13 @@ pub fn dialog(
     scrim(ui);
     let w = (ui.w - 2. * EDGE).min(440.);
     let lines = wrapped(ui, Face::Regular, 14., note, w - 48.).len() as f32;
-    let h = 32. * if ui.measure(Face::Display, 26., title) > w - 48. { 2. } else { 1. }
-        + lines * 21.
-        + 112.;
+    let h =
+        32. * if ui.measure(Face::Display, 26., title) > w - 48. {
+            2.
+        } else {
+            1.
+        } + lines * 21.
+            + 112.;
     let (x, y) = ((ui.w - w) / 2., (ui.h - h) / 2.);
     art.plate(ui, [x, y, w, h], radius::MODAL, Plate::Float);
     head(ui, x + 24., y + 20., w - 48., title, note);
@@ -2209,7 +2632,12 @@ pub fn shot_viewer(
         let room = [w - 2. * EDGE, h - 130.];
         let s = (room[0] / pixels.0 as f32).min(room[1] / pixels.1 as f32);
         let (iw, ih) = (pixels.0 as f32 * s, pixels.1 as f32 * s);
-        picture(ui, *key, pixels, [(w - iw) / 2., (h - 72. - ih) / 2., iw, ih]);
+        picture(
+            ui,
+            *key,
+            pixels,
+            [(w - iw) / 2., (h - 72. - ih) / 2., iw, ih],
+        );
     }
     let y = h - 60.;
     fitted(
@@ -2223,8 +2651,8 @@ pub fn shot_viewer(
         name,
     );
     let buttons: [(&str, &str, Action); 5] = [
-        ("Previous", "arrow-right-01", Action::ShotStep(false)),
-        ("Next", "arrow-right-01", Action::ShotStep(true)),
+        ("Previous", "", Action::ShotStep(false)),
+        ("Next", "", Action::ShotStep(true)),
         ("Save", "download-04", Action::SaveShot),
         ("Delete", "delete-02", Action::DeleteShot),
         ("Close", "cancel-01", Action::CloseShot),
@@ -2235,7 +2663,7 @@ pub fn shot_viewer(
             ui,
             &mut out.targets,
             [EDGE + i as f32 * (each + 8.), y, each, 44.],
-            (w >= 520.).then_some(icon),
+            (w >= 520. && !icon.is_empty()).then_some(icon),
             label,
             action,
             if action == Action::DeleteShot {

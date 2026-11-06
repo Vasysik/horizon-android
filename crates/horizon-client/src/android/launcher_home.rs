@@ -98,10 +98,13 @@ impl Launcher {
             .home_state
             .servers
             .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let pixels = glass::decode_png(s.icon.as_deref()?, 64)?;
-                Some((0x5e7_0000 + i as u64, Arc::new(pixels)))
+            .map(|s| {
+                use std::hash::{Hash, Hasher};
+                let bytes = s.icon.as_deref()?;
+                let pixels = glass::decode_png(bytes, 64)?;
+                let mut key = std::collections::hash_map::DefaultHasher::new();
+                bytes.hash(&mut key);
+                Some((key.finish() >> 24, Arc::new(pixels)))
             })
             .collect();
         self.home_state.shots = crate::screenshots::list(&game);
@@ -259,12 +262,7 @@ impl Launcher {
                 selected: *id == selected,
             })
             .collect();
-        let played = data::played(
-            h.instances
-                .list
-                .get(&selected)
-                .map_or(0, |m| m.played_secs),
-        );
+        let played = data::played(h.instances.list.get(&selected).map_or(0, |m| m.played_secs));
         let worlds: Vec<_> = {
             let list = std::mem::take(&mut h.worlds);
             let rows = list
@@ -274,7 +272,9 @@ impl Launcher {
                     note: format!(
                         "{} · {}{} · {}",
                         w.mode,
-                        w.version.as_deref().map_or(String::new(), |v| format!("{v} · ")),
+                        w.version
+                            .as_deref()
+                            .map_or(String::new(), |v| format!("{v} · ")),
                         data::age(w.last_played),
                         data::size(w.size)
                     ),
@@ -300,7 +300,7 @@ impl Launcher {
                 .iter()
                 .map(|s| ShotRow {
                     name: s.name.clone(),
-                    thumb: h.pictures.get(&s.path, 360),
+                    thumb: h.pictures.get(&s.path, 240),
                 })
                 .collect();
             h.shots = list;
@@ -451,7 +451,6 @@ impl Launcher {
             minecraft: horizon_core::VANILLA_VERSION.into(),
             page,
             home_tab: h.tab,
-            drawer: h.drawer,
             account_name: self.login.chip_name(&c.name),
             account_how: self.login.chip_how(),
             instances,
@@ -468,7 +467,6 @@ impl Launcher {
             bundled,
             shots,
             log: data::log_lines(),
-            follow: true,
             query: self.catalog.query.clone(),
             source,
             search_hint: search_hint.into(),
@@ -524,9 +522,9 @@ impl Launcher {
             let region = crate::launcher_view::area(&ui).rect;
             let start = ui.batch.vertices.len();
             let first = out.targets.len();
-            let bottom = self
-                .wardrobe
-                .draw(art, &mut ui, &mut out.targets, self.catalog.scroll, region);
+            let bottom =
+                self.wardrobe
+                    .draw(art, &mut ui, &mut out.targets, self.catalog.scroll, region);
             view.finish_page(&mut ui, start, first, region, bottom, &mut out);
         }
         if self.home_state.drawer {
@@ -535,21 +533,8 @@ impl Launcher {
         if let Some(menu) = &self.home_state.menu {
             menu.draw(art, &mut ui, &mut out);
         }
-        if let Some(form) = self.home_state.form_view() {
+        if let Some(form) = self.home_state.form_view(c.profile == 0) {
             form.draw(art, &mut ui, &mut out, self.catalog.editing);
-        }
-        if let Some(c) = &self.home_state.confirm {
-            dialog(
-                art,
-                &mut ui,
-                &mut out,
-                &c.title,
-                &c.note,
-                &[
-                    ("Cancel", Action::Dismiss, Kind::Secondary),
-                    (&c.label, c.action, Kind::Danger),
-                ],
-            );
         }
         if let Some(i) = self.home_state.viewer
             && let Some(shot) = self.home_state.shots.get(i)
@@ -564,6 +549,19 @@ impl Launcher {
             );
         }
         let art = &self.home_state.art;
+        if let Some(c) = &self.home_state.confirm {
+            dialog(
+                art,
+                &mut ui,
+                &mut out,
+                &c.title,
+                &c.note,
+                &[
+                    ("Cancel", Action::Dismiss, Kind::Secondary),
+                    (&c.label, c.action, Kind::Danger),
+                ],
+            );
+        }
         self.targets = std::mem::take(&mut out.targets);
         self.list_targets = std::mem::take(&mut out.list);
         self.list_view = out.scroll;
@@ -665,10 +663,13 @@ impl Launcher {
     /// What Back closes first; false when nothing is open.
     pub(super) fn close_overlay(&mut self) -> bool {
         let h = &mut self.home_state;
+        if h.confirm.take().is_some() {
+            return true;
+        }
         if h.viewer.take().is_some() {
             return true;
         }
-        if h.confirm.take().is_some() || h.menu.take().is_some() || h.form.take().is_some() {
+        if h.menu.take().is_some() || h.form.take().is_some() {
             self.catalog.editing = None;
             crate::platform::hide();
             return true;
@@ -769,51 +770,63 @@ impl Launcher {
         });
     }
 
+    /// A world's data packs, in the chooser: any number of them scrolls.
     fn pack_menu(&mut self, world: usize) {
         let h = &mut self.home_state;
+        h.menu = None;
         let Some(w) = h.worlds.get(world) else {
             return;
         };
         h.pack_world = world;
         h.packs = crate::datapacks::list(&w.path);
-        let rows: Vec<_> = h
+        h.data_world = Some(world);
+        let mut rows: Vec<_> = h
             .packs
             .iter()
             .enumerate()
-            .map(|(i, p)| MenuRow {
-                icon: "delete-02",
-                label: format!("Remove {}", p.file),
-                action: Action::RemoveDataPack(i),
-                danger: true,
+            .map(|(i, p)| {
+                (
+                    format!("Remove {}", p.file),
+                    if p.enabled {
+                        p.description.clone()
+                    } else {
+                        format!("Off · {}", p.description)
+                    },
+                    Action::RemoveDataPack(i),
+                    false,
+                )
             })
-            .chain(std::iter::once(MenuRow {
-                icon: "search-01",
-                label: "Find data packs".into(),
-                action: Action::Page(Page::DataPacks),
-                danger: false,
-            }))
             .collect();
-        h.data_world = Some(world);
-        h.menu = Some(Menu {
-            title: format!("{}: data packs", w.name),
-            note: if h.packs.is_empty() {
-                "None yet. The game turns a new one on when the world opens.".into()
-            } else {
-                format!("{} in this world.", h.packs.len())
-            },
+        rows.push((
+            "Find data packs".to_owned(),
+            "Modrinth, into this world".to_owned(),
+            Action::Page(Page::DataPacks),
+            false,
+        ));
+        self.chooser = Some(chooser::Chooser::list(
+            "Data packs",
+            "The game turns a new one on when the world opens.",
             rows,
-        });
+        ));
+    }
+
+    /// Plays once with the world or server just set; forgets it if the game didn't start.
+    fn play_once(&mut self, events: &ActiveEventLoop) -> Result<()> {
+        let result = self.action(events);
+        if self.game.is_none() && self.session_worker.is_none() {
+            self.home_state.once_world = None;
+            self.home_state.once_server = None;
+        }
+        result
     }
 
     /// Does `action` if it's one of the glass launcher's own; false for the older ones.
-    pub(super) fn home_action(
-        &mut self,
-        action: Action,
-        events: &ActiveEventLoop,
-    ) -> Result<bool> {
+    pub(super) fn home_action(&mut self, action: Action, events: &ActiveEventLoop) -> Result<bool> {
         let game = self.game();
         match action {
             Action::Home(tab) => {
+                self.catalog.editing = None;
+                crate::platform::hide();
                 self.home_state.tab = tab;
                 self.reload_home();
                 self.catalog.refresh(&self.home);
@@ -824,11 +837,13 @@ impl Launcher {
             }
             Action::Drawer => self.home_state.drawer ^= true,
             Action::Link(name) => {
-                let url = match name {
-                    "repository" => "https://github.com/Vasysik/horizon-android".to_owned(),
-                    name => links()[name].as_str().unwrap_or_default().to_owned(),
+                let url = links()[name].as_str().unwrap_or_default().to_owned();
+                let opened = if name == "repository" {
+                    crate::platform::open_repository()
+                } else {
+                    !url.is_empty() && crate::platform::open_url(&url)
                 };
-                if url.is_empty() || !crate::platform::open_url(&url) {
+                if !opened {
                     self.catalog.status = "No browser available to open that link.".into();
                 }
             }
@@ -922,7 +937,7 @@ impl Launcher {
                 self.home_state.menu = None;
                 if let Some(world) = self.home_state.worlds.get(i) {
                     self.home_state.once_world = Some(world.folder.clone());
-                    self.action(events)?;
+                    self.play_once(events)?;
                 }
             }
             Action::BackupWorld(i) => {
@@ -969,8 +984,8 @@ impl Launcher {
             }
             Action::WorldPacks(i) => self.pack_menu(i),
             Action::RemoveDataPack(i) => {
+                self.chooser = None;
                 let h = &mut self.home_state;
-                h.menu = None;
                 if let Some(pack) = h.packs.get(i) {
                     h.pending = i;
                     h.confirm = Some(Confirm {
@@ -984,7 +999,8 @@ impl Launcher {
             Action::ConfirmRemoveDataPack => {
                 let h = &mut self.home_state;
                 h.confirm = None;
-                if let (Some(pack), Some(world)) = (h.packs.get(h.pending), h.worlds.get(h.pack_world))
+                if let (Some(pack), Some(world)) =
+                    (h.packs.get(h.pending), h.worlds.get(h.pack_world))
                 {
                     self.catalog.status = match crate::datapacks::remove(&world.path, pack) {
                         Ok(()) => format!("Removed {}.", pack.file),
@@ -998,21 +1014,23 @@ impl Launcher {
                     .worlds
                     .iter()
                     .enumerate()
-                    .map(|(i, w)| MenuRow {
-                        icon: "earth",
-                        label: w.name.clone(),
-                        action: Action::PickDataPackWorld(i + 1),
-                        danger: false,
+                    .map(|(i, w)| {
+                        (
+                            w.name.clone(),
+                            data::size(w.size),
+                            Action::PickDataPackWorld(i + 1),
+                            self.home_state.data_world == Some(i),
+                        )
                     })
                     .collect();
-                self.home_state.menu = Some(Menu {
-                    title: "Into which world?".into(),
-                    note: String::new(),
+                self.chooser = Some(chooser::Chooser::list(
+                    "Into which world?",
+                    "A data pack goes into one world.",
                     rows,
-                });
+                ));
             }
             Action::PickDataPackWorld(n) => {
-                self.home_state.menu = None;
+                self.chooser = None;
                 self.home_state.data_world = Some(n - 1);
             }
             Action::WorldsFolder => {
@@ -1032,12 +1050,11 @@ impl Launcher {
             Action::JoinServer(i) => {
                 if let Some(server) = self.home_state.servers.get(i) {
                     self.home_state.once_server = Some(server.ip.clone());
-                    self.action(events)?;
+                    self.play_once(events)?;
                 }
             }
             Action::AddServer => {
-                self.home_state.form =
-                    Some((FormKind::AddServer, String::new(), String::new(), 0));
+                self.home_state.form = Some((FormKind::AddServer, String::new(), String::new(), 0));
             }
             Action::RemoveServer(i) => {
                 if let Some(server) = self.home_state.servers.get(i) {
@@ -1074,7 +1091,7 @@ impl Launcher {
                         Some(format!("{}{code}", horizon_friends::ADDRESS_PREFIX));
                     self.catalog.editing = None;
                     crate::platform::hide();
-                    self.action(events)?;
+                    self.play_once(events)?;
                 }
             }
             Action::OpenShot(i) => self.home_state.viewer = Some(i),
@@ -1151,7 +1168,6 @@ impl Launcher {
             Action::PlainGlass => {
                 self.catalog.config.plain_plates ^= true;
                 self.catalog.config.save(&self.home)?;
-                self.home_state.art = glass::Art::default();
             }
             Action::StillScene => {
                 self.catalog.config.still_scene ^= true;
@@ -1193,7 +1209,7 @@ impl Launcher {
 }
 
 impl Home {
-    fn form_view(&self) -> Option<Form> {
+    fn form_view(&self, first: bool) -> Option<Form> {
         let (kind, a, b, hue) = self.form.as_ref()?;
         let cancel = ("Cancel".to_owned(), Action::Dismiss, Kind::Secondary);
         Some(match kind {
@@ -1215,17 +1231,16 @@ impl Home {
                     ),
                 ],
                 hues: None,
-                buttons: vec![
-                    cancel,
-                    ("Add".into(), Action::SaveServer, Kind::Primary),
-                ],
+                buttons: vec![cancel, ("Add".into(), Action::SaveServer, Kind::Primary)],
             },
             kind => {
                 let editing = *kind == FormKind::EditInstance;
                 let mut buttons = vec![cancel];
                 if editing {
                     buttons.push(("Copy".into(), Action::CopyInstance, Kind::Secondary));
-                    buttons.push(("Delete".into(), Action::DeleteInstance, Kind::Danger));
+                    if !first {
+                        buttons.push(("Delete".into(), Action::DeleteInstance, Kind::Danger));
+                    }
                 }
                 buttons.push((
                     if editing { "Save" } else { "Create" }.into(),
@@ -1244,12 +1259,7 @@ impl Home {
                     } else {
                         "Its own worlds, options and packs.".into()
                     },
-                    fields: vec![(
-                        "Name".into(),
-                        "instance_name",
-                        a.clone(),
-                        "A name".into(),
-                    )],
+                    fields: vec![("Name".into(), "instance_name", a.clone(), "A name".into())],
                     hues: Some(*hue),
                     buttons,
                 }

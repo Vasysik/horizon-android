@@ -3,6 +3,8 @@ use super::{
     login::Login,
     pages::{Action, button},
 };
+use crate::launcher_glass::{Art, Kind as Look, paragraph, white};
+use crate::launcher_tokens::{ink, radius};
 use crate::{
     account::{Accounts, Provider},
     skins::{
@@ -11,8 +13,6 @@ use crate::{
         preview,
     },
 };
-use crate::launcher_glass::{Art, Kind as Look, paragraph, white};
-use crate::launcher_tokens::{ink, radius};
 use horizon_client::{
     hud::rgba,
     ui_theme::{Face, Ui},
@@ -399,7 +399,14 @@ impl Wardrobe {
         let compact = width < 620.0;
         let top = ay + 8.0 - scroll;
         let size = if compact { 34.0 } else { 46.0 };
-        ui.text(Face::Display, size, ax + 4.0, top + 8.0, white(ink::FULL), "Skins");
+        ui.text(
+            Face::Display,
+            size,
+            ax + 4.0,
+            top + 8.0,
+            white(ink::FULL),
+            "Skins",
+        );
         let intro = top + 8.0 + size * 1.45;
         let intro_h = paragraph(
             ui,
@@ -415,10 +422,11 @@ impl Wardrobe {
         let preview_width = if compact { width } else { 300.0 };
         let preview_height = if compact { 300.0 } else { 380.0 };
         let px = ax;
-        self.rect = [px, py, preview_width, preview_height];
+        // Only the picture turns with a finger; the buttons under it stay buttons.
+        self.rect = [px, py, preview_width, preview_height - 96.0];
         art.plate(
             ui,
-            self.rect,
+            [px, py, preview_width, preview_height],
             radius::PANEL,
             crate::launcher_glass::Plate::Glass,
         );
@@ -437,20 +445,20 @@ impl Wardrobe {
         }
         let controls = py + preview_height - 86.0;
         let each = (preview_width - 24.0 - 24.0) / 4.0;
-        for (i, (icon, action)) in [
-            ("arrow-right-01", Action::WardrobeRotate(-1)),
-            ("refresh", Action::WardrobeRotate(1)),
-            ("minus-sign", Action::WardrobeZoom(false)),
-            ("plus-sign", Action::WardrobeZoom(true)),
+        for (i, (label, action)) in [
+            ("<", Action::WardrobeRotate(-1)),
+            (">", Action::WardrobeRotate(1)),
+            ("-", Action::WardrobeZoom(false)),
+            ("+", Action::WardrobeZoom(true)),
         ]
         .into_iter()
         .enumerate()
         {
-            art.icon_button(
+            button(
                 ui,
                 targets,
                 [px + 12.0 + i as f32 * (each + 8.0), controls, each, 36.0],
-                icon,
+                label,
                 action,
                 false,
             );
@@ -478,7 +486,11 @@ impl Wardrobe {
         } else {
             (ax + preview_width + 12.0, width - preview_width - 12.0)
         };
-        let listtop = if compact { py + preview_height + 12.0 } else { py };
+        let listtop = if compact {
+            py + preview_height + 12.0
+        } else {
+            py
+        };
         let panel_start = ui.batch.vertices.len();
         let (ix, iw) = (lx + 12.0, lw - 24.0);
         let mut row = listtop + 12.0;
@@ -525,7 +537,11 @@ impl Wardrobe {
                     &format!(
                         "{} · cloud{}",
                         cape.title,
-                        if cape.active { " · active" } else { " · activate" }
+                        if cape.active {
+                            " · active"
+                        } else {
+                            " · activate"
+                        }
                     ),
                     Action::WardrobeActivateCape(index),
                     cape.active,
@@ -543,7 +559,11 @@ impl Wardrobe {
             let on = selected == Some(&item.id);
             entry(
                 ui,
-                &format!("{} · local{}", item.title, if on { " · selected" } else { "" }),
+                &format!(
+                    "{} · local{}",
+                    item.title,
+                    if on { " · selected" } else { "" }
+                ),
                 Action::WardrobeSelect(index),
                 on,
                 &mut row,
@@ -565,7 +585,13 @@ impl Wardrobe {
                 false,
                 &mut row,
             );
-            entry(ui, "Refresh cloud profile", Action::WardrobeCloud, false, &mut row);
+            entry(
+                ui,
+                "Refresh cloud profile",
+                Action::WardrobeCloud,
+                false,
+                &mut row,
+            );
             if !self.capes {
                 entry(
                     ui,

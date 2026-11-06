@@ -239,7 +239,6 @@ pub fn coverage(file: &Path) -> Result<Coverage, String> {
     Ok(Coverage { read, unread })
 }
 
-
 /// A zip's entry name: the app's zip crate gives it plain, the launcher's as a `Result`.
 trait EntryName {
     fn read(self) -> Result<String, String>;

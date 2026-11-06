@@ -44,16 +44,19 @@ mod desktop_seams {
 }
 #[path = "android/launcher_data.rs"]
 mod launcher_data;
+#[allow(dead_code)]
 #[path = "android/launcher_glass.rs"]
 mod launcher_glass;
 #[allow(dead_code)]
 #[path = "android/launcher_scene.rs"]
 mod launcher_scene;
+#[allow(dead_code)]
 #[path = "android/launcher_servers.rs"]
 mod server_list;
 #[allow(dead_code)]
 #[path = "android/launcher_tokens.rs"]
 mod launcher_tokens;
+#[allow(dead_code)]
 #[path = "android/launcher_view.rs"]
 mod launcher_view;
 use launcher_data::packs;

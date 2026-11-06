@@ -596,8 +596,7 @@ impl ApplicationHandler for Launcher {
                 }
             }
             WindowEvent::Ime(winit::event::Ime::Commit(text)) => {
-                self.catalog
-                    .edit(horizon_client::osk::Output::Text(text), &self.home);
+                self.edit_text(horizon_client::osk::Output::Text(text));
                 Ok(())
             }
             _ => Ok(()),

@@ -66,9 +66,15 @@ impl Sheet {
         let n = side as usize;
         let mut out = Vec::with_capacity(n * n * 4);
         for y in 0..n {
-            let (y0, y1) = (y * ICON_CELL / n, ((y + 1) * ICON_CELL / n).max(y * ICON_CELL / n + 1));
+            let (y0, y1) = (
+                y * ICON_CELL / n,
+                ((y + 1) * ICON_CELL / n).max(y * ICON_CELL / n + 1),
+            );
             for x in 0..n {
-                let (x0, x1) = (x * ICON_CELL / n, ((x + 1) * ICON_CELL / n).max(x * ICON_CELL / n + 1));
+                let (x0, x1) = (
+                    x * ICON_CELL / n,
+                    ((x + 1) * ICON_CELL / n).max(x * ICON_CELL / n + 1),
+                );
                 let mut sum = 0u32;
                 for sy in y0..y1 {
                     for sx in x0..x1 {
@@ -107,11 +113,8 @@ impl Baked {
             let mut out = Vec::with_capacity((size.0 * size.1 * 4) as usize);
             for y in 0..size.1 {
                 for x in 0..size.0 {
-                    let c = backdrop.at(
-                        float,
-                        (f64::from(x) + 0.5) * px,
-                        (f64::from(y) + 0.5) * px,
-                    );
+                    let c =
+                        backdrop.at(float, (f64::from(x) + 0.5) * px, (f64::from(y) + 0.5) * px);
                     let mixed =
                         [0, 1, 2].map(|i| ((plate[i] * a + c[i] * (1. - a)) * 255.).round() as u8);
                     out.extend_from_slice(&[mixed[0], mixed[1], mixed[2], 255]);
@@ -146,7 +149,7 @@ pub struct Art {
     /// Hold the stars and fireflies still.
     pub still: bool,
     baked: Option<Baked>,
-    key: (u32, u32, u32),
+    key: (u32, u32, u32, bool),
     /// Bumped when a picture changes, so the atlas's copy is asked for again.
     generation: u64,
     sheet: Option<Sheet>,
@@ -159,7 +162,7 @@ impl Default for Art {
             plain: false,
             still: false,
             baked: None,
-            key: (0, 0, 0),
+            key: (0, 0, 0, false),
             generation: 0,
             sheet: Sheet::load(),
             start: Instant::now(),
@@ -175,8 +178,13 @@ impl Art {
     /// Bakes the scene for this screen and `accent`, when either changed. Call with the whole
     /// screen's size before anything draws.
     pub fn prepare(&mut self, width: f32, height: f32, accent: u32) {
-        let key = (width.round() as u32, height.round() as u32, accent);
-        if self.key != key || (self.baked.is_none() && !self.plain) {
+        let key = (
+            width.round() as u32,
+            height.round() as u32,
+            accent,
+            self.plain,
+        );
+        if self.key != key {
             self.key = key;
             self.look = Glass::new(accent, tokens::TINT, tokens::BLUR);
             self.generation += 1;
@@ -241,7 +249,11 @@ impl Art {
         let (sw, sh) = (ui.batch.width * s, ui.batch.height * s);
         let (x0, y0) = ((x * d).round(), (y * d).round());
         let (x1, y1) = (((x + w) * d).round(), ((y + h) * d).round());
-        let rp = (r * d).round().min((x1 - x0) / 2.).min((y1 - y0) / 2.).max(0.);
+        let rp = (r * d)
+            .round()
+            .min((x1 - x0) / 2.)
+            .min((y1 - y0) / 2.)
+            .max(0.);
         let mut part = |a: f32, b: f32, c: f32, e: f32, alpha: f32| {
             if c <= a || e <= b {
                 return;
@@ -249,7 +261,12 @@ impl Art {
             let u = |v: f32| image.u0 + (image.u1 - image.u0) * (v / sw);
             let v = |v: f32| image.v0 + (image.v1 - image.v0) * (v / sh);
             ui.batch.quad(
-                [[a / s, b / s], [c / s, b / s], [c / s, e / s], [a / s, e / s]],
+                [
+                    [a / s, b / s],
+                    [c / s, b / s],
+                    [c / s, e / s],
+                    [a / s, e / s],
+                ],
                 [[u(a), v(b)], [u(c), v(b)], [u(c), v(e)], [u(a), v(e)]],
                 white(alpha),
             );
@@ -560,7 +577,11 @@ impl Art {
             w,
             h,
             radius::ROW,
-            white(if focused { fill::FIELD_FOCUS } else { fill::FIELD }),
+            white(if focused {
+                fill::FIELD_FOCUS
+            } else {
+                fill::FIELD
+            }),
         );
         let mut left = x + 12.;
         if let Some(name) = icon {
@@ -569,7 +590,12 @@ impl Art {
         }
         let room = (x + w - left - 12.).max(8.);
         let empty = value.is_empty();
-        let shown = ui.fit_text(Face::Regular, 14., if empty { placeholder } else { value }, room);
+        let shown = ui.fit_text(
+            Face::Regular,
+            14.,
+            if empty { placeholder } else { value },
+            room,
+        );
         let width = ui.text(
             Face::Regular,
             14.,
@@ -601,7 +627,14 @@ impl Art {
         ui.rounded(x, y, w, h, h / 2., white(fill::SELECTED));
         let done = (w * value.clamp(0., 1.)).max(0.);
         if done > 0. {
-            ui.rounded(x, y, done.max(h), h, h / 2., hex(self.look.accent_soft, 255));
+            ui.rounded(
+                x,
+                y,
+                done.max(h),
+                h,
+                h / 2.,
+                hex(self.look.accent_soft, 255),
+            );
         }
     }
 }
@@ -790,9 +823,7 @@ pub fn clip(ui: &mut Ui, start: usize, rect: [f32; 4]) {
 /// The picture `key`, from a PNG's bytes already decoded by [`decode_png`], scaled to fit.
 pub fn picture(ui: &mut Ui, key: u64, rgba: &Pixels, rect: [f32; 4]) {
     let [x, y, w, h] = rect;
-    if let Some(image) = ui.image(hash(5, key, 0), || {
-        Some((rgba.0, rgba.1, rgba.2.clone()))
-    }) {
+    if let Some(image) = ui.image(hash(5, key, 0), || Some((rgba.0, rgba.1, rgba.2.clone()))) {
         draw_rect(ui, image, x, y, w, h);
     }
 }
