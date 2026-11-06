@@ -51,8 +51,9 @@ fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color
     let block = max(f32(light.y), horizon_terrain_dynamic_block_light(position + origin));
     let sky = f32(light.x);
     let light_norm = min(vec2(block, sky) / 240.0, vec2(1.0));
-    let pos = horizon_vertex_move(VertexInput(position + origin, position, uv, color.rgb, light_norm,
-        horizon_sprite_tags(layer & 0x7fffu), horizon_sprite_material(layer & 0x7fffu), face, fluid, emission));
+    let pos = horizon_vertex_move(VertexInput(position + origin, uv,
+        horizon_sprite_material(layer & 0x7fffu), light_norm, vec4(color.rgb, 1.0), face, u32(fluid),
+        position, horizon_sprite_tags(layer & 0x7fffu), emission));
     var out: HorizonMaterialOut;
     out.clip = horizon_terrain_globals.view_proj * vec4(pos, 1.0);
     out.uv = uv;
@@ -88,6 +89,12 @@ fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color
 // in the pack's frame group (3), one array each, a blank 1x1 without them.
 @group(3) @binding(12) var horizon_pbr_normals: texture_2d_array<f32>;
 @group(3) @binding(13) var horizon_pbr_specular: texture_2d_array<f32>;
+fn horizon_block_sprite(uv: vec2<f32>, layer: u32, lod: f32) -> vec4<f32> {
+    return horizon_terrain_sprite(uv, layer & 0x7fffu);
+}
+fn horizon_block_sprite_size() -> vec2<f32> {
+    return vec2<f32>(textureDimensions(horizon_terrain_sprites_0).xy);
+}
 fn horizon_block_pbr_present() -> bool {
     return textureDimensions(horizon_pbr_normals).x > 1u;
 }
@@ -115,10 +122,11 @@ fn horizon_material_color(in: HorizonMaterialOut, translucent: bool) -> vec4<f32
     let fluid = select(0u, select(2u, 1u, translucent), in.fluid_quad != 0u);
     let normal = horizon_material_normal(in.position);
     let tangent = horizon_material_tangent(in.position, in.uv, normal);
+    let colored_light = horizon_terrain_native_colored_light(in.position);
     return material(MaterialInput(albedo, in.tint, in.light, in.lightmap, in.position, in.uv,
         translucent, horizon_sprite_tags(in.layer & 0x7fffu),
         horizon_sprite_material(in.layer & 0x7fffu), in.clip.xy / frame.resolution,
-        in.face, fluid, in.emission, normal, tangent)).color;
+        in.face, fluid, in.emission, normal, tangent, colored_light, 0.0)).color;
 }
 @fragment fn horizon_material_fs_solid(in: HorizonMaterialOut) -> @location(0) vec4<f32> {
     let color = horizon_material_color(in, false);
@@ -419,7 +427,7 @@ mod tests {
         let tags = [(7, 1), (3, 1), (9, 2)];
         let materials = [(5, 1000)];
         assert!(layer_table("t", &tags).contains("case 3u, 7u: { return 1u; }"));
-        let module = module(&stage, &tags, &materials).unwrap();
+        let module = module(&stage, None, &tags, &materials).unwrap();
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -428,7 +436,7 @@ mod tests {
         .unwrap_or_else(|e| {
             panic!(
                 "{}",
-                e.emit_to_string(&shader_source(&stage.source, &tags, &materials))
+                e.emit_to_string(&shader_source(&stage.source, None, &tags, &materials))
             )
         });
         let entries: Vec<&str> = module

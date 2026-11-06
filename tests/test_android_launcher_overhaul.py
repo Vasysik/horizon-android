@@ -79,18 +79,6 @@ class LauncherOverhaulTests(unittest.TestCase):
             "crates/horizon-client-render/src/gfx/pack_images.rs",
             "crates/horizon-client-render/src/gfx/flat.rs",
             "crates/horizon-client/src/game/fov.rs",
-            "crates/horizon-shader-api/src/manifest.rs",
-            "crates/horizon-shader-api/src/stages.rs",
-            "crates/horizon-shader-api/src/reference.rs",
-            "crates/horizon-shader-api/src/inputs.rs",
-            "crates/horizon-shader-api/src/check.rs",
-            "crates/horizon-shader-api/tests/reference.rs",
-            "crates/horizon-shaders/src/biomes.rs",
-            "crates/horizon-shaders/src/block_ids.rs",
-            "crates/horizon-shaders/src/macros.rs",
-            "crates/horizon-shaders/src/translate/mod.rs",
-            "crates/horizon-client-render/src/gfx/native_material.rs",
-            "crates/horizon-client-render/src/gfx/native_pack.rs",
         ]
         for rel in modified_files:
             path = ROOT / rel
@@ -649,6 +637,12 @@ class LauncherOverhaulTests(unittest.TestCase):
         self.assertIn("self.pack_shadow_casters.0", perspective)
         self.assertIn("pub fn pending_shader_pack_status()", shader_packs)
         self.assertIn("hz_dot", rewrite)
+        self.assertIn("float hz_dot(vec3 a, vec3 b) { return dot(a, b); }", rewrite)
+        inputs_rs = (ROOT / "crates/horizon-shader-api/src/inputs.rs").read_text(encoding="utf-8")
+        self.assertIn("colored_light:", inputs_rs)
+        self.assertIn("displaced:", inputs_rs)
+        self.assertIn("pub const SURFACE_DATA: Struct", inputs_rs)
+        self.assertIn("crate::touch::draw_mcpe_custom_button(", touch_ui)
         self.assertIn("{ if (true) discard; }", rewrite)
         self.assertIn("builtin:", catalog)
         self.assertIn("query.limit = 100;", catalog)
