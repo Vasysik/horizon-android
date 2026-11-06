@@ -439,7 +439,6 @@ use engine::{Block, Config, Host, Player, Position, Runtime, Tool};
 pub(super) struct State {
     runtime: Runtime,
     config: Option<Config>,
-    global_enabled: Option<bool>,
 }
 
 thread_local! {
@@ -578,10 +577,7 @@ impl Host for Native<'_, '_> {
 }
 impl Game<'_> {
     pub(super) fn veinminer_set_global_enabled(&mut self, enabled: bool) {
-        with_state(self, |game, state| {
-            game.native_set_setting(ID, "enabled", if enabled { "true" } else { "false" });
-            state.global_enabled = Some(enabled);
-        });
+        self.native_set_setting(ID, "enabled", if enabled { "true" } else { "false" });
     }
 
     pub(super) fn veinminer_break_block(&mut self, pos: Position) -> Result<()> {
@@ -594,9 +590,7 @@ impl Game<'_> {
                     config
                 }));
             }
-            let enabled = *state.global_enabled.get_or_insert_with(|| {
-                game.native_setting(ID, "enabled").as_deref() != Some("false")
-            });
+            let enabled = game.native_setting(ID, "enabled").as_deref() != Some("false");
             let mut config = state.config.as_ref().unwrap().clone();
             if !enabled {
                 config.settings.enabled = false;
@@ -615,9 +609,7 @@ impl Game<'_> {
             }
             let args: Vec<_> = words.collect();
             let actor = game.acting_player_uuid();
-            let globally_enabled = *state.global_enabled.get_or_insert_with(|| {
-                game.native_setting(ID, "enabled").as_deref() != Some("false")
-            });
+            let globally_enabled = game.native_setting(ID, "enabled").as_deref() != Some("false");
             let message = match args.as_slice() {
                 [] | ["status"] => {
                     if !globally_enabled {
