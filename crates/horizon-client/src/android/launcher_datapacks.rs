@@ -4,7 +4,7 @@
 //! the game discovers them (`datapack::discover`). The game turns on every pack it finds there
 //! that `<world>/datapacks.json` doesn't list as disabled, when the world opens or on `/reload`,
 //! so adding one is copying it in.
-use crate::packs::{entry, plain};
+use crate::launcher_data::packs::{entry, plain};
 use std::fs;
 use std::path::{Path, PathBuf};
 

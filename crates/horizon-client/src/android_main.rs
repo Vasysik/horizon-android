@@ -57,7 +57,6 @@ mod launcher_tokens;
 #[allow(dead_code)]
 #[path = "android/launcher_view.rs"]
 mod launcher_view;
-use launcher_data::packs;
 #[rustfmt::skip]
 #[allow(dead_code)]
 #[path = "../../../launcher/src/screenshots.rs"]
