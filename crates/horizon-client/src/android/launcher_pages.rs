@@ -58,6 +58,7 @@ pub(super) enum Action {
     PerformanceHints,
     GpuProfile,
     FpsCap,
+    PerfPreset,
 }
 
 /// Is `point` (dp) inside `rect`?
@@ -892,11 +893,11 @@ impl Launcher {
             self.catalog.scroll = self
                 .catalog
                 .scroll
-                .clamp(0.0, (16.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
+                .clamp(0.0, (17.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
             self.list_view = Some([
                 195.0,
                 h - 130.0,
-                (16.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
+                (17.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
             ]);
             for (i, (title, value, action)) in [
                 ("Rendering", c.renderer.label().to_owned(), Action::Renderer),
@@ -945,6 +946,11 @@ impl Launcher {
                     }
                     .into(),
                     Action::FpsCap,
+                ),
+                (
+                    "Graphics preset",
+                    c.perf_preset.label().to_owned(),
+                    Action::PerfPreset,
                 ),
                 (
                     "Performance hints",
@@ -1320,6 +1326,20 @@ impl Launcher {
                     "Frame rate uncapped: VSync off from the next launch. A 60 Hz screen still shows at most 60 fps."
                 } else {
                     "VSync on from the next launch: frames pace with the display."
+                }
+                .into();
+            }
+            Some(Action::PerfPreset) => {
+                self.catalog.config.perf_preset = self.catalog.config.perf_preset.next();
+                self.catalog.config.save(&self.home)?;
+                let game = self.catalog.config.game_home(&self.home);
+                self.catalog.config.apply_performance(&game);
+                self.catalog.status = if self.catalog.config.perf_preset
+                    == crate::catalog::PerfPreset::Off
+                {
+                    "Graphics preset off: the game's own Options decide."
+                } else {
+                    "Preset written to the game options. Settings you change in-game stay until a preset is picked here again."
                 }
                 .into();
             }

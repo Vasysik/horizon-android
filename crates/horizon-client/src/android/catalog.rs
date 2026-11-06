@@ -33,6 +33,52 @@ impl RendererMode {
     }
 }
 
+/// The graphics preset the launcher writes into the game's options: the
+/// same bundles the game's own Options > Graphics preset applies
+/// (`horizon_client::graphics::apply_preset`), Sodium-style one-tap tuning
+/// for render distance, particles, shadows, biome blend and chunk updates.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PerfPreset {
+    /// The game's own Options decide; the launcher writes nothing.
+    #[default]
+    Off,
+    Performance,
+    Balanced,
+    Quality,
+    Ultra,
+}
+impl PerfPreset {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Game's own settings",
+            Self::Performance => "Performance (low-end)",
+            Self::Balanced => "Balanced",
+            Self::Quality => "Quality",
+            Self::Ultra => "Ultra",
+        }
+    }
+    /// The Settings row cycles through the choices in this order.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Performance,
+            Self::Performance => Self::Balanced,
+            Self::Balanced => Self::Quality,
+            Self::Quality => Self::Ultra,
+            Self::Ultra => Self::Off,
+        }
+    }
+    fn engine(self) -> Option<horizon_client::graphics::Preset> {
+        match self {
+            Self::Off => None,
+            Self::Performance => Some(horizon_client::graphics::Preset::Performance),
+            Self::Balanced => Some(horizon_client::graphics::Preset::Balanced),
+            Self::Quality => Some(horizon_client::graphics::Preset::Quality),
+            Self::Ultra => Some(horizon_client::graphics::Preset::Ultra),
+        }
+    }
+}
+
 /// The `fps_uncapped` default: no artificial frame ceiling on phones.
 fn default_uncapped() -> bool {
     true
@@ -69,6 +115,9 @@ pub struct Config {
     /// anyway, and players asked for no artificial ceiling.
     #[serde(default = "default_uncapped")]
     pub fps_uncapped: bool,
+    /// The graphics preset bundle the launcher writes into the game's
+    /// options; `Off` leaves the game's own choices alone.
+    pub perf_preset: PerfPreset,
     #[serde(flatten)]
     pub device: crate::device_preferences::Settings,
     pub shader_source: crate::shader_catalog::Origin,
@@ -205,6 +254,20 @@ impl Config {
         {
             settings.save(&path);
         }
+    }
+    /// Writes the chosen graphics preset into the game's options: the same
+    /// bundle the game's own Options applies (render and simulation
+    /// distance, clouds, particles, entity shadows and distance, biome
+    /// blend, mipmaps, leaf style, weather radius and Horizon's chunk
+    /// update tuning). `Off` writes nothing.
+    pub fn apply_performance(&self, game: &Path) {
+        let Some(preset) = self.perf_preset.engine() else {
+            return;
+        };
+        let path = game.join("options.txt");
+        let mut settings = horizon_client::settings::Settings::load(&path);
+        horizon_client::graphics::apply_preset(preset, &mut settings);
+        settings.save(&path);
     }
     pub fn profile_home(&self, home: &Path) -> PathBuf {
         if self.profile == 0 {
