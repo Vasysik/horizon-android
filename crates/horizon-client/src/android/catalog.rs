@@ -847,18 +847,18 @@ impl Catalog {
             }
         }
         // Include enabled built-in Horizon mods (ANDROID_BUNDLED) in Installed > Mods.
-        for b in ANDROID_BUNDLED {
-            if on.enabled.contains(b.id) && !on.disabled.contains(b.id) {
-                let b_file = format!("builtin:{}", b.id);
+        for &(b_id, b_title, b_desc) in &horizon_client::mod_list::ANDROID_BUNDLED {
+            if on.enabled.contains(b_id) && !on.disabled.contains(b_id) {
+                let b_file = format!("builtin:{b_id}");
                 if !self.local.iter().any(|item| item.file == b_file) {
                     self.local.push(LocalItem {
                         kind: horizon_client::content_files::Kind::Mods,
                         file: b_file,
-                        title: format!("{} ({})", b.title, b.version),
+                        title: b_title.to_owned(),
                         enabled: true,
                         size_bytes: 0,
                         badge: "MOD",
-                        subtitle: format!("Built-in Horizon Mod  •  {}  •  {}", b.author, b.id),
+                        subtitle: format!("Built-in Horizon Mod  •  {b_desc}  •  {b_id}"),
                     });
                 }
             }

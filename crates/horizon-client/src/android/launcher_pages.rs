@@ -6801,7 +6801,7 @@ impl Launcher {
             }
             Action::PointerSizeDelta(_) => {
                 let v = ((0.50 + t * 1.50) * 100.0).round() / 100.0;
-                self.modify_touch_settings(|ts| ts.virtual_mouse_size = v.clamp(0.50, 2.0));
+                self.modify_touch_settings(|ts| ts.virtual_mouse_pointer_scale = v.clamp(0.50, 2.0));
             }
             Action::GyroSensDelta(_) => {
                 let v = ((0.10 + t * 2.90) * 100.0).round() / 100.0;
