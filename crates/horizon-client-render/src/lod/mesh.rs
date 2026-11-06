@@ -16,6 +16,9 @@ pub(super) struct EdgeColumn<'a> {
     pub start: i32,
     pub end: i32,
     pub column: &'a Column,
+    /// The neighbour is planned but not drawn yet: its terrain is not known
+    /// to be empty, so the sides facing it are left out, not drawn as walls.
+    pub unknown: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -160,7 +163,14 @@ impl Mesher {
                 for slot in &mut faces {
                     let Some(face) = matching.next() else { break };
                     *slot = Some(Style {
-                        layer: face.layer as u16 | if leaves { OPAQUE_LAYER } else { 0 },
+                        // As the mesher marks them: opaque leaves and faces over opaque
+                        // texels skip the cutout and draw in the opaque pass.
+                        layer: face.layer as u16
+                            | if leaves || face.opaque {
+                                OPAQUE_LAYER
+                            } else {
+                                0
+                            },
                         tint: if face.quad.tint_index >= 0 {
                             tint
                         } else {
@@ -207,7 +217,12 @@ impl Mesher {
                     Paint {
                         layer: face.layer,
                         light: span.light,
-                        color: channel(16) | channel(8) << 8 | channel(0) << 16 | 0xff000000,
+                        // The HDR tier, as the section mesher writes it, so a light source
+                        // keeps shining across the LOD boundary.
+                        color: crate::mesher::emitting(
+                            channel(16) | channel(8) << 8 | channel(0) << 16 | 0xff000000,
+                            context.tables.hdr_tier(span.state),
+                        ),
                         translucent: face.translucent,
                     }
                 })
@@ -307,6 +322,7 @@ fn mesh_columns_with_neighbors(
                 start: row as i32 * stride,
                 end: (row as i32 + 1) * stride,
                 column,
+                unknown: false,
             })
             .collect()
     });
@@ -335,13 +351,19 @@ fn heightmap(column: &Column, mut fluid: impl FnMut(&Span) -> bool) -> Column {
         ..*span
     };
     let mut spans = Spans::with_capacity(2);
-    match below.last() {
-        Some(under) if fluid(top) => {
-            spans.push(ground(under));
-            spans.push(*top);
-        }
-        _ if fluid(top) => spans.push(*top),
-        _ => spans.push(ground(top)),
+    if !fluid(top) {
+        spans.push(ground(top));
+    } else if let Some(under) = below.iter().rev().find(|&span| !fluid(span)) {
+        // The bed is under all of the water, however many spans the water
+        // takes: a chunk's own columns shade it a span a light level, a
+        // previewed far column one span for the run.
+        spans.push(ground(under));
+        spans.push(Span {
+            min: under.max,
+            ..*top
+        });
+    } else {
+        spans.push(*top);
     }
     Column {
         surface: column.surface,
@@ -384,6 +406,7 @@ fn mesh_columns_with_edges(
                     start: edge.start,
                     end: edge.end,
                     column,
+                    unknown: edge.unknown,
                 })
                 .collect()
         });
@@ -648,6 +671,9 @@ fn mesh_columns_with_edges(
                                 // A coarse face can meet several finer columns.
                                 // Clip each interval independently to avoid missing walls.
                                 for (i, edge) in neighbors[edge_side].iter().enumerate() {
+                                    if edge.unknown {
+                                        continue;
+                                    }
                                     let start = u0.max(edge.start as f32);
                                     let end = u1.min(edge.end as f32);
                                     if start < end {
@@ -772,6 +798,70 @@ mod refinement_tests {
             );
         }
         assert_eq!(area, (parent.size() * parent.size() - 256) as f32);
+    }
+    /// A neighbour that is still to come draws no wall against it; an empty
+    /// one (out of range) does.
+    #[test]
+    fn unknown_neighbor_leaves_its_side_out() {
+        let key = TileKey {
+            x: 0,
+            z: 0,
+            level: 0,
+        };
+        let columns = vec![
+            Column {
+                surface: None,
+                spans: vec![Span {
+                    min: 0,
+                    max: 8,
+                    state: BlockStateId(1),
+                    biome: 0,
+                    light: 240,
+                }]
+                .into()
+            };
+            256
+        ];
+        let columns: Vec<&Column> = columns.iter().collect();
+        let empty = Column::default();
+        let east_quads = |unknown: bool| {
+            let edge = |column| EdgeColumn {
+                start: 0,
+                end: 16,
+                column,
+                unknown,
+            };
+            let neighbors = [Vec::new(), vec![edge(&empty)], Vec::new(), Vec::new()];
+            let mesh = mesh_columns_with_edges(
+                key,
+                &columns,
+                &FxHashSet::default(),
+                None,
+                &neighbors,
+                &[],
+                |_, _, _| Material {
+                    faces: [
+                        Some(Paint {
+                            layer: 1,
+                            light: 240,
+                            color: u32::MAX,
+                            translucent: false,
+                        }),
+                        None,
+                    ],
+                    fluid: 0,
+                    opaque: true,
+                },
+            );
+            mesh.solid
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|quad| quad.iter().all(|v| v.pos[0] == 16.0))
+                .count()
+        };
+        assert!(east_quads(false) > 0, "a wall faces the empty neighbour");
+        assert_eq!(east_quads(true), 0, "none faces the unknown one");
     }
 }
 
@@ -1430,6 +1520,7 @@ mod tests {
             start: 0,
             end: CELLS as i32,
             column: &hill_column,
+            unknown: false,
         };
         let neighbors = [vec![hill()], vec![hill()], vec![hill()], vec![hill()]];
         let fill = |columns: &[Column]| -> Vec<Vec<Span>> {
@@ -1571,6 +1662,7 @@ mod tests {
                 start: 0,
                 end: 32,
                 column: &columns[0],
+                unknown: false,
             }]
         });
         // One fine column is lower than both the coarse cell and its sibling.
@@ -1584,16 +1676,19 @@ mod tests {
                 start: 0,
                 end: 1,
                 column: &columns[0],
+                unknown: false,
             },
             EdgeColumn {
                 start: 1,
                 end: 2,
                 column: &low,
+                unknown: false,
             },
             EdgeColumn {
                 start: 2,
                 end: 32,
                 column: &columns[0],
+                unknown: false,
             },
         ];
         let columns: Vec<&Column> = columns.iter().collect();

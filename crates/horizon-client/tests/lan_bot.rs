@@ -2,6 +2,7 @@
 //! handshake, status, offline login, configuration (registries and tags),
 //! then the play state (login, chunks with light, player list, entities,
 //! block changes). Needs the prepared resources; skipped without them.
+extern crate horizon_client_lib as horizon_client;
 use horizon_client::{
     chunk::{Chunk, MIN_Y},
     lan::{
@@ -9,12 +10,13 @@ use horizon_client::{
         chunks::ChunkEncoder,
         data::SyncData,
         entity::EntityState,
-        hub::{HostEvent, HostState, Hub, HubConfig, TickCtx},
+        hub::{HostEvent, Hub, HubConfig, TickCtx},
     },
     world::World,
 };
 use horizon_protocol::{
     PROTOCOL_VERSION,
+    adapter::ServerVersion,
     connection::Connection,
     crypto::offline_uuid,
     packets::{
@@ -171,30 +173,8 @@ struct Server {
 }
 impl Server {
     fn tick(&mut self, entities: &[EntityState]) {
-        let host = HostState {
-            uuid: 42,
-            name: "Host".into(),
-            entity_id: 1,
-            position: [0.5, -59.0, 0.5],
-            yaw: 0.0,
-            pitch: 0.0,
-            head_yaw: 0.0,
-            on_ground: true,
-            game_mode: 1,
-            sneaking: false,
-            sprinting: false,
-            equipment: Default::default(),
-            health: 20.0,
-            shoulders: [None; 2],
-            attributes: Vec::new(),
-            bed: None,
-            living_flags: 0,
-            stuck: (0, 0),
-            body: Default::default(),
-        };
         let mut ctx = TickCtx {
             world: &mut self.world,
-            host: Some(&host),
             entities,
             next_entity: &mut self.next_entity,
             spawn: [8.5, f64::from(MIN_Y + 5), 8.5],
@@ -203,7 +183,7 @@ impl Server {
             clock_rate: 1.0,
             tick_rate: 20.0,
             tick_frozen: false,
-            tick_steps: (0, 0),
+            tick_steps: Default::default(),
             collision: None,
             border: &horizon_client::worldborder::WorldBorder::default(),
             streaming: None,
@@ -231,13 +211,20 @@ impl Server {
 }
 
 fn server(resources: &Path) -> Server {
-    server_with(resources, NetConfig::lan(0, "Test - World".into(), 8))
+    server_with(resources, NetConfig::loopback(0, "Test - World".into(), 8))
 }
 
 fn server_with(resources: &Path, net: NetConfig) -> Server {
-    let sync = Arc::new(
-        SyncData::load(resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
-    );
+    server_sync(
+        Arc::new(
+            SyncData::load(resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
+        ),
+        net,
+    )
+}
+
+/// A server over already-built sync data (a test's packs layered in).
+fn server_sync(sync: Arc<SyncData>, net: NetConfig) -> Server {
     let lan = Lan::start_with(sync.clone(), net).unwrap();
     let biomes: Vec<String> = sync
         .dynamic
@@ -263,8 +250,7 @@ fn server_with(resources: &Path, net: NetConfig) -> Server {
             hardcore: false,
             view_distance: 3,
             simulation_distance: 3,
-            dedicated: false,
-            integrated: false,
+            integrated: true,
             dimension: "minecraft:overworld".into(),
             seed: 1234,
             max_players: 8,
@@ -312,7 +298,7 @@ fn a_lan_guest_sees_the_signed_in_owners_skin() {
     let net = NetConfig {
         announce: false,
         owner_profile: Some(profile.clone()),
-        ..NetConfig::lan(0, "Test - World".into(), 8)
+        ..NetConfig::loopback(0, "Test - World".into(), 8)
     };
     let mut s = server_with(&resources, net);
     s.hub.singleplayer_owner = Some(offline_uuid("Owner"));
@@ -435,6 +421,174 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
             .is_err()
         );
     }
+}
+
+/// A server whose pack carries recipes with NeoForge's ingredient shapes:
+/// every guest that joins gets the shapes' items, not empty slots — the
+/// book lists the shaped recipe's compound, the furnace's and the
+/// stonecutter's input sets carry it — and no guest is disconnected over
+/// them (#6368).
+#[test]
+fn neoforge_shapes_items_reach_two_guests() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let compound = r#"{"type":"neoforge:compound",
+        "children":["minecraft:raw_copper","minecraft:redstone"]}"#;
+    let packs = vec![
+        (
+            "advancement/minecraft:recipes/compound_book".to_owned(),
+            vec![
+                br#"{"criteria":{"tick":{"trigger":"minecraft:tick"}},
+                "rewards":{"recipes":["minecraft:compound_book"]}}"#
+                    .to_vec(),
+            ],
+        ),
+        (
+            "recipe/minecraft:compound_book".to_owned(),
+            vec![
+                format!(
+                    r#"{{"type":"minecraft:crafting_shaped","pattern":["X"],
+                "key":{{"X":{compound}}},
+                "result":{{"id":"minecraft:copper_ingot"}}}}"#
+                )
+                .into_bytes(),
+            ],
+        ),
+        (
+            "recipe/minecraft:compound_smelting".to_owned(),
+            vec![
+                format!(
+                    r#"{{"type":"minecraft:smelting","ingredient":{compound},
+                "result":{{"id":"minecraft:copper_ingot"}}}}"#
+                )
+                .into_bytes(),
+            ],
+        ),
+        (
+            "recipe/minecraft:compound_stonecutting".to_owned(),
+            vec![
+                format!(
+                    r#"{{"type":"minecraft:stonecutting","ingredient":{compound},
+                "result":{{"id":"minecraft:copper_ingot"}}}}"#
+                )
+                .into_bytes(),
+            ],
+        ),
+    ];
+    let sync = Arc::new(
+        SyncData::load(
+            &resources,
+            &horizon_world::loot::PackOverlay { files: &packs },
+        )
+        .expect("sync data"),
+    );
+    let (raw_copper, redstone) = (
+        sync.id("minecraft:item", "minecraft:raw_copper").unwrap(),
+        sync.id("minecraft:item", "minecraft:redstone").unwrap(),
+    );
+    let mut s = server_sync(sync, NetConfig::loopback(0, "Test - World".into(), 8));
+    let port = s.hub.lan.port;
+    // Guest one joins first and stays while guest two joins and reads its
+    // own join packets, then guest one reads its own.
+    let mut one = run(&mut s, move || connect(port, "CompoundOne", true));
+    let expected = (raw_copper, redstone);
+    let _two_stays = run(&mut s, move || {
+        let mut two = connect(port, "CompoundTwo", true)?;
+        read_join_recipes(&mut two, expected, "guest two")?;
+        Ok(two)
+    });
+    assert_eq!(s.hub.guests.len(), 2, "both guests stay connected");
+    run(&mut s, move || {
+        read_join_recipes(&mut one, expected, "guest one")
+    });
+}
+
+/// Reads a fresh guest's packets until the recipe update and the book add
+/// arrived, checking the compound's items in each: the furnace's input
+/// set, a stonecutting entry's input, and the book entry's requirements.
+fn read_join_recipes(bot: &mut Bot, expected: (i32, i32), who: &str) -> Result<(), String> {
+    let (raw_copper, redstone) = expected;
+    let mut sets_ok = false;
+    let mut book_ok = false;
+    for _ in 0..400 {
+        let packet = bot.recv_play().map_err(|e| format!("{who}: {e}"))?;
+        match packet {
+            C::Unknown(id, payload)
+                if id == horizon_protocol::ids::play::clientbound::UPDATE_RECIPES =>
+            {
+                let mut r = horizon_protocol::buf::Reader::new(&payload);
+                let mut furnace_input = None;
+                let mut stonecutting = Vec::new();
+                for _ in 0..r.varint().map_err(|e| e.to_string())? {
+                    let key = r.string(64).map_err(|e| e.to_string())?;
+                    let ids: Vec<i32> = (0..r.varint().map_err(|e| e.to_string())?)
+                        .map(|_| r.varint().unwrap_or(-1))
+                        .collect();
+                    if key == "minecraft:furnace_input" {
+                        furnace_input = Some(ids);
+                    }
+                }
+                let furnace_input = furnace_input.expect("furnace_input set");
+                assert!(
+                    furnace_input.contains(&raw_copper) && furnace_input.contains(&redstone),
+                    "{who}: furnace_input holds the compound: first ids {:?}",
+                    &furnace_input[..furnace_input.len().min(8)]
+                );
+                for _ in 0..r.varint().map_err(|e| e.to_string())? {
+                    if let horizon_protocol::packets::recipes::HolderSet::Items(ids) =
+                        horizon_protocol::packets::recipes::HolderSet::read(&mut r)
+                            .map_err(|e| e.to_string())?
+                    {
+                        stonecutting.push(ids);
+                    }
+                    // The result's ItemStackSlotDisplay: its type, the item,
+                    // the count and the two empty component lists.
+                    for _ in 0..5 {
+                        r.varint().map_err(|e| e.to_string())?;
+                    }
+                }
+                assert!(
+                    stonecutting
+                        .iter()
+                        .any(|ids| ids.contains(&raw_copper) && ids.contains(&redstone)),
+                    "{who}: a stonecutting input holds the compound"
+                );
+                sets_ok = true;
+            }
+            C::RecipeBookAdd(add) => {
+                // sendInitialRecipeBook's own add arrives first, empty
+                // until the first tick rewards its recipes.
+                if add.entries.is_empty() {
+                    continue;
+                }
+                let compound = add.entries.iter().any(|e| {
+                    e.requirements.as_deref().unwrap_or(&[]).iter().any(|set| {
+                        matches!(set,
+                            horizon_protocol::packets::recipes::HolderSet::Items(ids)
+                            if ids.contains(&raw_copper) && ids.contains(&redstone))
+                    })
+                });
+                assert!(
+                    compound,
+                    "{who}: the book lists the compound recipe ({} entries: {:?})",
+                    add.entries.len(),
+                    add.entries
+                        .iter()
+                        .map(|e| e.requirements.clone())
+                        .collect::<Vec<_>>()
+                );
+                book_ok = true;
+            }
+            _ => {}
+        }
+        if sets_ok && book_ok {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "{who}: recipes {sets_ok} book {book_ok} never both arrived"
+    ))
 }
 
 #[test]
@@ -590,7 +744,7 @@ fn a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player() {
     let net = NetConfig {
         online: Some(Arc::new(OnlineMode::generate(false).unwrap())),
         announce: false,
-        ..NetConfig::lan(0, "Test - World".into(), 8)
+        ..NetConfig::loopback(0, "Test - World".into(), 8)
     };
     let lan = Lan::start_with(sync, net).unwrap();
     let guest = Connection::connect("127.0.0.1", lan.port, Duration::from_secs(5)).unwrap();
@@ -744,6 +898,29 @@ fn status_and_join() {
     // ServerStatus.CODEC writes a plain literal MOTD as a bare string.
     assert_eq!(v["description"], "Test - World");
 
+    // `DedicatedServer.setRepliesToStatus`: disabling it closes a fresh status handshake.
+    s.hub.lan.shared.set_enable_status(false);
+    let closed = run(&mut s, move || {
+        let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5))
+            .map_err(|e| e.to_string())?;
+        c.send(
+            &handshake::Serverbound::Intention(handshake::Intention {
+                protocol: PROTOCOL_VERSION,
+                host: "127.0.0.1".into(),
+                port,
+                intent: handshake::STATUS,
+            })
+            .encode(),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(c.recv().is_err())
+    });
+    assert!(
+        closed,
+        "status handshake should close when replies are disabled"
+    );
+    s.hub.lan.shared.set_enable_status(true);
+
     // Join, receive the world, place a block, see another player arrive.
     let report = run(&mut s, move || {
         let mut bot = connect(port, "Steve", true)?;
@@ -777,7 +954,7 @@ fn status_and_join() {
                 // forceGameTimeSynchronization sends no clocks and may come first.
                 C::SetTime(t) if !t.clocks.is_empty() => time = true,
                 C::PlayerInfoUpdate(u) => {
-                    info |= u.entries.iter().any(|e| e.name.as_deref() == Some("Host"));
+                    info |= u.entries.iter().any(|e| e.name.as_deref() == Some("Steve"));
                 }
                 C::Commands(_) => commands = true,
                 C::LevelChunkWithLight(l) => {
@@ -856,16 +1033,22 @@ fn guests_see_each_other_and_the_world_entities() {
         head_yaw: 0.0,
         on_ground: true,
         velocity: [0.0; 3],
+        minecart_steps: None,
         data: 0,
         meta: Vec::new(),
         defaults: Vec::new(),
         equipment: Vec::new(),
         attributes: Vec::new(),
         precise: false,
+        vertical_collision: false,
+        horizontal_collision: false,
         needs_sync: false,
+        idle: false,
+        bare: false,
         leash: None,
         spectator: false,
         watching: false,
+        hidden: None,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;
@@ -965,6 +1148,92 @@ fn guests_see_each_other_and_the_world_entities() {
     drop(second);
 }
 
+/// A menu opened with extra data (a mod menu type's, NeoForge's `openMenu`
+/// with an extra-data writer) reaches the client as a `horizon:menu_extra`
+/// payload naming the window and the block, right before that window's
+/// `OpenScreen`; a menu without it sends no payload.
+#[test]
+fn menu_extra_data_comes_right_before_its_menu() {
+    use horizon_client::{items::ItemStack, lan::menu::Slots};
+    use horizon_protocol::menu_extra;
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let bot = run(&mut s, move || connect(port, "Machinist", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    let conn = s.hub.guests[0].conn;
+    bot.c
+        .reader
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let key = (3, 70, -5);
+    let items: Vec<Option<ItemStack>> = vec![None; 9];
+    let title = || horizon_protocol::text::translatable("container.dispenser", &[]);
+    /// The packets up to the next `OpenScreen`: the menu extra payloads met
+    /// on the way, each with whether the screen came right after it, then
+    /// the screen's window.
+    type Extras = Vec<(menu_extra::Message, bool)>;
+    fn until_screen(mut bot: Bot) -> Result<(Bot, Extras, i32), String> {
+        let mut extras = Extras::new();
+        loop {
+            match bot.recv_play()? {
+                C::CustomPayload(p) if p.channel == menu_extra::CHANNEL => {
+                    let message = menu_extra::decode(&p.data).map_err(|e| e.to_string())?;
+                    extras.push((message, true));
+                }
+                C::OpenScreen(p) => return Ok((bot, extras, p.container)),
+                _ => {
+                    if let Some(last) = extras.last_mut() {
+                        last.1 = false;
+                    }
+                }
+            }
+        }
+    }
+    s.hub.open_container(
+        conn,
+        "minecraft:generic_3x3",
+        title(),
+        key,
+        Slots::Block(key),
+        items.clone(),
+        None,
+    );
+    let (bot, extras, _) = run(&mut s, move || until_screen(bot));
+    assert!(extras.is_empty(), "a stock menu sends no extra data");
+    s.hub.open_container(
+        conn,
+        "minecraft:generic_3x3",
+        title(),
+        key,
+        Slots::Block(key),
+        items,
+        Some(vec![7, 0, 255]),
+    );
+    let window = s.hub.guests[0].menu.as_ref().unwrap().window;
+    let (_, extras, opened) = run(&mut s, move || until_screen(bot));
+    assert_eq!(opened, window);
+    assert_eq!(
+        extras,
+        [(
+            menu_extra::Message {
+                window,
+                pos: [3, 70, -5],
+                data: vec![7, 0, 255],
+            },
+            true
+        )],
+        "one payload, for this window and block, with nothing between it and the screen"
+    );
+}
+
 /// `ServerGamePacketListenerImpl.handleContainerClick`: a spectator looks
 /// into a chest but its clicks change nothing, and `sendAllDataToRemote`
 /// takes back what its client predicted.
@@ -1016,6 +1285,7 @@ fn a_spectators_container_click_is_taken_back() {
         key,
         Slots::Block(key),
         items.clone(),
+        None,
     );
     let window = s.hub.guests[0].menu.as_ref().unwrap().window;
     // The menu's own contents, as the client first sees them.
@@ -1174,6 +1444,7 @@ fn a_click_past_the_menu_is_ignored() {
         key,
         Slots::Block(key),
         items,
+        None,
     );
     let stone = Some(ItemStack::new("minecraft:stone", 64));
     s.hub.guests[0].inventory[9] = stone.clone();
@@ -1281,7 +1552,7 @@ fn the_prediction_records_each_client_tick_and_the_server_ticks_it_had_seen() {
 /// with no `BlockEntityData` for one whose mod gives no tag.
 #[test]
 fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
-    use horizon_client::containers::{BlockEntity, ModBlockEntity};
+    use horizon_client::containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields};
     use horizon_world::nbt::{Compound, JavaString, Tag};
     let Some(resources) = resources() else {
         return;
@@ -1310,10 +1581,10 @@ fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
         s.world
             .set(pos.0, pos.1, pos.2, BlockStateId(MACHINE))
             .unwrap();
-        let mut machine = ModBlockEntity {
+        let mut machine = ModBlockEntity::new(ModBlockEntityFields {
             id: "test:machine".into(),
-            ..ModBlockEntity::default()
-        };
+            ..Default::default()
+        });
         if let Some(on) = on {
             machine.nbt.insert("on".into(), Tag::Byte(on));
         }
@@ -1412,7 +1683,6 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
     let at = [8.5, f64::from(MIN_Y + 5), 8.5];
     let ctx = TickCtx {
         world: &mut s.world,
-        host: None,
         entities: &[],
         next_entity: &mut s.next_entity,
         spawn: at,
@@ -1421,7 +1691,7 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
         clock_rate: 1.0,
         tick_rate: 20.0,
         tick_frozen: false,
-        tick_steps: (0, 0),
+        tick_steps: Default::default(),
         collision: None,
         border: &border,
         streaming: None,
@@ -1445,4 +1715,327 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
         s.hub.guests[0].client_loaded(),
         "the packet marks it loaded"
     );
+}
+
+/// `tickPlayer`'s vehicle check (BoatFly): the driver of a boat its last accepted move left hovering
+/// over air is kicked once the boat has floated longer than `getMaximumFlyingTicks` (160 ticks at a
+/// boat's gravity), and a move that doesn't float starts the count again.
+#[test]
+fn a_boat_floating_too_long_kicks_its_driver() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Boater", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    let g = &mut s.hub.guests[0];
+    (g.vehicle, g.vehicle_floating, g.vehicle_gravity) = (Some(7), true, 0.04);
+    for _ in 0..100 {
+        s.tick(&[]);
+    }
+    assert_eq!(s.hub.guests[0].above_ground_vehicle_ticks, 100);
+    // The boat touched water: the next floating move counts from zero.
+    s.hub.guests[0].vehicle_floating = false;
+    s.tick(&[]);
+    assert_eq!(s.hub.guests[0].above_ground_vehicle_ticks, 0);
+    s.hub.guests[0].vehicle_floating = true;
+    for _ in 0..160 {
+        s.tick(&[]);
+    }
+    assert!(
+        s.hub.guests[0].left_reason.is_empty(),
+        "160 ticks are a boat's allowance: {}",
+        s.hub.guests[0].left_reason
+    );
+    s.tick(&[]);
+    assert!(
+        !s.hub.guests[0].left_reason.is_empty(),
+        "the 161st floating tick kicks the driver"
+    );
+}
+
+/// A client that numbers its packets as `version` does, from the protocol adapter's own tables: for 26.2 its
+/// handshake states 776 and every id it sends and reads is 26.2's. The payloads stay the pinned ones: the
+/// packets whose layout changed are a later step of `older-clients`.
+struct Numbered {
+    c: Connection,
+    version: ServerVersion,
+    state: horizon_protocol::State,
+}
+impl Numbered {
+    fn send(&mut self, body: Vec<u8>) -> Result<(), String> {
+        let body = self
+            .version
+            .serverbound_body(self.state, &body)
+            .map_err(|e| e.to_string())?
+            .ok_or("the client's version has no such packet")?;
+        self.c.send(&body).map_err(|e| e.to_string())
+    }
+    /// The next packet with its pinned id (the version's own id read off the wire).
+    fn recv(&mut self) -> Result<(i32, Vec<u8>), String> {
+        let (id, payload) = self.c.recv().map_err(|e| e.to_string())?;
+        let pinned = self
+            .version
+            .clientbound_id(self.state, id)
+            .ok_or_else(|| format!("no clientbound packet {id} in {:?}", self.state))?;
+        Ok((pinned, payload))
+    }
+}
+
+/// A login as `version`: `Err` with the refusal (login's JSON, configuration's text), or the client once in
+/// play, with the ids of the item tag `beacon_payment_items` it was sent.
+fn join_as(
+    version: ServerVersion,
+    port: u16,
+    name: &str,
+) -> Result<Result<(Numbered, Vec<i32>), String>, String> {
+    use horizon_protocol::State;
+    let e = |e: horizon_protocol::Error| e.to_string();
+    let hello = |intent| {
+        handshake::Serverbound::Intention(handshake::Intention {
+            protocol: version.protocol(),
+            host: "127.0.0.1".into(),
+            port,
+            intent,
+        })
+        .encode()
+    };
+    let c = Connection::connect("127.0.0.1", port, Duration::from_secs(5)).map_err(e)?;
+    c.reader
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .map_err(e)?;
+    let mut bot = Numbered {
+        c,
+        version,
+        state: State::Login,
+    };
+    bot.send(hello(handshake::LOGIN))?;
+    bot.send(
+        login::Serverbound::Hello(login::ServerHello {
+            name: name.into(),
+            uuid: offline_uuid(name),
+        })
+        .encode(),
+    )?;
+    loop {
+        let (id, payload) = bot.recv()?;
+        match login::Clientbound::decode(id, &payload).map_err(e)? {
+            login::Clientbound::Compression(p) => bot.c.set_compression(p.threshold),
+            login::Clientbound::LoginFinished(_) => break,
+            login::Clientbound::Disconnect(d) => return Ok(Err(d.reason_json)),
+            other => return Err(format!("unexpected login packet {other:?}")),
+        }
+    }
+    bot.send(login::Serverbound::LoginAcknowledged(Empty).encode())?;
+    bot.state = State::Configuration;
+    bot.send(cfg::Serverbound::ClientInformation(ClientInformation::new(4)).encode())?;
+    let mut payment = Vec::new();
+    loop {
+        let (id, payload) = bot.recv()?;
+        match cfg::Clientbound::decode(id, &payload).map_err(e)? {
+            // A 26.2 client knows its own core pack, not 26.3's: it is sent the registries' data (and so
+            // is this 26.3 client, alike).
+            cfg::Clientbound::SelectKnownPacks(_) => bot.send(
+                cfg::Serverbound::SelectKnownPacks(cfg::SelectKnownPacks { packs: Vec::new() })
+                    .encode(),
+            )?,
+            cfg::Clientbound::UpdateTags(t) => {
+                for registry in t.registries {
+                    if registry.registry == "minecraft:item" {
+                        payment.extend(
+                            registry
+                                .tags
+                                .into_iter()
+                                .filter(|t| t.name == "minecraft:beacon_payment_items")
+                                .flat_map(|t| t.ids),
+                        );
+                    }
+                }
+            }
+            cfg::Clientbound::Disconnect(d) => {
+                return Ok(Err(match d.reason {
+                    horizon_world::nbt::Tag::String(s) => s.to_string_lossy(),
+                    other => format!("{other:?}"),
+                }));
+            }
+            cfg::Clientbound::FinishConfiguration(_) => {
+                bot.send(cfg::Serverbound::FinishConfiguration(Empty).encode())?;
+                bot.state = State::Play;
+                return Ok(Ok((bot, payment)));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The protocol a status ping stating `protocol` is answered with.
+fn status_protocol(port: u16, protocol: i32) -> Result<i64, String> {
+    let e = |e: horizon_protocol::Error| e.to_string();
+    let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(5)).map_err(e)?;
+    c.send(
+        &handshake::Serverbound::Intention(handshake::Intention {
+            protocol,
+            host: "127.0.0.1".into(),
+            port,
+            intent: handshake::STATUS,
+        })
+        .encode(),
+    )
+    .map_err(e)?;
+    c.send(&status::Serverbound::StatusRequest(Empty).encode())
+        .map_err(e)?;
+    let (id, payload) = c.recv().map_err(e)?;
+    let status::Clientbound::StatusResponse(r) =
+        status::Clientbound::decode(id, &payload).map_err(e)?
+    else {
+        return Err("no status".into());
+    };
+    let v: serde_json::Value = serde_json::from_str(&r.json).map_err(|e| e.to_string())?;
+    v["version"]["protocol"]
+        .as_i64()
+        .ok_or_else(|| "no protocol".into())
+}
+
+/// `accept_older_clients` off (the default), a 26.2 client is turned away as vanilla turns it away and the
+/// server list shows 26.3's protocol; on, the client is told its own protocol, logs in in 26.2's packet ids
+/// and is told, before any registry data, that 26.2 isn't translated yet, while a 26.3 client is served as
+/// before. Let past that (the tests-only `older_clients_play`), it is sent the tags in 26.2's item ids, plays in
+/// 26.2's packet ids and sees the block it places.
+#[test]
+fn a_26_2_client_joins_only_a_server_that_accepts_older_clients() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    const OLD: ServerVersion = ServerVersion::V26_2;
+    const DIAMOND_26_2: i32 = 926;
+    const DIAMOND_26_3: i32 = 1012;
+    let mut off = server(&resources);
+    let port = off.hub.lan.port;
+    let (status, refused) = run(&mut off, move || {
+        let status = status_protocol(port, 776)?;
+        let refused = join_as(OLD, port, "Old")?
+            .err()
+            .ok_or("a 26.2 client got in")?;
+        Ok((status, refused))
+    });
+    assert_eq!(status, i64::from(PROTOCOL_VERSION));
+    assert!(
+        refused.contains("multiplayer.disconnect.incompatible"),
+        "{refused}"
+    );
+
+    let net = NetConfig {
+        accept_older_clients: true,
+        ..NetConfig::loopback(0, "Test - World".into(), 8)
+    };
+    let mut on = server_with(&resources, net);
+    let port = on.hub.lan.port;
+    let statuses = run(&mut on, move || {
+        Ok((
+            status_protocol(port, 776)?,
+            status_protocol(port, PROTOCOL_VERSION)?,
+        ))
+    });
+    assert_eq!(statuses, (776, i64::from(PROTOCOL_VERSION)));
+    let unfinished = run(&mut on, move || {
+        join_as(OLD, port, "Old")?
+            .err()
+            .ok_or_else(|| "a 26.2 client got past configuration".to_owned())
+    });
+    assert!(
+        unfinished.contains(horizon_client::lan::OLDER_CLIENTS_UNFINISHED),
+        "{unfinished}"
+    );
+    // A 26.3 client on the same server: its own ids, as on any server.
+    let payment = run(&mut on, move || {
+        let (_bot, payment) =
+            join_as(ServerVersion::Current, port, "New")?.map_err(|r| format!("refused: {r}"))?;
+        Ok(payment)
+    });
+    assert!(payment.contains(&DIAMOND_26_3), "{payment:?}");
+
+    let net = NetConfig {
+        accept_older_clients: true,
+        older_clients_play: true,
+        ..NetConfig::loopback(0, "Test - World".into(), 8)
+    };
+    let mut play = server_with(&resources, net);
+    let port = play.hub.lan.port;
+    let (payment, placed) = run(&mut play, move || {
+        let (mut bot, payment) = join_as(OLD, port, "Old")?.map_err(|r| format!("refused: {r}"))?;
+        let (mut login, mut chunks, mut placed) = (false, 0, None);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            let (id, payload) = bot.recv()?;
+            // The command tree has argument nodes the client side does not decode.
+            if id == horizon_protocol::ids::play::clientbound::COMMANDS {
+                continue;
+            }
+            match C::decode(id, &payload).map_err(|e| format!("packet {id}: {e}"))? {
+                C::Login(_) => login = true,
+                C::PlayerPosition(p) => bot.send(
+                    S::AcceptTeleportation(play::AcceptTeleportation {
+                        id: p.teleport,
+                        x: p.position[0],
+                        y: p.position[1],
+                        z: p.position[2],
+                        yaw: 0.0,
+                        pitch: 0.0,
+                    })
+                    .encode(),
+                )?,
+                C::LevelChunkWithLight(_) => chunks += 1,
+                C::ChunkBatchFinished(_) => {
+                    bot.send(
+                        S::ChunkBatchReceived(play::ChunkBatchReceived {
+                            chunks_per_tick: 20.0,
+                        })
+                        .encode(),
+                    )?;
+                    if chunks >= 9 && placed.is_none() {
+                        placed = Some(None);
+                        bot.send(S::PlayerLoaded(Empty).encode())?;
+                        bot.send(
+                            S::MovePlayerPosRot(play::MovePlayerPosRot {
+                                x: 9.5,
+                                y: f64::from(MIN_Y + 5),
+                                z: 9.5,
+                                yaw: 90.0,
+                                pitch: 10.0,
+                                flags: 1,
+                            })
+                            .encode(),
+                        )?;
+                        bot.send(
+                            S::UseItemOn(play::UseItemOn {
+                                hand: 0,
+                                pos: [9, MIN_Y + 4, 9],
+                                face: 1,
+                                cursor: [0.5, 1.0, 0.5],
+                                inside: false,
+                                world_border: false,
+                                sequence: 77,
+                            })
+                            .encode(),
+                        )?;
+                    }
+                }
+                C::BlockUpdate(u) => placed = Some(Some((u.pos, u.state))),
+                C::BlockChangedAck(a) if a.sequence == 77 => break,
+                _ => {}
+            }
+        }
+        assert!(login, "no login packet");
+        Ok((payment, placed.flatten()))
+    });
+    assert!(payment.contains(&DIAMOND_26_2), "{payment:?}");
+    assert!(!payment.contains(&DIAMOND_26_3), "{payment:?}");
+    assert_eq!(placed, Some(([9, MIN_Y + 5, 9], STONE as i32)));
+    assert_eq!(play.placed.len(), 1);
 }

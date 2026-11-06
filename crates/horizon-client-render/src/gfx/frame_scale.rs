@@ -3,15 +3,23 @@ use super::world_post;
 
 pub(super) struct FrameScale {
     post: world_post::Post,
+    /// The frame's format, which the renderer's pipelines draw (`Renderer::frame_format`).
     format: wgpu::TextureFormat,
+    /// The swapchain view's.
+    output: wgpu::TextureFormat,
     target: Option<(wgpu::Texture, wgpu::BindGroup)>,
 }
 
 impl FrameScale {
-    pub(super) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub(super) fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        output: wgpu::TextureFormat,
+    ) -> Self {
         Self {
-            post: world_post::Post::new(device, format),
+            post: world_post::Post::new(device, output),
             format,
+            output,
             target: None,
         }
     }
@@ -49,7 +57,7 @@ impl FrameScale {
     pub(super) fn present(&self, encoder: &mut wgpu::CommandEncoder, output: &wgpu::Texture) {
         if let Some((_, group)) = &self.target {
             let view = output.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.format),
+                format: Some(self.output),
                 ..Default::default()
             });
             self.post.finish_in_rect(
@@ -60,6 +68,7 @@ impl FrameScale {
                     output.width(),
                     output.height(),
                 ])),
+                None,
             );
         }
     }

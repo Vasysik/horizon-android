@@ -15,6 +15,7 @@ pub mod noise;
 pub mod paletted;
 pub mod player_texture;
 pub mod position;
+pub mod prepared_files;
 pub mod random;
 pub mod storage;
 pub mod text;

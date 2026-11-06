@@ -12,7 +12,7 @@ use std::{
 };
 
 use horizon_client::text::Text;
-use horizon_shader_api::{Pack, check};
+use horizon_shader_api::{Api, Blend, Manifest, Pack, check};
 
 use super::Game;
 
@@ -56,6 +56,9 @@ impl Game<'_> {
             return;
         };
         let result = Pack::read(path).map_err(|e| vec![e]).and_then(|pack| {
+            if let Some(why) = not_drawn(&pack.manifest) {
+                return Err(vec![why]);
+            }
             let report = check(&pack)
                 .map_err(|p| p.iter().map(ToString::to_string).collect::<Vec<String>>())?;
             // The player's values (the pack's Shader Options page), else the defaults.
@@ -67,7 +70,24 @@ impl Game<'_> {
                 layers.map(|(name, layer)| (name.as_str(), *layer))
             };
             let tags = pack.manifest.sprite_tags(sprites());
-            let materials = pack.manifest.sprite_materials(sprites());
+            let mut materials = pack.manifest.sprite_materials(sprites());
+            // `blocks` lists: the sprites their models draw with, where no pattern named them.
+            let listed = pack.manifest.material_blocks();
+            if !listed.is_empty() {
+                let macros = horizon_shaders::Macros::standard();
+                let properties = horizon_shaders::Properties::parse(&listed, &macros);
+                let ids = horizon_shaders::BlockIds::parse(&properties);
+                let table = super::shader_packs::block_id_table(&self.pack, &ids);
+                for (layer, id) in table.iter().step_by(2).enumerate() {
+                    let layer = layer as u32;
+                    if *id > 0 && !materials.iter().any(|m| m.0 == layer) {
+                        materials.push((layer, *id as u32));
+                    }
+                }
+                materials.sort_unstable();
+            }
+            let layers = sprites().map(|(_, l)| l as usize + 1).max().unwrap_or(0);
+            let translucent = pack.manifest.translucent_layers(&materials, layers);
             // Each light-giving block state's `[[lights]]` colour, with its level.
             let mut lights = horizon_client::gfx::block_light::LightTable::default();
             if !pack.manifest.lights.is_empty() {
@@ -83,11 +103,11 @@ impl Game<'_> {
             let labels = renderer
                 .set_native_shader_pack(Some((report, constants, tags, materials, lights)))
                 .map_err(|e| vec![e])?;
-            Ok((pack.manifest, labels))
+            Ok((pack.manifest, labels, translucent))
         });
         // The resources were loaded without a native pack, so without the resource packs'
         // LabPBR maps its material stage reads: load them once, now that one runs.
-        if result.as_ref().is_ok_and(|(m, _)| m.material.is_some())
+        if result.as_ref().is_ok_and(|(m, _, _)| m.material.is_some())
             && !horizon_client::sprites::labpbr_maps()
         {
             horizon_client::sprites::set_labpbr_maps(true);
@@ -96,7 +116,8 @@ impl Game<'_> {
         }
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         match result {
-            Ok((m, labels)) => {
+            Ok((m, labels, translucent)) => {
+                self.set_translucent_layers(translucent);
                 log::info!(
                     "shader pack {} {}: {} in {} ms",
                     m.id,
@@ -117,6 +138,23 @@ impl Game<'_> {
             }
         }
     }
+}
+
+/// Why the game doesn't draw a pack the check may still pass: what it asks of shader API 0.2
+/// (docs/design/hdr-linear-light.md, steps 3 and 4) isn't served yet.
+fn not_drawn(m: &Manifest) -> Option<String> {
+    if m.blend == Blend::Linear {
+        return Some(
+            "[frame] blend = \"linear\" isn't served yet: leave it out, or set \"gamma\"".into(),
+        );
+    }
+    (m.api != Api::V0_1).then(|| {
+        format!(
+            "it is written for shader API {}, which is experimental and not drawn yet: \
+             horizon-shader check takes it, the game takes shader API 0.1",
+            m.api
+        )
+    })
 }
 
 /// A hash of the names, sizes and modification times of the pack's files and of its saved
@@ -147,4 +185,30 @@ fn fingerprint(path: &Path) -> Option<u64> {
     let values = horizon_client::shader_pack_list::values_path(path);
     let _ = walk(&values, &mut hasher);
     Some(hasher.finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::not_drawn;
+    use horizon_shader_api::Manifest;
+
+    fn manifest(api: &str, extra: &str) -> Manifest {
+        Manifest::parse(&format!(
+            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"{api}\"\n\
+             [[post]]\nfile = \"post.wgsl\"\n{extra}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_shader_api_0_1_is_drawn() {
+        assert_eq!(not_drawn(&manifest("0.1", "")), None);
+        let why = not_drawn(&manifest("0.2", "")).unwrap();
+        assert!(
+            why.contains("shader API 0.2, which is experimental"),
+            "{why}"
+        );
+        let why = not_drawn(&manifest("0.2", "[frame]\nblend = \"linear\"\n")).unwrap();
+        assert!(why.contains("blend = \"linear\" isn't served yet"), "{why}");
+    }
 }

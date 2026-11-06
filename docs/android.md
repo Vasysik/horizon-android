@@ -68,9 +68,14 @@ Closing the account panel keeps a pending request active; **Cancel sign-in**
 cancels it. Account status distinguishes signed in, signing in and offline use.
 
 Refresh tokens are encrypted with an app-owned Android Keystore AES-GCM key and
-kept in private storage. Clearing app data requires signing in again. The current
-application registration is a temporary development configuration, not a
-project-owned Microsoft/Mojang approval. Production registration remains pending.
+kept in private storage. Clearing app data requires signing in again.
+
+The launcher has the desktop owner gate: nothing is downloaded and the game does not
+start until a Microsoft account signed in here owns Minecraft: Java Edition. Offline
+names and offline-mode servers play behind that gate. A build needs its own
+Mojang-approved app registration in `HORIZON_MSA_CLIENT_ID`
+([account integration](microsoft-account.md)); without one it cannot sign in, so it
+cannot start the game.
 Server and anticheat compatibility varies; see [account integration](microsoft-account.md).
 
 ## Touch controls

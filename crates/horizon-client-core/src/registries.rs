@@ -173,6 +173,16 @@ impl Registries {
         fill(&mut self.templates, "templates");
         fill(&mut self.persistent_components, "persistent_components");
         fill(&mut self.learnable_recipes, "learnable_recipes");
+        if self.summonable.is_empty() {
+            self.summonable = strings(&r["summonable"]);
+            self.summonable.sort();
+            self.summonable.dedup();
+        }
+        if self.entity_types.is_empty() {
+            self.entity_types = strings(&r["entity_types"]);
+            self.entity_types.sort();
+            self.entity_types.dedup();
+        }
         const RELOADED: [&str; 5] = [
             "minecraft:advancement",
             "minecraft:recipe",
@@ -211,6 +221,58 @@ impl Registries {
                 self.advancement_criteria
                     .insert(id.clone(), strings(criteria));
             }
+        }
+    }
+    /// Only what [`Self::fill_from_export`] takes from an export, to keep
+    /// in place of the export itself (a third of its memory).
+    pub fn from_export(r: &serde_json::Value) -> Self {
+        let mut out = Self::default();
+        out.fill_from_export(r);
+        out
+    }
+    /// [`Self::fill_from_export`] from an export already read with
+    /// [`Self::from_export`]: each field the game left empty, each registry
+    /// it did not list.
+    pub fn fill_from_exported(&mut self, e: &Self) {
+        let fill = |field: &mut Vec<String>, from: &Vec<String>| {
+            if field.is_empty() {
+                field.clone_from(from);
+            }
+        };
+        fill(&mut self.effects, &e.effects);
+        fill(&mut self.enchantments, &e.enchantments);
+        fill(&mut self.attributes, &e.attributes);
+        fill(&mut self.damage_types, &e.damage_types);
+        fill(&mut self.templates, &e.templates);
+        fill(&mut self.persistent_components, &e.persistent_components);
+        fill(&mut self.learnable_recipes, &e.learnable_recipes);
+        if self.summonable.is_empty() {
+            self.summonable.clone_from(&e.summonable);
+            self.summonable.sort();
+            self.summonable.dedup();
+        }
+        if self.entity_types.is_empty() {
+            self.entity_types.clone_from(&e.entity_types);
+            self.entity_types.sort();
+            self.entity_types.dedup();
+        }
+        for (name, ids) in &e.by_registry {
+            if !self.by_registry.contains_key(name) {
+                self.by_registry.insert(name.clone(), ids.clone());
+            }
+        }
+        if self.block_entities.is_empty() {
+            self.block_entities.clone_from(&e.block_entities);
+        }
+        if self.block_tag_members.is_empty() {
+            self.block_tag_members.clone_from(&e.block_tag_members);
+        }
+        if self.clock_time_markers.is_empty() {
+            self.clock_time_markers.clone_from(&e.clock_time_markers);
+        }
+        if self.advancement_criteria.is_empty() {
+            self.advancement_criteria
+                .clone_from(&e.advancement_criteria);
         }
     }
     /// The element ids of a registry (sorted).

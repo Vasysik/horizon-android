@@ -4,6 +4,7 @@
 //! point, Enter, Space and keypad Enter press the focused widget
 //! (`AbstractButton.keyPressed`), and a focused slider's left and right move
 //! its value once Enter (or Tab) let them (`AbstractSliderButton.keyPressed`).
+//! A focused text field is the screen's focus: those keys type into it.
 //!
 //! The focus lands on what the controller's focus mode reaches: the targets
 //! each screen registers (`widgets::target_as`, docs/controllers.md). This
@@ -65,7 +66,8 @@ pub(super) struct Context {
     /// The focused slider's arrows change its value (`canChangeValue`).
     pub slider_edit: bool,
     /// A text field has the keyboard (a click focused it): with nothing
-    /// focused, its caret takes left and right.
+    /// focused, its caret takes left and right, and Space and Enter belong to
+    /// it rather than to the widget the keyboard focus was left on.
     pub typing: bool,
     /// The screen joins its list's selected row on Enter itself
     /// (`WorldListEntry.keyPressed`): a focused row passes Enter on.
@@ -109,6 +111,11 @@ pub(super) fn act(nav: Nav, focus: Option<Target>, targets: &[Target], ctx: Cont
             let rects: Vec<Rect> = targets.iter().map(|t| t.rect).collect();
             gamepad::focus_step_rect(edge(ctx.gui, b), b, &rects).map_or(Act::Pass, Act::Focus)
         }
+        // A focused `EditBox` is the screen's focus (`Screen.setFocused`), so
+        // Space and Enter are the box's `charTyped` (a space, say) — never a
+        // press of the widget the keyboard's focus was left on from before
+        // (`AbstractButton.keyPressed` only hears the focused widget).
+        (Nav::Select, _) if ctx.typing => Act::Pass,
         (Nav::Select, None) => Act::Pass,
         (Nav::Select, Some(t)) => match t.kind {
             Kind::Field => Act::Pass,
@@ -127,6 +134,16 @@ fn edge((w, h): (f32, f32), button: Button) -> Rect {
         Button::DPadRight => [-1.0, 0.0, 1.0, h],
         _ => [0.0, -1.0, w, 1.0],
     }
+}
+
+/// Whether the screen still gets the key after `act`. `Screen.keyPressed`
+/// moves the focus on Tab or an arrow and returns false, so a container
+/// screen goes on to `checkHotbarKeyPressed` (`AbstractContainerScreen
+/// .keyPressed`): Tab bound to the off hand both moves the focus and swaps.
+/// Horizon's other screens handle these keys themselves, so only containers
+/// pass them on.
+pub(super) fn passes_on(act: Act, container: bool) -> bool {
+    container && matches!(act, Act::Focus(_) | Act::Step(_))
 }
 
 /// `AbstractSliderButton.setFocused`: the arrows change a slider's value
@@ -331,6 +348,19 @@ mod tests {
         assert_eq!(nav_of(KeyCode::Escape, false), None);
     }
 
+    /// Tab bound to key.swapOffhand in an inventory: the focus moves and the
+    /// screen still checks its hotbar keys; a press stays the widget's.
+    #[test]
+    fn containers_still_get_tab_and_arrows_after_the_focus_moves() {
+        assert!(passes_on(Act::Focus(0), true));
+        assert!(passes_on(Act::Step(Button::DPadDown), true));
+        assert!(!passes_on(Act::Press, true));
+        assert!(!passes_on(Act::ToggleSlider, true));
+        assert!(!passes_on(Act::Nudge(1.0), true));
+        assert!(!passes_on(Act::Focus(0), false));
+        assert!(!passes_on(Act::Step(Button::DPadDown), false));
+    }
+
     /// The title screen's rows (TitleScreen.init's add order).
     #[test]
     fn tab_order_reads_rows_top_to_bottom_then_left_to_right() {
@@ -389,6 +419,24 @@ mod tests {
             ..CTX
         };
         assert_eq!(act(Nav::Select, Some(r), &[r], joins), Act::Pass);
+    }
+
+    /// A focused text field is the screen's focus: Space types a space into
+    /// it, and neither it nor Enter presses the widget the keyboard's focus
+    /// was left on (the Create World tab a keyboard player tabbed to, say).
+    #[test]
+    fn a_focused_text_field_keeps_space_and_enter_for_typing() {
+        let b = button(0.0, 40.0);
+        let f = field();
+        let targets = [f, b];
+        let typing = Context {
+            typing: true,
+            ..CTX
+        };
+        assert_eq!(act(Nav::Select, Some(b), &targets, typing), Act::Pass);
+        assert_eq!(act(Nav::Select, Some(f), &targets, typing), Act::Pass);
+        // The same widget still takes them when no field has the focus.
+        assert_eq!(act(Nav::Select, Some(b), &targets, CTX), Act::Press);
     }
 
     /// AbstractSliderButton.keyPressed and setFocused.

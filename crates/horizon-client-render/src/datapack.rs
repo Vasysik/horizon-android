@@ -58,6 +58,24 @@ impl DataPack {
         }
         out
     }
+    /// The files of `data/<namespace>/<folder>/` in every namespace, as
+    /// `list` names them; a folder pack walks only those folders.
+    pub fn list_folder(&self, folder: &str) -> Vec<String> {
+        let files = self.list_kinds(&[folder]);
+        let Source::Zip(_) = &self.source else {
+            return files;
+        };
+        files
+            .into_iter()
+            .filter(|f| {
+                f.strip_prefix("data/")
+                    .and_then(|r| r.split_once('/'))
+                    .is_some_and(|(_, r)| {
+                        r.strip_prefix(folder).is_some_and(|r| r.starts_with('/'))
+                    })
+            })
+            .collect()
+    }
     pub fn read(&self, path: &str) -> Option<Vec<u8>> {
         match &self.source {
             Source::Zip(z) => z.read(path).ok(),
@@ -121,7 +139,11 @@ impl DataPack {
 }
 /// The packs in `<world>/datapacks`, sorted by name.
 pub fn discover(world: &Path) -> Vec<DataPack> {
-    let Ok(entries) = std::fs::read_dir(world.join("datapacks")) else {
+    discover_folder(&world.join("datapacks"))
+}
+/// Packs in Create World's temporary pack folder, before a world exists.
+pub fn discover_folder(dir: &Path) -> Vec<DataPack> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut packs = Vec::new();
@@ -253,19 +275,34 @@ pub fn temp_folder() -> std::io::Result<PathBuf> {
 /// `PackSelectionScreen.onFilesDrop`'s `PackDetector`: a zip is a pack; a
 /// folder is one when it holds a `pack.mcmeta`, or exactly one folder that
 /// does (a folder zipped by the system, which adds a wrapper). Copied into
-/// `dir`; false when `path` is no pack.
+/// `dir`; false when `path` is no pack, or when part of it could not be copied.
 pub fn copy_pack(path: &Path, dir: &Path) -> bool {
-    fn copy_dir(from: &Path, at: &Path) {
-        let _ = std::fs::create_dir_all(at);
+    fn copy_dir(from: &Path, at: &Path) -> bool {
+        let mut whole = true;
+        if let Err(e) = std::fs::create_dir_all(at) {
+            log::warn!("Horizon: {} is not made: {e}", at.display());
+            whole = false;
+        }
         for entry in std::fs::read_dir(from).into_iter().flatten().flatten() {
             let path = entry.path();
             let to = at.join(entry.file_name());
-            if path.is_dir() {
-                copy_dir(&path, &to);
+            let copied = if path.is_dir() {
+                copy_dir(&path, &to)
             } else {
-                let _ = std::fs::copy(&path, &to);
-            }
+                match std::fs::copy(&path, &to) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        log::warn!(
+                            "Horizon: {} is not copied into the pack: {e}",
+                            path.display()
+                        );
+                        false
+                    }
+                }
+            };
+            whole &= copied;
         }
+        whole
     }
     let name = || {
         path.file_name()
@@ -285,8 +322,7 @@ pub fn copy_pack(path: &Path, dir: &Path) -> bool {
         return false;
     }
     if path.join("pack.mcmeta").is_file() {
-        copy_dir(path, &dir.join(name()));
-        return true;
+        return copy_dir(path, &dir.join(name()));
     }
     let own: Vec<PathBuf> = std::fs::read_dir(path)
         .into_iter()
@@ -296,10 +332,7 @@ pub fn copy_pack(path: &Path, dir: &Path) -> bool {
         .filter(|p| p.is_dir() && p.join("pack.mcmeta").is_file())
         .collect();
     match own.as_slice() {
-        [one] => {
-            copy_dir(one, &dir.join(one.file_name().unwrap_or_default()));
-            true
-        }
+        [one] => copy_dir(one, &dir.join(one.file_name().unwrap_or_default())),
         _ => false,
     }
 }
@@ -575,7 +608,7 @@ pub struct DataStore {
     /// `item_modifier` files, for `/item modify`.
     pub item_modifiers: BTreeMap<String, serde_json::Value>,
     /// The content tables' raw files from the packs after the built-in one:
-    /// `recipe/`, `loot_table/`, `advancement/`, `dialog/` and `tags/…/` files, by
+    /// `recipe/`, `recipe_filter/`, `loot_table/`, `advancement/`, `dialog/`, `damage_type/`, `data_maps/` and `tags/…/` files, by
     /// `<kind-dir>/<ns>:<path>`, each id's files in pack order. The tables
     /// merge them over what they read from the resource root.
     pub files: BTreeMap<String, Vec<Vec<u8>>>,
@@ -583,15 +616,16 @@ pub struct DataStore {
     pub errors: Vec<(String, String)>,
 }
 /// `<kind-dir>/<ns>:<path>` for a pack file the content tables read:
-/// `recipe/`, `loot_table/`, `advancement/`, `trade_set/`,
-/// `villager_trade/`, `dialog/` or `tags/<sub>/`, where the id keeps the sub
+/// `recipe/`, `recipe_filter/`, `loot_table/`, `advancement/`, `trade_set/`,
+/// `villager_trade/`, `dialog/`, `damage_type/`, `data_maps/` or `tags/<sub>/`, where the id keeps the sub
 /// path so a nested tag kind stays addressable.
 fn content_id(file: &str) -> Option<String> {
     let rest = file.strip_prefix("data/")?;
     let (ns, rest) = rest.split_once('/')?;
     let (kind, rest) = rest.split_once('/')?;
     let kind = match kind {
-        "recipe" | "loot_table" | "advancement" | "trade_set" | "villager_trade" | "dialog" => kind,
+        "recipe" | "recipe_filter" | "loot_table" | "advancement" | "trade_set"
+        | "villager_trade" | "dialog" | "damage_type" | "data_maps" => kind,
         // A tag id is `{ns}:{path-under-tags}` (`tags/worldgen/biome/
         // test:sub/mytag`), the whole path after the namespace, so nested
         // registries keep their directory (`TagLoader`'s id shape).
@@ -622,12 +656,15 @@ impl DataStore {
             let builtin = pack.id == "vanilla";
             for f in pack.list_kinds(&[
                 "advancement",
+                "damage_type",
+                "data_maps",
                 "dialog",
                 "function",
                 "item_modifier",
                 "loot_table",
                 "predicate",
                 "recipe",
+                "recipe_filter",
                 "tags",
                 "trade_set",
                 "villager_trade",
@@ -859,6 +896,13 @@ pub fn worldgen_overrides(
     let mut warnings = Vec::new();
     for pack in packs {
         for file in pack.list_kinds(&overrides::PACK_KINDS) {
+            if let Some(id) = overrides::template_id(&file) {
+                match pack.read(&file) {
+                    Some(nbt) => out.set_template(&id, nbt),
+                    None => warnings.push(format!("{}: {file}: unreadable", pack.id)),
+                }
+                continue;
+            }
             let read = || String::from_utf8(pack.read(&file)?).ok();
             match out.add_file(&pack.id, &file, read) {
                 PackFile::Read | PackFile::Other => {}
@@ -881,6 +925,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn data_map_files_are_content_files_keyed_by_map_namespace_and_registry() {
+        assert_eq!(
+            content_id("data/mymod/data_maps/item/fuel.json").as_deref(),
+            Some("data_maps/mymod:item/fuel")
+        );
+        assert_eq!(content_id("data/mymod/data_maps/item/fuel.txt"), None);
+    }
+
+    #[test]
+    fn a_pack_that_cannot_be_copied_is_reported() {
+        let root = std::env::temp_dir().join(format!("hz-datapack-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let pack = root.join("pack");
+        std::fs::create_dir_all(pack.join("data")).unwrap();
+        std::fs::write(pack.join("pack.mcmeta"), "{}").unwrap();
+        std::fs::write(pack.join("data/functions.mcfunction"), "").unwrap();
+        // A file where the pack's folder goes: every copy under it fails.
+        let blocked = root.join("blocked");
+        std::fs::write(&blocked, "").unwrap();
+        assert!(!copy_pack(&pack, &blocked));
+        let dir = root.join("packs");
+        assert!(copy_pack(&pack, &dir));
+        assert!(dir.join("pack/pack.mcmeta").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn enabled_packs_override_worldgen_in_order() {
         let dir = std::env::temp_dir().join(format!("hz-datapack-worldgen-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -892,6 +963,7 @@ mod tests {
         for pack in ["a", "b", "off"] {
             write(pack, "pack.mcmeta", "{}");
             write(pack, "data/minecraft/worldgen/noise/cave.json", pack);
+            write(pack, "data/p/structure/room/a.nbt", pack);
             write(
                 pack,
                 "data/minecraft/tags/worldgen/biome/is_hill.json",
@@ -928,6 +1000,8 @@ mod tests {
             o.entries("noises").collect::<Vec<_>>(),
             [("minecraft:cave", "a")]
         );
+        assert_eq!(o.templates().len(), 1);
+        assert_eq!(&*o.templates()["p:room/a"], b"a");
         assert_eq!(
             o.entries("biomes").collect::<Vec<_>>(),
             [("minecraft:plains", "{}")]

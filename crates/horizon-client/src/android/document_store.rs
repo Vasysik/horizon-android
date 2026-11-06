@@ -93,6 +93,8 @@ fn resolve(home: &Path, id: &str) -> io::Result<Document> {
             Some("packs") => ("resourcepacks", "Resource Packs"),
             Some("shaders") => ("shaderpacks", "Shader Packs"),
             Some("worlds") => ("saves", "Worlds"),
+            Some("backups") => ("backups", "Backups"),
+            Some("screenshots") => ("screenshots", "Screenshots"),
             Some("configuration") => ("", "Configuration"),
             _ => return Err(invalid()),
         };
@@ -199,6 +201,8 @@ pub fn children(home: &Path, id: &str) -> io::Result<Vec<Value>> {
             "packs",
             "shaders",
             "worlds",
+            "backups",
+            "screenshots",
             "configuration",
             "reports",
         ]

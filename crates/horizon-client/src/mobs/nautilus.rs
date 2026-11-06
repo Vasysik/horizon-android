@@ -206,6 +206,21 @@ pub fn ridden(m: &mut Mob) {
         }
     }
 }
+/// `AbstractNautilus.onPlayerJump` and the momentum `handleStartJump` starts:
+/// a saddled nautilus that is not in its dash cooldown keeps the released
+/// jump bar's scale on the rider, and its next `tickRidden` dashes with it
+/// (`executeRidersJump`). Returns whether the jump was taken.
+pub fn on_player_jump(m: &mut Mob, data: i32) -> bool {
+    // `if (isSaddled() && dashCooldown <= 0) playerJumpPendingScale = ...`
+    if !m.extra.saddled || m.extra.anim_ticks > 0 {
+        return false;
+    }
+    let Some(rider) = m.rider.as_mut() else {
+        return false;
+    };
+    rider.jump = super::equine::jump_pending_scale(data);
+    true
+}
 /// `executeRidersJump` (with `handleStartJump`'s sound): along the rider's
 /// look, 1.2 in water and 0.5 on land.
 fn dash(m: &mut Mob, amount: f32) {
@@ -261,7 +276,12 @@ fn check_restriction(m: &mut Mob) {
 /// `AbstractNautilus.tick` and the brains' memories: the rider's breath, the
 /// dash clock, bubbles, and choosing whom to charge at
 /// (`NautilusAi.findNearestValidAttackTarget`).
-pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+pub fn ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut horizon_core::random::LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     // customServerAiStep: the home is kept before the rest of the step.
     check_restriction(m);
     if m.extra.scratch[1] != 0 {
@@ -276,6 +296,8 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 effect: "minecraft:breath_of_the_nautilus",
                 ticks: 60,
                 amplifier: 0,
+                // AbstractNautilus.applyEffects: ambient, visible, showIcon.
+                ambient: true,
             });
         }
     } else {
@@ -304,7 +326,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.extra.anger -= 1;
     }
     if m.ai.target.is_none() && m.alive() && !m.no_ai {
-        m.ai.target = find_target(m, w);
+        m.ai.target = find_target(m, w, level_random);
     }
 }
 /// `spawnBubbles`: more as it swims faster, from behind its mouth.
@@ -350,9 +372,19 @@ pub fn client_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
 fn in_water_at(w: &MobWorld, p: Vec3) -> bool {
     w.fluid(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32) == Fluid::Water
 }
+/// `AbstractNautilus.isAggravated`: the brain holds an `ANGRY_AT` or an
+/// `ATTACK_TARGET` memory. Horizon keeps those as the anger timer (whose
+/// target is `last_hurt_by`) and the current attack target.
+pub fn aggravated(m: &Mob) -> bool {
+    m.extra.anger > 0 || m.ai.target.is_some()
+}
 /// `NautilusAi.findNearestValidAttackTarget`: whoever it is angry at, else
 /// now and then (a coin flip every 2400 to 3600 ticks) the nearest pufferfish.
-fn find_target(m: &mut Mob, w: &MobWorld) -> Option<Who> {
+fn find_target(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut horizon_core::random::LegacyRandom,
+) -> Option<Who> {
     if m.extra.in_love > 0 || !m.fluids.in_water || m.is_baby() || m.extra.tame {
         return None;
     }
@@ -368,15 +400,26 @@ fn find_target(m: &mut Mob, w: &MobWorld) -> Option<Who> {
     if m.extra.counter > 0 {
         return None;
     }
-    m.extra.counter = 2400 + m.random.next_int_bound(1201).unwrap_or(0);
-    if m.random.next_float() < 0.5 {
+    // The cooldown and the coin come from the level's random (`level.getRandom()`).
+    m.extra.counter = 2400 + level_random.next_int_bound(1201).unwrap_or(0);
+    if level_random.next_float() < 0.5 {
         return None;
     }
-    w.nearby(m.position, 16.0, |s| {
-        s.species == Species::Pufferfish && in_water_at(w, s.position)
-    })
-    .next()
-    .map(|s| Who::Mob(s.id))
+    // NEAREST_VISIBLE_LIVING_ENTITIES.findClosest(isHostileTarget): the
+    // nearest #nautilus_hostiles in water that the nautilus can see
+    // (`Sensor.isEntityTargetable`: line of sight).
+    let mut near: Vec<(f64, u32)> = w
+        .nearby(m.position, 16.0, |s| {
+            s.species == Species::Pufferfish && in_water_at(w, s.position)
+        })
+        .map(|s| (s.position.distance_squared(m.position), s.id))
+        // TargetingConditions.range(16): feet to feet.
+        .filter(|&(d, _)| d <= 16.0 * 16.0)
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    near.into_iter()
+        .map(|(_, id)| Who::Mob(id))
+        .find(|&who| m.sees(w, who))
 }
 /// `hurtServer`: `NautilusAi.setAngerTarget` for 400 ticks.
 pub fn after_hurt(m: &mut Mob, source: &super::Damage) {
@@ -497,14 +540,16 @@ impl Goal for Charge {
         let factor = (self.speed as f32 * m.movement_speed() as f32).clamp(0.2, 2.0) + boost;
         let power = f64::from(factor * 2.0);
         if power > 0.0 {
-            let yaw = m.yaw.to_radians();
-            cx.events.push(MobEvent::Push {
+            // `causeExtraKnockback`: `LivingEntity.knockback` on the target, away
+            // from (sin(yaw), -cos(yaw)): its resistance, the halving of its own
+            // motion, the lift on the ground and the knockback hook all apply.
+            let yaw = f64::from(m.yaw * (std::f32::consts::PI / 180.0));
+            cx.events.push(MobEvent::Knockback {
                 target: who,
-                velocity: [
-                    -f64::from(yaw.sin()) * power,
-                    0.0,
-                    f64::from(yaw.cos()) * power,
-                ],
+                power,
+                x: f64::from(horizon_core::geometry::trig::sin(yaw)),
+                z: -f64::from(horizon_core::geometry::trig::cos(yaw)),
+                source: super::Damage::mob(m.id, from),
             });
             m.velocity = Vec3::new(m.velocity.x * 0.6, m.velocity.y, m.velocity.z * 0.6);
         }
@@ -553,12 +598,12 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, animations: &HashMap<String, Anim
     if let Some(a) = animations.get("NautilusAnimation.SWIMMING") {
         a.apply_walk(s.pos + s.age / 5.0, s.speed + 0.2, 2.0, 3.0, p);
     }
-    if m.extra.head.is_some() {
+    if m.extra.body.is_some() {
         p.visible("corals", false);
     }
 }
-/// Saved fields: `TamableAnimal`'s owner, the saddle, the zombie's variant
-/// and the brain's attack cooldown.
+/// `TamableAnimal.addAdditionalSaveData`: owner and ordered Sitting, plus
+/// the saddle, the zombie's variant and the brain's attack cooldown.
 pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
     use horizon_world::nbt::Tag;
     if let Some(owner) = m.extra.owner {
@@ -566,7 +611,7 @@ pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
     } else {
         map.remove(&"Owner".into());
     }
-    map.insert("Sitting".into(), Tag::Byte(0));
+    map.insert("Sitting".into(), Tag::Byte(i8::from(m.extra.sitting)));
     if zombie(m) {
         let v = VARIANTS[usize::from(m.extra.variant).min(1)];
         map.insert(
@@ -598,10 +643,12 @@ pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
         )]),
     );
 }
+/// `TamableAnimal.readAdditionalSaveData`: Sitting is independent of Owner.
 pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
     use horizon_world::nbt::Tag;
     m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
     m.extra.tame = m.extra.owner.is_some();
+    m.extra.sitting = crate::entity_nbt::flag(tag, "Sitting");
     if let Some(Tag::String(v)) = tag.get("variant") {
         let v = v.to_string().unwrap_or_default();
         m.extra.variant = u8::from(v.trim_start_matches("minecraft:") == "warm");
@@ -618,5 +665,230 @@ pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
         .and_then(|b| b.get("value"))
     {
         m.extra.counter = *v;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::world::with_test_world;
+    use std::sync::Arc;
+
+    #[test]
+    fn saved_sitting_is_independent_of_owner_and_raw_nbt_for_both_species() {
+        use horizon_world::nbt::Tag;
+        for (id, species) in [
+            ("minecraft:nautilus", Species::Nautilus),
+            ("minecraft:zombie_nautilus", Species::ZombieNautilus),
+        ] {
+            let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+            kind.id = id.into();
+            kind.species = species;
+            let mut m = Mob::new(1, Arc::new(kind), Vec3::ZERO, 0.0);
+            for owner in [None, Some([1, 2, 3, 4])] {
+                for sitting in [None, Some(false), Some(true)] {
+                    let mut entries = Vec::new();
+                    if let Some(owner) = owner {
+                        entries.push(("Owner", Tag::IntArray(owner.to_vec())));
+                    }
+                    if let Some(sitting) = sitting {
+                        entries.push(("Sitting", Tag::Byte(i8::from(sitting))));
+                    }
+                    let raw = Tag::compound(entries);
+                    let expected = sitting.unwrap_or(false);
+                    m.extra.sitting = !expected;
+                    from_nbt(&mut m, &raw);
+                    assert_eq!(m.extra.owner, owner);
+                    assert_eq!(m.extra.sitting, expected, "{id} {owner:?} {sitting:?}");
+                    // No raw compound: this must come from the modeled flag.
+                    let saved =
+                        crate::entity_nbt::mob_to_nbt(&m, [5, 6, 7, 8], None, None, |_| None);
+                    assert_eq!(saved.get("Sitting"), Some(&Tag::Byte(i8::from(expected))));
+                    // A stale raw flag must not override a later model change.
+                    m.extra.sitting = !expected;
+                    let saved =
+                        crate::entity_nbt::mob_to_nbt(&m, [5, 6, 7, 8], Some(&raw), None, |_| None);
+                    assert_eq!(saved.get("Sitting"), Some(&Tag::Byte(i8::from(!expected))));
+                }
+            }
+        }
+    }
+
+    /// `ChargeAttack.dealKnockBack` is `causeExtraKnockback`: `LivingEntity.knockback`
+    /// on the target, away from (sin(yaw), -cos(yaw)), not a raw push of its motion.
+    #[test]
+    fn a_charge_knocks_its_target_back_along_its_facing() {
+        let mut events = Vec::new();
+        let ran = with_test_world(&[], |w, types| {
+            let mut w = w.clone();
+            let at = Vec3::new(0.5, 64.0, 0.5);
+            w.player = Some(crate::mobs::world::test_player(at));
+            let mut m = Mob::new(
+                1,
+                Arc::new(types.types["minecraft:nautilus"].clone()),
+                Vec3::new(0.5, 64.0, 0.2),
+                0.0,
+            );
+            m.ai.target = Some(Who::Player);
+            let mut goal = Charge::new(0.5);
+            let mut lr = horizon_core::random::LegacyRandom::new(1);
+            let mut cx = Cx {
+                w: &w,
+                lr: &mut lr,
+                events: &mut events,
+            };
+            goal.tick(&mut m, &mut cx);
+        });
+        if !ran {
+            return;
+        }
+        let knock = events.iter().find_map(|e| match e {
+            MobEvent::Knockback {
+                target,
+                power,
+                x,
+                z,
+                ..
+            } => Some((*target, *power, *x, *z)),
+            _ => None,
+        });
+        let (target, power, x, z) = knock.expect("the charge knocks its target back");
+        assert_eq!(target, Who::Player);
+        assert!(power > 0.0);
+        // It turns to the target, which is straight ahead at +z (yaw 0): sin = 0, -cos = -1.
+        assert!(x.abs() < 1e-3 && (z + 1.0).abs() < 1e-3, "{x} {z}");
+        assert!(!events.iter().any(|e| matches!(e, MobEvent::Push { .. })));
+    }
+
+    /// A saddled nautilus with a rider looking south (`+z`), from the trip's
+    /// own `MobType`, so no prepared resources are needed.
+    fn ridden() -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = Arc::make_mut(&mut kind);
+        k.id = "minecraft:nautilus".into();
+        k.species = Species::Nautilus;
+        k.width = 0.9;
+        k.height = 0.9;
+        let mut m = Mob::new(7, kind, Vec3::new(1.5, 40.0, -2.5), 0.0);
+        m.set_saddle(Some(crate::items::ItemStack::new("minecraft:saddle", 1)));
+        m.rider = Some(super::super::equine::Rider {
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        });
+        m
+    }
+
+    /// `AbstractNautilus.onPlayerJump` keeps the released bar's scale (0.4 to
+    /// 1.0, none while the dash clock runs) and `tickRidden` spends it:
+    /// `executeRidersJump` pushes along the rider's look at 0.5 on land,
+    /// starts the 40-tick clock, raises DASH and queues the dash sound.
+    #[test]
+    fn the_dash_runs_off_the_scale_the_released_bar_left() {
+        let mut m = ridden();
+        assert!(on_player_jump(&mut m, 100));
+        assert_eq!(m.rider.expect("the rider stays on").jump, 1.0);
+        super::super::equine::ridden_step(&mut m);
+        assert_eq!(
+            m.rider.expect("the rider stays on").jump,
+            0.0,
+            "the scale is spent"
+        );
+        assert_eq!(m.extra.anim_ticks, DASH_COOLDOWN);
+        assert!(m.extra.flag2, "DASH");
+        assert_eq!(m.extra.scratch[1], 1, "the dash sound plays next tick");
+        let k = 0.5 * m.movement_speed();
+        assert!(
+            (m.velocity.z - k).abs() < 1.0e-9 && m.velocity.x.abs() < 1.0e-9,
+            "a dash along +z: {:?} against {k}",
+            m.velocity
+        );
+        // A dash still in its cooldown takes nothing (`dashCooldown > 0`), and
+        // neither does an unsaddled nautilus.
+        assert!(!on_player_jump(&mut m, 50));
+        m.extra.anim_ticks = 0;
+        m.extra.saddled = false;
+        assert!(!on_player_jump(&mut m, 50));
+        assert_eq!(m.rider.expect("the rider stays on").jump, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod hostile_target_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A pool from x -8 to 8, with a stone wall at x = 3 when `wall`.
+    fn pool(
+        wall: bool,
+    ) -> impl FnOnce(&mut crate::world::World, &horizon_world::registry::BlockRegistry) {
+        move |world, registry| {
+            let water = registry.default_state("minecraft:water").unwrap();
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            for cx in -1..2 {
+                for cz in -1..1 {
+                    world
+                        .chunks
+                        .insert((cx, cz), Arc::new(crate::chunk::Chunk::empty(cx, cz)));
+                }
+            }
+            for x in -8..=18 {
+                for y in 60..=66 {
+                    for z in -4..=4 {
+                        let block = if wall && x == 3 { stone } else { water };
+                        world.set(x, y, z, block).unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    /// `NautilusAi.findNearestValidAttackTarget`: past the cooldown and the
+    /// level random's 1 in 2, the target is the closest #nautilus_hostiles in
+    /// water among NEAREST_VISIBLE_LIVING_ENTITIES, so not a pufferfish behind
+    /// stone. Each seed is a fresh level random.
+    fn targets(wall: bool, fish_at: Vec3) -> Option<Vec<Option<Who>>> {
+        let mut out = None;
+        let mut fish = None;
+        crate::mobs::world::with_built_test_world(
+            &[],
+            |_, _| {},
+            |_, types| {
+                let kind = Arc::new(types.types["minecraft:pufferfish"].clone());
+                fish = Some(Mob::new(2, kind, fish_at, 0.0).seen(None));
+            },
+        );
+        let fish = fish?;
+        crate::mobs::world::with_built_test_world(&[fish], pool(wall), |w, types| {
+            let kind = Arc::new(types.types["minecraft:nautilus"].clone());
+            let picks = (0..16)
+                .map(|seed| {
+                    let mut m = Mob::new(1, kind.clone(), Vec3::new(0.5, 62.0, 0.5), 270.0);
+                    m.fluids.in_water = true;
+                    let mut level = horizon_core::random::LegacyRandom::new(seed);
+                    find_target(&mut m, w, &mut level)
+                })
+                .collect();
+            out = Some(picks);
+        });
+        out
+    }
+
+    #[test]
+    fn a_nautilus_only_targets_a_pufferfish_it_sees() {
+        let near = Vec3::new(6.5, 62.0, 0.5);
+        // 16 out on x and 3 on z: inside the sensor's box, past range(16).
+        let far = Vec3::new(16.5, 62.0, 3.5);
+        let (Some(open), Some(walled), Some(beyond)) = (
+            targets(false, near),
+            targets(true, near),
+            targets(false, far),
+        ) else {
+            return;
+        };
+        assert!(open.contains(&Some(Who::Mob(2))), "{open:?}");
+        assert!(open.iter().all(|t| t.is_none() || *t == Some(Who::Mob(2))));
+        assert!(walled.iter().all(Option::is_none), "{walled:?}");
+        assert!(beyond.iter().all(Option::is_none), "{beyond:?}");
     }
 }

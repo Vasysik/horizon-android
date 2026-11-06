@@ -10,10 +10,6 @@ pub fn source_only_mod(project: &Project) -> bool {
         && project.loaders.iter().any(|loader| loader == "hnmod")
 }
 
-/// Temporary dev registration published as Minecraft Nintendo Switch by PrismarineJS.
-/// Account tokens and client secrets are never bundled.
-pub const MICROSOFT_CLIENT_ID: &str = "00000000441cc96b";
-
 /// Minecraft player names are at most 16 UTF-16 units; a longer name fails
 /// the integrated-server handshake with only a generic disconnect. Truncate
 /// to that limit, counting UTF-16 units so characters outside the BMP count
@@ -74,6 +70,12 @@ pub struct Config {
     pub device: crate::device_preferences::Settings,
     pub shader_source: crate::shader_catalog::Origin,
     pub mod_source: crate::shader_catalog::Origin,
+    /// The player's accent as `0xRRGGBB`; 0 for Horizon's violet.
+    pub accent: u32,
+    pub plain_plates: bool,
+    pub still_scene: bool,
+    /// Extra arguments for the game, as the desktop's `game_args`.
+    pub game_args: String,
 }
 
 pub use horizon_client::android_gamepad::InputMode as InputHost;
@@ -117,6 +119,13 @@ impl Orientation {
     }
 }
 impl Config {
+    pub fn accent_or_default(&self) -> u32 {
+        if self.accent == 0 {
+            crate::launcher_tokens::ACCENT
+        } else {
+            self.accent
+        }
+    }
     pub fn load(home: &Path) -> Self {
         let value: serde_json::Value = std::fs::read(home.join("android-launcher.json"))
             .ok()
@@ -126,9 +135,8 @@ impl Config {
         if cfg!(target_pointer_width = "32") && value.get("renderer").is_none() {
             config.renderer = RendererMode::OpenGl;
         }
-        // Ignore saved app registrations while this dev build uses the fixed ID.
-        config.microsoft_client_id =
-            crate::account::client_id().unwrap_or_else(|| MICROSOFT_CLIENT_ID.into());
+        // The app registration comes from the build (HORIZON_MSA_CLIENT_ID), never from saved data.
+        config.microsoft_client_id = crate::account::client_id().unwrap_or_default();
         if value.get("renderer").is_none() && value["gpu_batching"].as_bool() == Some(true) {
             config.renderer = RendererMode::Vulkan;
         }
@@ -162,49 +170,20 @@ impl Config {
         self.profile_home(home)
     }
 }
-#[derive(Clone, Copy, PartialEq)]
-pub enum Page {
-    Play,
-    Mods,
-    Packs,
-    Shaders,
-    Installed,
-    Settings,
-    Skins,
-}
-impl Page {
-    pub const ALL: [Self; 7] = [
-        Self::Play,
-        Self::Mods,
-        Self::Packs,
-        Self::Shaders,
-        Self::Installed,
-        Self::Settings,
-        Self::Skins,
-    ];
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Play => "Play",
-            Self::Mods => "Mods",
-            Self::Packs => "Packs",
-            Self::Shaders => "Shaders",
-            Self::Installed => "Installed",
-            Self::Settings => "Settings",
-            Self::Skins => "Skins",
-        }
-    }
-    pub fn is_catalog(self) -> bool {
-        matches!(self, Self::Packs | Self::Mods | Self::Shaders)
-    }
-}
+pub use crate::launcher_view::Page;
 enum Reply {
     Done(String, horizon_client::content_files::Kind),
+    /// Nothing to show on another page.
+    Note(String),
 }
 pub struct Catalog {
     pub local: Vec<LocalItem>,
     pub bundled_enabled: std::collections::BTreeSet<String>,
-    pub sections: [bool; 3],
     pub pending_delete: Option<LocalItem>,
+    /// Home's tab to show after an install.
+    pub show_home: Option<horizon_client::content_files::Kind>,
+    /// The Proxy row's text; `config.proxy` once it's checked.
+    pub proxy_text: String,
     downloaded: Vec<(browser::SourceId, String)>,
     downloading: Option<(browser::SourceId, String)>,
     progress: Arc<Mutex<f32>>,
@@ -232,11 +211,13 @@ pub struct LocalItem {
 impl Catalog {
     pub fn new(home: &Path) -> Self {
         let config = Config::load(home);
+        crate::proxy::announce(config.proxy.clone());
         let mut result = Self {
             local: vec![],
             bundled_enabled: Default::default(),
-            sections: [false, false, false],
             pending_delete: None,
+            show_home: None,
+            proxy_text: config.proxy.clone().unwrap_or_default(),
             downloaded: vec![],
             downloading: None,
             progress: Arc::new(Mutex::new(0.0)),
@@ -257,18 +238,13 @@ impl Catalog {
         result.refresh(home);
         result
     }
+    /// Back to Home, on the tab that lists what just came in.
     pub fn show_installed(&mut self, kind: Option<horizon_client::content_files::Kind>) {
         self.searches.cancel_interest();
-        self.page = Page::Installed;
+        self.page = Page::Play;
         self.scroll = 0.0;
         self.editing = None;
-        self.sections = [false; 3];
-        if let Some(i) = horizon_client::content_files::Kind::ALL
-            .iter()
-            .position(|k| Some(*k) == kind)
-        {
-            self.sections[i] = true;
-        }
+        self.show_home = Some(kind.unwrap_or(horizon_client::content_files::Kind::Packs));
     }
     pub fn refresh(&mut self, home: &Path) {
         let game = self.config.game_home(home);
@@ -384,6 +360,7 @@ impl Catalog {
                     self.status = s;
                     self.show_installed(Some(kind));
                 }
+                Ok(Reply::Note(s)) => self.status = s,
                 Err(e) => self.status = e,
             }
             self.refresh(home);
@@ -433,7 +410,7 @@ impl Catalog {
         }
         self.scroll = 0.0;
         let source = match self.page {
-            Page::Packs => browser::SourceId::Modrinth,
+            Page::Packs | Page::DataPacks => browser::SourceId::Modrinth,
             Page::Shaders => self.config.shader_source.source(),
             Page::Mods => self.config.mod_source.source(),
             _ => browser::SourceId::Horizon,
@@ -489,6 +466,7 @@ impl Catalog {
             let kind = match page {
                 Page::Mods => Kind::Mod,
                 Page::Shaders => Kind::Shader,
+                Page::DataPacks => Kind::DataPack,
                 _ => Kind::ResourcePack,
             };
             let mut query = Query::new(&text, kind);
@@ -497,7 +475,7 @@ impl Catalog {
             let result = if page == Page::Shaders && source == browser::SourceId::Modrinth {
                 query.everything = true;
                 browser::modrinth::search_shader_packs(&query)
-            } else if page == Page::Packs
+            } else if matches!(page, Page::Packs | Page::DataPacks)
                 || (page == Page::Mods && source == browser::SourceId::Modrinth)
             {
                 query.everything = true;
@@ -589,6 +567,53 @@ impl Catalog {
                     _ => horizon_client::content_files::Kind::Packs,
                 },
             ))
+        });
+    }
+    /// Downloads a data pack into `world`, as the desktop's `install_datapack` does: refused
+    /// when nothing in it runs in Horizon yet.
+    pub fn install_datapack(&mut self, index: usize, world: PathBuf) {
+        let Some(project) = self.results.get(index).cloned() else {
+            return;
+        };
+        if self.busy() {
+            return;
+        }
+        self.downloading = Some((project.source, project.id.clone()));
+        self.failed = None;
+        *self.progress.lock().unwrap_or_else(|e| e.into_inner()) = 0.0;
+        let progress = self.progress.clone();
+        self.job("Checking the data pack and downloading...", move || {
+            let source = browser::source(project.source).ok_or("Unsupported download source")?;
+            let versions = source.versions(&project)?;
+            let version = browser::pick(Kind::DataPack, &versions, true)
+                .ok_or_else(|| format!("{} has no data pack to download.", project.title))?;
+            let file = version.file().ok_or("This version has no file")?;
+            let folder = crate::platform::cache_dir()
+                .ok_or("Could not access the app's cache")?
+                .join(format!("datapack-{}", version.id));
+            let result = source
+                .fetch(file, &folder, &|p| {
+                    if p.is_finite() {
+                        *progress.lock().unwrap_or_else(|e| e.into_inner()) = p.clamp(0.0, 1.0);
+                    }
+                })
+                .and_then(|zip| {
+                    let coverage = crate::datapacks::coverage(&zip)?;
+                    if coverage.read.is_empty() {
+                        return Err(format!(
+                            "{} would change nothing in Horizon yet: it has no functions, predicates or item modifiers, and Horizon doesn't read its {} yet.",
+                            project.title,
+                            coverage.not_read()
+                        ));
+                    }
+                    crate::datapacks::add(&world, &zip)
+                });
+            let _ = std::fs::remove_dir_all(&folder);
+            let pack = result?;
+            Ok(Reply::Note(format!(
+                "Installed {} into the world. The game turns it on when the world opens.",
+                pack.file
+            )))
         });
     }
     pub fn toggle_local(&mut self, home: &Path, index: usize) {
@@ -700,6 +725,8 @@ impl Catalog {
             Some("server") => &mut self.config.server,
             Some("render_scale") => &mut self.render_scale_text,
             Some("client_id") => &mut self.config.microsoft_client_id,
+            Some("game_args") => &mut self.config.game_args,
+            Some("proxy") => &mut self.proxy_text,
             _ => &mut self.query,
         };
         match out {
@@ -726,6 +753,15 @@ impl Catalog {
                             return;
                         }
                     }
+                }
+                if self.editing == Some("proxy") {
+                    let spec = self.proxy_text.trim().to_owned();
+                    if let Some(why) = crate::proxy::refuse(&spec) {
+                        self.status = why;
+                        return;
+                    }
+                    self.config.proxy = (!spec.is_empty()).then_some(spec);
+                    crate::proxy::announce(self.config.proxy.clone());
                 }
                 self.editing = None;
                 let _ = self.config.save(home);

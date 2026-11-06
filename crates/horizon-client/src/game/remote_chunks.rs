@@ -4,7 +4,9 @@
 //! order only inserts the result (`ClientPacketListener.handleLevelChunkWithLight`).
 use super::Game;
 use horizon_client::{
-    chunk::{BIOME_STRATEGY, Chunk, ColumnLayout, Light, Section, block_strategy},
+    chunk::{
+        BIOME_STRATEGY, Chunk, ColumnLayout, Light, Section, block_strategy, known_blocks_only,
+    },
     streaming::Streaming,
 };
 use horizon_core::paletted::{PalettedContainer, Strategy};
@@ -13,6 +15,7 @@ use horizon_protocol::{
     packets::play::{self, Clientbound as C},
     registry::DimensionType,
 };
+use horizon_world::attachments::Holder;
 use std::sync::{
     Arc,
     mpsc::{self, TryRecvError},
@@ -84,20 +87,10 @@ impl ChunkFormat {
             };
             let palette = s.states.palette.iter().map(|&p| p as u32).collect();
             let words = s.states.data.iter().map(|&w| w as u64).collect();
-            let mut blocks = PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
-                .map_err(|e| e.to_string())?;
-            if strategy.global_bits != ours.global_bits {
-                let mut values = [0u32; 4096];
-                blocks.unpack(&mut values);
-                // Ids past our registry (a host with mods we lack) read as air.
-                let limit = 1u64 << ours.global_bits;
-                for v in &mut values {
-                    if u64::from(*v) >= limit {
-                        *v = 0;
-                    }
-                }
-                blocks = PalettedContainer::from_values(ours, &values);
-            }
+            let blocks = known_blocks_only(
+                PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
+                    .map_err(|e| e.to_string())?,
+            );
             let mut section = Section {
                 blocks,
                 biomes: PalettedContainer::new(BIOME_STRATEGY, 0),
@@ -112,6 +105,9 @@ impl ChunkFormat {
         // the server sent; nothing is relit.
         let (layers, above) = self.light(&p.light);
         horizon_client::light::light_from_layers(&mut chunk, &layers, above, self.has_skylight);
+        // From the single-player server thread: its own sections where they
+        // are the same.
+        horizon_client::lan::handoff::take(&mut chunk);
         Ok(chunk)
     }
 
@@ -282,7 +278,14 @@ impl Game<'_> {
             }
         };
         let (x, z) = (p.x, p.z);
-        self.streaming.insert_remote(&mut self.world, chunk);
+        // A column sent again while it is resident (a bulk edit): only what changed is lit and meshed again.
+        if self.world.chunks.contains_key(&(x, z)) {
+            horizon_client::spans::time("replace_remote", || {
+                self.streaming.replace_remote(&mut self.world, chunk)
+            });
+        } else {
+            self.streaming.insert_remote(&mut self.world, chunk);
+        }
         self.world
             .block_entities
             .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));
@@ -296,6 +299,15 @@ impl Game<'_> {
             self.sync_block_entity(pos, None, state);
             // LevelChunk.replaceWithPacketData: the block entity loads its update tag.
             self.remote_block_entity_data([pos.0, pos.1, pos.2], info.kind, &info.tag);
+        }
+        if let Some(r) = self.remote.as_mut() {
+            r.attachments.retain(|holder, _| match *holder {
+                Holder::BlockEntity([bx, by, bz]) => {
+                    (bx >> 4, bz >> 4) != (x, z)
+                        || self.world.block_entities.contains_key(&(bx, by, bz))
+                }
+                _ => true,
+            });
         }
     }
 

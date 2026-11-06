@@ -7,7 +7,10 @@ use horizon_client::{
     text::Text,
     worldborder::MAX_SIZE,
 };
-use horizon_core::random::RandomSource;
+use horizon_core::{position::ChunkPos, random::RandomSource};
+
+/// How long `/forceload add` waits for its chunks, as the game tests' loads do.
+const FORCED_CHUNK_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
 fn num(n: impl std::fmt::Display) -> Text {
     Text::literal(n.to_string())
@@ -23,7 +26,13 @@ fn holder(text: Text) -> Holder {
     }
 }
 fn ticks_to_seconds(ticks: i64) -> String {
-    format!("{:.2}", ticks as f64 / 20.0)
+    super::percent_f(ticks as f64 / 20.0, 2)
+}
+/// `WorldBorderCommand.ERROR_TOO_BIG`'s argument: vanilla hands the message the
+/// double `5.9999968E7` (the value `setSize` compares against too), and a `%s`
+/// substitution prints a double with `Double.toString`.
+fn size_limit_text() -> String {
+    horizon_client::java_text::double_to_string(MAX_SIZE)
 }
 
 impl Game<'_> {
@@ -36,12 +45,30 @@ impl Game<'_> {
         let p = self.resolve_coords(&c);
         Ok([p[0].floor() as i32, p[2].floor() as i32])
     }
+    /// `ServerLevel.setChunkForced`'s `getChunk`: a command right after
+    /// `/forceload add` (`/place`, `/setblock`) finds the chunks loaded.
+    fn wait_for_forced_chunks(&mut self, min: [i32; 2], max: [i32; 2]) {
+        let missing = |g: &Self| {
+            (min[0]..=max[0])
+                .any(|x| (min[1]..=max[1]).any(|z| !g.world.chunks.contains_key(&(x, z))))
+        };
+        let deadline = std::time::Instant::now() + FORCED_CHUNK_WAIT;
+        while missing(self) {
+            if std::time::Instant::now() >= deadline {
+                log::warn!("Horizon: /forceload: chunks {min:?}..{max:?} are not loaded yet");
+                return;
+            }
+            let _ = self.streaming.update(&mut self.world);
+            self.streaming.wait(std::time::Duration::from_millis(5));
+        }
+    }
     pub(super) fn cmd_forceload(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let dim = Text::literal(self.dim.id());
         match id {
             "forceload.query" if ctx.get("pos").is_none() => {
                 let mut forced: Vec<(i32, i32)> = self.streaming.forced.iter().copied().collect();
-                forced.sort_unstable();
+                // ForceLoadCommand sorts its LongStream before formatting chunks.
+                forced.sort_unstable_by_key(|&(x, z)| ChunkPos::new(x, z).pack());
                 if forced.is_empty() {
                     self.command_failure(Text::translate("commands.forceload.added.none", &[dim]));
                     return Ok(0);
@@ -121,6 +148,7 @@ impl Game<'_> {
                 }
                 if add {
                     self.streaming.rank_forced(cx0, cz0, cx1, cz1);
+                    self.wait_for_forced_chunks([cx0, cz0], [cx1, cz1]);
                 }
                 let (lo, hi) = (chunk_text(cx0, cz0), chunk_text(cx1, cz1));
                 let verb = if add { "added" } else { "removed" };
@@ -276,7 +304,14 @@ impl Game<'_> {
         }
     }
     pub(in crate::game) fn tick_worldborder(&mut self) {
+        let remaining = self.border.remaining_ticks();
         self.border.tick();
+        if remaining > 0
+            && self.border.remaining_ticks() == 0
+            && (self.serving.is_some() || self.options.dedicated.is_some())
+        {
+            self.native_world_border_bounds_change_finish();
+        }
         self.player_border();
         self.border_damage();
     }
@@ -312,7 +347,7 @@ impl Game<'_> {
         }
     }
     pub(super) fn cmd_worldborder(&mut self, id: &str, ctx: &Context) -> R<i32> {
-        let float2 = |v: f64| format!("{v:.2}");
+        let float2 = |v: f64| super::percent_f(v, 2);
         let double = match ctx.get("distance") {
             Some(Arg::Double(d)) => *d,
             _ => 0.0,
@@ -326,7 +361,7 @@ impl Game<'_> {
                 let size = self.border.size();
                 self.feedback(Text::translate(
                     "commands.worldborder.get",
-                    &[Text::literal(format!("{size:.0}"))],
+                    &[Text::literal(super::percent_f(size, 0))],
                 ));
                 Ok((size + 0.5).floor() as i32)
             }
@@ -344,9 +379,12 @@ impl Game<'_> {
                     return Err(err("commands.worldborder.set.failed.small", &[]));
                 }
                 if distance > MAX_SIZE {
-                    return Err(err("commands.worldborder.set.failed.big", &[&"5.999997E7"]));
+                    return Err(err(
+                        "commands.worldborder.set.failed.big",
+                        &[&size_limit_text()],
+                    ));
                 }
-                let shown = Text::literal(format!("{distance:.1}"));
+                let shown = Text::literal(super::percent_f(distance, 1));
                 if time > 0 {
                     self.border.lerp_to(distance, time);
                     let key = if distance > current {
@@ -365,6 +403,7 @@ impl Game<'_> {
                         &[shown],
                     ));
                 }
+                self.native_world_border_bounds_changed();
                 Ok((distance - current) as i32)
             }
             "worldborder.center" => {
@@ -382,6 +421,7 @@ impl Game<'_> {
                     ));
                 }
                 self.border.set_center([x, z]);
+                self.native_world_border_center_changed();
                 self.feedback(Text::translate(
                     "commands.worldborder.center.success",
                     &[Text::literal(float2(x)), Text::literal(float2(z))],
@@ -494,15 +534,34 @@ impl Game<'_> {
                 let Some(Arg::Resource(table)) = ctx.get("loot_table").cloned() else {
                     return Ok(0);
                 };
-                // An inline table (ResourceOrIdArgument): no random sequence.
+                // An inline table (ResourceOrIdArgument) keeps its random sequence.
                 if table.starts_with('{') {
                     let (tag, _) = horizon_world::nbt::parse_snbt(&table)
                         .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
                     let json = horizon_client::scoreboard::tag_to_json(&tag);
-                    let drops = self
-                        .res
-                        .items()
-                        .inline_loot_table(&json, &mut self.world.random);
+                    // LootCommand's omitted fishing tool is EMPTY, not mainhand.
+                    let held = if id == "loot.fish"
+                        && (ctx.get("tool").is_some() || ctx.has("mainhand") || ctx.has("offhand"))
+                    {
+                        self.tool_stack(ctx)?
+                    } else {
+                        None
+                    };
+                    let drops = match json["random_sequence"].as_str() {
+                        Some(sequence) => {
+                            let random = self.rand_sequences.get(sequence, self.level.seed);
+                            world_items!(self).inline_loot_table_with_tool(
+                                &json,
+                                held.as_ref(),
+                                random,
+                            )
+                        }
+                        None => world_items!(self).inline_loot_table_with_tool(
+                            &json,
+                            held.as_ref(),
+                            &mut self.world.random,
+                        ),
+                    };
                     (drops, None)
                 } else {
                     if !self.items().has_loot_table(&table) {
@@ -534,7 +593,9 @@ impl Game<'_> {
                     return Ok(0);
                 };
                 let ty = self.target_type(t);
-                let table = format!("minecraft:entities/{}", ty.trim_start_matches("minecraft:"));
+                // `EntityType.getDefaultLootTable`, in the type's namespace.
+                let (namespace, path) = ty.split_once(':').unwrap_or(("minecraft", ty.as_str()));
+                let table = format!("{namespace}:entities/{path}");
                 if t == Target::Player || !world_items!(self).has_loot_table(&table) {
                     return Err(err(
                         "commands.drop.no_loot_table.entity",
@@ -565,10 +626,11 @@ impl Game<'_> {
                 let p = self.block_pos_arg(ctx, "pos")?;
                 let state = self.world.block(p[0], p[1], p[2]);
                 let name = self.data_block_name(p);
-                let table = format!("minecraft:blocks/{}", name.trim_start_matches("minecraft:"));
-                if !world_items!(self).has_loot_table(&table) {
+                let Some(table) =
+                    world_items!(self).block_loot_table(self.pack.assets.registry, state)
+                else {
                     return Err(err("commands.drop.no_loot_table.block", &[&name]));
-                }
+                };
                 let tool = self.tool_stack(ctx)?;
                 let drops = match world_items!(self).loot_sequence(&table) {
                     Some(seq) => {
@@ -635,6 +697,9 @@ impl Game<'_> {
                 let mut left = d.clone();
                 let mut placed = false;
                 for s in &slots {
+                    if !self.slot_accepts(s, Some(&left)) {
+                        continue;
+                    }
                     match self.slot_get(s) {
                         None => {
                             self.slot_set(s, Some(left.clone()));
@@ -712,7 +777,8 @@ impl Game<'_> {
                     };
                     let Some(slot) = slot else { continue };
                     let item = drops.get(i).cloned();
-                    if self.slot_set(&slot, item.clone()) {
+                    if self.slot_accepts(&slot, item.as_ref()) && self.slot_set(&slot, item.clone())
+                    {
                         used.push(item.unwrap_or(ItemStack {
                             item: "minecraft:air".into(),
                             count: 0,
@@ -726,8 +792,9 @@ impl Game<'_> {
         let mut tracker = Tracker::default();
         for u in &used {
             let name = self.item_display_name(&u.item);
-            tracker.track(&holder(name), u.count as i32);
-            let _ = u;
+            // CommandResponseTracker.track(drop): one per stack, so the
+            // command returns how many stacks it used, not how many items.
+            tracker.track(&holder(name), 1);
         }
         let counts: Vec<u32> = used.iter().map(|u| u.count).collect();
         let (message, total) = tracker.message(
@@ -755,5 +822,19 @@ impl Game<'_> {
         )?;
         self.feedback(message);
         Ok(total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `WorldBorderCommand.ERROR_TOO_BIG` is built with the double
+    /// `5.9999968E7`, the same value `setSize` compares `distance` against, and
+    /// the `%s` substitution of a translatable renders a double with
+    /// `Double.toString`: the message names `5.9999968E7`, not a rounded
+    /// `5.999997E7`.
+    #[test]
+    fn the_too_big_message_names_the_limit_as_vanilla_prints_it() {
+        assert_eq!(super::MAX_SIZE, 5.9999968E7);
+        assert_eq!(super::size_limit_text(), "5.9999968E7");
     }
 }

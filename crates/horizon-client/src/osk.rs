@@ -7,6 +7,11 @@
 use crate::gamepad::{Button, GlyphStyle};
 use crate::ui_theme::{self, Face, Ui, color};
 
+/// A label of the keyboard: the language table's, or the English text.
+fn tr(key: &str, english: &str) -> String {
+    crate::lang::get_or(key, english)
+}
+
 /// What a key press does to the focused field.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Output {
@@ -287,8 +292,9 @@ impl Keyboard {
     }
 
     /// Draw the keyboard across the bottom of the screen, or the top when
-    /// the field it types into is in the lower half.
-    pub fn draw(&self, ui: &mut Ui, at_top: bool, glyphs: GlyphStyle) {
+    /// the field it types into is in the lower half. `by_letter`: the pad goes by its letters
+    /// and the glyphs are Nintendo's, so a hint names the button playing its part.
+    pub fn draw(&self, ui: &mut Ui, at_top: bool, glyphs: GlyphStyle, by_letter: bool) {
         const UNIT: f32 = 50.0;
         const GAP: f32 = 6.0;
         const KEY_H: f32 = 38.0;
@@ -332,12 +338,12 @@ impl Keyboard {
                 let label = match key {
                     Key::Char(ch) => self.letter(*ch),
                     Key::Shift if self.caps => "CAPS".into(),
-                    Key::Shift => "Shift".into(),
+                    Key::Shift => tr("horizon.osk.shift", "Shift"),
                     Key::Layer if self.symbols => "abc".into(),
                     Key::Layer => "&123".into(),
-                    Key::Space => "Space".into(),
-                    Key::Backspace => "Delete".into(),
-                    Key::Done => "Done".into(),
+                    Key::Space => tr("horizon.osk.space", "Space"),
+                    Key::Backspace => tr("horizon.osk.delete", "Delete"),
+                    Key::Done => tr("gui.done", "Done"),
                 };
                 let lw = ui.measure(Face::Medium, ui_theme::BODY, &label);
                 ui.text_line(
@@ -352,17 +358,20 @@ impl Keyboard {
             }
         }
         let hints = [
-            (Button::South, "Type"),
-            (Button::West, "Delete"),
-            (Button::North, "Space"),
-            (Button::LeftTrigger, "Shift"),
-            (Button::RightBumper, "Symbols"),
-            (Button::Start, "Done"),
-            (Button::East, "Close"),
+            (Button::South, tr("horizon.osk.type", "Type")),
+            (Button::West, tr("horizon.osk.delete", "Delete")),
+            (Button::North, tr("horizon.osk.space", "Space")),
+            (Button::LeftTrigger, tr("horizon.osk.shift", "Shift")),
+            (Button::RightBumper, tr("horizon.osk.symbols", "Symbols")),
+            (Button::Start, tr("gui.done", "Done")),
+            (Button::East, tr("horizon.osk.close", "Close")),
         ];
         let line: Vec<String> = hints
             .iter()
-            .map(|(b, what)| format!("{} {what}", b.label(glyphs)))
+            .map(|(b, what)| {
+                let b = if by_letter { b.by_letter() } else { *b };
+                format!("{} {what}", b.label(glyphs))
+            })
             .collect();
         ui.text_centered(
             Face::Regular,

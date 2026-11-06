@@ -34,9 +34,66 @@ fn add(chat: &mut Chat, font: &Font, content: Text) {
                 added: 0,
                 content,
                 tag: None,
+                message: "".into(),
             },
         );
     }
+}
+
+#[test]
+fn smooth_chat_slides_a_line_in_and_can_hide_the_indicator() {
+    let mut chat = Chat {
+        smooth: true,
+        ..Chat::default()
+    };
+    chat.lines.push(Line {
+        added: 0,
+        content: Text::literal("hi"),
+        tag: Some(std::sync::Arc::new(Tag::system_single_player(
+            SYSTEM_INDICATOR,
+        ))),
+        message: "hi".into(),
+    });
+    let text_alpha = |draws: &[GuiDraw]| {
+        draws.iter().find_map(|d| match d {
+            GuiDraw::Text { color, .. } => Some(color >> 24),
+            _ => None,
+        })
+    };
+    // The slide is the negative translate the line carries while it moves.
+    let slide = |draws: &[GuiDraw]| {
+        draws.iter().find_map(|d| match d {
+            GuiDraw::Push(ops) => ops.iter().find_map(|op| match op {
+                PoseOp::Translate(x, _) if *x < 0.0 => Some(*x),
+                _ => None,
+            }),
+            _ => None,
+        })
+    };
+    // The tick it arrives: fully faded out, so nothing is drawn.
+    assert_eq!(text_alpha(&chat.layout(361, 0.0, false)), None);
+    // Halfway through the intro: left of its place and still faint.
+    let halfway = chat.layout(361, INTRO_TICKS / 2.0, false);
+    assert!(slide(&halfway).is_some_and(|x| (-INTRO_WIDTH..0.0).contains(&x)));
+    let faded = text_alpha(&halfway).expect("the line shows halfway through");
+    // Settled: in place and as opaque as vanilla's line.
+    let settled = chat.layout(361, INTRO_TICKS, false);
+    assert_eq!(slide(&settled), None);
+    assert!(text_alpha(&settled).expect("settled") > faded);
+    // The extra off draws the line whole on the tick it arrives, as vanilla.
+    chat.smooth = false;
+    let plain = chat.layout(361, 0.0, false);
+    assert_eq!(slide(&plain), None);
+    assert_eq!(text_alpha(&plain), text_alpha(&settled));
+    // The indicator bar is the -4 to -2 fill at the left of the line.
+    let bar = |draws: &[GuiDraw]| {
+        draws
+            .iter()
+            .any(|d| matches!(d, GuiDraw::Fill { x0: -4, x1: -2, .. }))
+    };
+    assert!(bar(&plain));
+    chat.hide_indicator = true;
+    assert!(!bar(&chat.layout(361, 0.0, false)));
 }
 
 #[test]
@@ -95,7 +152,7 @@ fn click_targets_match_rendered_spans_when_scaled_wrapped_and_scrolled() {
             for scroll in [0, 3, 12] {
                 chat.scroll = scroll;
                 let mut links = 0;
-                for draw in chat.layout(361, 0, true) {
+                for draw in chat.layout(361, 0.0, true) {
                     if let GuiDraw::Text { text, x, y, .. } = draw {
                         let mut at = x as f64;
                         for (c, style) in text.chars() {
@@ -489,7 +546,7 @@ fn the_chat_option_filters_the_lines_both_ways() {
     assert_eq!(shown(&chat), ["client", "server", "player"]);
 }
 
-/// The in-frame LAN host's chat: a guest's line is a player message, so the
+/// A server's own chat: a guest's line is a player message, so the
 /// Chat option's player-message permission hides it at Commands Only and
 /// Hidden; command feedback (`/list`, `/tp`) is a system message and stays
 /// at Commands Only.
@@ -645,4 +702,141 @@ fn a_chat_message_is_cut_to_the_256_utf16_units_the_packet_holds() {
     // A cut between the halves of a pair keeps the character below it.
     let mixed = format!("{}\u{1f600}", "b".repeat(255));
     assert_eq!(normalize_chat_message(&mixed), "b".repeat(255));
+}
+
+/// PvP & HUD's chat options: the time before each message, and a repeated message counted on
+/// its own lines instead of filling the chat.
+#[test]
+fn timestamps_and_compact_chat_change_the_lines_not_the_messages() {
+    let font = font();
+    let mut chat = Chat {
+        clock: Some((9, 5)),
+        ..Chat::default()
+    };
+    chat.qol.compact = true;
+    let says = |chat: &mut Chat, text: &str| {
+        chat.add_message(
+            &font,
+            Text::literal(text),
+            None,
+            ChatSource::Server,
+            0,
+            false,
+        );
+    };
+    let shown =
+        |chat: &Chat| -> Vec<String> { chat.lines.iter().map(|l| l.content.plain()).collect() };
+    says(&mut chat, "gg");
+    says(&mut chat, "gg");
+    says(&mut chat, "gg");
+    assert_eq!(shown(&chat), ["gg (x3)"]);
+    says(&mut chat, "wp");
+    says(&mut chat, "gg");
+    assert_eq!(shown(&chat), ["gg", "wp", "gg (x3)"]);
+    assert_eq!(chat.received, 5, "every message still counts as received");
+    chat.qol.timestamps = true;
+    chat.rewrap(&font);
+    assert_eq!(
+        shown(&chat),
+        ["[09:05] gg", "[09:05] wp", "[09:05] gg (x3)"]
+    );
+    // Copying takes the message as it came: no time, no count.
+    assert_eq!(&*chat.lines[2].message, "gg");
+    // Turned off, the history shows each repeat as it was counted.
+    chat.qol = ChatQol::default();
+    chat.rewrap(&font);
+    assert_eq!(shown(&chat), ["gg", "wp", "gg (x3)"]);
+}
+
+/// PvP & HUD's chat search: only the messages holding the query show, in any case; clearing
+/// it brings every line back.
+#[test]
+fn the_chat_search_keeps_the_matching_messages() {
+    let font = font();
+    let mut chat = Chat::default();
+    for text in ["Alpha one", "beta", "ALPHABET soup"] {
+        chat.add_message(
+            &font,
+            Text::literal(text),
+            None,
+            ChatSource::Server,
+            0,
+            false,
+        );
+    }
+    let shown =
+        |chat: &Chat| -> Vec<String> { chat.lines.iter().map(|l| l.content.plain()).collect() };
+    chat.set_search_with(&font, Some("alpha"));
+    assert!(chat.searching());
+    assert_eq!(shown(&chat), ["ALPHABET soup", "Alpha one"]);
+    // A new message that doesn't match stays out of sight until the search ends.
+    chat.add_message(
+        &font,
+        Text::literal("gamma"),
+        None,
+        ChatSource::Server,
+        0,
+        false,
+    );
+    assert_eq!(shown(&chat).len(), 2);
+    chat.set_search_with(&font, Some("  "));
+    assert!(!chat.searching());
+    assert_eq!(
+        shown(&chat),
+        ["gamma", "ALPHABET soup", "beta", "Alpha one"]
+    );
+}
+
+/// Search and copy read a message as the chat shows it: legacy `§` codes format it, they
+/// aren't text.
+#[test]
+fn the_chat_search_and_copy_skip_legacy_codes() {
+    let font = font();
+    let mut chat = Chat::default();
+    for text in ["He§cllo", "§aplain"] {
+        chat.add_message(
+            &font,
+            Text::literal(text),
+            None,
+            ChatSource::Server,
+            0,
+            false,
+        );
+    }
+    assert_eq!(&*chat.lines[1].message, "Hello");
+    chat.set_search_with(&font, Some("hello"));
+    assert_eq!(chat.lines.len(), 1);
+    // `c` and `a` are codes here, not letters of either message.
+    chat.set_search_with(&font, Some("c"));
+    assert_eq!(chat.lines.len(), 0);
+}
+
+/// A repeat merged by compact chat leaves a reader scrolled up where they were.
+#[test]
+fn a_compact_repeat_keeps_the_scrolled_view_still() {
+    let font = font();
+    let mut chat = Chat::default();
+    chat.qol.compact = true;
+    let says = |chat: &mut Chat, text: &str| {
+        chat.add_message(
+            &font,
+            Text::literal(text),
+            None,
+            ChatSource::Server,
+            0,
+            true,
+        );
+    };
+    for i in 0..60 {
+        says(&mut chat, &format!("line {i}"));
+    }
+    says(&mut chat, "gg");
+    chat.scroll_by(5, true);
+    assert_eq!(chat.scroll, 5);
+    says(&mut chat, "gg");
+    assert_eq!(chat.lines[0].content.plain(), "gg (x2)");
+    assert_eq!(chat.scroll, 5);
+    // A new message still pushes the view up by its line.
+    says(&mut chat, "new");
+    assert_eq!(chat.scroll, 6);
 }

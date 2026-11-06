@@ -10,7 +10,7 @@ use super::{
 use horizon_client::{
     containers::{Beacon, BlockEntity},
     effects::EffectInstance,
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
     items::ItemStack,
     mesher::Vertex,
     mobs::render::{DYE, DYE_NAMES},
@@ -130,8 +130,13 @@ impl Game<'_> {
         let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.take(&key) else {
             return;
         };
+        let previous = b.levels;
         self.tick_beacon(key, &mut b, false);
+        let current = b.levels;
         self.world.block_entities.put(key, BlockEntity::Beacon(b));
+        if (previous == 0) != (current == 0) {
+            self.native_beacon_state_change(self.dim.id(), [key.0, key.1, key.2], current > 0);
+        }
     }
     /// `ClientLevel.tickBlockEntities` for beacons: a server's chunk data
     /// carries no beam sections, so the client builds them too; effects,
@@ -461,15 +466,8 @@ impl Game<'_> {
                 |t| t.plain(),
             )
         });
+        self.render_transparent_background("beacon", batch);
         let atlas = &self.gui.atlas;
-        batch.fill(
-            atlas,
-            0.0,
-            0.0,
-            batch.width,
-            batch.height,
-            rgba(16, 16, 16, 160),
-        );
         if let Some(mut r) = atlas.sprites.get("gui/container/beacon").copied() {
             let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
             r.u1 = r.u0 + 230.0 * du;

@@ -11,6 +11,7 @@ use horizon_client::{
     enchant::{EffectContext, Enchantments, level_value},
     items::ItemStack,
     mobs::Who,
+    projectiles::Projectile,
 };
 use horizon_core::{position::BlockPos, random::RandomSource};
 use horizon_world::{fluid::FluidKind, level::LevelAccess, registry::BlockStateId};
@@ -34,14 +35,13 @@ fn block_break_speed_factor(value: Option<f64>) -> f32 {
 impl Game<'_> {
     /// `Player.getDestroySpeed` after the tool speed: mining efficiency, haste
     /// and mining fatigue.
-    pub(super) fn modify_destroy_speed(&self, mut speed: f32) -> f32 {
+    pub(super) fn modify_destroy_speed(&mut self, mut speed: f32) -> f32 {
         if speed > 1.0 {
-            let held = self.inventory[self.selected].as_ref();
             speed += self
-                .res
-                .stations()
-                .enchantments
-                .attribute_add(held, "minecraft:mining_efficiency") as f32;
+                .player
+                .as_mut()
+                .and_then(|player| player.attribute("minecraft:mining_efficiency").ok())
+                .unwrap_or(0.0) as f32;
         }
         speed * self.potions.effects.mining_speed_factor()
     }
@@ -89,7 +89,17 @@ impl Game<'_> {
     /// `ItemStack.hurtAndBreak` for the player's `stack`: the wear Unbreaking
     /// leaves, and `ItemDurabilityTrigger` when some is left (`applyDamage`).
     pub(super) fn wear(&mut self, stack: &ItemStack, amount: u32) -> u32 {
-        let loss = self.durability_loss(stack, amount);
+        let mut loss = self.durability_loss(stack, amount);
+        // The mods hear a server player's wear once Unbreaking has had its say,
+        // and may change it or stop it.
+        if loss > 0
+            && let (Some(uuid), Some(name)) = (self.lan_acting_uuid, self.lan_acting_name.clone())
+        {
+            let mut points = loss as i32;
+            let mut cancel = false;
+            self.native_item_damaged(uuid, &name, &stack.item, &mut points, &mut cancel);
+            loss = if cancel { 0 } else { points.max(0) as u32 };
+        }
         if loss > 0 {
             self.trigger_item_durability(stack, stack.damage + loss);
         }
@@ -540,21 +550,55 @@ impl Game<'_> {
                 items: Some(world_items!(self)),
                 ..Default::default()
             };
-            let to_repair_xp = world_stations!(self).enchantments.modify_value(
+            let mut to_repair_xp = world_stations!(self).enchantments.modify_value(
                 Some(&stack),
                 "minecraft:repair_with_xp",
                 &ctx,
                 &mut self.world.random,
                 amount as f32,
             ) as u32;
-            let repaired = to_repair_xp.min(stack.damage);
-            if let Some(s) = self.mend_slot_mut(slot).as_mut() {
-                s.damage -= repaired;
+            let vanilla_repair = to_repair_xp;
+            if self.serving.is_some() || self.options.dedicated.is_some() {
+                let player = self.native_acting_id();
+                self.native_mending_repair(player, &stack, amount, &mut to_repair_xp);
             }
-            if repaired == 0 || to_repair_xp == 0 {
-                return 0;
+            // A hook can re-enter experience granting or replace the slot. Only
+            // repair the same eligible stack, using its current damage.
+            let Some(current) = self.mend_slot_mut(slot).as_mut() else {
+                return amount;
+            };
+            let mut original = stack.clone();
+            original.damage = current.damage;
+            if *current != original
+                || current.damage == 0
+                || current.enchantment_level("minecraft:mending") == 0
+            {
+                return amount;
             }
-            let remaining = amount.saturating_sub(repaired * amount / to_repair_xp);
+            if to_repair_xp == 0 {
+                // Vanilla consumes the XP when its own repair effect returns zero.
+                return if vanilla_repair == 0 { 0 } else { amount };
+            }
+            let repaired = to_repair_xp.min(current.damage);
+            if repaired == 0 {
+                return amount;
+            }
+            current.damage -= repaired;
+            let item = current.item.to_string();
+            let player = (self.serving.is_some() || self.options.dedicated.is_some())
+                .then(|| self.native_acting_id());
+            let remaining = amount.saturating_sub(
+                (u64::from(repaired) * u64::from(amount) / u64::from(to_repair_xp)) as u32,
+            );
+            if let Some(player) = player
+                && let Some(name) = self
+                    .native_server_players()
+                    .into_iter()
+                    .find(|p| p.uuid == player)
+                    .map(|p| p.name)
+            {
+                self.native_player_item_mend(player, &name, &item, repaired, amount);
+            }
             if remaining == 0 {
                 return 0;
             }
@@ -611,17 +655,27 @@ impl Game<'_> {
             ) == 0.0;
         (f64::from(power), infinity)
     }
-    /// `EnchantmentHelper.onProjectileSpawned` ignite effects of the held bow
-    /// (flame): the seconds the new arrow burns for.
-    pub(super) fn bow_projectile_ignite(&mut self) -> Option<f32> {
-        let bow = self.held().cloned()?;
+    /// `EnchantmentHelper.onProjectileSpawned`, which `AbstractArrow`'s
+    /// constructor runs for every arrow fired from a weapon, bow or crossbow:
+    /// the weapon's `projectile_spawned` ignite effects (Flame) spawn the arrow
+    /// burning.
+    pub(super) fn ignite_spawned_arrow(&mut self, weapon: &ItemStack, arrow: &mut Projectile) {
+        if let Some(seconds) = self.projectile_spawned_ignite(weapon)
+            && let Some(a) = arrow.arrow.as_mut()
+        {
+            a.ignite_for_seconds(seconds);
+        }
+    }
+    /// The `projectile_spawned` ignite effects of `weapon` (Flame): the seconds
+    /// the new arrow burns for, the longest when several apply.
+    fn projectile_spawned_ignite(&mut self, weapon: &ItemStack) -> Option<f32> {
         let ctx = EffectContext {
             this: Some("minecraft:arrow"),
             items: Some(world_items!(self)),
             ..Default::default()
         };
         let mut ignite: Option<f32> = None;
-        for (id, level) in bow.enchantments() {
+        for (id, level) in weapon.enchantments() {
             let Some(def) = world_stations!(self).enchantments.get(id) else {
                 continue;
             };
@@ -790,40 +844,96 @@ impl Game<'_> {
             return;
         }
         let riding = self.riding.is_some();
-        let mut disks = Vec::new();
-        for (stack, slot) in self.armor.iter().zip(["head", "chest", "legs", "feet"]) {
-            let Some(stack) = stack else { continue };
-            for (id, level) in stack.enchantments() {
-                let Some(def) = self.stations().enchantments.get(id) else {
-                    continue;
-                };
-                if !def
-                    .slots
-                    .iter()
-                    .any(|s| s == slot || s == "armor" || s == "any")
-                {
-                    continue;
-                }
-                for effect in def.effects["minecraft:location_changed"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                {
-                    if effect["effect"]["type"] == "minecraft:replace_disk"
-                        && location_requirements(&effect["requirements"], on_ground, riding)
-                    {
-                        disks.push((effect["effect"].clone(), *level));
-                    }
-                }
+        let disks = location_disks(
+            &self.stations().enchantments,
+            self.armor.iter().zip(["head", "chest", "legs", "feet"]),
+            on_ground,
+            riding,
+        );
+        for (effect, level) in disks {
+            self.replace_disk(&effect, level, at, Who::Player);
+        }
+    }
+    /// `LivingEntity.onChangedBlock`, landing and `collectEquipmentChanges`
+    /// for an armor stand: run location effects before travel (including a
+    /// piston push), on landing, and for newly equipped items.
+    pub(super) fn armor_stand_location_effects(&mut self, index: usize, landed: bool) {
+        let stand = &mut self.armor_stands[index];
+        let block = BlockPos::containing(stand.position);
+        let moved = !landed && stand.enchantment_block.replace(block) != Some(block);
+        let changed: [bool; 6] =
+            std::array::from_fn(|i| stand.equipment[i] != stand.enchantment_equipment[i]);
+        if !moved && !landed && !changed.iter().any(|c| *c) {
+            return;
+        }
+        let id = stand.id;
+        let told: Vec<_> = (0..6)
+            .filter(|&i| changed[i])
+            .map(|i| {
+                let slot = horizon_client::entities::ArmorStand::SLOTS[i];
+                (
+                    slot,
+                    stand.enchantment_equipment[i].clone(),
+                    stand.equipment[i].clone(),
+                )
+            })
+            .collect();
+        stand.enchantment_equipment.clone_from(&stand.equipment);
+        if self.remote.is_none() && !self.options.execution_role.is_client() {
+            for (slot, from, to) in told {
+                self.native_living_equipment_change(
+                    id,
+                    "minecraft:armor_stand",
+                    slot,
+                    from.as_ref(),
+                    to.as_ref(),
+                );
             }
         }
+        let stand = &self.armor_stands[index];
+        let at = [stand.position.x, stand.position.y, stand.position.z];
+        let who = Who::Mob(stand.id);
+        let equipment = stand
+            .equipment
+            .iter()
+            .zip(horizon_client::entities::ArmorStand::SLOTS)
+            .enumerate()
+            .filter(|(i, _)| moved || landed || changed[*i])
+            .filter(|(_, (stack, _))| {
+                moved
+                    || landed
+                    || !stack.as_ref().is_some_and(|stack| {
+                        let data = stack.data();
+                        let component = |id| data.and_then(|data| data.other(id));
+                        let max_damage = match component("minecraft:max_damage") {
+                            Some(horizon_world::nbt::Tag::Int(value)) => *value as u32,
+                            _ => self
+                                .res
+                                .items()
+                                .get(&stack.item)
+                                .map_or(0, |i| i.max_damage),
+                        };
+                        max_damage > 0
+                            && component("minecraft:unbreakable").is_none()
+                            && component("!minecraft:max_damage").is_none()
+                            && component("!minecraft:damage").is_none()
+                            && stack.damage >= max_damage
+                    })
+            })
+            .map(|(_, item)| item);
+        let disks = location_disks(
+            &self.stations().enchantments,
+            equipment,
+            stand.on_ground,
+            stand.vehicle.is_some(),
+        );
         for (effect, level) in disks {
-            self.replace_disk(&effect, level, at);
+            self.replace_disk(&effect, level, at, who);
         }
     }
     /// `ReplaceDisk.apply`: the blocks of the disk around `at` that pass the
     /// predicate become the effect's state, and each placement is a game event.
-    fn replace_disk(&mut self, effect: &Value, level: u32, at: [f64; 3]) {
+    fn replace_disk(&mut self, effect: &Value, level: u32, at: [f64; 3], who: Who) {
         let registry = self.pack.assets.registry;
         let spec = &effect["block_state"];
         let Some(default) = spec["id"].as_str().and_then(|n| registry.default_state(n)) else {
@@ -861,7 +971,7 @@ impl Game<'_> {
                         self.post_block_game_event(
                             "minecraft:block_place",
                             pos,
-                            Some(Who::Player),
+                            Some(who),
                             Some(new),
                         );
                     }
@@ -942,28 +1052,77 @@ impl Game<'_> {
                     })
             })
     }
-    /// Enchantment attribute modifiers of worn armor (respiration, depth strider...).
+    /// Enchantment attribute modifiers of active equipment, including held Efficiency.
     /// Each piece's modifier id ends with its slot (`EnchantmentAttributeEffect.idForSlot`),
     /// so the same enchantment on two pieces stacks instead of replacing itself.
     pub(super) fn apply_enchantment_attributes(&mut self) {
         let mut wanted: Vec<(String, String, f64, String)> = Vec::new();
-        for (stack, slot) in self.armor.iter().zip(["head", "chest", "legs", "feet"]) {
+        for (stack, slot) in self
+            .armor
+            .iter()
+            .zip(["head", "chest", "legs", "feet"])
+            .chain([
+                (&self.inventory[self.selected], "mainhand"),
+                (&self.offhand, "offhand"),
+            ])
+        {
             let Some(stack) = stack else { continue };
-            for (attr, id, amount, op) in self.stations().enchantments.attributes(stack) {
-                wanted.push((attr, format!("{id}/{slot}"), amount, op));
+            for (attr, id, amount, op, group) in self.stations().enchantments.modifier_rows(stack) {
+                if super::equipment_modifier_applies(&group, slot) {
+                    wanted.push((attr, format!("{id}/{slot}"), amount, op));
+                }
             }
         }
         let Some(p) = self.player.as_mut() else {
             return;
         };
         for (attr, id, _, op) in std::mem::take(&mut self.potions.enchant_modifiers) {
-            let _ = p.set_modifier(&attr, &id, 0.0, &op, false);
+            let _ = p.set_modifier_unclamped(&attr, &id, 0.0, &op, false);
         }
         for (attr, id, amount, op) in &wanted {
-            let _ = p.set_modifier(attr, id, *amount, op, true);
+            let _ = p.set_modifier_unclamped(attr, id, *amount, op, true);
         }
+        let _ = p.clamp_health_to_max();
         self.potions.enchant_modifiers = wanted;
     }
+}
+
+/// `EnchantmentHelper.runLocationChangedEffects`: the replace-disk effects of
+/// active equipment slots, with the wearer's ground/passenger requirements.
+fn location_disks<'a>(
+    enchantments: &Enchantments,
+    equipment: impl IntoIterator<Item = (&'a Option<ItemStack>, &'static str)>,
+    on_ground: bool,
+    riding: bool,
+) -> Vec<(Value, u32)> {
+    let mut disks = Vec::new();
+    for (stack, slot) in equipment {
+        let Some(stack) = stack else { continue };
+        for (id, level) in stack.enchantments() {
+            let Some(def) = enchantments.get(id) else {
+                continue;
+            };
+            let armor = matches!(slot, "head" | "chest" | "legs" | "feet");
+            let hand = matches!(slot, "mainhand" | "offhand");
+            if !def.slots.iter().any(|s| {
+                s == slot || s == "any" || (s == "armor" && armor) || (s == "hand" && hand)
+            }) {
+                continue;
+            }
+            for effect in def.effects["minecraft:location_changed"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                if effect["effect"]["type"] == "minecraft:replace_disk"
+                    && location_requirements(&effect["requirements"], on_ground, riding)
+                {
+                    disks.push((effect["effect"].clone(), *level));
+                }
+            }
+        }
+    }
+    disks
 }
 
 /// Soul Speed's `attribute` effects at `level` (attribute, id, amount, operation),

@@ -1,76 +1,64 @@
 //! Vanilla 26.3's CubeMapTexture and CubeMap, separate from the pixel-filtered GUI atlas.
-use crate::{Result, hud::decode};
+use crate::{Result, hud::decode_bytes};
 use glam::Mat4;
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 use wgpu::util::DeviceExt;
 
 /// Native cube order: +X, -X, +Y, -Y, +Z, -Z (CubeMapTexture.SUFFIXES).
 const FACE_ORDER: [u8; 6] = [1, 3, 5, 4, 0, 2];
+/// Where the cube's faces live in a resource root.
+const BACKGROUND: &str = "assets/minecraft/textures/gui/title/background";
 
+/// The title screen's six faces. The cube is on the GPU only while the title
+/// screen shows, and its texels are decoded from the faces' files each time it
+/// is made: kept decoded, they held 24 MiB through the whole game.
 #[derive(Debug)]
 pub struct Faces {
     pub size: u32,
-    pub pixels: Vec<u8>,
+    /// The faces' PNG files in cube order; none for a one-colour cube.
+    files: Vec<Vec<u8>>,
+    /// The texel of a one-colour cube.
+    colour: [u8; 4],
+    /// The texels decoded while loading, which the first cube takes.
+    decoded: Mutex<Option<Vec<u8>>>,
 }
 
 impl Faces {
-    pub fn load(root: &Path) -> Self {
-        let faces = Self::try_load(root).unwrap_or_else(|error| {
-            log::warn!("Horizon: title panorama unavailable ({error})");
-            Self {
-                size: 1,
-                pixels: [96, 110, 111, 255].repeat(6),
-            }
-        });
-        #[cfg(target_os = "android")]
-        let faces =
-            if crate::android_runtime::graphics_api() == crate::graphics::GraphicsApi::OpenGl {
-                faces.reduced(256)
-            } else {
-                faces
-            };
-        faces
+    /// The title artwork of `root` (the packs' overlay) over `defaults` (the
+    /// game's own resources). `CubeMapTexture` registers each face with the
+    /// resource manager, which takes the topmost pack that has it: a pack that
+    /// leaves a face alone keeps vanilla's, and only a cube no layer completes
+    /// falls back to the grey placeholder that an installation without the
+    /// imported panorama shows.
+    pub fn load(root: &Path, defaults: &Path) -> Self {
+        Self::try_load(root, defaults).unwrap_or_else(|error| {
+            log::warn!(
+                "Horizon: no title panorama ({error}); prepare the game again in the launcher \
+                 (or run horizon-prepare panorama)"
+            );
+            Self::colour([96, 110, 111, 255])
+        })
     }
 
-    #[cfg(any(target_os = "android", test))]
-    fn reduced(mut self, maximum: u32) -> Self {
-        let side = self.size.min(maximum.max(1));
-        if side == self.size {
-            return self;
+    /// A one-texel cube of one colour.
+    pub fn colour(colour: [u8; 4]) -> Self {
+        Self {
+            size: 1,
+            files: Vec::new(),
+            colour,
+            decoded: Mutex::new(None),
         }
-        let face_bytes = (self.size * self.size * 4) as usize;
-        let mut pixels = Vec::with_capacity((side * side * 4 * 6) as usize);
-        for face in self.pixels.chunks_exact(face_bytes) {
-            for y in 0..side {
-                let (y0, y1) = (y * self.size / side, (y + 1) * self.size / side);
-                for x in 0..side {
-                    let (x0, x1) = (x * self.size / side, (x + 1) * self.size / side);
-                    let mut sum = [0u64; 4];
-                    for sy in y0..y1 {
-                        for sx in x0..x1 {
-                            let at = ((sy * self.size + sx) * 4) as usize;
-                            for channel in 0..4 {
-                                sum[channel] += u64::from(face[at + channel]);
-                            }
-                        }
-                    }
-                    let count = u64::from((x1 - x0) * (y1 - y0));
-                    pixels.extend(sum.map(|value| ((value + count / 2) / count) as u8));
-                }
-            }
-        }
-        self.size = side;
-        self.pixels = pixels;
-        self
     }
 
-    fn try_load(root: &Path) -> Result<Self> {
-        let background = root.join("assets/minecraft/textures/gui/title/background");
+    fn try_load(root: &Path, defaults: &Path) -> Result<Self> {
         let mut size = 0;
-        let mut pixels = Vec::new();
+        let mut files = Vec::with_capacity(FACE_ORDER.len());
+        let mut texels = Vec::new();
         for face in FACE_ORDER {
-            let path = background.join(format!("panorama_{face}.png"));
-            let (w, h, data) = decode(&path)?;
+            let (path, file, (w, h, data)) = load_face(root, defaults, face)?;
             if w != h || (size != 0 && w != size) {
                 return Err(format!(
                     "{}: panorama faces must be equally sized squares",
@@ -81,11 +69,104 @@ impl Faces {
             size = w;
             // CubeMapTexture copies each original image with flipY=true. Keep every texel.
             for row in data.chunks_exact((w * 4) as usize).rev() {
-                pixels.extend_from_slice(row);
+                texels.extend_from_slice(row);
             }
+            files.push(file);
         }
-        Ok(Self { size, pixels })
+        // Decoded once here to check them, and kept for the first cube.
+        Ok(Self {
+            size,
+            files,
+            colour: [0; 4],
+            decoded: Mutex::new(Some(texels)),
+        })
     }
+
+    /// The cube's texels, layer after layer.
+    pub fn texels(&self) -> Vec<u8> {
+        if self.files.is_empty() {
+            return self.colour.repeat(6);
+        }
+        let loaded = self
+            .decoded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        loaded
+            .or_else(|| decode_faces(&self.files).ok().map(|(_, texels)| texels))
+            .unwrap_or_else(|| vec![0; (self.size * self.size * 4 * 6) as usize])
+    }
+}
+
+/// The faces' files decoded, side by side, into one array of six layers of
+/// equal squares.
+fn decode_faces(files: &[Vec<u8>]) -> Result<(u32, Vec<u8>)> {
+    let decoded: Vec<_> = std::thread::scope(|scope| {
+        let threads: Vec<_> = files
+            .iter()
+            .map(|file| scope.spawn(|| decode_bytes(file).map_err(|e| e.to_string())))
+            .collect();
+        threads
+            .into_iter()
+            .map(|t| t.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+            .collect()
+    });
+    let mut size = 0;
+    let mut texels = Vec::new();
+    for (face, image) in FACE_ORDER.iter().zip(decoded) {
+        let (w, h, data) = image?;
+        if w != h || (size != 0 && w != size) {
+            return Err(format!(
+                "panorama_{face}.png: panorama faces must be equally sized squares"
+            )
+            .into());
+        }
+        if size == 0 {
+            size = w;
+            texels.reserve_exact((w * w * 4) as usize * files.len());
+        }
+        // CubeMapTexture copies each original image with flipY=true. Keep every texel.
+        for row in data.chunks_exact((w * 4) as usize).rev() {
+            texels.extend_from_slice(row);
+        }
+    }
+    Ok((size, texels))
+}
+
+/// `panorama_{face}.png` from the first layer that has one, with the path it
+/// came from, its file and its decoded image. Reading a face that no layer
+/// provides fails naming every path tried, so a report of a missing panorama
+/// says where the game looked.
+#[allow(clippy::type_complexity)]
+fn load_face(
+    root: &Path,
+    defaults: &Path,
+    face: u8,
+) -> Result<(std::path::PathBuf, Vec<u8>, (u32, u32, Vec<u8>))> {
+    let name = format!("panorama_{face}.png");
+    let mut tried: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for layer in [root, defaults] {
+        let path = layer.join(BACKGROUND).join(&name);
+        // A vanilla-only installation loads one root twice.
+        if tried.first().is_some_and(|(seen, _)| *seen == path) {
+            continue;
+        }
+        let read = std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|file| {
+                let image = decode_bytes(&file).map_err(|e| e.to_string())?;
+                Ok((file, image))
+            });
+        match read {
+            Ok((file, image)) => return Ok((path, file, image)),
+            Err(error) => tried.push((path, error)),
+        }
+    }
+    let tried: Vec<String> = tried
+        .iter()
+        .map(|(path, error)| format!("{}: {error}", path.display()))
+        .collect();
+    Err(tried.join("; ").into())
 }
 
 fn projection(width: u32, height: u32, yaw: f32, pitch: f32) -> Mat4 {
@@ -102,62 +183,20 @@ fn projection(width: u32, height: u32, yaw: f32, pitch: f32) -> Mat4 {
 
 pub(super) struct Panorama {
     pipeline: wgpu::RenderPipeline,
-    group: wgpu::BindGroup,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
     uniform: wgpu::Buffer,
-    vertices: wgpu::Buffer,
-}
-
-// The same cube as CubeMap's procedural vertex indices. Passing positions
-// explicitly avoids a driver link failure on nested constant-array indexing
-// observed on GLES 3.0 Adreno 304.
-fn cube_vertices() -> [[f32; 3]; 36] {
-    let corners = [
-        [-1.0, -1.0, -1.0],
-        [1.0, -1.0, -1.0],
-        [1.0, 1.0, -1.0],
-        [-1.0, 1.0, -1.0],
-        [-1.0, -1.0, 1.0],
-        [1.0, -1.0, 1.0],
-        [1.0, 1.0, 1.0],
-        [-1.0, 1.0, 1.0],
-    ];
-    [
-        4, 7, 6, 4, 6, 5, 5, 6, 2, 5, 2, 1, 1, 2, 3, 1, 3, 0, 0, 3, 7, 0, 7, 4, 7, 3, 2, 7, 2, 6,
-        0, 4, 5, 0, 5, 1,
-    ]
-    .map(|i| corners[i])
+    faces: Arc<Faces>,
+    /// The cube and its bindings, while the title screen shows.
+    cube: Option<wgpu::BindGroup>,
 }
 
 impl Panorama {
     pub(super) fn new(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
-        faces: &Faces,
+        faces: Arc<Faces>,
     ) -> Self {
-        let texture = device.create_texture_with_data(
-            queue,
-            &wgpu::TextureDescriptor {
-                label: Some("Title panorama cube"),
-                size: wgpu::Extent3d {
-                    width: faces.size,
-                    height: faces.size,
-                    depth_or_array_layers: 6,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            },
-            wgpu::util::TextureDataOrder::LayerMajor,
-            &faces.pixels,
-        );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::Cube),
-            ..Default::default()
-        });
         // CubeMapTexture's blur=true metadata: linear minification and magnification, no mips.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Title panorama linear filtering"),
@@ -202,24 +241,6 @@ impl Panorama {
                 },
             ],
         });
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Title panorama resources"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Title panorama shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("panorama.wgsl").into()),
@@ -229,11 +250,6 @@ impl Panorama {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Title panorama vertices"),
-            contents: bytemuck::cast_slice(&cube_vertices()),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Title panorama"),
             layout: Some(&pipeline_layout),
@@ -241,11 +257,7 @@ impl Panorama {
                 module: &shader,
                 entry_point: Some("vs_panorama"),
                 compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 12,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                })],
+                buffers: &[],
             },
             primitive: wgpu::PrimitiveState {
                 cull_mode: None,
@@ -274,14 +286,18 @@ impl Panorama {
         });
         Self {
             pipeline,
-            group,
+            layout,
+            sampler,
             uniform,
-            vertices,
+            faces,
+            cube: None,
         }
     }
 
+    /// Ready a title screen frame: the cube, made if it is not on the GPU.
     pub(super) fn prepare(
-        &self,
+        &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         width: u32,
         height: u32,
@@ -293,12 +309,68 @@ impl Panorama {
             0,
             bytemuck::cast_slice(&projection(width, height, yaw, pitch).to_cols_array()),
         );
+        if self.cube.is_none() {
+            self.cube = Some(self.cube(device, queue));
+        }
     }
 
+    /// Give the cube's video memory back: no frame draws it until the title
+    /// screen shows again.
+    pub(super) fn release(&mut self) {
+        self.cube = None;
+    }
+
+    fn cube(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::BindGroup {
+        let texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Title panorama cube"),
+                size: wgpu::Extent3d {
+                    width: self.faces.size,
+                    height: self.faces.size,
+                    depth_or_array_layers: 6,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &self.faces.texels(),
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Title panorama resources"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        })
+    }
+
+    /// Draw the cube `prepare` made for this frame.
     pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+        let Some(cube) = &self.cube else {
+            return;
+        };
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.group, &[]);
-        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_bind_group(0, cube, &[]);
         pass.draw(0..36, 0..1);
     }
 }
@@ -326,9 +398,18 @@ mod tests {
         sync::atomic::{AtomicU32, Ordering},
     };
 
+    /// One resource root: a pack overlay, or the game's own resources.
     struct Fixture(std::path::PathBuf);
     impl Fixture {
         fn new(size: u32) -> Self {
+            let fixture = Self::bare();
+            for face in 0..6 {
+                fixture.write(face, size, size);
+            }
+            fixture
+        }
+        /// A root with the faces' folder and none of the faces.
+        fn bare() -> Self {
             static NEXT: AtomicU32 = AtomicU32::new(0);
             let root = std::env::temp_dir().join(format!(
                 "horizon-panorama-{}-{}",
@@ -337,9 +418,6 @@ mod tests {
             ));
             let fixture = Self(root);
             fs::create_dir_all(fixture.background()).unwrap();
-            for face in 0..6 {
-                fixture.write(face, size, size);
-            }
             fixture
         }
         fn background(&self) -> std::path::PathBuf {
@@ -371,19 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn cube_vertices_form_twelve_inward_facing_triangles() {
-        let mut faces = [0; 6];
-        for triangle in cube_vertices().chunks_exact(3) {
-            let [a, b, c] = [triangle[0], triangle[1], triangle[2]].map(glam::Vec3::from_array);
-            let normal = (b - a).cross(c - a);
-            assert_eq!(normal.length_squared(), 16.0);
-            assert!(normal.dot(a) < 0.0);
-            let axis = (0..3).find(|&i| normal[i] != 0.0).unwrap();
-            faces[axis * 2 + usize::from(normal[axis] > 0.0)] += 1;
-        }
-        assert_eq!(faces, [2; 6]);
-    }
-    #[test]
     fn rotation_speed_changes_preserve_position() {
         let mut rotation = Rotation::default();
         assert_eq!(rotation.update(5.0, 1.0), -10.0);
@@ -393,38 +458,21 @@ mod tests {
     }
 
     #[test]
-    fn reduced_panorama_preserves_face_order_and_colours() {
-        let faces = Faces {
-            size: 4,
-            pixels: (0..6u8)
-                .flat_map(|face| [face, face + 10, face + 20, 255].repeat(16))
-                .collect(),
-        }
-        .reduced(2);
-        assert_eq!(faces.size, 2);
-        assert_eq!(faces.pixels.len(), 6 * 2 * 2 * 4);
-        for (face, pixels) in faces.pixels.chunks_exact(16).enumerate() {
-            assert!(
-                pixels
-                    .chunks_exact(4)
-                    .all(|rgba| rgba == [face as u8, face as u8 + 10, face as u8 + 20, 255])
-            );
-        }
-    }
-
-    #[test]
     fn original_resolution_texels_and_vanilla_cube_orientation_are_preserved() {
         let f = Fixture::new(1024);
-        let faces = Faces::try_load(&f.0).unwrap();
+        let faces = Faces::try_load(&f.0, &f.0).unwrap();
         assert_eq!(faces.size, 1024);
-        assert_eq!(faces.pixels.len(), 6 * 1024 * 1024 * 4);
+        // The texels decoded while loading, then decoded again for the next cube.
+        let (loaded, again) = (faces.texels(), faces.texels());
+        assert_eq!(loaded, again);
+        assert_eq!(again.len(), 6 * 1024 * 1024 * 4);
         // CubeMapTexture's actual layer suffixes, with each source row flipped vertically.
         for (layer, source_face) in [1, 3, 5, 4, 0, 2].into_iter().enumerate() {
             for y in 0..1024 {
                 for x in 0..1024 {
                     let at = ((layer * 1024 + y) * 1024 + x) * 4;
                     assert_eq!(
-                        faces.pixels[at..at + 4],
+                        again[at..at + 4],
                         [source_face, (x % 251) as u8, ((1023 - y) % 253) as u8, 255]
                     );
                 }
@@ -435,21 +483,57 @@ mod tests {
     #[test]
     fn placeholders_load_and_incomplete_or_mismatched_cubes_fall_back() {
         let f = Fixture::new(1);
-        assert_eq!(Faces::try_load(&f.0).unwrap().size, 1);
+        assert_eq!(Faces::try_load(&f.0, &f.0).unwrap().size, 1);
         f.write(5, 2, 1);
         assert!(
-            Faces::try_load(&f.0)
+            Faces::try_load(&f.0, &f.0)
                 .unwrap_err()
                 .to_string()
                 .contains("equally sized squares")
         );
-        let fallback = Faces::load(&f.0);
-        assert_eq!(fallback.pixels.len(), 24);
+        let fallback = Faces::load(&f.0, &f.0);
+        assert_eq!(fallback.texels(), [96, 110, 111, 255].repeat(6));
         f.write(5, 2, 2);
-        assert!(Faces::try_load(&f.0).is_err());
+        assert!(Faces::try_load(&f.0, &f.0).is_err());
         fs::remove_file(f.background().join("panorama_5.png")).unwrap();
-        assert!(Faces::try_load(&f.0).is_err());
-        assert_eq!(Faces::load(&f.0).size, 1);
+        assert!(Faces::try_load(&f.0, &f.0).is_err());
+        assert_eq!(Faces::load(&f.0, &f.0).size, 1);
+    }
+
+    #[test]
+    fn a_pack_without_a_face_keeps_vanillas_and_its_own_face_wins() {
+        let vanilla = Fixture::new(4);
+        // A pack that replaces one face of the cube: the other five are
+        // still the game's, as the bottom of the pack stack provides them.
+        let pack = Fixture::bare();
+        pack.write(2, 4, 4);
+        let faces = Faces::try_load(&pack.0, &vanilla.0).unwrap();
+        assert_eq!(faces.size, 4);
+        let texels = faces.texels();
+        assert_eq!(texels.len(), 6 * 4 * 4 * 4);
+        // Each face's red channel is its index (`face` above), and the cube
+        // holds them in FACE_ORDER: layer 5 is face 2, the pack's, and layer 4
+        // is face 0, which only the game's resources have.
+        let red = |layer: usize, texel: usize| texels[(layer * 16 + texel) * 4];
+        assert_eq!(red(5, 0), 2);
+        assert_eq!(red(4, 0), 0);
+    }
+
+    #[test]
+    fn a_missing_cube_names_every_path_it_tried() {
+        let vanilla = Fixture::bare();
+        let pack = Fixture::bare();
+        let error = Faces::try_load(&pack.0, &vanilla.0)
+            .unwrap_err()
+            .to_string();
+        for root in [&pack, &vanilla] {
+            let path = root.background().join("panorama_1.png");
+            assert!(error.contains(&path.display().to_string()), "{error}");
+        }
+        // No layer completes the cube: the one-pixel grey placeholder, and the
+        // window still has a title.
+        let fallback = Faces::load(&pack.0, &vanilla.0);
+        assert_eq!((fallback.size, fallback.texels().len()), (1, 24));
     }
 
     #[test]

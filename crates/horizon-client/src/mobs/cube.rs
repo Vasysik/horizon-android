@@ -143,13 +143,13 @@ pub(super) fn set_wanted(m: &mut Mob, speed: f64) {
     m.ai.mov.operation = Operation::MoveTo;
 }
 /// AbstractCubeMob.jumpFromGround (and MagmaCube's size boost).
-pub fn jump(m: &mut Mob) {
+pub fn jump(m: &mut Mob, w: &MobWorld) {
     let boost = if m.species() == Species::MagmaCube {
         m.extra.size as f32 * 0.1
     } else {
         0.0
     };
-    m.velocity.y = f64::from(m.jump_power() + boost);
+    m.velocity.y = f64::from(m.jump_power(w) + boost);
 }
 /// `AbstractCubeMob.tick`'s landing splash: crumbs of goo (or flames) around
 /// the cube's feet, drawn by the side that ticks the mob.
@@ -179,16 +179,31 @@ fn landing_splash(m: &mut Mob, events: &mut Vec<MobEvent>) {
         i += 1;
     }
 }
-/// `AbstractCubeMob.tick` on a client of a server: the landing splash follows
-/// the on-ground flag the server sends.
+/// `AbstractCubeMob.tick` on a client of a server: the squish scale (`oSquish`,
+/// the step toward `targetSquish`, the land and takeoff targets, then
+/// `decreaseSquish`) and the landing splash follow the on-ground flag the
+/// server sends. The squish sound stays the server's broadcast.
 pub fn client_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.species() == Species::SulfurCube {
         super::sulfur_cube::client_tick(m);
     }
-    if m.on_ground && !m.extra.flag2 {
+    // `AbstractCubeMob.tick`: `oSquish = squish`, then squish toward the target.
+    m.anim.vo[SQUISH] = m.anim.v[SQUISH];
+    m.anim.v[SQUISH] += (m.anim.v[TARGET_SQUISH] - m.anim.v[SQUISH]) * 0.5;
+    let was = m.extra.flag2;
+    if m.on_ground && !was {
         landing_splash(m, events);
+        m.anim.v[TARGET_SQUISH] = -0.5;
+    } else if !m.on_ground && was {
+        m.anim.v[TARGET_SQUISH] = 1.0;
     }
     m.extra.flag2 = m.on_ground;
+    // `AbstractCubeMob.decreaseSquish`; `MagmaCube` multiplies by 0.9.
+    m.anim.v[TARGET_SQUISH] *= if m.species() == Species::MagmaCube {
+        0.9
+    } else {
+        0.6
+    };
 }
 /// AbstractCubeMob.tick squish and landing sounds, plus contact damage.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -231,12 +246,8 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         // Player.touch: entities within the player's box grown by (1, 0.5, 1).
         && m.bounds().intersects(p.bounds.inflate(Vec3::new(1.0, 0.5, 1.0)))
     {
-        let reach = 2.04f32.sqrt() as f64 - 0.6;
-        if m.bounds()
-            .inflate(Vec3::new(reach, 0.0, reach))
-            .intersects(p.bounds)
-            && m.sees(w, Who::Player)
-        {
+        // isWithinMeleeAttackRange, with what the cube holds.
+        if m.melee_reaches(p.bounds) && m.sees(w, Who::Player) {
             events.push(MobEvent::CubeHurtPlayer {
                 cube: m.id,
                 amount: attack_damage(m),
@@ -259,7 +270,8 @@ fn attack_damage(m: &Mob) -> f32 {
 /// `AbstractCubeMob.push(entity)`: an iron golem whose `pushEntities` takes
 /// this cube (its box overlaps the cube's, `EntitySelector.pushableBy`) gets
 /// `dealDamage`: alive, `doTeamsAllowDamage`, `isWithinMeleeAttackRange`
-/// (always true for overlapping boxes) and `hasLineOfSight`, then a
+/// (true for overlapping boxes unless a held spear's minimum range refuses
+/// them) and `hasLineOfSight`, then a
 /// `mobAttack` hit for `getAttackDamage`.
 fn hurt_touching_golems(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     // canDealDamage also needs Mob.isEffectiveAi: a NoAI cube never hurts.
@@ -277,6 +289,7 @@ fn hurt_touching_golems(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 && o.species == Species::IronGolem
                 && o.alive
                 && o.bounds.intersects(bounds)
+                && m.melee_reaches(o.bounds)
                 && crate::scoreboard::pushable_by(theirs, own, pushable)
                 && crate::scoreboard::teams_allow_damage(own, theirs)
         })
@@ -517,6 +530,9 @@ mod golem_touch_tests {
                 main_hand: None,
                 off_hand: None,
                 head: None,
+                chest: None,
+                legs: None,
+                feet: None,
                 armor_cover: 0.0,
                 invisible: false,
                 spectator: false,
@@ -535,6 +551,7 @@ mod golem_touch_tests {
                 sleeping: false,
                 sleep_timer: 0,
                 passenger: false,
+                riding_vehicle: None,
                 vehicle: None,
             });
             let mut slime = Mob::new(

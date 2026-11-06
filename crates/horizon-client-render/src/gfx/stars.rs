@@ -50,7 +50,6 @@ struct Uniform {
 
 pub(super) struct Stars {
     pipeline: wgpu::RenderPipeline,
-    late_pipeline: Option<wgpu::RenderPipeline>,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     vertices: wgpu::Buffer,
@@ -58,7 +57,7 @@ pub(super) struct Stars {
 }
 
 impl Stars {
-    pub(super) fn new(device: &wgpu::Device, format: wgpu::TextureFormat, late: bool) -> Self {
+    pub(super) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let triangles = star_triangles();
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Stars vertex buffer"),
@@ -102,7 +101,7 @@ impl Stars {
             ..Default::default()
         });
         let attributes = wgpu::vertex_attr_array![0 => Float32x3];
-        let descriptor = wgpu::RenderPipelineDescriptor {
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Stars"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -133,52 +132,24 @@ impl Stars {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    // RenderPipelines.STARS: the celestial blend (src alpha, one).
+                    // RenderPipelines.STARS: the celestial blend (src alpha, one), with the
+                    // colour premultiplied in fs_stars, so its alpha can carry HDR's mark.
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            src_factor: wgpu::BlendFactor::One,
                             dst_factor: wgpu::BlendFactor::One,
                             operation: wgpu::BlendOperation::Add,
                         },
-                        alpha: wgpu::BlendComponent::OVER,
+                        alpha: wgpu::BlendComponent::REPLACE,
                     }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
             multiview_mask: None,
             cache: None,
-        };
-        let pipeline = device.create_render_pipeline(&descriptor);
-        let late_pipeline = late
-            .then(|| {
-                let checks = super::GpuChecks::push(device);
-                let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-                let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    vertex: wgpu::VertexState {
-                        compilation_options: wgpu::PipelineCompilationOptions {
-                            constants: &[("LATE_SKY", 1.0)],
-                            ..Default::default()
-                        },
-                        ..descriptor.vertex.clone()
-                    },
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
-                        ..descriptor.depth_stencil.clone().unwrap()
-                    }),
-                    ..descriptor.clone()
-                });
-                let error = pollster::block_on(internal.pop()).or(checks.pop());
-                if let Some(error) = error {
-                    log::warn!("Late stars unavailable; retaining original sky order: {error}");
-                    None
-                } else {
-                    Some(pipeline)
-                }
-            })
-            .flatten();
+        });
         Self {
             pipeline,
-            late_pipeline,
             group,
             uniform,
             vertices,
@@ -203,16 +174,8 @@ impl Stars {
         uploads.buffer(encoder, &self.uniform, 0, bytemuck::bytes_of(&uniform));
     }
 
-    pub(super) fn has_late_pipeline(&self) -> bool {
-        self.late_pipeline.is_some()
-    }
-
-    pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, late: bool) {
-        pass.set_pipeline(if late {
-            self.late_pipeline.as_ref().unwrap()
-        } else {
-            &self.pipeline
-        });
+    pub(super) fn draw(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.draw(0..self.count, 0..1);
