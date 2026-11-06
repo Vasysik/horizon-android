@@ -1,3 +1,27 @@
+// `joml::Mat4::rotation`, `rotate_affine`, `transform_affine` and `invert_orthonormal`, and
+// `joml::Quat::rotation_x`/`_y`/`_z`, in this file are adapted from JOML 1.10.9's `Matrix4f`,
+// `Quaternionf` and `Vector4f` (https://github.com/JOML-CI/JOML, MIT; see THIRD_PARTY_NOTICES.md).
+//
+// Copyright (c) 2015-2026 Richard Greenlees
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
 //! The camera (`Camera.tick`, `tickFov`, `calculateFov`, `alignWithEntity`,
 //! `getMaxZoom`, `setRotation`, `move`), view and hurt bobbing
 //! (`GameRenderer.bobView`, `bobHurt`), the walk and bob history they read
@@ -119,6 +143,40 @@ pub mod joml {
                 w: w * cz + z * sz,
             }
         }
+        /// `Quaternionf.rotationX(angle)`.
+        pub fn rotation_x(angle: f32) -> Self {
+            let (x, w) = Self::half_turn(angle);
+            Self {
+                x,
+                y: 0.0,
+                z: 0.0,
+                w,
+            }
+        }
+        /// `Quaternionf.rotationY(angle)`.
+        pub fn rotation_y(angle: f32) -> Self {
+            let (y, w) = Self::half_turn(angle);
+            Self {
+                x: 0.0,
+                y,
+                z: 0.0,
+                w,
+            }
+        }
+        /// `Quaternionf.rotationZ(angle)`.
+        pub fn rotation_z(angle: f32) -> Self {
+            let (z, w) = Self::half_turn(angle);
+            Self {
+                x: 0.0,
+                y: 0.0,
+                z,
+                w,
+            }
+        }
+        fn half_turn(angle: f32) -> (f32, f32) {
+            let sin = sin(angle * 0.5);
+            (sin, cos_from_sin(sin, angle * 0.5))
+        }
         /// `Quaternionf.transform(x, y, z, dest)` (`Vector3f.rotate`).
         pub fn transform(&self, v: [f32; 3]) -> [f32; 3] {
             let [x, y, z] = v;
@@ -142,8 +200,10 @@ pub mod joml {
     }
 
     const PERSPECTIVE: u8 = 1;
+    const AFFINE: u8 = 2;
     const IDENTITY: u8 = 4;
     const TRANSLATION: u8 = 8;
+    const ORTHONORMAL: u8 = 16;
 
     /// A JOML `Matrix4f` with its property flags, which select the code
     /// paths (and so the rounding) of later operations. `m[column * 4 + row]`.
@@ -284,9 +344,148 @@ pub mod joml {
             // already taken that branch.
             self.rotate_axis(2, ang);
         }
+        /// `Matrix4f.rotation(Quaternionfc)`.
+        pub fn rotation(&mut self, q: Quat) {
+            let (w2, x2, y2, z2) = (q.w * q.w, q.x * q.x, q.y * q.y, q.z * q.z);
+            let zw = q.z * q.w;
+            let dzw = zw + zw;
+            let xy = q.x * q.y;
+            let dxy = xy + xy;
+            let xz = q.x * q.z;
+            let dxz = xz + xz;
+            let yw = q.y * q.w;
+            let dyw = yw + yw;
+            let yz = q.y * q.z;
+            let dyz = yz + yz;
+            let xw = q.x * q.w;
+            let dxw = xw + xw;
+            self.reset_unless_identity();
+            self.set(0, 0, w2 + x2 - z2 - y2);
+            self.set(0, 1, dxy + dzw);
+            self.set(0, 2, dxz - dyw);
+            self.set(1, 0, -dzw + dxy);
+            self.set(1, 1, y2 - z2 + w2 - x2);
+            self.set(1, 2, dyz + dxw);
+            self.set(2, 0, dyw + dxz);
+            self.set(2, 1, dyz - dxw);
+            self.set(2, 2, z2 - y2 - x2 + w2);
+            self.properties = AFFINE | ORTHONORMAL;
+        }
+        /// An affine matrix of no more specific kind, as JOML's property flags have it.
+        pub fn affine(m: glam::Mat4) -> Self {
+            Self {
+                m: m.to_cols_array(),
+                properties: AFFINE,
+            }
+        }
+        /// `Matrix4f.rotate(Quaternionfc)` of an affine matrix that is neither the identity nor
+        /// a pure translation (`rotateAffine`).
+        pub fn rotate_affine(&mut self, q: Quat) {
+            debug_assert!(
+                self.properties & AFFINE != 0 && self.properties & (IDENTITY | TRANSLATION) == 0
+            );
+            let (w2, x2, y2, z2) = (q.w * q.w, q.x * q.x, q.y * q.y, q.z * q.z);
+            let zw = q.z * q.w;
+            let dzw = zw + zw;
+            let xy = q.x * q.y;
+            let dxy = xy + xy;
+            let xz = q.x * q.z;
+            let dxz = xz + xz;
+            let yw = q.y * q.w;
+            let dyw = yw + yw;
+            let yz = q.y * q.z;
+            let dyz = yz + yz;
+            let xw = q.x * q.w;
+            let dxw = xw + xw;
+            let r = [
+                [w2 + x2 - z2 - y2, dxy + dzw, dxz - dyw],
+                [-dzw + dxy, y2 - z2 + w2 - x2, dyz + dxw],
+                [dyw + dxz, dyz - dxw, z2 - y2 - x2 + w2],
+            ];
+            let s = *self;
+            for (column, r) in r.iter().enumerate() {
+                for row in 0..3 {
+                    let v = s.get(0, row) * r[0] + s.get(1, row) * r[1] + s.get(2, row) * r[2];
+                    self.set(column, row, v);
+                }
+                self.set(column, 3, 0.0);
+            }
+            self.properties &= !(PERSPECTIVE | IDENTITY | TRANSLATION);
+        }
+        /// `Vector4f.mul(Matrix4fc)` of an affine matrix (`mulAffine`, JOML's `Math.fma`
+        /// unfused): the matrix times `v`, `w` kept.
+        pub fn transform_affine(&self, v: [f32; 4]) -> [f32; 3] {
+            debug_assert!(self.properties & AFFINE != 0);
+            let [x, y, z, w] = v;
+            std::array::from_fn(|row| {
+                self.get(0, row) * x
+                    + (self.get(1, row) * y + (self.get(2, row) * z + self.get(3, row) * w))
+            })
+        }
+        /// `Matrix4f.invert()` of a rotation and translation (`invertOrthonormal`; with the
+        /// identity and pure-translation shortcuts). `None` for any other matrix, which JOML
+        /// inverts by other code paths.
+        pub fn invert_orthonormal(&self) -> Option<Self> {
+            if self.properties & IDENTITY != 0 {
+                return Some(Self::IDENTITY);
+            }
+            let mut out = *self;
+            if self.properties & TRANSLATION != 0 {
+                for row in 0..3 {
+                    out.set(3, row, -self.get(3, row));
+                }
+                out.properties = AFFINE | TRANSLATION | ORTHONORMAL;
+                return Some(out);
+            }
+            if self.properties & ORTHONORMAL == 0 {
+                return None;
+            }
+            let g = |c, r| self.get(c, r);
+            let t = |c| -(g(c, 0) * g(3, 0) + g(c, 1) * g(3, 1) + g(c, 2) * g(3, 2));
+            out.m = [
+                g(0, 0),
+                g(1, 0),
+                g(2, 0),
+                0.0,
+                g(0, 1),
+                g(1, 1),
+                g(2, 1),
+                0.0,
+                g(0, 2),
+                g(1, 2),
+                g(2, 2),
+                0.0,
+                t(0),
+                t(1),
+                t(2),
+                1.0,
+            ];
+            out.properties = AFFINE | ORTHONORMAL;
+            Some(out)
+        }
+        pub fn to_glam(self) -> glam::Mat4 {
+            glam::Mat4::from_cols_array(&self.m)
+        }
     }
 }
 use joml::{Mat4, Quat};
+
+/// `Camera.getViewRotationMatrix` to the last bit: `Matrix4f.rotation` of the conjugate of
+/// `setRotation`'s quaternion, and its JOML `invert()`. `view_matrix` turns the same quaternion
+/// into a matrix by glam's formula, which differs in the last bits (1.0 for 0.99999994, 6e-8 for
+/// 0).
+pub fn view_rotation_matrix(yaw: f32, pitch: f32) -> (glam::Mat4, glam::Mat4) {
+    let q = Quat::rotation_yxz(PI - yaw * DEG_TO_RAD, -pitch * DEG_TO_RAD, 0.0);
+    let mut m = Mat4::IDENTITY;
+    m.rotation(Quat {
+        x: -q.x,
+        y: -q.y,
+        z: -q.z,
+        w: q.w,
+    });
+    let inverse = m.invert_orthonormal().expect("a rotation is orthonormal");
+    (m.to_glam(), inverse.to_glam())
+}
 
 /// Camera-relative world view used by terrain, sky and the first-person hand.
 pub fn view_matrix(yaw: f32, pitch: f32) -> glam::Mat4 {
@@ -419,6 +618,31 @@ pub enum CameraFluid {
     PowderSnow,
 }
 
+/// `Camera.NearPlane`: the near plane's centre and its half extents toward
+/// the camera's left and up, relative to the camera.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NearPlane {
+    pub forward: [f64; 3],
+    pub left: [f64; 3],
+    pub up: [f64; 3],
+}
+impl NearPlane {
+    /// `forward`, `getTopLeft`, `getTopRight`, `getBottomLeft`, `getBottomRight`:
+    /// the points `Camera.getFluidInCamera` looks for lava and powder snow at.
+    pub fn points(&self) -> [[f64; 3]; 5] {
+        let corner = |up: f64, left: f64| -> [f64; 3] {
+            std::array::from_fn(|i| self.forward[i] + self.up[i] * up + self.left[i] * left)
+        };
+        [
+            self.forward,
+            corner(1.0, 1.0),
+            corner(1.0, -1.0),
+            corner(-1.0, 1.0),
+            corner(-1.0, -1.0),
+        ]
+    }
+}
+
 /// `Camera`: the eye-height and field-of-view easing and the view placement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
@@ -481,6 +705,19 @@ impl Camera {
         self.up = self.rotation.transform([0.0, 1.0, 0.0]);
         self.left = self.rotation.transform([-1.0, 0.0, 0.0]);
     }
+    /// `Camera.getNearPlane(fov)` for a `width` x `height` window, at the
+    /// projection's `zNear` of 0.05.
+    pub fn near_plane(&self, fov: f32, width: f32, height: f32) -> NearPlane {
+        let z_near = f64::from(0.05f32);
+        let aspect = f64::from(width) / f64::from(height);
+        let plane_height = horizon_core::jmath::tan(f64::from(fov * DEG_TO_RAD) / 2.0) * z_near;
+        let scale = |v: [f32; 3], by: f64| v.map(|c| f64::from(c) * by);
+        NearPlane {
+            forward: scale(self.forwards, z_near),
+            left: scale(self.left, plane_height * aspect),
+            up: scale(self.up, plane_height),
+        }
+    }
     /// `Camera.move(forwards, up, right)`.
     pub fn move_by(&mut self, forwards: f32, up: f32, right: f32) {
         let offset = self.rotation.transform([right, up, -forwards]);
@@ -501,6 +738,19 @@ impl Camera {
         entity: &CameraEntity,
         partial: f32,
         camera_type: CameraType,
+        clip: impl FnMut([f64; 3], [f64; 3]) -> Option<[f64; 3]>,
+    ) {
+        self.align_with_entity_distance(entity, partial, camera_type, |distance| distance, clip);
+    }
+    /// Adjust the detached distance after entity/mount scaling, before collision clipping.
+    /// Only finite overrides in 0..=1024 blocks are accepted (within the game's ray budget).
+    /// First-person views do not call `adjust_distance`.
+    pub fn align_with_entity_distance(
+        &mut self,
+        entity: &CameraEntity,
+        partial: f32,
+        camera_type: CameraType,
+        adjust_distance: impl FnOnce(f32) -> f32,
         mut clip: impl FnMut([f64; 3], [f64; 3]) -> Option<[f64; 3]>,
     ) {
         self.set_rotation(entity.view_y_rot(partial), entity.view_x_rot(partial));
@@ -528,10 +778,14 @@ impl Camera {
                 mount_scale = s;
                 mount_distance = d as f32;
             }
-            let zoom = self.max_zoom(
-                java_max(scale * distance, mount_scale * mount_distance),
-                &mut clip,
-            );
+            let vanilla = java_max(scale * distance, mount_scale * mount_distance);
+            let adjusted = adjust_distance(vanilla);
+            let distance = if adjusted.is_finite() && (0.0..=1024.0).contains(&adjusted) {
+                adjusted
+            } else {
+                vanilla
+            };
+            let zoom = self.max_zoom(distance, &mut clip);
             self.move_by(-zoom, 0.0, 0.0);
         } else if let Some(LivingCamera {
             sleeping: Some(bed),
@@ -967,6 +1221,100 @@ mod tests {
             Some([0.0, 0.0, -1.0])
         });
         assert!(camera.position[2] > -1.1 && camera.position[2] < -0.9);
+    }
+    #[test]
+    fn detached_distance_override_keeps_collision_clipping() {
+        let entity = CameraEntity {
+            position: [0.0; 3],
+            previous: [0.0; 3],
+            x_rot: 0.0,
+            y_rot: 0.0,
+            x_rot_o: 0.0,
+            y_rot_o: 0.0,
+            eye_height: 1.62,
+            living: Some(LivingCamera {
+                scale: 2.0,
+                camera_distance: 3.0,
+                sleeping: None,
+                dead: None,
+            }),
+            mount: Some((3.0, 4.0)),
+        };
+        for kind in [CameraType::ThirdPersonBack, CameraType::ThirdPersonFront] {
+            let mut camera = Camera::default();
+            let mut calls = 0;
+            let mut rays = 0;
+            let z = if kind.is_mirrored() { 1.0 } else { -1.0 };
+            camera.align_with_entity_distance(
+                &entity,
+                1.0,
+                kind,
+                |distance| {
+                    assert_eq!(distance, 12.0);
+                    8.0
+                },
+                |_, _| None,
+            );
+            assert!((camera.position[2] - z * 8.0).abs() < 1e-5);
+            camera.align_with_entity_distance(
+                &entity,
+                1.0,
+                kind,
+                |distance| {
+                    calls += 1;
+                    assert_eq!(distance, 12.0);
+                    8.0
+                },
+                |_, _| {
+                    rays += 1;
+                    Some([0.0, 0.0, z])
+                },
+            );
+            assert_eq!((calls, rays), (1, 8));
+            assert!((camera.position[2] - z).abs() < 0.2);
+        }
+    }
+    #[test]
+    fn detached_distance_rejects_invalid_values_and_accepts_zero() {
+        let entity = CameraEntity {
+            position: [0.0; 3],
+            previous: [0.0; 3],
+            x_rot: 0.0,
+            y_rot: 0.0,
+            x_rot_o: 0.0,
+            y_rot_o: 0.0,
+            eye_height: 1.62,
+            living: None,
+            mount: None,
+        };
+        for distance in [f32::NAN, f32::INFINITY, -1.0, 1025.0] {
+            let mut camera = Camera::default();
+            camera.align_with_entity_distance(
+                &entity,
+                1.0,
+                CameraType::ThirdPersonBack,
+                |_| distance,
+                |_, _| None,
+            );
+            assert!((camera.position[2] + 4.0).abs() < 1e-6);
+        }
+        let mut camera = Camera::default();
+        camera.align_with_entity_distance(
+            &entity,
+            1.0,
+            CameraType::ThirdPersonBack,
+            |_| 0.0,
+            |_, _| None,
+        );
+        assert_eq!(camera.position, camera.eye);
+        camera.align_with_entity_distance(
+            &entity,
+            1.0,
+            CameraType::FirstPerson,
+            |_| panic!("first person has no detached distance"),
+            |_, _| None,
+        );
+        assert_eq!(camera.position, camera.eye);
     }
     #[test]
     fn fov_modifier_combines_speed_flight_and_bow() {

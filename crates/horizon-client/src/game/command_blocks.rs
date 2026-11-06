@@ -9,7 +9,7 @@ use horizon_client::{
     containers::BlockEntity,
     hud::{HudBatch, rgba},
     screen_draw::Measure,
-    text::{self, Text},
+    text::Text,
     ui::{self, EditBox},
     world::World,
 };
@@ -338,7 +338,7 @@ impl Game<'_> {
         let block = self.command_block(pos).cloned();
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
-            dispatcher: super::chat::chat_tree(&self.remote, &self.mods),
+            dispatcher: super::chat::chat_tree(&self.remote),
             registries: &self.ui.registries,
         };
         let Some(screen) = self.command_block_screen.as_mut() else {
@@ -546,9 +546,9 @@ impl Game<'_> {
         }
     }
     /// `CommandSourceStack.sendSuccess` from a command block: its output when
-    /// `send_command_feedback`, and `broadcastToAdmins` when
+    /// `send_command_feedback`, and `broadcastToAdmins` when `broadcast` and
     /// `command_block_output`.
-    pub(super) fn command_block_success(&mut self, pos: Pos, message: Text) {
+    pub(super) fn command_block_success(&mut self, pos: Pos, message: Text, broadcast: bool) {
         let Some(name) = self
             .command_block(pos)
             .filter(|c| c.track_output)
@@ -560,11 +560,8 @@ impl Game<'_> {
         if feedback {
             self.command_block_output(pos, message.clone());
         }
-        if feedback && self.ui.rules.bool("command_block_output") {
-            let broadcast = Text::translate("chat.type.admin", &[name, message])
-                .with_color(text::GRAY)
-                .italic();
-            self.system_message(broadcast);
+        if broadcast && feedback && self.ui.rules.bool("command_block_output") {
+            self.broadcast_source_to_admins(name, message);
         }
     }
 
@@ -591,7 +588,7 @@ impl Game<'_> {
         let (w, h) = self.gui_size();
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
-            dispatcher: super::chat::chat_tree(&self.remote, &self.mods),
+            dispatcher: super::chat::chat_tree(&self.remote),
             registries: &self.ui.registries,
         };
         let mut command = ChatScreen::command_block(&m, &c, &block.command, w as i32, h as i32);
@@ -676,6 +673,14 @@ impl Game<'_> {
         }
         for (b, x, y, bw) in CommandBlockScreen::buttons(w, h, s.cart.is_some()) {
             let hover = ui::hovered(self.cursor, x, y, bw, 20.0);
+            let action = match b {
+                Button::Done => Some(horizon_client::widgets::Action::Done),
+                Button::Cancel => Some(horizon_client::widgets::Action::Cancel),
+                _ => None,
+            };
+            if let Some(action) = action {
+                horizon_client::widgets::declare_action(action, [x, y, bw, 20.0], true);
+            }
             ui::button_as(
                 batch,
                 atlas,
@@ -692,7 +697,7 @@ impl Game<'_> {
         // The command box, then its suggestions over the widgets.
         let m = Measure(&atlas.font);
         let c = Commands {
-            dispatcher: super::chat::chat_tree(&self.remote, &self.mods),
+            dispatcher: super::chat::chat_tree(&self.remote),
             registries: &self.ui.registries,
         };
         s.command.resize(&m, &c, w as i32, h as i32);
@@ -728,7 +733,7 @@ impl Game<'_> {
         };
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
-            dispatcher: super::chat::chat_tree(&self.remote, &self.mods),
+            dispatcher: super::chat::chat_tree(&self.remote),
             registries: &self.ui.registries,
         };
         s.command.server_suggestions(&m, &c, id, range, list);
@@ -742,7 +747,7 @@ impl Game<'_> {
         {
             let m = Measure(&self.gui.atlas.font);
             let c = Commands {
-                dispatcher: super::chat::chat_tree(&self.remote, &self.mods),
+                dispatcher: super::chat::chat_tree(&self.remote),
                 registries: &self.ui.registries,
             };
             let (x, y) = (f64::from(self.cursor.0), f64::from(self.cursor.1));
@@ -806,8 +811,8 @@ impl Game<'_> {
         shortcut: Option<horizon_client::clipboard::EditShortcut>,
         text: Option<&str>,
     ) {
-        let ctrl = self.keys.contains(&KeyCode::ControlLeft);
-        let shift = self.keys.contains(&KeyCode::ShiftLeft);
+        let ctrl = self.has_control_down_with_quirk();
+        let shift = self.has_shift_down();
         // Windows' AltGr is Ctrl+Alt, and its characters still type.
         let types_text = self.types_text();
         let Some(mut s) = self.command_block_screen.take() else {
@@ -815,7 +820,7 @@ impl Game<'_> {
         };
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
-            dispatcher: super::chat::chat_tree(&self.remote, &self.mods),
+            dispatcher: super::chat::chat_tree(&self.remote),
             registries: &self.ui.registries,
         };
         if s.command.suggestions_key(&m, &c, key, shift) {
@@ -889,7 +894,7 @@ impl Game<'_> {
         };
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
-            dispatcher: super::chat::chat_tree(&self.remote, &self.mods),
+            dispatcher: super::chat::chat_tree(&self.remote),
             registries: &self.ui.registries,
         };
         s.command.type_text(&m, &c, &allowed);
@@ -947,7 +952,8 @@ impl Game<'_> {
             conditional: p.flags & 2 != 0,
             auto: p.flags & 4 != 0,
         };
-        self.as_guest(host, conn, |game| {
+        // The confirmation (`advMode.setCommand.success`) is the editing player's alone.
+        self.as_guest_messaged(host, conn, |game| {
             if allowed {
                 game.apply_command_block(&edit);
                 // BaseCommandBlock.onUpdated: the clients get the new command.

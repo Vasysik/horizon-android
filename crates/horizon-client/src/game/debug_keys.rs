@@ -10,7 +10,7 @@ use horizon_client::{
     gizmos::Gizmos,
     hud::HudBatch,
     hud_layout, keybinds,
-    text::Text,
+    text::{ClickEvent, Style, Text},
 };
 use horizon_core::geometry::{Axis, Vec3};
 use horizon_protocol::packets::play::{BlockEntityTagQuery, EntityTagQuery, Serverbound};
@@ -67,9 +67,6 @@ impl Game<'_> {
     /// own handling. Returns true when it is used up (a debug combination,
     /// F3 itself, F3+Escape).
     pub(super) fn debug_key(&mut self, key: KeyCode, action: KeyAction) -> bool {
-        if self.title.is_some() {
-            return false;
-        }
         let Some(name) = keybinds::key_name(key) else {
             return false;
         };
@@ -82,6 +79,11 @@ impl Game<'_> {
                 }
             } else if key == KeyCode::Escape {
                 self.close_gamemode_switcher(false);
+            } else if name == self.settings.keys.get("key.debug.debugOptions") {
+                // The debug options screen interrupts the switcher too
+                // (`canInterruptScreen`): it closes, then F6 opens over the game.
+                self.close_gamemode_switcher(false);
+                self.toggle_debug_options();
             } else if matches!(key, KeyCode::F2 | KeyCode::F11) {
                 return false;
             }
@@ -367,8 +369,19 @@ impl Game<'_> {
             .map_or("0".into(), |mhz| {
                 debug_overlay::refresh_rate_label(f64::from(mhz) / 1000.0)
             });
+        // Horizon: with frame generation running, the frames reaching the screen too.
+        let generated = self
+            .renderer
+            .as_ref()
+            .and_then(|r| r.frame_generation_share())
+            .map_or(String::new(), |share| {
+                format!(
+                    " ({} fps FSR 3.1)",
+                    (self.fps * (1.0 + share)).round() as i32
+                )
+            });
         d.priority(format!(
-            "{} fps T: {}{present} @{refresh}Hz",
+            "{} fps{generated} T: {}{present} @{refresh}Hz",
             self.fps.round() as i32,
             if limit == 260 {
                 "inf".into()
@@ -543,7 +556,9 @@ impl Game<'_> {
     }
     /// `LocalPlayer.isReducedDebugInfo`: the server's rule or the option.
     pub(super) fn reduced_debug_info(&self) -> bool {
-        self.settings.reduced_debug_info || self.ui.rules.bool("reduced_debug_info")
+        self.settings.reduced_debug_info
+            || self.ui.rules.bool("reduced_debug_info")
+            || self.remote.as_ref().is_some_and(|r| r.reduced_debug_info)
     }
     /// `DebugScreenEntryList.isCurrentlyEnabled` for an entry's path.
     pub(super) fn debug_entry(&self, path: &str) -> bool {
@@ -699,15 +714,61 @@ impl Game<'_> {
                 self.debug_charts.toggle_lightmap(&mut self.debug);
                 true
             }
+            // The debug options screen is not wired over the title screen yet:
+            // leave F6 unhandled there rather than half-open it.
+            DebugAction::DebugOptions if self.title.is_some() => false,
             DebugAction::DebugOptions => {
                 self.toggle_debug_options();
                 true
             }
+            // Horizon's own: a repro recording for a bug report (game/repro.rs).
+            // Off unless the AI Agent page enables the shortcuts.
+            DebugAction::RecordSession if !self.settings.extras.repro_keys => false,
+            DebugAction::ExportRepro if !self.settings.extras.repro_keys => false,
+            DebugAction::RecordSession => {
+                self.toggle_recording_key();
+                true
+            }
+            DebugAction::ExportRepro => {
+                self.export_repro_key();
+                true
+            }
+            DebugAction::DumpDynamicTextures => {
+                // `KeyboardHandler`: `TextureUtil.getDebugTexturePath` is the game
+                // folder's `screenshots/debug`; `TextureManager.dumpAllSheets` then
+                // writes every dumpable texture there and the chat names the folder.
+                let dir = horizon_client::logging::player_dir()
+                    .join("screenshots")
+                    .join("debug");
+                match self
+                    .gui
+                    .atlas
+                    .dump_contents(&dir, "minecraft_textures_atlas_gui")
+                {
+                    Ok(_) => {
+                        log::info!("Dumped dynamic textures to {}", dir.display());
+                        let link = Text::styled(
+                            "screenshots/debug",
+                            Style {
+                                underlined: Some(true),
+                                click: Some(ClickEvent::OpenFile(
+                                    dir.to_string_lossy().into_owned(),
+                                )),
+                                ..Style::default()
+                            },
+                        );
+                        self.debug_feedback(Text::translate(
+                            "debug.dump_dynamic_textures",
+                            &[link],
+                        ));
+                    }
+                    Err(e) => log::error!("Failed to dump dynamic textures: {e}"),
+                }
+                true
+            }
             // Screens and overlays Horizon does not draw yet (the profiler and
-            // its chart, the texture dump): the keys are used up as in vanilla.
-            DebugAction::DumpDynamicTextures
-            | DebugAction::Profiling
-            | DebugAction::ProfilingChart => true,
+            // its chart): the keys are used up as in vanilla.
+            DebugAction::Profiling | DebugAction::ProfilingChart => true,
             DebugAction::ShowHitboxes
             | DebugAction::ShowChunkBorders
             | DebugAction::SwitchGameMode
@@ -745,7 +806,7 @@ impl Game<'_> {
             "client"
         };
         if self.entity_targeted()
-            && let Some((index, _)) = self.mob_hit()
+            && let Some((index, _, _)) = self.mob_hit()
         {
             let (kind, position, id) = {
                 let m = &self.mobs[index];
@@ -903,8 +964,7 @@ impl Game<'_> {
         }
         let lerp = |a: f64, b: f64| a + f64::from(alpha) * (b - a);
         let lerpf = |a: f32, b: f32| a + alpha * (b - a);
-        let guests = self.lan.iter().flat_map(|h| h.models.values());
-        for m in self.mobs.iter().chain(guests) {
+        for m in self.mobs.iter() {
             if m.removed || m.invisible || m.has_effect("minecraft:invisibility") {
                 continue;
             }
@@ -1051,6 +1111,7 @@ impl Game<'_> {
                 | K::EnderPearl
                 | K::LlamaSpit
                 | K::Potion { .. }
+                | K::ExperienceBottle
                 | K::Thrown(_) => (0.25, 0.2125),
                 K::SmallFireball | K::ShulkerBullet { .. } | K::WitherSkull { .. } => {
                     (0.3125, 0.265_625)
@@ -1109,6 +1170,11 @@ impl Game<'_> {
         }
         for b in &self.bolts {
             g.hitbox(b.at, (0.0, 0.0), 0.0, false, (0.0, 0.0));
+        }
+        // AreaEffectCloud.getDimensions: diameter follows synced radius,
+        // height is 0.5; EntityDimensions.scalable gives eyes at 85% height.
+        for c in &self.potions.clouds {
+            g.hitbox(c.at, (c.radius * 2.0, 0.5), 0.425, false, (0.0, 0.0));
         }
         // The dragon: 16 by 8, a living entity; its parts follow.
         if let Some(d) = &self.dragon {

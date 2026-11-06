@@ -8,6 +8,7 @@ use horizon_client::{
     mesher::Vertex,
     mobs::{Mob, Species, Who, sulfur_cube},
     projectiles::Projectile,
+    text::Text,
 };
 use horizon_core::{position::BlockPos, random::RandomSource};
 
@@ -45,7 +46,7 @@ impl Game<'_> {
         light: u32,
         out: &mut Vec<Vertex>,
     ) {
-        let Some(item) = mob.extra.head.as_deref() else {
+        let Some(item) = mob.extra.body.as_deref() else {
             return;
         };
         if super::armor_stands::skull_kind(item).is_some() {
@@ -85,7 +86,7 @@ impl Game<'_> {
     /// Spit the swallowed block out on top (`EntityAttachment.PASSENGER`).
     fn eject_sulfur_block(&mut self, index: usize) {
         let m = &mut self.mobs[index];
-        let Some(item) = m.extra.head.take() else {
+        let Some(item) = m.extra.body.take() else {
             return;
         };
         let at = [
@@ -121,6 +122,8 @@ impl Game<'_> {
         let explosive = sulfur_cube::archetype(m).is_some_and(|a| a.explosion.is_some());
         if explosive && matches!(item, "minecraft:flint_and_steel" | "minecraft:fire_charge") {
             if !self.ui.rules.bool("tnt_explodes") {
+                let message = Text::translate("block.minecraft.tnt.disabled", &[]);
+                self.send_overlay_message(message);
                 return false;
             }
             sulfur_cube::prime(&mut self.mobs[index], false);
@@ -129,15 +132,20 @@ impl Game<'_> {
             } else {
                 self.consume_held();
             }
+            self.award_stat("used", item, 1);
             return true;
         }
         if item == "minecraft:shears" && sulfur_cube::has_body(m) {
             // shear: out comes the block, and nothing is swallowed for 5 s.
-            let sheared = self.mobs[index].extra.head.clone();
+            let sheared = self.mobs[index].extra.body.clone();
             self.eject_sulfur_block(index);
             self.mobs[index].extra.ints[3] = sulfur_cube::PICKUP_TIMER;
             self.sulfur_sound(index, "entity.sulfur_cube.eject");
             self.damage_held_tool();
+            // gameEvent(SHEAR, player).
+            let at = self.mobs[index].position;
+            let ctx = self.who_context(Some(Who::Player), None);
+            self.post_game_event("minecraft:shear", [at.x, at.y, at.z], ctx);
             // CriteriaTriggers.PLAYER_SHEARED_EQUIPMENT with the body block.
             if let Some(body) = sheared {
                 let target = self.mob_entity(&self.mobs[index]);
@@ -151,13 +159,17 @@ impl Game<'_> {
         }
         if sulfur_cube::swallowable(m, item) {
             // equipItem: not the same block again; the old one comes out.
-            if m.extra.head.as_deref() == Some(item) {
+            if m.extra.body.as_deref() == Some(item) {
                 return false;
             }
             self.eject_sulfur_block(index);
-            self.mobs[index].extra.head = Some(item.into());
+            self.mobs[index].extra.body = Some(item.into());
             self.consume_held();
             self.sulfur_sound(index, "entity.sulfur_cube.absorb");
+            // Entity.gameEvent(ENTITY_INTERACT): the cube is the source.
+            let (id, at) = (self.mobs[index].id, self.mobs[index].position);
+            let ctx = self.who_context(Some(Who::Mob(id)), None);
+            self.post_game_event("minecraft:entity_interact", [at.x, at.y, at.z], ctx);
             return true;
         }
         false
@@ -211,7 +223,7 @@ impl Game<'_> {
         let griefing = self.ui.rules.bool("mob_griefing");
         for i in 0..self.mobs.len() {
             let m = &self.mobs[i];
-            if m.species() != Species::SulfurCube {
+            if m.species() != Species::SulfurCube || !self.creatures.ticked.contains(&m.id) {
                 continue;
             }
             if !m.alive() || m.is_baby() || sulfur_cube::has_body(m) || m.extra.ints[3] > 0 {
@@ -264,7 +276,7 @@ impl Game<'_> {
                 self.remove_dropped(j);
             }
             let m = &mut self.mobs[i];
-            m.extra.head = Some(item);
+            m.extra.body = Some(item);
             m.extra.point = None;
             self.sulfur_sound(i, "entity.sulfur_cube.absorb");
             if thrown_by_player {

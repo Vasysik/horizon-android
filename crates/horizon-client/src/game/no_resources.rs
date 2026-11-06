@@ -24,10 +24,7 @@ pub(super) fn show(looked_in: &std::path::Path, settings: &Settings) -> Result<(
         renderer: None,
         gui: UiResources {
             atlas: HudAtlas::build(looked_in)?,
-            panorama: Arc::new(horizon_client::gfx::panorama::Faces {
-                size: 1,
-                pixels: [0u8; 4].repeat(6),
-            }),
+            panorama: Arc::new(horizon_client::gfx::panorama::Faces::colour([0; 4])),
         },
         screen: NoResources::new(looked_in),
         pointer: (0.0, 0.0),
@@ -96,10 +93,10 @@ impl ApplicationHandler for Missing {
         if self.window.is_some() {
             return;
         }
-        let attributes = Window::default_attributes()
-            .with_title("Horizon")
-            .with_window_icon(horizon_client::window::icon())
-            .with_inner_size(winit::dpi::LogicalSize::new(1040.0, 700.0));
+        let attributes = horizon_client::window::with_horizon_icon(
+            Window::default_attributes().with_title("Horizon"),
+        )
+        .with_inner_size(winit::dpi::LogicalSize::new(1040.0, 700.0));
         let made = event_loop
             .create_window(attributes)
             .map_err(Into::into)
@@ -109,7 +106,7 @@ impl ApplicationHandler for Missing {
                     window.clone(),
                     false,
                     Some(&self.gui.atlas),
-                    Some(self.gui.panorama.as_ref()),
+                    Some(&self.gui.panorama),
                     None,
                     self.api,
                 )?;

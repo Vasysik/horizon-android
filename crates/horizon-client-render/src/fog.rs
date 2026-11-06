@@ -5,6 +5,7 @@
 use crate::{
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
+    camera::NearPlane,
     environment::Sky,
     world::World,
 };
@@ -20,7 +21,7 @@ pub enum FogType {
 }
 
 /// The fog uniform (`FogData`).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FogData {
     pub color: [f32; 4],
     pub environmental_start: f32,
@@ -135,9 +136,24 @@ fn camera_fluid_height(world: &World, facts: &BlockFacts, b: [i32; 3]) -> Option
     };
     Some((s.fluid, height))
 }
-/// `Camera.getFluidInCamera` (near-plane points reduced to the camera and
-/// the point just in front of it).
-pub fn fog_type(world: &World, facts: &BlockFacts, camera: [f64; 3], forward: [f64; 3]) -> FogType {
+/// `Camera.getFluidInCamera`: water at the camera, then lava or powder snow
+/// at the near plane's centre and corners.
+pub fn fog_type(world: &World, facts: &BlockFacts, camera: [f64; 3], near: &NearPlane) -> FogType {
+    camera_fog_type(
+        camera,
+        near,
+        |b| camera_fluid_height(world, facts, b),
+        |b| &*facts.get(world.block(b[0], b[1], b[2])).name == "minecraft:powder_snow",
+    )
+}
+/// `fog_type` over a block lookup: the fluid and its camera height, and
+/// whether the block is powder snow.
+fn camera_fog_type(
+    camera: [f64; 3],
+    near: &NearPlane,
+    fluid: impl Fn([i32; 3]) -> Option<(Fluid, f64)>,
+    powder_snow: impl Fn([i32; 3]) -> bool,
+) -> FogType {
     let block = |p: [f64; 3]| {
         [
             p[0].floor() as i32,
@@ -146,28 +162,19 @@ pub fn fog_type(world: &World, facts: &BlockFacts, camera: [f64; 3], forward: [f
         ]
     };
     let b = block(camera);
-    if let Some((Fluid::Water, h)) = camera_fluid_height(world, facts, b)
+    if let Some((Fluid::Water, h)) = fluid(b)
         && camera[1] < f64::from(b[1]) + h
     {
         return FogType::Water;
     }
-    for p in [
-        [
-            camera[0] + forward[0] * 0.05,
-            camera[1] + forward[1] * 0.05,
-            camera[2] + forward[2] * 0.05,
-        ],
-        camera,
-    ] {
+    for point in near.points() {
+        let p: [f64; 3] = std::array::from_fn(|i| camera[i] + point[i]);
         let b = block(p);
-        match camera_fluid_height(world, facts, b) {
+        match fluid(b) {
             Some((Fluid::Lava, h)) if p[1] <= f64::from(b[1]) + h => return FogType::Lava,
             Some((Fluid::Lava, _)) => {}
-            _ => {
-                if &*facts.get(world.block(b[0], b[1], b[2])).name == "minecraft:powder_snow" {
-                    return FogType::PowderSnow;
-                }
-            }
+            _ if powder_snow(b) => return FogType::PowderSnow,
+            _ => {}
         }
     }
     FogType::Atmospheric
@@ -205,8 +212,11 @@ pub struct FogInputs<'a> {
     pub boss_world_fog: bool,
     /// The camera entity is a spectator (`LavaFogEnvironment`).
     pub spectator: bool,
-    /// The camera entity has Fire Resistance (`LavaFogEnvironment`).
+    /// The camera entity has Fire Resistance (`LavaFogEnvironment`), or PvP & HUD's clear lava
+    /// asks for its fog.
     pub fire_resistance: bool,
+    /// PvP & HUD's clear water: the water vision `FogState` reaches after 600 ticks under water.
+    pub full_water_vision: bool,
     /// `GameRenderer.nightVisionScale` while Night Vision is on without
     /// Darkness, else 0 (`FogRenderer.computeFogColor`'s brightenFactor).
     pub night_vision: f32,
@@ -217,7 +227,11 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
     let rd = input.render_distance_chunks as f32 * 16.0;
     let sky = input.sky;
     let eye_in_water = input.fog_type == FogType::Water;
-    let water_vision = state.water_vision(eye_in_water);
+    let water_vision = if input.full_water_vision && eye_in_water {
+        1.0
+    } else {
+        state.water_vision(eye_in_water)
+    };
     // Base colour of the applicable environment.
     let mut color = match input.fog_type {
         FogType::Lava => rgb(0x99_1A00),
@@ -444,8 +458,26 @@ mod tests {
             boss_world_fog: false,
             spectator: false,
             fire_resistance: false,
+            full_water_vision: false,
             night_vision: 0.0,
         }
+    }
+    #[test]
+    fn lava_fog_starts_when_a_near_plane_corner_dips_under_the_surface() {
+        // Flowing lava (amount 4) on y 64: the camera sees its surface at 64 + 4/9.
+        let surface = 64.0 + 4.0 / 9.0;
+        let fluid = |b: [i32; 3]| (b[1] == 64).then_some((Fluid::Lava, 4.0 / 9.0));
+        let fog = |y: f64, pitch: f32| {
+            let mut camera = crate::camera::Camera::default();
+            camera.set_rotation(0.0, pitch);
+            let near = camera.near_plane(70.0, 1600.0, 900.0);
+            camera_fog_type([0.5, y, 0.5], &near, fluid, |_| false)
+        };
+        // Looking level, the near plane reaches tan(35 degrees) * 0.05 = 0.035 below the eye.
+        assert_eq!(fog(surface + 0.02, 0.0), FogType::Lava);
+        assert_eq!(fog(surface + 0.05, 0.0), FogType::Atmospheric);
+        // The eye itself is not tested: looking up, the whole plane is above it.
+        assert_eq!(fog(surface - 0.01, -90.0), FogType::Atmospheric);
     }
     #[test]
     fn boss_world_fog_closes_in() {
@@ -647,6 +679,31 @@ mod tests {
         }
         assert_eq!(s.water_vision(true), 1.0);
         assert_eq!(s.water_vision(false), 0.0);
+    }
+    #[test]
+    fn clear_water_sees_as_far_as_after_thirty_seconds_under_water() {
+        let sky = Sky::default();
+        let tables = FogTables {
+            water_fog_end: vec![1.0],
+        };
+        let mut input = inputs(&sky);
+        input.fog_type = FogType::Water;
+        // Just in: vanilla's water vision is 0, so the fog ends at a quarter of 96 blocks.
+        let mut state = FogState::default();
+        state.tick(true);
+        let first = setup_fog(&tables, &state, &input);
+        assert_eq!(first.environmental_end, 24.0);
+        for _ in 0..600 {
+            state.tick(true);
+        }
+        let settled = setup_fog(&tables, &state, &input);
+        assert_eq!(settled.environmental_end, 96.0);
+        input.full_water_vision = true;
+        let mut fresh = FogState::default();
+        fresh.tick(true);
+        let clear = setup_fog(&tables, &fresh, &input);
+        assert_eq!(clear.environmental_end, settled.environmental_end);
+        assert_eq!(clear.color, settled.color);
     }
     #[test]
     fn rain_fog_pulls_fog_in() {

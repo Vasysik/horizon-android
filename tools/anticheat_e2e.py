@@ -18,7 +18,8 @@ Checks:
 - prediction: `[anticheat]` on, survival: a real Horizon client, through a relay that holds every packet
          20-120 ms, walks, sprint-jumps, strafes and sneaks, with effects given and cleared, over ice and
          soul sand, swims, walks into cows, has blocks changed around it, flies in creative, glides with an
-         elytra and a firework, launches with riptide and rides a boat: it is never flagged. A bot, which
+         elytra and a firework, launches with riptide, rides a boat and hits a cow mid-sprint: it is never
+         flagged. A bot, which
          moves by its own rules and sends no keys, is flagged and sent back.
 - combat: no server.toml (the anticheat's defaults: `combat` acts), survival: a bot attacking a player
          twice a second and swinging each time, as vanilla's client does, is never flagged and its hits
@@ -33,7 +34,7 @@ Checks:
 
 Each server runs in a fresh folder with fresh HORIZON_HOME and XDG folders (lab.game_env), on a free port,
 in a flat world (creative unless the check says otherwise: the bots fly). Build first:
-    cargo build --profile fast -p horizon-client --bin horizon-client --bin horizon-ctl
+    cargo build --profile fast -p horizon-client -p horizon-client-lib --bin horizon-client --bin horizon-ctl
     cargo build --profile fast -p horizon-bots
 """
 import argparse
@@ -347,6 +348,19 @@ def honest_play(game, console):
     at('fill ~-3 ~-2 ~-3 ~3 ~-1 ~11 minecraft:stone')
     game.raw('move', 'back', 2, '--sprint')
     game.wait(40)
+    # A cow hit mid-sprint, the sprint key held: the server stops the sprint (causeExtraKnockback), the
+    # client starts it again as the flag reaches it and says nothing, and sprints on for 4 seconds. On
+    # untouched flat ground, looking down at the cow so the hit lands.
+    console('tp Walker 0.5 -60 -40.5 0 25')
+    game.wait(40)
+    console('summon minecraft:cow 0.5 -60 -36.5 {NoAI:1b}')
+    game.wait(10)
+    game.script(['key w down', 'key ctrl down', 'wait 5', 'mouse left click', 'wait 80', 'key ctrl up',
+                 'key w up', 'wait 20'])
+    # The hit landed: the cow lost half a heart (a fist).
+    console('data get entity @e[type=minecraft:cow,limit=1] Health')
+    console.__self__.wait_for(r'Cow has the following entity data: 9\.0f', 10)
+    console('kill @e[type=minecraft:cow]')
 
 
 def water_play(game, console):

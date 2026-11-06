@@ -1,7 +1,7 @@
-//! Horizon's extras in the game (`docs/extras.md`); a mod's minimap
-//! (`render.set-minimap`: its tiles, image and HUD) and zoom (`render.set-zoom`) on the camera; clicks
-//! and frame times for mods (`input.clicks-per-second`, `render.frame-stats`).
-//! Each hook does nothing while its extra is off and no mod runs.
+//! Horizon's extras in the game (`docs/extras.md`); a native mod's minimap
+//! (`native_minimap`: its tiles, image and HUD) and zoom (`native_zoom`) on the camera; clicks
+//! and frame times for mods (`native_clicks`, `native_frame_rate`).
+//! Each hook does nothing while its extra is off and no mod uses it.
 use super::{Dim, Game, Screen, native_hooks::NativeMinimap};
 use horizon_client::{
     extras::{Corner, Cps, FpsCounter, fov_target},
@@ -62,6 +62,8 @@ impl Game<'_> {
         let now = self.extras_now();
         self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
         self.native_frame(elapsed);
+        self.pvp_frame();
+        self.recipes_received_now();
     }
     /// The frame counter for mods: fps, min, 1% low.
     pub(super) fn frame_reading(&self) -> (u32, u32, u32) {
@@ -133,7 +135,7 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// The minimap a mod shows (`render.set-minimap`): its corner, its side
+    /// The minimap a mod shows (`native_minimap`): its corner, its side
     /// in GUI pixels and its view of the player.
     fn minimap_shown(&self) -> Option<(Corner, f32, View)> {
         let p = self.player.as_ref()?;
@@ -151,20 +153,9 @@ impl Game<'_> {
         };
         Some((m.corner, m.size, view))
     }
-    /// The minimap shown: a native mod's (`native_minimap`), else a
-    /// WebAssembly mod's.
+    /// The minimap shown: a native mod's (`native_minimap`).
     fn minimap_wanted(&self) -> Option<NativeMinimap> {
-        if let Some(m) = self.native_minimap_now() {
-            return Some(m);
-        }
-        let m = self.mod_minimap()?;
-        Some(NativeMinimap {
-            corner: m.corner,
-            size: m.size,
-            blocks_per_pixel: m.blocks_per_pixel,
-            rotate: m.rotate,
-            round: m.round,
-        })
+        self.native_minimap_now()
     }
     /// Refresh the minimap's tiles within the frame budget, recompose its
     /// image when the view or a tile changed, and queue the upload.
@@ -218,13 +209,10 @@ impl Game<'_> {
             rgba: self.extras.minimap.image.clone(),
         });
     }
-    /// A mod's zoom in effect (`render.set-zoom`): (factor, smooth, turning
+    /// A mod's zoom in effect (`native_zoom`): (factor, smooth, turning
     /// scale); none is 1.
     fn zoom_now(&self) -> (f32, bool, f64) {
-        if let Some(z) = self.native_zoom_now() {
-            return (z.factor, z.smooth, f64::from(z.turn));
-        }
-        self.mod_zoom().map_or((1.0, true, 1.0), |z| {
+        self.native_zoom_now().map_or((1.0, true, 1.0), |z| {
             (z.factor, z.smooth, f64::from(z.turn))
         })
     }
@@ -249,7 +237,6 @@ impl Game<'_> {
     /// The minimap and mods' corner panels, in the HUD layer (hidden with F1
     /// by the caller). The top left corner gives way to the debug screen.
     pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
-        let mod_panels = self.mods.has_panels();
         let map = self.minimap_shown();
         let visible = |corner| !(self.debug && corner == Corner::TopLeft);
         let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
@@ -275,16 +262,14 @@ impl Game<'_> {
             };
             extras_hud::draw_minimap(batch, atlas, &mut corners, &look);
         }
-        if mod_panels {
-            self.draw_mod_panels(batch, &mut corners);
-        }
+        self.draw_pvp_hud(batch, &mut corners);
         self.native_hud(batch, &mut corners);
     }
     /// The height the status effect icons take at the top right
     /// (`Hud.extractEffects`: beneficial at y 1, harmful at y 26).
     fn effect_rows_height(&self) -> f32 {
         let effects = &self.potions.effects.list;
-        if effects.is_empty() || self.screen != Screen::Playing {
+        if effects.is_empty() || self.screen != Screen::Playing || self.pvp_effects_shown() {
             return 0.0;
         }
         let harmful = effects.iter().any(|e| {

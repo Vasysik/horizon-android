@@ -235,6 +235,7 @@ impl Game<'_> {
         // SmithingTrimDemoSlotDisplay draws from a random of its own.
         let mut random = super::dispenser::entity_random();
         let mut items = Vec::new();
+        let mut first = None;
         for id in recipes {
             let Some(station) = index.toast_station(id) else {
                 continue;
@@ -262,19 +263,22 @@ impl Game<'_> {
                         )
                     });
                 if let Some(result) = result {
+                    first.get_or_insert(id);
                     items.push((station.to_owned(), result));
                 }
             }
         }
-        if items.is_empty() {
+        let Some(first) = first else {
             return;
-        }
+        };
         match self.adv.toasts.iter_mut().find(|t| t.is_recipe()) {
             Some(toast) => toast.add_recipes(items),
-            None => self
-                .adv
-                .toasts
-                .push_back(super::advancements::Toast::recipe(items)),
+            None => {
+                if self.toast_allowed("recipe", first) {
+                    let toast = super::advancements::Toast::recipe(items);
+                    self.adv.toasts.push_back(toast);
+                }
+            }
         }
     }
 
@@ -309,6 +313,8 @@ impl Game<'_> {
                 names: &self.pack.names,
                 trade: None,
                 maps: None,
+                limited_crafting: self.limited_crafting(),
+                known_recipes: Some(&self.level.recipe_book),
             };
             for i in 0..36 {
                 menu.set_player_item(i, self.inventory[i].clone());
@@ -363,7 +369,7 @@ impl Game<'_> {
         ui.client_known = Some(known.clone());
         ui.client_version += 1;
     }
-    /// Every entry of the book, in its order (capability `recipes`).
+    /// Every entry of the book, in its order (`native_recipes`).
     pub(super) fn recipe_book_entries(&mut self) -> Vec<Entry> {
         self.ensure_book();
         self.recipe_ui
@@ -372,13 +378,19 @@ impl Game<'_> {
             .map_or_else(Vec::new, |b| b.entries.clone())
     }
     /// The display ids the player's book holds, and a number that changes
-    /// whenever they do (capability `recipes`).
+    /// whenever they do (`native_known_recipes`).
     pub(super) fn recipe_book_displays(&mut self) -> (u64, Vec<i32>) {
         self.sync_client_book();
         (
             self.recipe_ui.client_version,
             self.recipe_ui.client.displays(),
         )
+    }
+    /// The book's model is made again from `Game::recipes` when next needed:
+    /// the server's recipes arrived, or a new session began.
+    pub(super) fn forget_book(&mut self) {
+        self.recipe_ui.book = None;
+        self.recipe_tables.categories = None;
     }
     fn ensure_book(&mut self) {
         if self.recipe_ui.book.is_none() {
@@ -715,7 +727,9 @@ impl Game<'_> {
         if let Some(search) = self.recipe_ui.search.as_mut() {
             search.x = xo + 25.0;
             search.y = yo + 13.0;
-            let magnifier = inside(cursor, xo + 8.0, yo + 13.0, 17.0, 14.0);
+            // RecipeBookComponent's magnifierIconPlacement: from the book's
+            // left edge plus eight to the search box's own left edge.
+            let magnifier = inside(cursor, xo + 8.0, yo + 13.0, search.x - xo, 14.0);
             if magnifier || inside(cursor, search.x, search.y, search.width, search.height) {
                 self.recipe_ui.search_drag = true;
                 search.focused = true;
@@ -831,6 +845,25 @@ impl Game<'_> {
     /// How many displays the client's book holds.
     pub(super) fn recipe_book_known(&self) -> usize {
         self.recipe_ui.client.displays().len()
+    }
+    /// The next or previous page, as the arrows turn it: nothing past either end, or with a
+    /// pointer button held.
+    pub(super) fn pad_recipe_page(&mut self, next: bool) {
+        if self.pad.menu.held != [false; 2] {
+            return;
+        }
+        let pages = self.recipe_ui.view.buttons.len().div_ceil(20);
+        let page = self.recipe_ui.page;
+        let Some(to) = (if next {
+            (page + 1 < pages).then_some(page + 1)
+        } else {
+            page.checked_sub(1)
+        }) else {
+            return;
+        };
+        self.recipe_ui.page = to;
+        self.audio
+            .play("minecraft:ui.button.click", None, 0.25, 1.0);
     }
     /// The recipe book's buttons a controller can focus: the book button,
     /// recipes, page arrows, the craftable filter and the tabs (GUI pixels;
@@ -971,14 +1004,14 @@ impl Game<'_> {
         self.place_recipe(book_type, entry_index, use_max);
         true
     }
-    /// Whether the open screen takes `recipes.place`: a crafting grid's
+    /// Whether the open screen takes `native_place_recipe`: a crafting grid's
     /// book (the inventory's or a crafting table's).
     pub(super) fn mod_recipe_screen(&self) -> bool {
         self.screen == Screen::Inventory
             && self.active_book() == Some(BookType::Crafting)
             && !self.spectator()
     }
-    /// `recipes.place`: the book's click on the recipe with this display
+    /// `native_place_recipe`: the book's click on the recipe with this display
     /// id, refused as `handlePlaceRecipe` refuses it (no crafting screen,
     /// not in the player's book; an impossible one in `place_recipe`).
     pub(super) fn mod_place_recipe(&mut self, display_id: i32, all: bool) {

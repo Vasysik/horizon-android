@@ -200,7 +200,11 @@ impl Game<'_> {
     }
     /// The narrator option changed, on the options screen or by its hotkey.
     pub(super) fn narrator_status_changed(&mut self) {
+        let new = self.narrator_toast.is_none();
         update_status(self.settings.narrator(), &mut self.narrator_toast);
+        if new && !self.toast_allowed("system", "narrator_toggle") {
+            self.narrator_toast = None;
+        }
     }
     /// The narrator hotkey on a key press or repeat, before the screen or
     /// the game takes the key (it doesn't consume it): the next status,
@@ -260,7 +264,7 @@ impl Game<'_> {
             Screen::Chat if self.title.is_none() => true,
             Screen::Options => self.ui.options.typing(),
             Screen::WorldOptions => self.world_options_typing(),
-            Screen::CommandBlock => true,
+            Screen::CommandBlock | Screen::Social => true,
             Screen::Inventory => self.station_typing() || self.mod_browser_typing(),
             _ => self
                 .title

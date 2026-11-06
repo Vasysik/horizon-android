@@ -29,6 +29,10 @@ pub type Signature = horizon_protocol::secure_chat::Signature;
 /// How long a message shows before a deletion replaces it
 /// (`ChatComponent.deleteMessageOrDelay`: `addedTime + 60`).
 const DELETION_DELAY: u64 = 60;
+/// The smooth chat extra: the ticks a new line takes to slide in and fade in,
+/// and how far left of its place it starts (GUI pixels).
+const INTRO_TICKS: f32 = 5.0;
+const INTRO_WIDTH: f32 = 12.0;
 
 /// `ChatVisiblity`: the Chat option's three values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,6 +174,12 @@ impl ChatOptions {
 #[derive(Clone, Debug)]
 struct Message {
     added: u64,
+    /// Local hour and minute it came in (PvP & HUD's chat timestamps).
+    time: (u8, u8),
+    /// How many times in a row it came (PvP & HUD's compact chat), 1 for once.
+    repeats: u32,
+    /// The lines it wrapped to the last time it was laid out (0 while hidden).
+    wrapped: usize,
     content: Text,
     tag: Option<std::sync::Arc<Tag>>,
     source: ChatSource,
@@ -182,6 +192,32 @@ struct Line {
     added: u64,
     content: Text,
     tag: Option<std::sync::Arc<Tag>>,
+    /// The whole message's text, for PvP & HUD's copy on click.
+    message: std::sync::Arc<str>,
+}
+
+/// PvP & HUD's chat options (`pvp::ChatQol`): each changes the lines, so a change rewraps them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChatQol {
+    /// Each message starts with the local time it came in.
+    pub timestamps: bool,
+    /// A message equal to the one before it raises that one's count ("(x3)") instead of adding lines.
+    pub compact: bool,
+}
+/// Whether `next` repeats `last`: the same text, kind and tag, neither one signed (a server may
+/// delete a signed message by itself).
+fn repeats(last: &Message, next: &Message) -> bool {
+    last.signature.is_none()
+        && next.signature.is_none()
+        && last.source == next.source
+        && last.tag == next.tag
+        && last.content == next.content
+}
+/// The local hour and minute.
+fn local_time() -> (u8, u8) {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    (now.hour() as u8, now.minute() as u8)
 }
 
 /// `GuiMessageTag`: the bar at the left of a message's lines, the tooltip
@@ -233,14 +269,10 @@ impl Tag {
 
 /// `ChatComponent.AlphaCalculator.timeBased`: opaque for 180 ticks, then
 /// fading out quadratically over 20.
-fn time_alpha(ticks: u64, added: u64) -> f32 {
-    let delta = ticks as i64 - added as i64;
-    let mut t = delta as f64 / 200.0;
-    t = 1.0 - t;
-    t *= 10.0;
-    t = t.clamp(0.0, 1.0);
-    t *= t;
-    t as f32
+fn time_alpha(ticks: f32, added: u64) -> f32 {
+    let mut t = 1.0 - (ticks - added as f32) / 200.0;
+    t = (t * 10.0).clamp(0.0, 1.0);
+    t * t
 }
 #[derive(Default)]
 pub struct Chat {
@@ -256,6 +288,11 @@ pub struct Chat {
     scroll: usize,
     new_since_scroll: bool,
     pub options: ChatOptions,
+    /// The smooth chat extra: a new line slides in from the left while it
+    /// fades in, instead of appearing whole.
+    pub smooth: bool,
+    /// The smooth chat extra: no indicator bar at the left of a line.
+    pub hide_indicator: bool,
     /// Messages printed to stdout as `[CHAT]` (vanilla logs them).
     pub log: bool,
     /// Messages added since the start, for the control socket's events.
@@ -265,6 +302,14 @@ pub struct Chat {
     /// `ChatComponent.messageDeletionQueue`: deletions of messages still
     /// too new to replace, with the tick from which they may be.
     deletions: Vec<(Box<Signature>, u64)>,
+    qol: ChatQol,
+    /// PvP & HUD's chat search is on: the screen shows its prompt.
+    pub search_prompt: bool,
+    /// PvP & HUD's chat search: only messages holding this (lower case) show.
+    search: Option<String>,
+    /// The tests' clock in place of the local time.
+    #[cfg(test)]
+    clock: Option<(u8, u8)>,
 }
 impl Chat {
     pub fn lines_per_page(&self, focused: bool) -> usize {
@@ -326,6 +371,9 @@ impl Chat {
             font,
             Message {
                 added: ticks,
+                time: (0, 0),
+                repeats: 1,
+                wrapped: 0,
                 content,
                 tag: tag.map(std::sync::Arc::new),
                 source: ChatSource::Player,
@@ -347,6 +395,9 @@ impl Chat {
             font,
             Message {
                 added: ticks,
+                time: (0, 0),
+                repeats: 1,
+                wrapped: 0,
                 content,
                 tag,
                 source,
@@ -355,7 +406,7 @@ impl Chat {
             focused,
         );
     }
-    fn push_message(&mut self, font: &crate::font::Font, message: Message, focused: bool) {
+    fn push_message(&mut self, font: &crate::font::Font, mut message: Message, focused: bool) {
         if !self.abilities.shows(message.source) {
             return;
         }
@@ -365,12 +416,52 @@ impl Chat {
         if self.log {
             println!("[CHAT] {plain}");
         }
-        self.add_lines(font, &message, focused);
+        message.time = self.now();
+        self.received += 1;
+        if self.qol.compact
+            && let Some(last) = self.messages.first()
+            && repeats(last, &message)
+        {
+            // The newest lines are that message's: they make way for its lines with the count.
+            let mut last = self.messages.remove(0);
+            let shown = last.wrapped.min(self.lines.len());
+            self.lines.drain(..shown);
+            // A reader scrolled up keeps their view: only lines the merge adds move it.
+            let (scroll, new_since_scroll) = (self.scroll, self.new_since_scroll);
+            last.repeats += 1;
+            last.added = message.added;
+            last.time = message.time;
+            last.wrapped = self.add_lines(font, &last, focused);
+            if scroll > 0 {
+                self.scroll = scroll;
+                self.new_since_scroll = new_since_scroll;
+                self.scroll_by(last.wrapped as i32 - shown as i32, focused);
+            }
+            self.messages.insert(0, last);
+            return;
+        }
+        message.wrapped = self.add_lines(font, &message, focused);
         self.messages.insert(0, message);
         self.messages.truncate(100);
-        self.received += 1;
     }
-    fn add_lines(&mut self, font: &crate::font::Font, message: &Message, focused: bool) {
+    fn now(&self) -> (u8, u8) {
+        #[cfg(test)]
+        if let Some(time) = self.clock {
+            return time;
+        }
+        local_time()
+    }
+    /// The lines `message` wraps to (none when the chat search hides it), added newest first.
+    fn add_lines(&mut self, font: &crate::font::Font, message: &Message, focused: bool) -> usize {
+        // What the chat shows: legacy `§` codes format the text, they aren't part of it.
+        let whole = message.content.strip_legacy().plain();
+        if let Some(query) = &self.search
+            && !whole.to_lowercase().contains(query.as_str())
+        {
+            return 0;
+        }
+        let whole: std::sync::Arc<str> = whole.into();
+        let mut count = 0;
         // GuiMessage.splitLines: room for the tag's icon (its width, 4 before and 2 after).
         let icon = if message.tag.as_ref().is_some_and(|tag| tag.icon) {
             9 + 4 + 2
@@ -378,8 +469,9 @@ impl Chat {
             0
         };
         let width = self.max_width() - icon;
-        let content = self.displayed(&message.content);
+        let content = self.message_text(message);
         for line in font.wrap_components(&content, width) {
+            count += 1;
             if focused && self.scroll > 0 {
                 self.new_since_scroll = true;
                 self.scroll_by(1, focused);
@@ -390,10 +482,12 @@ impl Chat {
                     added: message.added,
                     content: line,
                     tag: message.tag.clone(),
+                    message: whole.clone(),
                 },
             );
         }
         self.lines.truncate(100);
+        count
     }
     /// What a message's lines wrap (ComponentRenderUtils.wrapComponents):
     /// without Chat Colors its `§` codes are stripped (stripColor); with
@@ -405,6 +499,67 @@ impl Chat {
             content.strip_legacy()
         }
     }
+    /// A message's lines before wrapping: [`Chat::displayed`], with PvP & HUD's time before it
+    /// and count after it, in grey.
+    fn message_text(&self, message: &Message) -> Text {
+        let content = self.displayed(&message.content);
+        if !self.qol.timestamps && message.repeats <= 1 {
+            return content;
+        }
+        let mut out = Text::empty();
+        if self.qol.timestamps {
+            let (h, m) = message.time;
+            let time = Text::literal(format!("{h:02}:{m:02}"));
+            out = out.append(
+                Text::translate_with_fallback("horizon.chat.timestamp", "[%s] ", &[time])
+                    .with_color(text::GRAY),
+            );
+        }
+        out = out.append(content);
+        if message.repeats > 1 {
+            let count = Text::literal(message.repeats.to_string());
+            out = out.append(
+                Text::translate_with_fallback("horizon.chat.repeats", " (x%s)", &[count])
+                    .with_color(text::GRAY),
+            );
+        }
+        out
+    }
+    /// PvP & HUD's chat options; a change lays the lines out again.
+    pub fn set_qol(&mut self, atlas: &HudAtlas, qol: ChatQol) {
+        if self.qol != qol {
+            self.qol = qol;
+            self.rewrap(&atlas.font);
+        }
+    }
+    /// PvP & HUD's chat search: only the messages holding `query` (any case) show; `None` or
+    /// an empty query shows them all again.
+    pub fn set_search(&mut self, atlas: &HudAtlas, query: Option<&str>) {
+        self.set_search_with(&atlas.font, query);
+    }
+    fn set_search_with(&mut self, font: &crate::font::Font, query: Option<&str>) {
+        // Called each frame while searching: no work (nor allocation) for the same query.
+        let blank = |q: &str| q.trim().is_empty();
+        let same = match (&self.search, query) {
+            (None, None) => true,
+            (None, Some(q)) => blank(q),
+            (Some(_), None) => false,
+            (Some(current), Some(q)) => q.chars().flat_map(char::to_lowercase).eq(current.chars()),
+        };
+        if same {
+            return;
+        }
+        let query = query
+            .map(str::to_lowercase)
+            .filter(|q| !q.trim().is_empty());
+        if self.search != query {
+            self.search = query;
+            self.rewrap(font);
+        }
+    }
+    pub fn searching(&self) -> bool {
+        self.search.is_some()
+    }
     /// Re-wrap after a width or scale change (ChatComponent.rescaleChat),
     /// keeping only the messages the Chat option shows.
     pub fn rescale(&mut self, atlas: &HudAtlas) {
@@ -414,16 +569,15 @@ impl Chat {
         self.scroll = 0;
         self.new_since_scroll = false;
         self.lines.clear();
-        let messages: Vec<Message> = self
-            .messages
-            .iter()
-            .rev()
-            .filter(|m| self.abilities.shows(m.source))
-            .cloned()
-            .collect();
-        for m in &messages {
-            self.add_lines(font, m, false);
+        let mut messages = std::mem::take(&mut self.messages);
+        for m in messages.iter_mut().rev() {
+            m.wrapped = if self.abilities.shows(m.source) {
+                self.add_lines(font, m, false)
+            } else {
+                0
+            };
         }
+        self.messages = messages;
     }
     /// `ChatComponent.setVisibleMessageFilter`: the Chat option changed;
     /// the messages it now hides leave the chat, those it shows again return.
@@ -485,6 +639,9 @@ impl Chat {
         }
         *message = Message {
             added: message.added,
+            time: message.time,
+            repeats: 1,
+            wrapped: 0,
             content: Self::deleted_marker(),
             tag: Some(std::sync::Arc::new(Tag::system_single_player(
                 SYSTEM_INDICATOR,
@@ -555,7 +712,7 @@ impl Chat {
     }
     /// `ChatComponent.extractRenderState` (background mode unless `focused`)
     /// on a screen `height` GUI pixels tall at `Hud.tickCount` `ticks`.
-    pub fn layout(&self, height: i32, ticks: u64, focused: bool) -> Vec<GuiDraw> {
+    pub fn layout(&self, height: i32, ticks: f32, focused: bool) -> Vec<GuiDraw> {
         let total = self.lines.len();
         if total == 0 {
             return Vec::new();
@@ -569,28 +726,47 @@ impl Chat {
         let entry_height = o.line_height();
         let bottom_to_text =
             (8.0 * (o.line_spacing + 1.0) - 4.0 * o.line_spacing + 0.5).floor() as i32;
+        // Vanilla's 200-tick fade reads the whole GUI ticks
+        // (`Gui.getGuiTicks`); only the smooth chat extra eases it per frame.
+        let fade_ticks = if self.smooth { ticks } else { ticks.floor() };
         let alpha_of = |line: &Line| {
             if focused {
                 1.0
             } else {
-                time_alpha(ticks, line.added)
+                time_alpha(fade_ticks, line.added)
             }
+        };
+        // The smooth chat extra: how far into its intro a line is, 0 at the
+        // tick it was added and 1 once it has arrived, as (alpha, offset x).
+        let intro_of = |line: &Line| {
+            if focused || !self.smooth {
+                return (1.0, 0.0);
+            }
+            let t = ((ticks - line.added as f32) / INTRO_TICKS).clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - t) * (1.0 - t);
+            (eased, (eased - 1.0) * INTRO_WIDTH)
         };
         let visible = total
             .saturating_sub(self.scroll)
             .min(self.lines_per_page(focused));
-        let lines: Vec<(usize, &Line, f32)> = (0..visible)
+        let lines: Vec<(usize, &Line, f32, f32)> = (0..visible)
             .rev()
             .map(|i| (i, &self.lines[i + self.scroll]))
-            .map(|(i, line)| (i, line, alpha_of(line)))
-            .filter(|(_, _, alpha)| *alpha > 1.0e-5)
+            .map(|(i, line)| {
+                let (eased, slide) = intro_of(line);
+                (i, line, alpha_of(line) * eased, slide)
+            })
+            .filter(|(_, _, alpha, _)| *alpha > 1.0e-5)
             .collect();
         let mut out = vec![GuiDraw::Push(vec![
             PoseOp::Scale(scale, scale),
             PoseOp::Translate(4.0, 0.0),
         ])];
-        for &(i, _, alpha) in &lines {
+        for &(i, _, alpha, slide) in &lines {
             let bottom = chat_bottom - i as i32 * entry_height;
+            if slide != 0.0 {
+                out.push(GuiDraw::Push(vec![PoseOp::Translate(slide, 0.0)]));
+            }
             out.push(hud_layout::fill(
                 -4,
                 bottom - entry_height,
@@ -598,9 +774,15 @@ impl Chat {
                 bottom,
                 hud_layout::as8(alpha * background_opacity) << 24,
             ));
+            if slide != 0.0 {
+                out.push(GuiDraw::Pop);
+            }
         }
-        for &(i, line, alpha) in &lines {
+        for &(i, line, alpha, slide) in &lines {
             let bottom = chat_bottom - i as i32 * entry_height;
+            if slide != 0.0 {
+                out.push(GuiDraw::Push(vec![PoseOp::Translate(slide, 0.0)]));
+            }
             let opacity = alpha * text_opacity;
             let color = hud_layout::white(opacity);
             if color >> 24 != 0 {
@@ -612,7 +794,7 @@ impl Chat {
                     shadow: true,
                 });
             }
-            if let Some(tag) = &line.tag {
+            if let Some(tag) = line.tag.as_ref().filter(|_| !self.hide_indicator) {
                 let color = hud_layout::as8(opacity) << 24 | tag.color & 0xFF_FFFF;
                 out.push(hud_layout::fill(
                     -4,
@@ -621,6 +803,9 @@ impl Chat {
                     bottom,
                     color,
                 ));
+            }
+            if slide != 0.0 {
+                out.push(GuiDraw::Pop);
             }
         }
         if focused {
@@ -658,11 +843,17 @@ impl Chat {
     }
     /// Draws [`Chat::layout`] into the HUD batch, and with the chat screen
     /// open the restricted prompt above the lines.
-    pub fn draw(&self, batch: &mut HudBatch, atlas: &HudAtlas, ticks: u64, focused: bool) {
+    pub fn draw(&self, batch: &mut HudBatch, atlas: &HudAtlas, ticks: f32, focused: bool) {
         let draws = self.layout(batch.height as i32, ticks, focused);
         hud_layout::paint(batch, atlas, &draws);
-        if focused && self.abilities.any_restriction() {
+        let restricted = focused && self.abilities.any_restriction();
+        if restricted {
             let prompt = self.restricted_prompt(&atlas.font, batch.height as i32);
+            hud_layout::paint(batch, atlas, &prompt);
+        }
+        if focused && self.search_prompt {
+            let row = if restricted { 2 } else { 1 };
+            let prompt = self.search_prompt(&atlas.font, batch.height as i32, row);
             hud_layout::paint(batch, atlas, &prompt);
         }
     }
@@ -670,6 +861,27 @@ impl Chat {
     /// background row and the red, underlined "Chat is restricted" line in
     /// the row above the messages, clipped to the chat's width.
     fn restricted_prompt(&self, font: &crate::font::Font, height: i32) -> Vec<GuiDraw> {
+        let prompt = Text::translate("chat_screen.restricted", &[]).with_style(&Style {
+            color: Some(text::RED),
+            underlined: Some(true),
+            ..Style::default()
+        });
+        self.prompt_above(font, height, prompt, 1)
+    }
+    /// PvP & HUD's chat search: a yellow "Search chat:" line above the lines while the box holds
+    /// the query.
+    fn search_prompt(&self, font: &crate::font::Font, height: i32, row: i32) -> Vec<GuiDraw> {
+        let label = Text::translate_with_fallback("horizon.chat.search", "Search chat:", &[]);
+        self.prompt_above(font, height, label.with_color(text::YELLOW), row)
+    }
+    /// A line `row` lines above the shown ones, on the chat's background.
+    fn prompt_above(
+        &self,
+        font: &crate::font::Font,
+        height: i32,
+        prompt: Text,
+        row: i32,
+    ) -> Vec<GuiDraw> {
         let o = &self.options;
         let scale = o.scale as f32;
         let max_width = hud_layout::ceil(o.width_px() as f32 / scale);
@@ -682,12 +894,8 @@ impl Chat {
             .len()
             .saturating_sub(self.scroll)
             .min(self.lines_per_page(true));
-        let top = chat_bottom - (shown as i32 + 1) * entry_height;
-        let mut prompt = Text::translate("chat_screen.restricted", &[]).with_style(&Style {
-            color: Some(text::RED),
-            underlined: Some(true),
-            ..Style::default()
-        });
+        let top = chat_bottom - (shown as i32 + row) * entry_height;
+        let mut prompt = prompt;
         // ComponentRenderUtils.clipText.
         let mut width = 0.0;
         let fits = prompt
@@ -731,6 +939,12 @@ impl Chat {
         y: f64,
     ) -> Option<ClickEvent> {
         self.style_at(font, height, x, y)?.click
+    }
+    /// The whole text of the message under a GUI-space cursor while chat is focused (PvP &
+    /// HUD's copy on click), without its time or count.
+    pub fn message_at(&self, height: i32, x: f64, y: f64) -> Option<&str> {
+        let (line, x) = self.line_at(height, x, y)?;
+        (x >= 0.0).then_some(&*line.message)
     }
     /// The hover text under a GUI-space cursor while chat is focused
     /// (ChatScreen.render's `renderComponentHoverEffect`).

@@ -32,6 +32,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 if os.name == "nt":
@@ -70,10 +71,13 @@ ln -sfn "$state/parity-runner" .local/parity-runner && ln -sfn "$state/parity-ta
 }
 ROOT_RUST = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "clippy.toml"}
 LAUNCHER_FEATURES = """export features=""
-if [ "$(uname)" = Darwin ] && ! xcrun metal --version > /dev/null 2>&1; then features="--features gpui/runtime_shaders"; fi
+if [ "$(uname)" = Darwin ] && ! xcrun metal --version > /dev/null 2>&1; then features="--features gpui_platform/runtime_shaders"; fi
 in_shell() { if [ "$(uname)" = Linux ] && ! pkg-config --exists xkbcommon 2>/dev/null && command -v nix-shell > /dev/null; then
   nix-shell shell.nix --run "$1"; else bash -c "$1"; fi; }"""
 
+
+# Build-script inputs outside the crates: catalog-only edits still need to build and test their consumers.
+MOD_API_INPUTS = ("native-hooks.json", "tools/native-hook-fragments/")
 
 def is_doc(path):
     return path.endswith(".md")
@@ -81,7 +85,8 @@ def is_doc(path):
 
 def workspace_rust(path):
     """Whether a change to path is built by the main Cargo workspace."""
-    return not is_doc(path) and (path.startswith(("crates/", "xtask/", ".cargo/")) or path in ROOT_RUST)
+    return not is_doc(path) and (path.startswith(("crates/", "xtask/", ".cargo/", *MOD_API_INPUTS))
+                                 or path in ROOT_RUST)
 
 
 def launcher_rust(path):
@@ -96,6 +101,16 @@ def touched_crates(paths, packages):
     crates = set()
     for path in paths:
         if is_doc(path):
+            continue
+        if path.startswith(MOD_API_INPUTS):
+            crates.update({"horizon-client", "horizon-client-render", "horizon-mod-api-gen"})
+            continue
+        if "horizon-client-lib" in packages and path.startswith("crates/horizon-client/"):
+            relative = path.removeprefix("crates/horizon-client/")
+            gameplay = relative in {"Cargo.toml", "build.rs", "windows-segment-heap.manifest",
+                                    "src/lib.rs", "src/main.rs", "src/entry.rs", "src/game.rs", "tests/launch_api.rs"} \
+                or relative.startswith("src/game/")
+            crates.add("horizon-client" if gameplay else "horizon-client-lib")
             continue
         owners = [name for name, directory in packages.items() if path.startswith(directory.rstrip("/") + "/")]
         if owners:
@@ -270,11 +285,10 @@ def parity_summary(output):
     return text
 
 
-# CI's verify job (.github/workflows/ci.yml): clippy over the whole workspace with the game's code mods, and over the
-# server build (the game without sound or controllers); tests with code mods and mod packaging.
-CI_CLIPPY = "cargo clippy --workspace --all-targets --locked --features horizon-client/mods -- -D warnings"
+# CI's verify job (.github/workflows/ci.yml): clippy over the whole workspace, and over the server build (the game
+# without sound or controllers).
+CI_CLIPPY = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 CI_CLIPPY_SERVER = "cargo clippy -p horizon-client --all-targets --locked --no-default-features -- -D warnings"
-CI_TEST_FEATURES = "horizon-client/mods,horizon-mods/pack"
 
 
 # CI installs the current stable each run (rustup toolchain install stable), and Rust ships one every six weeks
@@ -320,24 +334,16 @@ def mark_old_rust(steps, warning):
 
 
 def mod_features(crates):
-    """The features CI's workspace-wide test run gives these crates (code mods are off by default: docs/mods.md).
-    Cargo unifies features over the packages it builds, so a crate tested alone needs the ones the workspace would
-    have turned on for it: horizon-client's code mods, and horizon-mods' runtime, packaging and index."""
-    if crates is None:
-        return f" --features {CI_TEST_FEATURES}"
-    features = []
-    if "horizon-mods" in crates:
-        features += ["horizon-mods/runtime", "horizon-mods/pack", "horizon-mods/index"]
-    if "horizon-client" in crates:
-        features.append("horizon-client/mods")
-    return f" --features {','.join(features)}" if features else ""
+    """The features CI's workspace-wide test run gives these crates. Cargo unifies features over the packages it
+    builds, so a crate tested alone needs the ones the workspace would have turned on for it: horizon-mods' index."""
+    return " --features horizon-mods/index" if crates is not None and "horizon-mods" in crates else ""
 
 
 # What horizon-client's full content-root tests load (mod_content_tests.rs). They take minutes on prepared data, so
 # they are #[ignore]d and run here only when one of these changes.
 CONTENT_ROOT = ("crates/horizon-client/src/mod_content", "crates/horizon-client-render/src/assets.rs", "crates/horizon-items/",
                 "crates/horizon-mods/", "crates/horizon-assets/")
-CONTENT_ROOT_TESTS = "cargo test --locked -p horizon-client --features horizon-client/mods --lib mod_content::tests:: -- --ignored"
+CONTENT_ROOT_TESTS = "cargo test --locked -p horizon-client-lib --lib mod_content::tests:: -- --ignored"
 
 
 def plan(args, base, changed, crates_of, libraries, dependencies):
@@ -383,7 +389,7 @@ def plan(args, base, changed, crates_of, libraries, dependencies):
     launcher_skip = None if launcher else "launcher untouched"
     for name, command in [("launcher rustfmt", "cargo fmt --check"),
                           ("launcher clippy", "cargo clippy --all-targets --locked $features -- -D warnings"),
-                          ("launcher tests", "cargo test --locked --lib $features")]:
+                          ("launcher tests", "cargo test --locked --lib --bins $features")]:
         steps.append(Step(name, f"cd launcher && {LAUNCHER_FEATURES}\nin_shell {shlex.quote(command)}", skip=launcher_skip,
                           summary=tests_passed if name == "launcher tests" else None))
     harness = Step("Parity", summary=parity_summary)
@@ -511,6 +517,31 @@ def run_windows(steps, verbose):
         finish(step, verbose)
 
 
+def run_checks(steps, host, verbose):
+    """Runs the checks: the Python ones here beside the cargo ones on host, then the harnesses.
+
+    The Python tests and the public-tree check only read files, and they took about two minutes of a warm run that
+    waited for them before cargo started (114 of 213 s, 2026-11-03). Side by side, the run takes about as long as the
+    longer of the two. The harnesses build with cargo, so they still come after it. With --verbose, every check's
+    output is shown, and the checks run one after another so that it doesn't interleave.
+    """
+    here = [step for step in steps if step.where == "here" and step.status is None]
+    beside = [step for step in here if step.name != "Parity"]
+    after = [step for step in here if step.name == "Parity"]
+    on_host = [step for step in steps if step.where == "host" and step.status is None]
+    if verbose:
+        run_script(beside + after, "local", verbose)
+        run_script(on_host, host, verbose)
+        return
+    python = threading.Thread(target=run_script, args=(beside, "local", verbose))
+    python.start()
+    try:
+        run_script(on_host, host, verbose)
+    finally:
+        python.join()
+    run_script(after, "local", verbose)
+
+
 def finish(step, verbose):
     if step.status == "pass" and step.summary:
         step.detail = step.summary(step.output)
@@ -567,8 +598,7 @@ def main():
     problem = lock_problem(changed)
     lock.status, lock.detail = ("fail", problem) if problem else ("pass", "unchanged" if not any(
         p.endswith("Cargo.lock") for p in changed) else "changes with a Cargo.toml")
-    run_script([step for step in steps if step.where == "here" and step.status is None], "local", args.verbose)
-    run_script([step for step in steps if step.where == "host" and step.status is None], args.host, args.verbose)
+    run_checks(steps, args.host, args.verbose)
     warning = old_rust(rust_version(), datetime.date.today()) if args.host == "local" else None
     if warning and any(step.name.endswith("clippy") and step.skip is None for step in steps):
         print(f"pr_ready: Rust {warning}", file=sys.stderr)

@@ -50,12 +50,17 @@ impl Game<'_> {
         // hears it, and the replay follows, but nothing counts.
         let waiting = g.awaiting_teleport.is_some();
         // The server's copy of a guest doesn't follow its armor (Game.glider_worn).
-        let glider = g.armor[1].as_ref().is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
-        });
+        let hand = |stack: Option<&horizon_client::items::ItemStack>, slot: &str| {
+            stack.is_some_and(|s| {
+                horizon_client::item_sync::can_glide_using(s, slot, self.res.items())
+            })
+        };
+        let glider = super::gliding_pieces(self.res.items(), &g.armor).contains(&true)
+            || hand(
+                g.inventory.get(g.selected).and_then(Option::as_ref),
+                "mainhand",
+            )
+            || hand(g.offhand.as_ref(), "offhand");
         if let Some(motion) = g.motion.as_deref_mut() {
             motion.glider = glider;
             motion.item_use_speed = item_use.map(|(speed, _)| speed);
@@ -75,6 +80,7 @@ impl Game<'_> {
                 assets: &self.pack.assets,
                 collision_binding: self.collision,
                 resources: self.motion,
+                health: &self.health_resources,
             }
             .replayed_tick(keys, sprinting)
         };
@@ -152,8 +158,10 @@ fn excused(g: &Guest, world: &World, entities: &[EntityState], guests: &[Guest])
     };
     let unsent = world
         .block_log
-        .as_ref()
-        .is_some_and(|log| log.iter().any(|&(x, y, z)| near(at, [x, y, z], slack)));
+        .iter()
+        .flatten()
+        .chain(&world.block_log_held)
+        .any(|&(x, y, z)| near(at, [x, y, z], slack));
     let pistons = world
         .moving_pistons
         .iter()

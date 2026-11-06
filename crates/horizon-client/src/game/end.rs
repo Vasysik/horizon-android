@@ -11,7 +11,6 @@ use horizon_client::{
     items::ItemStack,
     mesher::Vertex,
     mobs::Who,
-    motion::PlayerMotion,
     particles::{ParticleOptions, ParticleType},
     projectiles::{Projectile, ProjectileKind},
     vanillagen::VanillaTerrain,
@@ -69,6 +68,8 @@ enum Arriving {
     Saved(Tag),
     /// A thrown ender pearl (projectiles are not saved).
     Pearl(Box<Projectile>),
+    /// A vehicle remains in this level while its destination loads.
+    Vehicle(u32),
 }
 
 impl GatewayJob {
@@ -113,9 +114,16 @@ fn exit_target(exit: [i32; 3], exact: bool, find: impl FnOnce([i32; 3]) -> [i32;
     if exact { exit } else { find(exit) }
 }
 
+fn fallback_spawn(own: Option<Vec3>, world: Option<[i32; 3]>) -> Vec3 {
+    let s = own.unwrap_or_else(|| {
+        let [x, y, z] = world.unwrap_or([0, 64, 0]);
+        Vec3::new(f64::from(x), f64::from(y), f64::from(z))
+    });
+    Vec3::new(s.x.floor() + 0.5, s.y, s.z.floor() + 0.5)
+}
+
 #[derive(Default)]
 pub(super) struct EndState {
-    job: Option<GatewayJob>,
     /// Ticks until the player can use a gateway again (TheEndGatewayBlockEntity cooldown).
     gateway_cooldown: u32,
     gateways: HashMap<u32, horizon_client::end_gateway::Traveller>,
@@ -177,6 +185,15 @@ impl EndFlash {
     fn intensity(&self, partial: f32) -> f32 {
         self.old_intensity + (self.intensity - self.old_intensity) * partial
     }
+    /// SkyRenderer.renderEndFlash's pose: the sprite at height 100 turned to the flash.
+    fn pose(&self) -> glam::Mat4 {
+        flash_pose(self.x_angle, self.y_angle)
+    }
+}
+
+fn flash_pose(x_angle: f32, y_angle: f32) -> glam::Mat4 {
+    glam::Mat4::from_rotation_y((180.0 - y_angle).to_radians())
+        * glam::Mat4::from_rotation_x((-90.0 - x_angle).to_radians())
 }
 impl EndState {
     pub(super) fn locator(&self) -> Option<Arc<VanillaTerrain>> {
@@ -316,9 +333,7 @@ impl Game<'_> {
                 .get("environment/celestial/end_flash")
                 .copied()
         {
-            let flash = &self.end.flash;
-            let pose = glam::Mat4::from_rotation_y((180.0 - flash.y_angle).to_radians())
-                * glam::Mat4::from_rotation_x((-90.0 - flash.x_angle).to_radians());
+            let pose = self.end.flash.pose();
             let level = (intensity.clamp(0.0, 1.0) * 255.0) as u32;
             let color = level << 24 | level << 16 | level << 8 | level;
             let corners = [
@@ -342,6 +357,21 @@ impl Game<'_> {
             }
         }
         out
+    }
+
+    /// Iris's `endFlashIntensity` and the flash's direction (camera-relative, length 100: the
+    /// sprite's centre), for shader packs; no flash outside the End.
+    pub(super) fn end_flash_for_pack(&self, partial: f32) -> (f32, glam::Vec3) {
+        if self.dim != Dim::End {
+            return (0.0, glam::Vec3::ZERO);
+        }
+        let flash = &self.end.flash;
+        (
+            flash.intensity(partial).clamp(0.0, 1.0),
+            flash
+                .pose()
+                .transform_point3(glam::Vec3::new(0.0, 100.0, 0.0)),
+        )
     }
 
     /// LightmapRenderStateExtractor: End flashes add to the sky light factor
@@ -421,6 +451,7 @@ impl Game<'_> {
                 p.position.y = top;
             }
         }
+        self.award_stat("used", "minecraft:ender_eye", 1);
         self.consume_held();
         self.swing_arm();
         // EnderEyeItem.useOn emits this event for all nearby players.
@@ -428,13 +459,15 @@ impl Game<'_> {
         if let Some(c) = self.portal_ring_center(hit.pos) {
             for dz in -1..=1 {
                 for dx in -1..=1 {
-                    self.set_state_named(
-                        [c[0] + dx, c[1], c[2] + dz],
-                        "minecraft:end_portal",
-                        &[],
-                    )?;
+                    let p = [c[0] + dx, c[1], c[2] + dz];
+                    let at = BlockPos::new(p[0], p[1], p[2]);
+                    self.with_level(|b, level, ticks| {
+                        b.destroy_block(level, ticks, at, true);
+                    });
+                    self.set_state_named(p, "minecraft:end_portal", &[])?;
                 }
             }
+            self.process_level_events()?;
             // EnderEyeItem.useOn: global level event 1038 (END_PORTAL_SPAWN),
             // heard by every player (vanilla places it at the frame's corner
             // + (1, 0, 1); only its direction matters).
@@ -489,7 +522,13 @@ impl Game<'_> {
         if self.dim == Dim::End {
             self.tick_fight();
             self.tick_dragon_fireballs();
+        } else {
+            // `/summon ender_dragon` outside the End: no fight, but the dragon flies.
+            self.tick_fight();
         }
+        // The spikes' crystals (placed above) join before they light a fire:
+        // a mod that cancels one keeps its fire out too.
+        self.native_joins_flush(false, 0);
         self.tick_crystals();
         self.tick_eyes();
         if self.dim == Dim::End {
@@ -505,43 +544,6 @@ impl Game<'_> {
         }
         if self.dim == Dim::End {
             self.ensure_exit_portal()?;
-        }
-        let Some(p) = self.player.as_ref() else {
-            return Ok(());
-        };
-        if self.travelling.is_some() || p.health.dead_or_dying() {
-            return Ok(());
-        }
-        let (portal, gateway) = self.inside_end_portals(
-            p.position,
-            f64::from(p.dimensions.width),
-            f64::from(p.dimensions.height),
-        );
-        if portal && self.dim == Dim::End && !self.level.seen_credits {
-            // EndPortalBlock.entityInside: the first exit shows the credits.
-            self.show_end_credits()?;
-        } else if portal {
-            if self.portals.player.cooldown == 0 {
-                let target = if self.dim == Dim::End {
-                    Dim::Overworld
-                } else {
-                    Dim::End
-                };
-                self.end_portal_travel = true;
-                let result = self.enter_dimension(target);
-                self.end_portal_travel = false;
-                result?;
-                // Player.getDimensionChangingDelay.
-                self.portals.player.cooldown = 10;
-            } else {
-                // Entity.setAsInsidePortal while cooling down restarts the cooldown.
-                self.portals.player.cooldown = 10;
-            }
-        } else if let Some(g) = gateway
-            && self.end.gateway_cooldown == 0
-            && self.gateway_enter(g)
-        {
-            self.enter_gateway(g)?;
         }
         Ok(())
     }
@@ -600,57 +602,7 @@ impl Game<'_> {
                 f64::from(c.pos[2]) + 0.5,
             ));
         }
-        let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
-        Some(Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5))
-    }
-
-    /// Arrival after End portal or gateway travel, once the destination is loaded.
-    pub(super) fn place_after_end_travel(
-        &mut self,
-        mut player: PlayerMotion,
-        target: Vec3,
-    ) -> Result<()> {
-        self.end_travel = false;
-        // Player.getDimensionChangingDelay (enter_dimension uses the Nether portal value).
-        self.portals.player.cooldown = 10;
-        if player.health.dead_or_dying() {
-            // Respawning out of the End: a fresh player at the spawn.
-            player = PlayerMotion::new(self.motion, target)?;
-            self.eye = 1.62;
-            self.previous_eye = 1.62;
-            self.clock.reset();
-        }
-        let position = if let Some(job) = self.end.job.take() {
-            self.resolve_gateway(job, target)?
-        } else {
-            let mut finder = self.player_spawn.take();
-            let arrival = self.end_arrival(target, &mut finder);
-            self.player_spawn = finder;
-            let Some((position, yaw)) = arrival? else {
-                // A spawn candidate's chunk is loading: try again next tick.
-                self.travelling = Some((player, target));
-                self.end_travel = true;
-                return Ok(());
-            };
-            if let Some(yaw) = yaw {
-                self.yaw = yaw;
-                player.yaw = yaw;
-                player.head_yaw = yaw;
-            }
-            position
-        };
-        player.position = position;
-        player.velocity = Vec3::ZERO;
-        player.fall_distance = 0.0;
-        self.previous_position = player.position;
-        self.player = Some(player);
-        self.pad.player_replaced();
-        self.sway = Default::default();
-        self.apply_equipment();
-        let pitch = self.world.random.next_float() * 0.4 + 0.8;
-        self.audio
-            .play("minecraft:block.portal.travel", None, 0.25, pitch);
-        Ok(())
+        Some(fallback_spawn(self.spawn, self.level.world_spawn))
     }
 
     /// Where an End portal's traveller lands once `target` has loaded, and
@@ -676,11 +628,21 @@ impl Game<'_> {
                             "minecraft:air"
                         };
                         if &*self.block_name(p) != name {
+                            // Portal arrivals rebuild the platform with drops enabled.
+                            self.with_level(|b, level, ticks| {
+                                b.destroy_block(
+                                    level,
+                                    ticks,
+                                    BlockPos::new(p[0], p[1], p[2]),
+                                    true,
+                                );
+                            });
                             self.set_state_named(p, name, &[])?;
                         }
                     }
                 }
             }
+            self.native_portal_create("minecraft:the_end", origin);
             // Direction.WEST.toYRot().
             return Ok(Some((target, Some(90.0))));
         }
@@ -691,8 +653,7 @@ impl Game<'_> {
             if let Some((at, yaw)) = self.find_respawn_and_use(c, false)? {
                 return Ok(Some((at, Some(yaw))));
             }
-            let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
-            target = Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5);
+            target = fallback_spawn(self.spawn, self.level.world_spawn);
         }
         let (x, z) = (target.x.floor() as i32, target.z.floor() as i32);
         // TeleportTransition.missingRespawnBlock: PlayerSpawnFinder around
@@ -710,27 +671,13 @@ impl Game<'_> {
         Ok(Some((Vec3::new(target.x, y, target.z), None)))
     }
 
-    /// Dying away from the Overworld respawns at the world spawn there.
-    pub(super) fn respawn_out_of_end(&mut self) -> Result<()> {
-        if self.dim == Dim::Overworld || self.player.is_none() {
-            return Ok(());
-        }
-        self.end_portal_travel = true;
-        let result = self.enter_dimension(Dim::Overworld);
-        self.end_portal_travel = false;
-        // The arrival places a fresh player at the spawn.
-        self.end_travel = true;
-        result
-    }
-
     /// EnderDragonFight without a dragon: once the centre of the main island
     /// is loaded, place the active exit portal (EndPodiumFeature) and the
     /// first gateway (spawnNewGateway) if the portal is not there yet. Like
     /// scanState and spawnExitPortal, only while the fight has no exit portal
     /// location: a podium that is later broken stays broken.
     fn ensure_exit_portal(&mut self) -> Result<()> {
-        if self.travelling.is_some()
-            || !(-1..=0).all(|cz| (-1..=0).all(|cx| self.streaming.is_lit(cx, cz)))
+        if !(-1..=0).all(|cz| (-1..=0).all(|cx| self.streaming.is_lit(cx, cz)))
             || !self.fight_ready()
         {
             return Ok(());
@@ -952,21 +899,6 @@ impl Game<'_> {
             Some(BlockEntity::EndGateway(g)) => g.exit_portal.map(|e| (e, g.exact_teleport)),
             _ => None,
         }
-    }
-
-    /// EndGatewayBlock.entityInside and TheEndGatewayBlockEntity.getPortalPosition:
-    /// travel within the End, waiting for the destination chunks to load.
-    fn enter_gateway(&mut self, gateway: [i32; 3]) -> Result<()> {
-        // TheEndGatewayBlockEntity.triggerCooldown: 40 ticks.
-        self.end.gateway_cooldown = 40;
-        let (job, destination) = self.gateway_job(gateway);
-        let Some(player) = self.player.take() else {
-            return Ok(());
-        };
-        self.end.job = Some(job);
-        self.end_travel = true;
-        self.travelling = Some((player, destination));
-        Ok(())
     }
 
     /// Where `gateway` leads (TheEndGatewayBlockEntity.getPortalPosition):
@@ -1277,8 +1209,10 @@ impl Game<'_> {
             target
         };
         let survive = self.world.random.next_int_bound(5).unwrap_or(0) > 0;
+        let at = [p.position.x, p.position.y, p.position.z];
+        let id = self.take_entity_id();
         self.end.eyes.push(EyeOfEnder {
-            id: 0,
+            id,
             position: start,
             previous: start,
             velocity: glam::DVec3::ZERO,
@@ -1288,10 +1222,10 @@ impl Game<'_> {
         });
         let r = self.world.random.next_float();
         let pitch = 0.33 + r * (0.5 - 0.33);
-        let at = [p.position.x, p.position.y, p.position.z];
         self.audio
             .play("minecraft:entity.ender_eye.launch", Some(at), 1.0, pitch);
         self.consume_held();
+        self.award_stat("used", "minecraft:ender_eye", 1);
         self.swing_arm();
     }
 
@@ -1433,6 +1367,32 @@ impl Game<'_> {
             .iter()
             .filter(|m| self.mob_can_use_portal(m))
             .map(|m| (m.id, m.position, m.width(), m.height()))
+            .chain(
+                self.boats
+                    .iter()
+                    .filter(|b| self.vehicle_can_use_portal(b.id))
+                    .map(|b| {
+                        (
+                            b.id,
+                            b.position,
+                            super::boats::WIDTH as f32,
+                            super::boats::HEIGHT as f32,
+                        )
+                    }),
+            )
+            .chain(
+                self.carts
+                    .iter()
+                    .filter(|c| self.vehicle_can_use_portal(c.id))
+                    .map(|c| {
+                        (
+                            c.id,
+                            c.position,
+                            super::minecarts::WIDTH as f32,
+                            super::minecarts::HEIGHT as f32,
+                        )
+                    }),
+            )
             .collect();
         let mut inside: Vec<(u32, BlockPos)> = Vec::new();
         for (id, to, width, height) in items.into_iter().chain(mobs) {
@@ -1501,6 +1461,16 @@ impl Game<'_> {
             .map(|e| (e.id, true))
             .chain(self.mobs.iter().map(|m| (m.id, self.mob_can_use_portal(m))))
             .chain(
+                self.boats
+                    .iter()
+                    .map(|b| (b.id, self.vehicle_can_use_portal(b.id))),
+            )
+            .chain(
+                self.carts
+                    .iter()
+                    .map(|c| (c.id, self.vehicle_can_use_portal(c.id))),
+            )
+            .chain(
                 self.creatures
                     .projectiles
                     .iter()
@@ -1512,6 +1482,7 @@ impl Game<'_> {
         // A pearl waiting for its exit keeps its portal cooldown.
         present.extend(self.end.arrivals.iter().filter_map(|a| match &a.traveller {
             Arriving::Pearl(p) => Some(p.id),
+            Arriving::Vehicle(id) => Some(*id),
             Arriving::Saved(_) => None,
         }));
         self.end.gateways.retain(|id, _| present.contains(id));
@@ -1534,8 +1505,27 @@ impl Game<'_> {
     }
 
     /// `Entity.teleportToPortalDestination` for an entity that goes through an
-    /// End gateway: it is saved and waits for the exit's chunks.
+    /// End gateway: a same-level vehicle stays live while the exit loads.
     fn send_through_gateway(&mut self, id: u32, gateway: BlockPos) {
+        if matches!(
+            self.level_entity(id as i32),
+            Some(
+                super::commands::Target::Mob(_)
+                    | super::commands::Target::Boat(_)
+                    | super::commands::Target::Cart(_)
+            )
+        ) {
+            let (job, target) = self.gateway_job([gateway.x, gateway.y, gateway.z]);
+            let arrival = GatewayArrival {
+                traveller: Arriving::Vehicle(id),
+                job,
+                target,
+            };
+            if let Some(waiting) = self.arrive_through_gateway(arrival) {
+                self.end.arrivals.push(waiting);
+            }
+            return;
+        }
         let tag = if let Some(i) = self.dropped.iter().position(|e| e.id == id) {
             let uuid = self.uuid_for(id);
             let tag = horizon_client::entity_nbt::item_entity_to_nbt(
@@ -1546,34 +1536,12 @@ impl Game<'_> {
             // A gateway keeps the item in its level (teleportSameDimension
             // moves it): it doesn't leave, so no native_entity_leave_level.
             self.dropped.remove(i);
-            self.forget_entity(id);
-            tag
-        } else if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
-            let mut tag = self.mob_tree_nbt(i);
-            // Entity.removeAfterChangingDimensions drops the leash.
-            if let Tag::Compound(c) = &mut tag {
-                c.remove(&"leash".into());
-            }
-            // The mobs riding it travel with it (their tags are in its compound).
-            let mut gone = vec![id];
-            let mut k = 0;
-            while k < gone.len() {
-                let v = gone[k];
-                gone.extend(
-                    self.mobs
-                        .iter()
-                        .filter(|m| m.extra.mount == Some(v))
-                        .map(|m| m.id),
-                );
-                k += 1;
-            }
-            self.mobs.retain(|m| !gone.contains(&m.id));
-            for g in gone {
-                self.forget_entity(g);
-            }
+            self.native_leave_skip(id);
+            self.detach_entity(id);
             tag
         } else if let Some(i) = self.creatures.projectiles.iter().position(|p| p.id == id) {
             let pearl = Box::new(self.creatures.projectiles.remove(i));
+            self.native_leave_skip(id);
             let (job, target) = self.gateway_job([gateway.x, gateway.y, gateway.z]);
             let arrival = GatewayArrival {
                 traveller: Arriving::Pearl(pearl),
@@ -1633,6 +1601,15 @@ impl Game<'_> {
         };
         let key = chunk(at);
         match arrival.traveller {
+            Arriving::Vehicle(id) => {
+                if let Some(target) = self.level_entity(id as i32) {
+                    // Entity.teleportSameDimension keeps the live entity and
+                    // its motion, and moves every passenger in the same operation.
+                    self.teleport_to_in_level(target, [at.x, at.y, at.z], None, false);
+                    self.set_portal_cooldown(id);
+                    self.place_portal_ticket(key);
+                }
+            }
             Arriving::Saved(mut tag) => {
                 if let Tag::Compound(c) = &mut tag {
                     c.insert("Pos".into(), doubles([at.x, at.y, at.z]));
@@ -1767,6 +1744,17 @@ mod tests {
     }
 
     #[test]
+    fn leaving_the_end_without_a_point_of_its_own_goes_to_the_world_spawn() {
+        let world = Some([220, 63, -41]);
+        assert_eq!(fallback_spawn(None, world), Vec3::new(220.5, 63.0, -40.5));
+        assert_eq!(
+            fallback_spawn(Some(Vec3::new(10.5, 70.0, 12.5)), world),
+            Vec3::new(10.5, 70.0, 12.5)
+        );
+        assert_eq!(fallback_spawn(None, None), Vec3::new(0.5, 64.0, 0.5));
+    }
+
+    #[test]
     fn end_gateway_job_reads_the_block_entity_and_keeps_new_sources_loaded() {
         let gateway = [702, 100, 0];
         let exit = [8, 100, 0];
@@ -1855,5 +1843,18 @@ mod tests {
         let corners = quad.map(|v| glam::Vec3::from_array(v.pos));
         let centre = corners.iter().copied().sum::<glam::Vec3>() / 4.0;
         assert!((centre - at).abs_diff_eq(up_dir * 0.125, 1e-5), "{centre}");
+    }
+
+    /// `endFlashPosition`'s direction: the flash sprite's centre, 100 blocks away.
+    #[test]
+    fn the_end_flash_is_where_its_sprite_is() {
+        let at =
+            |x: f32, y: f32| flash_pose(x, y).transform_point3(glam::Vec3::new(0.0, 100.0, 0.0));
+        // Straight up whatever the turn, and level toward the north at y_angle 180.
+        assert!(at(-90.0, 37.0).abs_diff_eq(glam::Vec3::new(0.0, 100.0, 0.0), 1e-3));
+        assert!(at(0.0, 180.0).abs_diff_eq(glam::Vec3::new(0.0, 0.0, -100.0), 1e-3));
+        for (x, y) in [(-60.0, -180.0), (10.0, 95.0), (-25.0, 3.0)] {
+            assert!((at(x, y).length() - 100.0).abs() < 1e-3);
+        }
     }
 }

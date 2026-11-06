@@ -12,6 +12,7 @@
 //! it by the rope either. Here the pull lands on the server's copy and the
 //! rider's client overwrites it the same way (`tick_boats`).
 use super::{Game, boats::Boat};
+use horizon_client::actions::Action;
 use horizon_client::mobs::leash::{self, Holder, HolderState, Pending};
 use horizon_core::geometry::Vec3;
 use horizon_world::nbt::Tag;
@@ -418,7 +419,7 @@ impl Game<'_> {
         let id = self.boats[i].id;
         // The sneak branch: the player's mobs and boats on leads are re-tied
         // to this boat.
-        let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft);
+        let sneaking = self.keys.held(Action::Sneak);
         if sneaking
             && self.tie_player_leads(glam::DVec3::new(c.x, c.y, c.z), Holder::Boat(id), None)
         {
@@ -486,23 +487,14 @@ impl Game<'_> {
 
     /// The leads on boats that hang on a player or a mob, for the entity
     /// tracker: the holder's entity id (`ClientboundSetEntityLinkPacket`).
-    pub(super) fn boat_leash_link(
-        &self,
-        b: &Boat,
-        host_entity: Option<i32>,
-        guests: &[(u128, i32)],
-    ) -> Option<i32> {
+    pub(super) fn boat_leash_link(&self, b: &Boat, guests: &[(u128, i32)]) -> Option<i32> {
         match b.leash? {
             Holder::Player => {
                 let uuid = self.boat_leash_player(b);
-                match guests
+                guests
                     .iter()
                     .find(|(u, _)| Some(horizon_client::lan::playerdata::uuid_ints(*u)) == uuid)
-                {
-                    Some(&(_, id)) => Some(id),
-                    None if uuid == self.level.player_uuid => host_entity,
-                    None => None,
-                }
+                    .map(|&(_, id)| id)
             }
             Holder::Mob(id) | Holder::Boat(id) => Some(id as i32),
             Holder::Knot(p) => self.knot_ids.get(&p).map(|&id| id as i32),

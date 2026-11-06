@@ -5,8 +5,7 @@
 //! A server (the dedicated server and single player's server thread) keeps
 //! the other dimensions' levels here and ticks each one with players or forced
 //! chunks by swapping it into place (`enter_level`), the way `as_guest` swaps a player
-//! in, so the tick code runs unchanged, one level at a time. The in-frame
-//! game holds one level, which follows its player (`enter_dimension`).
+//! in, so the tick code runs unchanged, one level at a time.
 //!
 //! Shared by every level, as vanilla's derived levels share the
 //! Overworld's level data: the game time, the day time and the weather, the
@@ -48,31 +47,32 @@ pub(super) struct Parked {
     level_events: Vec<LevelEvent>,
     /// Entity portal processes and cooldowns belong to this level's entities.
     portal_states: HashMap<u32, horizon_client::nether_portal::PortalState>,
-    falling: Vec<FallingBlock>,
+    falling: horizon_client::join_seq::JoinList<FallingBlock>,
     paintings: Vec<horizon_client::entities::Painting>,
     item_frames: Vec<horizon_client::entities::ItemFrame>,
-    armor_stands: Vec<horizon_client::entities::ArmorStand>,
+    armor_stands: horizon_client::join_seq::JoinList<horizon_client::entities::ArmorStand>,
     cushions: Vec<horizon_client::entities::Cushion>,
     others: Vec<commands::OtherEntity>,
-    pub(super) boats: Vec<boats::Boat>,
-    pub(super) carts: Vec<minecarts::Minecart>,
+    fangs: super::fangs::FangState,
+    pub(super) boats: horizon_client::join_seq::JoinList<boats::Boat>,
+    pub(super) carts: horizon_client::join_seq::JoinList<minecarts::Minecart>,
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
     bolts: Vec<lightning::Bolt>,
     crystals: Vec<dragon::Crystal>,
     dragon: Option<dragon::Dragon>,
     dragon_fireballs: Vec<dragon::DragonFireball>,
     breath_clouds: Vec<dragon::Breath>,
-    tridents: Vec<trident::ThrownTrident>,
-    rockets: Vec<fireworks::Rocket>,
+    tridents: horizon_client::join_seq::JoinList<trident::ThrownTrident>,
+    rockets: horizon_client::join_seq::JoinList<fireworks::Rocket>,
     ominous_spawners: Vec<ominous_item_spawner::OminousItemSpawner>,
-    tnts: Vec<tnt::PrimedTnt>,
+    tnts: horizon_client::join_seq::JoinList<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
-    pub(super) mobs: Vec<Mob>,
+    pub(super) mobs: horizon_client::join_seq::JoinList<Mob>,
     /// The entity ids of the level's fence knots (`knot_ids`).
     knot_ids: HashMap<[i32; 3], u32>,
-    projectiles: Vec<horizon_client::projectiles::Projectile>,
-    dropped: Vec<ItemEntity>,
-    orbs: Vec<ExperienceOrb>,
+    projectiles: horizon_client::join_seq::JoinList<horizon_client::projectiles::Projectile>,
+    dropped: horizon_client::join_seq::JoinList<ItemEntity>,
+    orbs: horizon_client::join_seq::JoinList<ExperienceOrb>,
     persist: persist::EntityMemory,
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     lid_openers: HashMap<(i32, i32, i32), i32>,
@@ -80,11 +80,16 @@ pub(super) struct Parked {
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
+    /// The hub's tracked entities of this level (`LanHost::states`), as its last tick described
+    /// them: what its players' moves are checked against before this tick describes them again.
+    lan_states: horizon_client::lan::entity::States,
     /// Only the per-level parts of these are used (`swap_level`).
     anims: BlockEntityAnims,
     raiding: Raiding,
     sculk: SculkState,
     creaking: CreakingState,
+    /// Natural spawning's candidate cache: each level keeps its own players' squares.
+    spawn_scratch: super::natural_spawning::SpawnScratch,
     /// Server ticks since a player was last in the level.
     idle: u32,
 }
@@ -118,22 +123,26 @@ impl Default for Pass {
 #[derive(Default)]
 pub(super) struct Levels {
     parked: HashMap<Dim, Parked>,
+    /// The levels whose open the mods heard (`native_level_load`), each to
+    /// be told closed once.
+    heard_open: Vec<Dim>,
 }
 
 impl Levels {
+    /// Clear every parked level and dimensions recorded as heard open.
+    pub(super) fn clear(&mut self) {
+        self.parked.clear();
+        self.heard_open.clear();
+    }
+
     /// A parked level, without opening or loading it.
     pub(super) fn parked_world(&self, dim: Dim) -> Option<&World> {
         self.parked.get(&dim).map(|level| &level.world)
     }
-    /// The chunks of each level not in place (capability `world` lends
-    /// them to server mods for a call).
-    #[cfg_attr(not(feature = "mods"), allow(dead_code))]
-    pub(super) fn parked_chunks(
-        &mut self,
-    ) -> impl Iterator<Item = (Dim, &mut horizon_client::chunk_map::ChunkMap)> {
-        self.parked
-            .iter_mut()
-            .map(|(d, p)| (*d, &mut p.world.chunks))
+
+    /// The worlds of the levels not in place.
+    pub(super) fn parked_worlds(&self) -> impl Iterator<Item = &World> {
+        self.parked.values().map(|level| &level.world)
     }
 
     /// The world of the level not in place, in `dim`, to change.
@@ -146,9 +155,44 @@ impl Levels {
         self.parked.get_mut(&dim)
     }
 
+    /// The entities of a parked level, counted as `Game::entity_count` counts the one in place.
+    pub(super) fn parked_entity_count(&self, dim: Dim) -> Option<usize> {
+        let l = self.parked.get(&dim)?;
+        Some(
+            l.mobs.iter().filter(|m| !m.removed).count()
+                + l.dropped.len()
+                + l.orbs.len()
+                + l.projectiles.len()
+                + l.carts.len()
+                + l.boats.len()
+                + l.falling.len()
+                + l.paintings.len()
+                + l.item_frames.len()
+                + l.armor_stands.len()
+                + l.cushions.len()
+                + l.tridents.len()
+                + l.rockets.len()
+                + l.tnts.len(),
+        )
+    }
+
     /// The mobs of a parked level.
     pub(super) fn parked_mobs(&self, dim: Dim) -> Option<&[Mob]> {
         self.parked.get(&dim).map(|level| level.mobs.as_slice())
+    }
+
+    /// A parked level's loose entities, for `horizon-report`: items, experience orbs,
+    /// projectiles, minecarts and boats.
+    pub(super) fn parked_entity_counts(&self, dim: Dim) -> Option<[usize; 5]> {
+        self.parked.get(&dim).map(|l| {
+            [
+                l.dropped.as_slice().len(),
+                l.orbs.as_slice().len(),
+                l.projectiles.as_slice().len(),
+                l.carts.as_slice().len(),
+                l.boats.as_slice().len(),
+            ]
+        })
     }
 
     /// The levels that are not in place, by dimension.
@@ -179,6 +223,7 @@ impl Game<'_> {
             &self.level.enabled_features,
         )?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
+        world.attachments = save.load_attachments();
         world.shape = self.level_shapes.get(dim.id());
         world.fast_lava = dim == Dim::Nether;
         Ok(Parked {
@@ -192,30 +237,31 @@ impl Game<'_> {
             random_tick_sections: Default::default(),
             level_events: Vec::new(),
             portal_states: HashMap::new(),
-            falling: Vec::new(),
+            falling: Default::default(),
             paintings: Vec::new(),
             item_frames: Vec::new(),
-            armor_stands: Vec::new(),
+            armor_stands: Default::default(),
             cushions: Vec::new(),
             others: Vec::new(),
-            boats: Vec::new(),
-            carts: Vec::new(),
+            fangs: Default::default(),
+            boats: Default::default(),
+            carts: Default::default(),
             jukebox_sounds: HashMap::new(),
             bolts: Vec::new(),
             crystals: Vec::new(),
             dragon: None,
             dragon_fireballs: Vec::new(),
             breath_clouds: Vec::new(),
-            tridents: Vec::new(),
-            rockets: Vec::new(),
+            tridents: Default::default(),
+            rockets: Default::default(),
             ominous_spawners: Vec::new(),
-            tnts: Vec::new(),
+            tnts: Default::default(),
             hoppers: HashMap::new(),
-            mobs: Vec::new(),
+            mobs: Default::default(),
             knot_ids: HashMap::new(),
-            projectiles: Vec::new(),
-            dropped: Vec::new(),
-            orbs: Vec::new(),
+            projectiles: Default::default(),
+            dropped: Default::default(),
+            orbs: Default::default(),
             persist: Default::default(),
             lectern_pulses: Vec::new(),
             lid_openers: HashMap::new(),
@@ -223,10 +269,12 @@ impl Game<'_> {
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
             lan_critical_hits: Vec::new(),
+            lan_states: Default::default(),
             anims: Default::default(),
             raiding: Default::default(),
             sculk: Default::default(),
             creaking: Default::default(),
+            spawn_scratch: Default::default(),
             idle: 0,
         })
     }
@@ -253,6 +301,7 @@ impl Game<'_> {
         swap(&mut self.armor_stands, &mut p.armor_stands);
         swap(&mut self.cushions, &mut p.cushions);
         swap(&mut self.others, &mut p.others);
+        swap(&mut self.fangs, &mut p.fangs);
         swap(&mut self.boats, &mut p.boats);
         swap(&mut self.carts, &mut p.carts);
         swap(&mut self.jukebox_sounds, &mut p.jukebox_sounds);
@@ -292,6 +341,7 @@ impl Game<'_> {
         self.raiding.swap_level(&mut p.raiding);
         self.sculk.swap_level(&mut p.sculk);
         self.creaking.swap_level(&mut p.creaking);
+        swap(&mut self.spawn_scratch, &mut p.spawn_scratch);
         // What only the client draws starts over.
         self.particles.clear();
         self.pickups.clear();
@@ -301,8 +351,12 @@ impl Game<'_> {
     /// The level that was in place is kept with the others; the shared
     /// clock and weather go with the swap. `host` is the hub when the caller
     /// holds it (`self.lan` is taken during the network tick).
-    pub(super) fn enter_level(&mut self, host: Option<&mut LanHost>, target: Dim) -> Result<()> {
-        // The in-frame game keeps its one level (`enter_dimension`).
+    pub(super) fn enter_level(
+        &mut self,
+        mut host: Option<&mut LanHost>,
+        target: Dim,
+    ) -> Result<()> {
+        // A client holds no levels.
         if self.options.execution_role.is_client() {
             return Ok(());
         }
@@ -320,12 +374,23 @@ impl Game<'_> {
             // The sculk tables' watched blocks are built once per game.
             p.world.watched = std::mem::take(&mut self.world.watched);
             self.swap_level(&mut p);
+            // The tracked entities go with their level: a level's moves, read before its tick
+            // describes its entities again, would otherwise meet the last level's (the anticheat
+            // missed the boat under a player while anyone was in another dimension).
+            let states = match host.as_deref_mut() {
+                Some(h) => Some(&mut h.states),
+                None => self.lan.as_mut().map(|h| &mut h.states),
+            };
+            if let Some(states) = states {
+                std::mem::swap(states, &mut p.lan_states);
+            }
             p.idle = 0;
             let left = std::mem::replace(&mut self.dim, target);
             self.levels.parked.insert(left, p);
             if opened {
                 // The new streaming's radius and meshing options.
                 self.apply_settings();
+                self.native_level_opened(target);
             }
         }
         let host = match host {
@@ -399,17 +464,30 @@ impl Game<'_> {
         // `ServerTickStart` before that level work, where NeoForge fires
         // `ServerTickEvent.Pre`. A paused pass and a held server tick nothing.
         let running = (!paused && !self.agent.hold_server).then(|| self.clock.world_runs());
+        let server = self.serving.is_some() || self.options.dedicated.is_some();
+        // A config edited while the server is paused (empty) still reloads.
+        if server {
+            self.native_configs_poll();
+        }
         if let Some(running) = running
-            && (self.serving.is_some() || self.options.dedicated.is_some())
+            && server
         {
             self.native_lifecycle_server_tick_start(running);
         }
         let observe_level =
             running.is_some() && (self.serving.is_some() || self.options.dedicated.is_some());
         let dims = self.levels_to_tick();
+        let order = dims.clone();
         let n = dims.len();
         let mut result = Ok(());
         for (k, dim) in dims.into_iter().enumerate() {
+            // Each level's share of the tick (the first one also reads the network and runs the
+            // tick's shared parts): `horizon-report`'s `level_*` spans.
+            let _level_span = horizon_client::spans::guard(match dim {
+                Dim::Overworld => "level_overworld",
+                Dim::Nether => "level_the_nether",
+                Dim::End => "level_the_end",
+            });
             if let Err(e) = self.enter_level(None, dim) {
                 result = Err(e);
                 break;
@@ -425,7 +503,6 @@ impl Game<'_> {
             }
             self.update_dedicated_streaming();
             self.update_world();
-            self.apply_mod_block_writes();
             result = horizon_client::block_contact::in_level(
                 (self.serving.is_some() || self.options.dedicated.is_some()).then_some(dim.id()),
                 || {
@@ -436,9 +513,8 @@ impl Game<'_> {
                         self.tick()
                     } else {
                         let running = running.unwrap_or_else(|| self.clock.world_runs());
-                        if running {
-                            self.tick_weather_effects();
-                        }
+                        // ClientLevel.tick: the sky flash fades in a frozen level too.
+                        self.tick_weather_effects();
                         self.tick_world(running)
                     }
                 },
@@ -450,6 +526,22 @@ impl Game<'_> {
                 self.native_level_tick_post(dim.id());
             }
             self.publish_server_debug(dim);
+            // An entity that crossed into a level that already ticked this
+            // server tick is in it when the tick ends (`addDuringTeleport`).
+            if running == Some(true) {
+                let mut moved = false;
+                for &earlier in &order[..k] {
+                    if !self.arrival_chunks(earlier).is_empty()
+                        && self.enter_level(None, earlier).is_ok()
+                    {
+                        self.land_portal_arrivals();
+                        moved = true;
+                    }
+                }
+                if moved {
+                    self.enter_level(None, dim)?;
+                }
+            }
         }
         self.level_pass = Pass::default();
         if result.is_err() {
@@ -469,20 +561,24 @@ impl Game<'_> {
     /// `tick_server` as a server thread runs it. With `HORIZON_SPIKES=MS`, a
     /// tick longer than MS is logged with its thread CPU time and spans.
     pub(super) fn tick_server_timed(&mut self, paused: bool) -> Result<()> {
-        self.tick_server_spans(paused, |_, _, _| {})
+        self.tick_server_spans(paused, |_, _, _, _| {})
     }
 
     /// `tick_server_timed`, handing the tick's wall time, thread CPU time
-    /// and spans (milliseconds) to `record` while spans are on: a dedicated
-    /// server's performance report turns them on to record its ticks.
+    /// and spans (milliseconds, summed by name) to `record` while spans are on, with how many
+    /// spans the tick itself recorded: a dedicated server's performance report turns them on to
+    /// record its ticks.
     pub(super) fn tick_server_spans(
         &mut self,
         paused: bool,
-        record: impl FnOnce(f32, Option<f32>, Vec<horizon_client::spans::Span>),
+        record: impl FnOnce(f32, Option<f32>, Vec<horizon_client::spans::Span>, usize),
     ) -> Result<()> {
         if self.options.spikes.is_none() && !horizon_client::spans::enabled() {
             return self.tick_server(paused);
         }
+        // Spans recorded since the last tick ran between ticks (the chunk pump of the wait): they
+        // stay in the tick's list, but only the tick's own count as recorded in it.
+        let between = horizon_client::spans::take_raw();
         let (started, cpu) = (Instant::now(), horizon_client::spans::thread_cpu());
         let result = horizon_client::spans::job("server_tick", || self.tick_server(paused));
         let wall = started.elapsed().as_secs_f32() * 1000.0;
@@ -490,26 +586,40 @@ impl Game<'_> {
             .zip(cpu)
             .map(|(end, start)| (end - start).as_secs_f32() * 1000.0);
         // Taken every tick: nothing else takes this thread's spans.
-        let spans = horizon_client::spans::take();
+        let raw = horizon_client::spans::take_raw();
+        let in_tick = raw.len();
+        let spans = if between.is_empty() {
+            horizon_client::spans::merge(&raw)
+        } else {
+            horizon_client::spans::merge(&[between, raw].concat())
+        };
+        let notes = horizon_client::spans::take_notes();
         if let Some(threshold) = self.options.spikes
             && wall > threshold
         {
             let cpu = cpu.map_or_else(String::new, |c| format!(", cpu {c:.1} ms"));
             log::info!(
-                "Horizon: slow tick {wall:.1} ms{cpu} ({} mobs): {}",
+                "Horizon: slow tick {wall:.1} ms{cpu} ({} mobs): {}{}",
                 self.mobs.len(),
-                horizon_client::spans::describe(&spans)
+                horizon_client::spans::describe(&spans),
+                slowest_steps(&notes)
             );
         }
-        record(wall, cpu, spans);
+        record(wall, cpu, spans, in_tick);
         result
     }
 
     /// The end of `MinecraftServer.runServer`'s loop for a server thread: a
     /// finished `/tick sprint` reports to the operators as the server, then
     /// the next tick starts one tick length after this one, or straight away
-    /// while the sprint runs (`checkShouldSprintThisTick`).
-    pub(super) fn wait_for_next_server_tick(&mut self, next: &mut Instant, paused: bool) {
+    /// while the sprint runs (`checkShouldSprintThisTick`). A server more
+    /// than two seconds behind skips the ticks it missed: that returns how far
+    /// behind it was, for the overload warning.
+    pub(super) fn wait_for_next_server_tick(
+        &mut self,
+        next: &mut Instant,
+        paused: bool,
+    ) -> Option<Duration> {
         if let Some(report) = self.clock.take_sprint_report() {
             // ServerTickRateManager.finishTickSprint: the server's sendSuccess.
             self.console_broadcast = Some(true);
@@ -524,7 +634,7 @@ impl Game<'_> {
         let now = Instant::now();
         if !paused && self.clock.sprinting() {
             *next = now;
-            return;
+            return None;
         }
         *next += self.clock.tick_duration();
         if *next > now {
@@ -536,8 +646,11 @@ impl Game<'_> {
                 std::thread::sleep(*next - now);
             }
         } else if now - *next > Duration::from_secs(2) {
+            let behind = now - *next;
             *next = now;
+            return Some(behind);
         }
+        None
     }
 
     /// The levels this server tick runs, in `MinecraftServer.levels` order
@@ -551,15 +664,19 @@ impl Game<'_> {
         let mut dims: Vec<Dim> = [Dim::Overworld, Dim::Nether, Dim::End]
             .into_iter()
             .filter(|d| {
+                // `/forceload`ed chunks, or a native mod's tickets.
+                let held = |s: &Streaming| !s.forced.is_empty() || !s.mod_forced.is_empty();
                 let forced = if *d == self.dim {
-                    !self.streaming.forced.is_empty()
+                    held(&self.streaming)
                 } else {
                     self.levels
                         .parked
                         .get(d)
-                        .is_some_and(|p| !p.streaming.forced.is_empty())
+                        .is_some_and(|p| held(&p.streaming))
                 };
                 guests.iter().any(|g| g.dimension == d.id())
+                    // A viewer count not yet told to 0 (`tick_mod_container_viewers`).
+                    || self.mod_container_viewers.keys().any(|(k, _)| *k == d.id())
                     || self.player_bed_levels().any(|b| b == *d)
                     || forced
                     // A game test runs in its own level, players or not.
@@ -624,10 +741,46 @@ impl Game<'_> {
             let chunks: Vec<_> = self.world.chunks.values().cloned().collect();
             self.native_chunks_changed(&chunks);
             self.save_level(true)?;
+            // Its entities' attachments are saved with them; they leave memory too.
+            for uuid in self.persist.uuids.values() {
+                self.entity_attachments.remove(uuid);
+            }
             self.enter_level(None, back)?;
             self.levels.parked.remove(&dim);
+            self.native_level_closed(dim);
         }
         Ok(())
+    }
+
+    /// The mods hear `dim`'s level open (`LevelEvent.Load`), on a server.
+    pub(super) fn native_level_opened(&mut self, dim: Dim) {
+        if self.remote.is_some()
+            || self.options.execution_role.is_client()
+            || self.levels.heard_open.contains(&dim)
+        {
+            return;
+        }
+        self.levels.heard_open.push(dim);
+        self.native_level_load(dim.id());
+    }
+
+    /// The mods hear `dim`'s level close (`LevelEvent.Unload`), once for
+    /// each open they heard.
+    fn native_level_closed(&mut self, dim: Dim) {
+        let Some(i) = self.levels.heard_open.iter().position(|d| *d == dim) else {
+            return;
+        };
+        self.levels.heard_open.remove(i);
+        self.native_level_unload(dim.id());
+    }
+
+    /// Every level still open closes with the server, however it ends
+    /// (`MinecraftServer.stopServer`'s `level.close()` loop), in vanilla's
+    /// order of its levels: the Overworld, the Nether, the End.
+    pub(super) fn native_levels_closing(&mut self) {
+        for dim in [Dim::Overworld, Dim::Nether, Dim::End] {
+            self.native_level_closed(dim);
+        }
     }
 
     /// Save every parked level (`MinecraftServer.saveAllChunks`); the level
@@ -643,5 +796,33 @@ impl Game<'_> {
             self.save_level(wait)?;
         }
         self.enter_level(None, back)
+    }
+}
+
+/// A slow tick's line's end: the steps it noted as its slowest (`spans::note`), whose packets
+/// or which player's event, or nothing.
+fn slowest_steps(notes: &[(f32, String)]) -> String {
+    if notes.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = notes
+        .iter()
+        .map(|(ms, what)| format!("{what} {ms:.1}"))
+        .collect();
+    format!("; slowest: {}", list.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn levels_clear_empties_parked_and_heard_open() {
+        let mut levels = Levels::default();
+        levels.heard_open.push(Dim::Nether);
+        assert!(!levels.heard_open.is_empty());
+        levels.clear();
+        assert!(levels.heard_open.is_empty());
+        assert!(levels.parked.is_empty());
     }
 }

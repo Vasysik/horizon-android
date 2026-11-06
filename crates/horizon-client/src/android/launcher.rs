@@ -226,16 +226,13 @@ impl Launcher {
         crate::display::prepare(&window)?;
         let gui = game::UiResources {
             atlas: HudAtlas::build(&self.home.join("installer"))?,
-            panorama: Arc::new(horizon_client::gfx::panorama::Faces {
-                size: 1,
-                pixels: [0u8; 4].repeat(6),
-            }),
+            panorama: Arc::new(horizon_client::gfx::panorama::Faces::colour([0; 4])),
         };
         self.renderer = Some(game::loading_renderer(
             window.clone(),
             false,
             Some(&gui.atlas),
-            Some(gui.panorama.as_ref()),
+            Some(&gui.panorama),
             None,
             if self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl {
                 horizon_client::graphics::GraphicsApi::OpenGl

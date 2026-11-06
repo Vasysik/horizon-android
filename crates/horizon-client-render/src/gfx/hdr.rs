@@ -1,8 +1,10 @@
 //! HDR output (Horizon setting, off by default): the frame renders exactly as
-//! without it, into an 8-bit target in vanilla's gamma space, and one pass
-//! (`hdr.wgsl`) writes it to an HDR10 or scRGB swapchain at the player's paper
-//! white, expanding the world's highlights towards their peak brightness. The
-//! world is copied aside before the hand and HUD so only it is expanded.
+//! without it, in vanilla's gamma space, into a 16-bit target when HDR output
+//! was on when the renderer was made, else an 8-bit one
+//! (`Renderer::frame_format`), and one pass (`hdr.wgsl`) writes it to an HDR10
+//! or scRGB swapchain at the player's paper white, expanding the world's
+//! highlights towards their peak brightness. The world is copied aside before
+//! the hand and HUD so only it is expanded.
 
 /// The swapchain HDR output presents to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -40,17 +42,31 @@ impl Output {
     }
 }
 
+/// `HORIZON_HDR_OUTPUT`'s names, in order of preference.
+const NAMES: [(Output, &str); 2] = [(Output::Pq, "pq"), (Output::ScRgb, "scrgb")];
+
 /// The HDR output `caps` can present: HDR10 where offered, else scRGB.
 /// `HORIZON_HDR_OUTPUT=pq` or `scrgb` allows only that one.
 pub fn output(caps: &wgpu::SurfaceCapabilities) -> Option<Output> {
     pick(caps, std::env::var("HORIZON_HDR_OUTPUT").ok().as_deref())
 }
 fn pick(caps: &wgpu::SurfaceCapabilities, only: Option<&str>) -> Option<Output> {
-    [(Output::Pq, "pq"), (Output::ScRgb, "scrgb")]
+    NAMES
         .into_iter()
         .filter(|(_, name)| only.is_none_or(|o| o == *name))
         .map(|(output, _)| output)
         .find(|o| caps.color_spaces(o.format()).contains(o.space()))
+}
+/// The HDR output an offscreen renderer (`--offscreen`) offers: it has no display to ask, so
+/// only the one `HORIZON_HDR_OUTPUT` names, for HDR screenshots without an HDR display.
+pub fn offscreen_output() -> Option<Output> {
+    named(std::env::var("HORIZON_HDR_OUTPUT").ok().as_deref())
+}
+fn named(name: Option<&str>) -> Option<Output> {
+    NAMES
+        .into_iter()
+        .find(|(_, n)| name == Some(*n))
+        .map(|(output, _)| output)
 }
 
 struct Targets {
@@ -61,7 +77,8 @@ struct Targets {
 }
 
 /// How one tier of light sources (`mesher::hdr_tier`) shines: `share` of the headroom for
-/// its brightest pixels, lifted from brightness `start` (none) to `full` (all of it).
+/// its brightest pixels, lifted from brightness `start` (none) to `full` (all of it), the
+/// texel's own brightness before lighting.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tier {
     pub share: f32,
@@ -148,6 +165,12 @@ pub struct Hdr {
     pub ui: f32,
     /// Which pixels of a light source shine (`Masks`).
     pub masks: Masks,
+    /// HDR lighting: off while a shader pack's post or material stage runs, the pack's own, and
+    /// with `HORIZON_HDR_LIGHTING=0`, to compare.
+    pub lighting: bool,
+    /// The HDR Lighting setting: off, nothing in the world is lifted, light sources and the
+    /// sun included, so the picture is SDR's on the HDR canvas.
+    pub look: bool,
     /// Calibration's test picture while it runs.
     pub calibration: Option<Calibration>,
 }
@@ -268,7 +291,7 @@ impl Hdr {
         let params = || {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Horizon HDR parameters"),
-                size: 96,
+                size: 64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
@@ -292,11 +315,13 @@ impl Hdr {
             tiers: TIERS,
             ui: 1.0,
             masks: MASKS,
+            lighting: true,
+            look: true,
             calibration: None,
         }
     }
 
-    /// The 8-bit frame every pass draws into this frame, sized like the window.
+    /// The frame every pass draws into this frame, sized like the window.
     pub fn frame(&mut self, device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
         if self.targets.as_ref().is_none_or(|t| t.size != size) {
             let texture = |label, usage| {
@@ -319,7 +344,10 @@ impl Hdr {
                 "Horizon HDR frame",
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             );
-            let world = texture("Horizon HDR world", wgpu::TextureUsages::COPY_DST);
+            let world = texture(
+                "Horizon HDR world",
+                wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            );
             let view = |t: &wgpu::Texture| t.create_view(&Default::default());
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Horizon HDR bindings"),
@@ -366,7 +394,11 @@ impl Hdr {
     /// Keeps the world as drawn so far, before the hand and HUD cover it, then zeroes the
     /// frame's alpha: the world's marks live on in the copy, and whatever draws from here
     /// on raises the alpha where it covers the world.
-    pub fn keep_world(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn keep_world(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        timing: Option<&mut super::pack_timing::PassTiming>,
+    ) {
         let Some(t) = &self.targets else {
             return;
         };
@@ -387,6 +419,7 @@ impl Hdr {
         })];
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Horizon HDR UI mask"),
+            timestamp_writes: timing.and_then(|t| t.writes("HDR UI mask")),
             color_attachments: &attachments,
             ..Default::default()
         });
@@ -397,7 +430,11 @@ impl Hdr {
     /// After the hand: its pixels' alpha goes down to 1/255, below anything the HUD and
     /// menus leave, so HDR output tells the hand (the world's brightness, never lifted)
     /// from the UI (UI Brightness).
-    pub fn mark_hand(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn mark_hand(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        timing: Option<&mut super::pack_timing::PassTiming>,
+    ) {
         let Some(t) = &self.targets else {
             return;
         };
@@ -413,6 +450,7 @@ impl Hdr {
         })];
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Horizon HDR hand mark"),
+            timestamp_writes: timing.and_then(|t| t.writes("HDR hand mark")),
             color_attachments: &attachments,
             ..Default::default()
         });
@@ -427,13 +465,26 @@ impl Hdr {
         pass.draw(0..3, 0..1);
     }
 
+    /// The world as `keep_world` kept it: where the hand's marks go (its alpha, which HDR output
+    /// reads for it too), and what tints the world rather than covering it.
+    pub fn hand_light_view(&self) -> Option<wgpu::TextureView> {
+        let t = self.targets.as_ref()?;
+        Some(t.world.create_view(&Default::default()))
+    }
+
     /// Writes the finished frame to the swapchain image `target`.
+    /// The tiers' windows for the shaders that mark the frame (`Globals::hdr_windows`):
+    /// where each starts, then where each is full.
+    pub fn windows(&self) -> [[f32; 4]; 2] {
+        [self.tiers.map(|t| t.start), self.tiers.map(|t| t.full)]
+    }
     pub fn present(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::Texture,
         world: bool,
+        timing: Option<&mut super::pack_timing::PassTiming>,
     ) {
         let Some(t) = &self.targets else {
             return;
@@ -443,7 +494,7 @@ impl Hdr {
             0,
             bytemuck::cast_slice(&self.params(world, self.output == Output::Pq)),
         );
-        Self::draw_output(encoder, &self.pipeline, &t.group, target, true);
+        Self::draw_output(encoder, &self.pipeline, &t.group, target, timing, true);
     }
 
     /// The frame `present` writes, as HDR10 (BT.2020, PQ, 10 bits a channel) whatever
@@ -494,32 +545,35 @@ impl Hdr {
             0,
             bytemuck::cast_slice(&self.params(world, true)),
         );
-        Self::draw(encoder, &self.capture_pipeline, &group, &texture);
+        Self::draw(encoder, &self.capture_pipeline, &group, &texture, None);
         Some(texture)
     }
 
     /// hdr.wgsl's `Params`.
-    fn params(&self, world: bool, pq: bool) -> [f32; 24] {
+    fn params(&self, world: bool, pq: bool) -> [f32; 16] {
         let paper = self.paper_white.max(1.0);
         let c = self.calibration;
-        let mut params = [0.0; 24];
+        let mut params = [0.0; 16];
         params[..5].copy_from_slice(&[
             paper / 80.0,
             (self.peak / paper).max(1.0),
-            f32::from(u8::from(world)),
+            f32::from(u8::from(world && self.look)),
             f32::from(u8::from(self.debug)),
             f32::from(u8::from(pq)),
         ]);
         params[5] = self.black.clamp(0.0, paper);
         params[6] = self.ui.clamp(0.25, 1.0);
+        params[7] = if self.lighting {
+            scene_gain(self.peak, self.paper_white)
+        } else {
+            1.0
+        };
         for (i, t) in self.tiers.iter().enumerate() {
             params[8 + i] = t.share;
-            params[12 + i] = t.start;
-            params[16 + i] = t.full;
         }
-        params[20] = c.map_or(0.0, |c| c.step as f32);
-        params[21] = c.map_or(0.0, |c| c.nits);
-        params[22] = c.map_or(0.0, |c| c.band);
+        params[12] = c.map_or(0.0, |c| c.step as f32);
+        params[13] = c.map_or(0.0, |c| c.nits);
+        params[14] = c.map_or(0.0, |c| c.band);
         params
     }
 
@@ -528,14 +582,16 @@ impl Hdr {
         pipeline: &wgpu::RenderPipeline,
         group: &wgpu::BindGroup,
         target: &wgpu::Texture,
+        timing: Option<&mut super::pack_timing::PassTiming>,
     ) {
-        Self::draw_output(encoder, pipeline, group, target, false);
+        Self::draw_output(encoder, pipeline, group, target, timing, false);
     }
     fn draw_output(
         encoder: &mut wgpu::CommandEncoder,
         pipeline: &wgpu::RenderPipeline,
         group: &wgpu::BindGroup,
         target: &wgpu::Texture,
+        timing: Option<&mut super::pack_timing::PassTiming>,
         presentation: bool,
     ) {
         #[cfg(not(target_os = "android"))]
@@ -552,6 +608,7 @@ impl Hdr {
         })];
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Horizon HDR"),
+            timestamp_writes: timing.and_then(|t| t.writes("HDR output")),
             color_attachments: &attachments,
             ..Default::default()
         });
@@ -609,9 +666,15 @@ fn logo_mask(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
         .create_view(&Default::default())
 }
 
+/// What the strongest light multiplies a surface by, in HDR lighting: 4, which looked right
+/// across biomes; less only where there is little headroom to ease into (`hdr.wgsl`).
+fn scene_gain(peak: f32, paper_white: f32) -> f32 {
+    (peak / paper_white.max(1.0) * 1.75).clamp(1.0, 4.0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Output, pick};
+    use super::{Output, named, pick};
     use wgpu::{SurfaceColorSpaces as S, TextureFormat as F};
 
     #[test]
@@ -621,6 +684,7 @@ mod tests {
             include_str!("../hdr.wgsl"),
             include_str!("../terrain.wgsl"),
             include_str!("../hdr_stats.wgsl"),
+            include_str!("stars.wgsl"),
             &entity,
         ] {
             let module = naga::front::wgsl::parse_str(source).unwrap();
@@ -659,5 +723,28 @@ mod tests {
         assert_eq!(pick(&scrgb, None), Some(Output::ScRgb));
         assert_eq!(pick(&scrgb, Some("pq")), None);
         assert_eq!(pick(&caps(&[(F::Bgra8UnormSrgb, S::SRGB)]), None), None);
+    }
+
+    #[test]
+    fn offscreen_offers_only_the_named_output() {
+        assert_eq!(named(Some("pq")), Some(Output::Pq));
+        assert_eq!(named(Some("scrgb")), Some(Output::ScRgb));
+        assert_eq!(named(Some("hdr10")), None);
+        assert_eq!(named(None), None);
+    }
+}
+
+#[cfg(test)]
+mod lighting_tests {
+    use super::scene_gain;
+
+    #[test]
+    fn the_lighting_scales_with_the_headroom() {
+        // Enough headroom: the full strength, whatever the paper white.
+        assert_eq!(scene_gain(1000.0, 430.0), 4.0);
+        assert_eq!(scene_gain(1060.0, 203.0), 4.0);
+        // Little headroom, and none.
+        assert_eq!(scene_gain(600.0, 400.0), 2.625);
+        assert_eq!(scene_gain(200.0, 480.0), 1.0);
     }
 }

@@ -1,24 +1,22 @@
 //! Android's native entry point. The simulation and renderer are shared with desktop.
 #![cfg(target_os = "android")]
 
+// The game and mod API compile into this crate, not horizon-client's library,
+// so their `crate::` paths reach the Android platform modules below.
+extern crate self as horizon_client;
+pub use horizon_client_lib::*;
+
 #[allow(dead_code, clippy::collapsible_match)]
 // Shared vanilla match structure and desktop harnesses.
-mod game;
+pub mod game;
+pub mod mod_api;
 #[path = "android/game_launch.rs"]
 mod game_launch;
 #[path = "android/launcher.rs"]
 mod launcher;
-// Share the desktop launcher's actual search, compatibility checks, downloads,
-// dependency resolution and Java content porting; GPUI itself is desktop-only.
-// These files are formatted in the launcher's separate Rust 2021 workspace.
-#[rustfmt::skip]
-#[allow(dead_code)]
-#[path = "../../../launcher/src/account.rs"]
-mod account;
-#[rustfmt::skip]
-#[allow(dead_code)]
-#[path = "../../../launcher/src/browser.rs"]
-mod browser;
+// The fork's launcher search, compatibility checks, downloads, dependency
+// resolution, Ely.by accounts and Java content porting; GPUI is desktop-only.
+// Kept as Android's own copy: upstream's launcher dropped the Ely.by provider.
 #[path = "android/dns.rs"]
 mod android_dns;
 #[path = "android/catalog.rs"]
@@ -49,10 +47,6 @@ mod native_ime;
 mod performance;
 #[path = "android/platform.rs"]
 mod platform;
-#[rustfmt::skip]
-#[allow(dead_code)]
-#[path = "../../../launcher/src/proxy.rs"]
-mod proxy;
 #[path = "android/search_queue.rs"]
 mod search_queue;
 #[path = "android/secure_store.rs"]
@@ -61,8 +55,19 @@ mod secure_store;
 mod shader_catalog;
 #[rustfmt::skip]
 #[allow(dead_code)]
-#[path = "../../../launcher/src/skins.rs"]
-mod skins;
+#[path = "android/launcher_shared"]
+mod launcher_shared {
+    pub mod account;
+    pub mod browser;
+    pub mod proxy;
+    pub mod skins;
+}
+use launcher_shared::{account, browser, proxy};
+// The launcher's wardrobe and the client's skin code share the name `skins`.
+pub mod skins {
+    pub use crate::launcher_shared::skins::*;
+    pub use horizon_client_lib::skins::*;
+}
 // The shared account protocol needs only the launcher's version and data path.
 mod backend {
     pub const VERSION: &str = if crate::PUBLIC_BUILD {
@@ -140,7 +145,7 @@ thread_local! {
     static APP: RefCell<Option<AndroidApp>> = const { RefCell::new(None) };
 }
 
-pub(crate) fn android_event_loop() -> Result<EventLoop<()>, winit::error::EventLoopError> {
+pub(crate) fn android_event_loop() -> std::result::Result<EventLoop<()>, winit::error::EventLoopError> {
     APP.with(|app| {
         EventLoop::builder()
             .with_android_app(
