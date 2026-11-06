@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
-      CARGO_BUILD_JOBS: '2'
+      CARGO_BUILD_JOBS: '4'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_TARGET_DIR: ${{ github.workspace }}/.local/ci-target
       HORIZON_TELEMETRY_URL: 'off'
@@ -128,7 +128,7 @@ jobs:
 
       - name: Build engine APK
         run: |
-          python3 tools/android_build.py --abi arm64-v8a --public --profile release \
+          python3 tools/android_build.py --abi arm64-v8a --public --profile fast \
             --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME" --gradle "$(command -v gradle)" \
             --ndk-version 28.2.13676358 --build-tools-version 35.0.0
 
