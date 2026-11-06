@@ -100,6 +100,12 @@ pub(super) struct ServerPackState {
     /// the toasts the integrated server's chunk IO reports add (`chunk_io`).
     pub(super) chunk_io: [Option<SystemToast>; 3],
 }
+
+impl ServerPackState {
+    pub(super) fn is_busy(&self) -> bool {
+        self.prompt.is_some() || !self.notifiers.is_empty() || self.queue.is_some()
+    }
+}
 /// `DownloadedPackSource.createDownloadNotifier`: one batch's progress in its
 /// own `SystemToast`.
 struct PackNotifier {

@@ -383,6 +383,7 @@ fn register_menu_types(mods: &[horizon_client::mod_content::ContentMod]) {
 }
 
 /// What the launcher writes beside a game it built with native mods: their ids under `mods`.
+#[allow(dead_code)]
 const BUILD_INFO: &str = "native-mods.json";
 
 #[cfg(feature = "mods")]
@@ -1466,7 +1467,7 @@ pub(super) fn warn_no_block_entity(block: &str, id: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+mod extra_tests {
     use super::*;
     use horizon_client::mod_list::Installed;
     use std::io::Write;

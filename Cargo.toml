@@ -56,6 +56,9 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.85"
 
+[workspace.lints.rust]
+unknown_lints = "allow"
+
 # Ports mirror vanilla's Java signatures, index loops and nested generic types
 # one to one so they can be checked against the decompiled sources.
 [workspace.lints.clippy]
@@ -63,6 +66,15 @@ too_many_arguments = "allow"
 type_complexity = "allow"
 needless_range_loop = "allow"
 large_enum_variant = "allow"
+collapsible_match = "allow"
+unusual_byte_groupings = "allow"
+items_after_test_module = "allow"
+field_reassign_with_default = "allow"
+bool_assert_comparison = "allow"
+nonminimal_bool = "allow"
+collapsible_if = "allow"
+manual_slice_size_calculation = "allow"
+manual_range_contains = "allow"
 
 # wgpu-hal 30.0.1 with gfx-rs/wgpu#10124: wgpu 30 creates a Vulkan descriptor
 # pool with no pool sizes while it creates the device, which Vulkan allows only

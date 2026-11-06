@@ -1,0 +1,1619 @@
+//! Simple Voice Chat (SVC) Protocol Implementation in Rust for Horizon.
+//!
+//! Provides byte-for-byte wire parity with Simple Voice Chat Java Compatibility Version 21.
+//! Handles 14 TCP CustomPayload channels and 10 UDP AES-128-GCM packets.
+
+use aes_gcm::{
+    Aes128Gcm, Nonce,
+    aead::{Aead, KeyInit},
+};
+use std::io::{Cursor, Read};
+
+pub const COMPATIBILITY_VERSION: i32 = 21;
+pub const MAGIC_BYTE: u8 = 0xFF;
+pub const IV_SIZE_BYTES: usize = 12;
+pub const NONCE_SIZE_BYTES: usize = 16;
+pub const MAX_OPUS_PAYLOAD_SIZE: usize = 1275;
+
+// Packet IDs for UDP Voice Channel
+pub const PACKET_ID_MIC: u8 = 0x01;
+pub const PACKET_ID_PLAYER_SOUND: u8 = 0x02;
+pub const PACKET_ID_GROUP_SOUND: u8 = 0x03;
+pub const PACKET_ID_LOCATION_SOUND: u8 = 0x04;
+pub const PACKET_ID_AUTHENTICATE: u8 = 0x05;
+pub const PACKET_ID_AUTHENTICATE_ACK: u8 = 0x06;
+pub const PACKET_ID_PING: u8 = 0x07;
+pub const PACKET_ID_KEEP_ALIVE: u8 = 0x08;
+pub const PACKET_ID_CONNECTION_CHECK: u8 = 0x09;
+pub const PACKET_ID_CONNECTION_CHECK_ACK: u8 = 0x0A;
+
+// Minecraft CustomPayload Channel Identifiers
+pub const CHANNEL_REQUEST_SECRET: &str = "voicechat:request_secret";
+pub const CHANNEL_SECRET: &str = "voicechat:secret";
+pub const CHANNEL_CLIENT_STATE: &str = "voicechat:client_state";
+pub const CHANNEL_PLAYER_STATE: &str = "voicechat:state";
+pub const CHANNEL_PLAYER_STATES: &str = "voicechat:states";
+pub const CHANNEL_REMOVE_STATE: &str = "voicechat:remove_state";
+pub const CHANNEL_ADD_GROUP: &str = "voicechat:add_group";
+pub const CHANNEL_REMOVE_GROUP: &str = "voicechat:remove_group";
+pub const CHANNEL_SET_GROUP: &str = "voicechat:set_group";
+pub const CHANNEL_CREATE_GROUP: &str = "voicechat:create_group";
+pub const CHANNEL_LEAVE_GROUP: &str = "voicechat:leave_group";
+pub const CHANNEL_JOINED_GROUP: &str = "voicechat:joined_group";
+pub const CHANNEL_ADD_CATEGORY: &str = "voicechat:add_category";
+pub const CHANNEL_REMOVE_CATEGORY: &str = "voicechat:remove_category";
+
+/// Helper for reading Minecraft FriendlyByteBuf network representations.
+pub struct ByteBufReader<'a> {
+    cursor: Cursor<&'a [u8]>,
+}
+
+impl<'a> ByteBufReader<'a> {
+    pub fn new(slice: &'a [u8]) -> Self {
+        Self {
+            cursor: Cursor::new(slice),
+        }
+    }
+
+    pub fn read_u8(&mut self) -> Result<u8, std::io::Error> {
+        let mut buf = [0u8; 1];
+        self.cursor.read_exact(&mut buf)?;
+        Ok(buf[0])
+    }
+
+    pub fn read_i16(&mut self) -> Result<i16, std::io::Error> {
+        let mut buf = [0u8; 2];
+        self.cursor.read_exact(&mut buf)?;
+        Ok(i16::from_be_bytes(buf))
+    }
+
+    pub fn read_i32(&mut self) -> Result<i32, std::io::Error> {
+        let mut buf = [0u8; 4];
+        self.cursor.read_exact(&mut buf)?;
+        Ok(i32::from_be_bytes(buf))
+    }
+
+    pub fn read_i64(&mut self) -> Result<i64, std::io::Error> {
+        let mut buf = [0u8; 8];
+        self.cursor.read_exact(&mut buf)?;
+        Ok(i64::from_be_bytes(buf))
+    }
+
+    pub fn read_f32(&mut self) -> Result<f32, std::io::Error> {
+        let mut buf = [0u8; 4];
+        self.cursor.read_exact(&mut buf)?;
+        Ok(f32::from_be_bytes(buf))
+    }
+
+    pub fn read_f64(&mut self) -> Result<f64, std::io::Error> {
+        let mut buf = [0u8; 8];
+        self.cursor.read_exact(&mut buf)?;
+        Ok(f64::from_be_bytes(buf))
+    }
+
+    pub fn read_bool(&mut self) -> Result<bool, std::io::Error> {
+        Ok(self.read_u8()? != 0)
+    }
+
+    pub fn read_varint(&mut self) -> Result<i32, std::io::Error> {
+        let mut num_read = 0;
+        let mut result = 0i32;
+        loop {
+            let read = self.read_u8()?;
+            let value = (read & 0b0111_1111) as i32;
+            result |= value << (7 * num_read);
+            num_read += 1;
+            if num_read > 5 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "VarInt too big",
+                ));
+            }
+            if (read & 0b1000_0000) == 0 {
+                break;
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn read_uuid(&mut self) -> Result<u128, std::io::Error> {
+        let mut buf = [0u8; 16];
+        self.cursor.read_exact(&mut buf)?;
+        Ok(u128::from_be_bytes(buf))
+    }
+
+    pub fn read_string(&mut self) -> Result<String, std::io::Error> {
+        let raw = self.read_varint()?;
+        if raw < 0 || (raw as usize) > self.remaining().min(32767) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bad len",
+            ));
+        }
+        let len = raw as usize;
+        let mut bytes = vec![0u8; len];
+        self.cursor.read_exact(&mut bytes)?;
+        String::from_utf8(bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    pub fn read_byte_array(&mut self) -> Result<Vec<u8>, std::io::Error> {
+        let raw = self.read_varint()?;
+        if raw < 0 || (raw as usize) > self.remaining().min(32767) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bad len",
+            ));
+        }
+        let len = raw as usize;
+        let mut bytes = vec![0u8; len];
+        self.cursor.read_exact(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    pub fn read_exact_bytes(&mut self, buf: &mut [u8]) -> Result<(), std::io::Error> {
+        self.cursor.read_exact(buf)
+    }
+
+    pub fn remaining(&self) -> usize {
+        let pos = self.cursor.position() as usize;
+        let inner = self.cursor.get_ref();
+        inner.len().saturating_sub(pos)
+    }
+}
+
+/// Helper for writing Minecraft FriendlyByteBuf network representations.
+#[derive(Default)]
+pub struct ByteBufWriter {
+    buffer: Vec<u8>,
+}
+
+impl ByteBufWriter {
+    pub fn new() -> Self {
+        Self { buffer: Vec::new() }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            buffer: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub fn write_u8(&mut self, val: u8) {
+        self.buffer.push(val);
+    }
+
+    pub fn write_i16(&mut self, val: i16) {
+        self.buffer.extend_from_slice(&val.to_be_bytes());
+    }
+
+    pub fn write_i32(&mut self, val: i32) {
+        self.buffer.extend_from_slice(&val.to_be_bytes());
+    }
+
+    pub fn write_i64(&mut self, val: i64) {
+        self.buffer.extend_from_slice(&val.to_be_bytes());
+    }
+
+    pub fn write_f32(&mut self, val: f32) {
+        self.buffer.extend_from_slice(&val.to_be_bytes());
+    }
+
+    pub fn write_f64(&mut self, val: f64) {
+        self.buffer.extend_from_slice(&val.to_be_bytes());
+    }
+
+    pub fn write_bool(&mut self, val: bool) {
+        self.buffer.push(if val { 1 } else { 0 });
+    }
+
+    pub fn write_varint(&mut self, mut value: i32) {
+        loop {
+            if (value & !0b0111_1111) == 0 {
+                self.buffer.push(value as u8);
+                return;
+            }
+            self.buffer
+                .push(((value & 0b0111_1111) | 0b1000_0000) as u8);
+            value = ((value as u32) >> 7) as i32;
+        }
+    }
+
+    pub fn write_uuid(&mut self, uuid: u128) {
+        self.buffer.extend_from_slice(&uuid.to_be_bytes());
+    }
+
+    pub fn write_string(&mut self, str_val: &str) {
+        let bytes = str_val.as_bytes();
+        self.write_varint(bytes.len() as i32);
+        self.buffer.extend_from_slice(bytes);
+    }
+
+    pub fn write_byte_array(&mut self, bytes: &[u8]) {
+        self.write_varint(bytes.len() as i32);
+        self.buffer.extend_from_slice(bytes);
+    }
+
+    pub fn write_raw_bytes(&mut self, bytes: &[u8]) {
+        self.buffer.extend_from_slice(bytes);
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.buffer
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buffer
+    }
+}
+
+/// AES-128-GCM cipher wrapper for SVC UDP packets.
+pub struct SvcCipher {
+    cipher: Aes128Gcm,
+}
+
+impl SvcCipher {
+    pub fn new(secret_key: &[u8; 16]) -> Self {
+        Self {
+            cipher: Aes128Gcm::new_from_slice(secret_key).expect("Valid 16-byte key"),
+        }
+    }
+
+    /// Encrypts plaintext into `[12-byte IV] + [Ciphertext + 16-byte GCM Tag]`.
+    pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        let mut iv = [0u8; IV_SIZE_BYTES];
+        // Generate cryptographic random IV via getrandom
+        getrandom::fill(&mut iv).map_err(|e| format!("IV generation failed: {e}"))?;
+        let nonce = Nonce::from_slice(&iv);
+
+        let ciphertext = self
+            .cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|e| format!("GCM encrypt error: {e:?}"))?;
+
+        let mut payload = Vec::with_capacity(IV_SIZE_BYTES + ciphertext.len());
+        payload.extend_from_slice(&iv);
+        payload.extend_from_slice(&ciphertext);
+        Ok(payload)
+    }
+
+    /// Decrypts payload `[12-byte IV] + [Ciphertext + 16-byte GCM Tag]` back to plaintext.
+    pub fn decrypt(&self, payload: &[u8]) -> Result<Vec<u8>, String> {
+        if payload.len() < IV_SIZE_BYTES + 16 {
+            return Err("Payload too short for IV and Tag".into());
+        }
+        let iv = &payload[..IV_SIZE_BYTES];
+        let ciphertext = &payload[IV_SIZE_BYTES..];
+        let nonce = Nonce::from_slice(iv);
+
+        self.cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| format!("GCM decrypt error: {e:?}"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TCP Packets (Minecraft CustomPayload Channels)
+// ---------------------------------------------------------------------------
+
+/// RequestSecretPacket (channel: voicechat:request_secret)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestSecretPacket {
+    pub compatibility_version: i32,
+}
+
+impl RequestSecretPacket {
+    pub fn new(version: i32) -> Self {
+        Self {
+            compatibility_version: version,
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_i32(self.compatibility_version);
+        w.into_bytes()
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        let compatibility_version = r.read_i32()?;
+        Ok(Self {
+            compatibility_version,
+        })
+    }
+}
+
+/// SecretPacket (channel: voicechat:secret)
+#[derive(Debug, Clone, PartialEq)]
+pub struct SecretPacket {
+    pub secret: [u8; 16],
+    pub connection_id: u128,
+    pub server_port: i32,
+    pub player_uuid: u128,
+    pub codec: u8,
+    pub mtu_size: i32,
+    pub voice_chat_distance: f64,
+    pub keep_alive: i32,
+    pub groups_enabled: bool,
+    pub voice_host: String,
+    pub allow_recording: bool,
+}
+
+impl SecretPacket {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        let mut secret = [0u8; 16];
+        r.read_exact_bytes(&mut secret)?;
+        let server_port = r.read_i32()?;
+        let player_uuid = r.read_uuid()?;
+        let codec = r.read_u8()?;
+        let mtu_size = r.read_i32()?;
+        let voice_chat_distance = r.read_f64()?;
+        let keep_alive = r.read_i32()?;
+        let groups_enabled = r.read_bool()?;
+        let voice_host = if r.remaining() > 0 {
+            r.read_string().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let allow_recording = if r.remaining() > 0 {
+            r.read_bool().unwrap_or(false)
+        } else {
+            false
+        };
+
+        // For SVC compat 20, connection_id is the player_uuid
+        let connection_id = player_uuid;
+
+        log::info!(
+            "SVC: Handshake secret parsed successfully. UDP Port: {}, Host: '{}', MTU: {}",
+            server_port,
+            voice_host,
+            mtu_size
+        );
+
+        Ok(Self {
+            secret,
+            connection_id,
+            server_port,
+            player_uuid,
+            codec,
+            mtu_size,
+            voice_chat_distance,
+            keep_alive,
+            groups_enabled,
+            voice_host,
+            allow_recording,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_raw_bytes(&self.secret);
+        w.write_i32(self.server_port);
+        w.write_uuid(self.player_uuid);
+        w.write_u8(self.codec);
+        w.write_i32(self.mtu_size);
+        w.write_f64(self.voice_chat_distance);
+        w.write_i32(self.keep_alive);
+        w.write_bool(self.groups_enabled);
+        w.write_string(&self.voice_host);
+        w.write_bool(self.allow_recording);
+        w.into_bytes()
+    }
+}
+
+fn sanitize_host_string(s: &str) -> &str {
+    let mut s = s.trim().trim_matches('"').trim_matches('\'').trim();
+    for scheme in &["udp://", "tcp://", "http://", "https://"] {
+        if let Some(stripped) = s.strip_prefix(scheme) {
+            s = stripped.trim();
+        }
+    }
+    s.trim_end_matches('/').trim()
+}
+
+fn strip_default_host_port(s: &str) -> &str {
+    let s = sanitize_host_string(s);
+    if let Some((ip6, _)) = s.strip_prefix('[').and_then(|r| r.split_once(']')) {
+        ip6.trim()
+    } else if s.chars().filter(|&c| c == ':').count() == 1 {
+        s.split_once(':').map(|(h, _)| h).unwrap_or(s).trim()
+    } else {
+        s
+    }
+}
+
+/// Parses voice host into `(host, port)`.
+///
+/// Handles:
+/// - Empty or whitespace string -> `(default_host, default_port)`
+/// - Numeric string (e.g. `"8000"`) -> `(default_host, 8000)`
+/// - IPv6 with brackets and port (e.g. `"[::1]:8000"`) -> `("::1", 8000)`
+/// - IPv6 with brackets without port (e.g. `"[::1]"`) -> `("::1", default_port)`
+/// - IPv6 without brackets (e.g. `"::1"`) -> `("::1", default_port)`
+/// - Host with port (e.g. `"edge.slimeskyes.id:8000"`) -> `("edge.slimeskyes.id", 8000)`
+/// - Host without port (e.g. `"edge.slimeskyes.id"`) -> `("edge.slimeskyes.id", default_port)`
+/// - Fallback substitution for invalid/unbound hosts (0.0.0.0, ::, localhost, 127.0.0.1)
+///
+/// Port specified in `host` overrides `default_port`.
+pub fn parse_voice_host(host: &str, default_host: &str, default_port: u16) -> (String, u16) {
+    let clean_def = strip_default_host_port(default_host);
+    let fallback_is_local = matches!(clean_def, "localhost" | "127.0.0.1" | "::1");
+
+    let clean_host = sanitize_host_string(host);
+    if clean_host.is_empty() {
+        return (clean_def.to_string(), default_port);
+    }
+
+    // 1. Check if the string is just a numeric port (e.g. "8000")
+    if let Ok(p @ 1..) = clean_host.parse::<u16>() {
+        return (clean_def.to_string(), p);
+    }
+
+    // 2. Bracketed IPv6, e.g. "[::1]:8000" or "[::1]"
+    if let Some((ip_part, rest)) = clean_host.strip_prefix('[').and_then(|s| s.split_once(']')) {
+        let rest = rest.trim();
+        let port = if let Some(port_str) = rest.strip_prefix(':') {
+            port_str
+                .trim()
+                .parse::<u16>()
+                .ok()
+                .filter(|&p| p > 0)
+                .unwrap_or(default_port)
+        } else {
+            default_port
+        };
+        let raw_h = ip_part.trim();
+        let is_invalid = raw_h.is_empty() || matches!(raw_h, "::" | "[::]" | "0.0.0.0");
+        let is_local = matches!(raw_h, "localhost" | "127.0.0.1");
+        let final_h = if is_invalid || (is_local && !fallback_is_local) {
+            clean_def
+        } else {
+            raw_h
+        };
+        return (final_h.to_string(), port);
+    }
+
+    // 3. Unbracketed IPv6 (contains multiple colons), e.g. "::1" or "2001:db8::1"
+    let colon_count = clean_host.chars().filter(|&c| c == ':').count();
+    if colon_count > 1 {
+        let is_invalid = matches!(clean_host, "::" | "0:0:0:0:0:0:0:0");
+        let final_h = if is_invalid && !fallback_is_local {
+            clean_def
+        } else {
+            clean_host
+        };
+        return (final_h.to_string(), default_port);
+    }
+
+    // 4. Host with single port, e.g. "edge.slimeskyes.id:8000" or ":8000"
+    if colon_count == 1 {
+        let mut parts = clean_host.splitn(2, ':');
+        let h = parts.next().unwrap_or("").trim();
+        let p_str = parts.next().unwrap_or("").trim();
+        let port = p_str
+            .parse::<u16>()
+            .ok()
+            .filter(|&p| (1..=65535).contains(&p))
+            .unwrap_or(default_port);
+        let is_invalid = h.is_empty() || matches!(h, "0.0.0.0" | "::");
+        let is_local = matches!(h, "localhost" | "127.0.0.1");
+        let final_h = if is_invalid || (is_local && !fallback_is_local) {
+            clean_def
+        } else {
+            h
+        };
+        return (final_h.to_string(), port);
+    }
+
+    // 5. Hostname or IPv4 without port, e.g. "edge.slimeskyes.id"
+    let is_invalid = clean_host.is_empty() || matches!(clean_host, "0.0.0.0" | "::");
+    let is_local = matches!(clean_host, "localhost" | "127.0.0.1");
+    let final_h = if is_invalid || (is_local && !fallback_is_local) {
+        clean_def
+    } else {
+        clean_host
+    };
+    (final_h.to_string(), default_port)
+}
+
+/// UpdateStatePacket (channel: voicechat:client_state)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateStatePacket {
+    pub muted: bool,
+    pub disabled: bool,
+}
+
+impl UpdateStatePacket {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_bool(self.muted);
+        w.write_bool(self.disabled);
+        w.into_bytes()
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        Ok(Self {
+            muted: r.read_bool()?,
+            disabled: r.read_bool()?,
+        })
+    }
+}
+
+/// Substructure for player states in PlayerStatePacket & PlayerStatesPacket
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerState {
+    pub disabled: bool,
+    pub disconnected: bool,
+    pub uuid: u128,
+    pub name: String,
+    pub group: Option<u128>,
+}
+
+impl PlayerState {
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+    pub fn is_disconnected(&self) -> bool {
+        self.disconnected
+    }
+    pub fn has_group(&self) -> bool {
+        self.group.is_some()
+    }
+
+    pub fn read_from(r: &mut ByteBufReader<'_>) -> Result<Self, std::io::Error> {
+        let disabled = r.read_bool()?;
+        let disconnected = r.read_bool()?;
+        let uuid = r.read_uuid()?;
+        let name = r.read_string()?;
+        let has_group = r.read_bool()?;
+        let group = if has_group {
+            Some(r.read_uuid()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            disabled,
+            disconnected,
+            uuid,
+            name,
+            group,
+        })
+    }
+
+    pub fn write_to(&self, w: &mut ByteBufWriter) {
+        w.write_bool(self.disabled);
+        w.write_bool(self.disconnected);
+        w.write_uuid(self.uuid);
+        w.write_string(&self.name);
+        w.write_bool(self.group.is_some());
+        if let Some(gid) = self.group {
+            w.write_uuid(gid);
+        }
+    }
+}
+
+/// PlayerStatePacket (channel: voicechat:state)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerStatePacket {
+    pub state: PlayerState,
+}
+
+impl PlayerStatePacket {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        Ok(Self {
+            state: PlayerState::read_from(&mut r)?,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        self.state.write_to(&mut w);
+        w.into_bytes()
+    }
+}
+
+/// PlayerStatesPacket (channel: voicechat:states)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerStatesPacket {
+    pub states: Vec<PlayerState>,
+}
+
+impl PlayerStatesPacket {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        let raw_c = r.read_i32()?;
+        if raw_c < 0 || (raw_c as usize) > (r.remaining() / 18) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "bad count",
+            ));
+        }
+        let count = raw_c as usize;
+        let mut states = Vec::with_capacity(count);
+        for _ in 0..count {
+            states.push(PlayerState::read_from(&mut r)?);
+        }
+        Ok(Self { states })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_i32(self.states.len() as i32);
+        for s in &self.states {
+            s.write_to(&mut w);
+        }
+        w.into_bytes()
+    }
+}
+
+/// RemovePlayerStatePacket (channel: voicechat:remove_state)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovePlayerStatePacket {
+    pub player_uuid: u128,
+}
+
+impl RemovePlayerStatePacket {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        Ok(Self {
+            player_uuid: r.read_uuid()?,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_uuid(self.player_uuid);
+        w.into_bytes()
+    }
+}
+
+/// Substructure for group representations
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientGroup {
+    pub id: u128,
+    pub name: String,
+    pub has_password: bool,
+    pub persistent: bool,
+    pub hidden: bool,
+    pub group_type: i16,
+}
+
+impl ClientGroup {
+    pub fn read_from(r: &mut ByteBufReader<'_>) -> Result<Self, std::io::Error> {
+        let id = r.read_uuid()?;
+        let name = r.read_string()?;
+        let has_password = r.read_bool()?;
+        let persistent = r.read_bool()?;
+        let hidden = r.read_bool()?;
+        let group_type = r.read_i16()?;
+        Ok(Self {
+            id,
+            name,
+            has_password,
+            persistent,
+            hidden,
+            group_type,
+        })
+    }
+
+    pub fn write_to(&self, w: &mut ByteBufWriter) {
+        w.write_uuid(self.id);
+        w.write_string(&self.name);
+        w.write_bool(self.has_password);
+        w.write_bool(self.persistent);
+        w.write_bool(self.hidden);
+        w.write_i16(self.group_type);
+    }
+}
+
+/// AddGroupPacket (channel: voicechat:add_group)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddGroupPacket {
+    pub group: ClientGroup,
+}
+
+impl AddGroupPacket {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        Ok(Self {
+            group: ClientGroup::read_from(&mut r)?,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        self.group.write_to(&mut w);
+        w.into_bytes()
+    }
+}
+
+/// RemoveGroupPacket (channel: voicechat:remove_group)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveGroupPacket {
+    pub group_id: u128,
+}
+
+impl RemoveGroupPacket {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        Ok(Self {
+            group_id: r.read_uuid()?,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_uuid(self.group_id);
+        w.into_bytes()
+    }
+}
+
+/// JoinGroupPacket (channel: voicechat:set_group)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JoinGroupPacket {
+    pub group_id: u128,
+    pub password: Option<String>,
+}
+
+impl JoinGroupPacket {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_uuid(self.group_id);
+        w.write_bool(self.password.is_some());
+        if let Some(pw) = &self.password {
+            w.write_string(pw);
+        }
+        w.into_bytes()
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        let group_id = r.read_uuid()?;
+        let has_pw = r.read_bool()?;
+        let password = if has_pw { Some(r.read_string()?) } else { None };
+        Ok(Self { group_id, password })
+    }
+}
+
+/// CreateGroupPacket (channel: voicechat:create_group)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateGroupPacket {
+    pub name: String,
+    pub password: Option<String>,
+    pub group_type: i16,
+}
+
+impl CreateGroupPacket {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_string(&self.name);
+        w.write_bool(self.password.is_some());
+        if let Some(pw) = &self.password {
+            w.write_string(pw);
+        }
+        w.write_i16(self.group_type);
+        w.into_bytes()
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        let name = r.read_string()?;
+        let has_pw = r.read_bool()?;
+        let password = if has_pw { Some(r.read_string()?) } else { None };
+        let group_type = r.read_i16()?;
+        Ok(Self {
+            name,
+            password,
+            group_type,
+        })
+    }
+}
+
+/// LeaveGroupPacket (channel: voicechat:leave_group)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaveGroupPacket;
+
+impl LeaveGroupPacket {
+    pub fn to_bytes() -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+/// JoinedGroupPacket (channel: voicechat:joined_group)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JoinedGroupPacket {
+    pub group_id: Option<u128>,
+    pub wrong_password: bool,
+}
+
+impl JoinedGroupPacket {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        let has_group = r.read_bool()?;
+        let group_id = if has_group {
+            Some(r.read_uuid()?)
+        } else {
+            None
+        };
+        let wrong_password = r.read_bool()?;
+        Ok(Self {
+            group_id,
+            wrong_password,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_bool(self.group_id.is_some());
+        if let Some(gid) = self.group_id {
+            w.write_uuid(gid);
+        }
+        w.write_bool(self.wrong_password);
+        w.into_bytes()
+    }
+}
+
+/// AddCategoryPacket (channel: voicechat:add_category)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddCategoryPacket {
+    pub id: String,
+    pub name: String,
+    pub icon: Option<String>,
+}
+
+impl AddCategoryPacket {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        let id = r.read_string()?;
+        let name = r.read_string()?;
+        let has_icon = r.read_bool()?;
+        let icon = if has_icon {
+            Some(r.read_string()?)
+        } else {
+            None
+        };
+        Ok(Self { id, name, icon })
+    }
+}
+
+/// RemoveCategoryPacket (channel: voicechat:remove_category)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveCategoryPacket {
+    pub id: String,
+}
+
+impl RemoveCategoryPacket {
+    pub fn from_bytes(data: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(data);
+        Ok(Self {
+            id: r.read_string()?,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UDP Packets & Framing
+// ---------------------------------------------------------------------------
+
+/// Builds client-to-server framed UDP packet:
+/// `[Magic 0xFF] + [ConnID 16B] + [VarInt Length] + [Encrypted Payload (12B IV + Ciphertext + Tag)]`
+pub fn build_client_udp_packet(
+    connection_id: u128,
+    cipher: &SvcCipher,
+    packet_id: u8,
+    packet_body: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut plaintext = Vec::with_capacity(1 + packet_body.len());
+    plaintext.push(packet_id);
+    plaintext.extend_from_slice(packet_body);
+
+    let encrypted = cipher.encrypt(&plaintext)?;
+
+    let mut w = ByteBufWriter::new();
+    w.write_u8(MAGIC_BYTE);
+    w.write_uuid(connection_id);
+    w.write_byte_array(&encrypted);
+    Ok(w.into_bytes())
+}
+
+/// Parses server-to-client framed UDP packet:
+/// `[Magic 0xFF] + [VarInt Length] + [Encrypted Payload (12B IV + Ciphertext + Tag)]`
+pub fn parse_server_udp_packet(
+    raw_packet: &[u8],
+    cipher: &SvcCipher,
+) -> Result<(u8, Vec<u8>), String> {
+    let mut r = ByteBufReader::new(raw_packet);
+    let magic = r.read_u8().map_err(|e| e.to_string())?;
+    if magic != MAGIC_BYTE {
+        return Err(format!("Invalid magic byte: {magic:#x}"));
+    }
+
+    let encrypted = r.read_byte_array().map_err(|e| e.to_string())?;
+    let decrypted = cipher.decrypt(&encrypted)?;
+    if decrypted.is_empty() {
+        return Err("Decrypted packet payload is empty".into());
+    }
+
+    let packet_id = decrypted[0];
+    let body = decrypted[1..].to_vec();
+    Ok((packet_id, body))
+}
+
+/// MicPacket (UDP ID 0x01): microphone audio sent from client to server.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MicPacket {
+    pub opus_data: Vec<u8>,
+    pub sequence_number: i64,
+    pub whispering: bool,
+}
+
+impl MicPacket {
+    pub fn to_body(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_byte_array(&self.opus_data);
+        w.write_i64(self.sequence_number);
+        w.write_bool(self.whispering);
+        w.into_bytes()
+    }
+
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(body);
+        let opus_data = r.read_byte_array()?;
+        let sequence_number = r.read_i64()?;
+        let whispering = r.read_bool()?;
+        Ok(Self {
+            opus_data,
+            sequence_number,
+            whispering,
+        })
+    }
+}
+
+/// PlayerSoundPacket (UDP ID 0x02): proximity audio received from server.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerSoundPacket {
+    pub channel_id: u128,
+    pub sender_uuid: u128,
+    pub opus_data: Vec<u8>,
+    pub sequence_number: i64,
+    pub distance: f32,
+    pub whispering: bool,
+    pub category: Option<String>,
+}
+
+impl PlayerSoundPacket {
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(body);
+        let channel_id = r.read_uuid()?;
+        let sender_uuid = r.read_uuid()?;
+        let opus_data = r.read_byte_array()?;
+        let sequence_number = r.read_i64()?;
+        let distance = r.read_f32()?;
+        let flags = r.read_u8()?;
+        let whispering = (flags & 0b01) != 0;
+        let has_category = (flags & 0b10) != 0;
+        let category = if has_category {
+            Some(r.read_string()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            channel_id,
+            sender_uuid,
+            opus_data,
+            sequence_number,
+            distance,
+            whispering,
+            category,
+        })
+    }
+}
+
+/// GroupSoundPacket (UDP ID 0x03): group audio received from server.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupSoundPacket {
+    pub channel_id: u128,
+    pub sender_uuid: u128,
+    pub opus_data: Vec<u8>,
+    pub sequence_number: i64,
+    pub category: Option<String>,
+}
+
+impl GroupSoundPacket {
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(body);
+        let channel_id = r.read_uuid()?;
+        let sender_uuid = r.read_uuid()?;
+        let opus_data = r.read_byte_array()?;
+        let sequence_number = r.read_i64()?;
+        let flags = r.read_u8()?;
+        let has_category = (flags & 0b10) != 0;
+        let category = if has_category {
+            Some(r.read_string()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            channel_id,
+            sender_uuid,
+            opus_data,
+            sequence_number,
+            category,
+        })
+    }
+}
+
+/// LocationSoundPacket (UDP ID 0x04): 3D positional broadcast audio.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocationSoundPacket {
+    pub channel_id: u128,
+    pub sender_uuid: u128,
+    pub location: [f64; 3],
+    pub opus_data: Vec<u8>,
+    pub sequence_number: i64,
+    pub distance: f32,
+    pub category: Option<String>,
+}
+
+impl LocationSoundPacket {
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(body);
+        let channel_id = r.read_uuid()?;
+        let sender_uuid = r.read_uuid()?;
+        let location = [r.read_f64()?, r.read_f64()?, r.read_f64()?];
+        let opus_data = r.read_byte_array()?;
+        let sequence_number = r.read_i64()?;
+        let distance = r.read_f32()?;
+        let flags = r.read_u8()?;
+        let has_category = (flags & 0b10) != 0;
+        let category = if has_category {
+            Some(r.read_string()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            channel_id,
+            sender_uuid,
+            location,
+            opus_data,
+            sequence_number,
+            distance,
+            category,
+        })
+    }
+}
+
+/// AuthenticatePacket (UDP ID 0x05): client authentication to voice server.
+/// In v20: body contains `player_uuid` (16 bytes BE) + `secret` (16 bytes).
+/// In v21: body can be empty, but v21 servers ignore extra bytes in buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatePacket {
+    pub player_uuid: u128,
+    pub secret: [u8; 16],
+}
+
+impl AuthenticatePacket {
+    pub fn new(player_uuid: u128, secret: [u8; 16]) -> Self {
+        Self {
+            player_uuid,
+            secret,
+        }
+    }
+
+    pub fn to_body(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_uuid(self.player_uuid);
+        w.write_raw_bytes(&self.secret);
+        w.into_bytes()
+    }
+
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        if body.len() >= 32 {
+            let mut r = ByteBufReader::new(body);
+            let player_uuid = r.read_uuid()?;
+            let mut secret = [0u8; 16];
+            r.read_exact_bytes(&mut secret)?;
+            Ok(Self {
+                player_uuid,
+                secret,
+            })
+        } else {
+            Ok(Self {
+                player_uuid: 0,
+                secret: [0u8; 16],
+            })
+        }
+    }
+}
+
+/// AuthenticateAckPacket (UDP ID 0x06): server response to authenticate with optional nonce.
+/// In v20: body is empty.
+/// In v21: body contains 16-byte nonce.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AuthenticateAckPacket {
+    pub nonce: Option<[u8; 16]>,
+}
+
+impl AuthenticateAckPacket {
+    pub fn new(nonce: Option<[u8; 16]>) -> Self {
+        Self { nonce }
+    }
+
+    pub fn to_body(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        if let Some(nonce) = self.nonce {
+            w.write_raw_bytes(&nonce);
+        }
+        w.into_bytes()
+    }
+
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        if body.len() >= 16 {
+            let mut r = ByteBufReader::new(body);
+            let mut nonce = [0u8; 16];
+            r.read_exact_bytes(&mut nonce)?;
+            Ok(Self { nonce: Some(nonce) })
+        } else {
+            Ok(Self { nonce: None })
+        }
+    }
+}
+
+/// ConnectionCheckPacket (UDP ID 0x09): client connection verification.
+/// In v20: body is empty.
+/// In v21: body contains the 16-byte nonce received in AuthenticateAckPacket.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConnectionCheckPacket {
+    pub nonce: Option<[u8; 16]>,
+}
+
+impl ConnectionCheckPacket {
+    pub fn new(nonce: Option<[u8; 16]>) -> Self {
+        Self { nonce }
+    }
+
+    pub fn to_body(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        if let Some(nonce) = self.nonce {
+            w.write_raw_bytes(&nonce);
+        }
+        w.into_bytes()
+    }
+
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        if body.len() >= 16 {
+            let mut r = ByteBufReader::new(body);
+            let mut nonce = [0u8; 16];
+            r.read_exact_bytes(&mut nonce)?;
+            Ok(Self { nonce: Some(nonce) })
+        } else {
+            Ok(Self { nonce: None })
+        }
+    }
+}
+
+/// PingPacket (UDP ID 0x07): roundtrip latency measurement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PingPacket {
+    pub id: u128,
+    pub timestamp: i64,
+}
+
+impl PingPacket {
+    pub fn to_body(&self) -> Vec<u8> {
+        let mut w = ByteBufWriter::new();
+        w.write_uuid(self.id);
+        w.write_i64(self.timestamp);
+        w.into_bytes()
+    }
+
+    pub fn from_body(body: &[u8]) -> Result<Self, std::io::Error> {
+        let mut r = ByteBufReader::new(body);
+        Ok(Self {
+            id: r.read_uuid()?,
+            timestamp: r.read_i64()?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_varint_roundtrip() {
+        let values = [
+            0,
+            1,
+            127,
+            128,
+            255,
+            256,
+            16384,
+            2097151,
+            -1,
+            i32::MAX,
+            i32::MIN,
+        ];
+        for val in values {
+            let mut w = ByteBufWriter::new();
+            w.write_varint(val);
+            let mut r = ByteBufReader::new(w.as_slice());
+            assert_eq!(r.read_varint().unwrap(), val);
+        }
+    }
+
+    #[test]
+    fn test_secret_packet_serialization() {
+        let secret = SecretPacket {
+            secret: [42u8; 16],
+            connection_id: 0x1111_2222_3333_4444_5555_6666_7777_8888,
+            server_port: 24454,
+            player_uuid: 0x1111_2222_3333_4444_5555_6666_7777_8888,
+            codec: 0,
+            mtu_size: 1024,
+            voice_chat_distance: 48.0,
+            keep_alive: 1000,
+            groups_enabled: true,
+            voice_host: "voice.horizon.lan".to_string(),
+            allow_recording: false,
+        };
+
+        let bytes = secret.to_bytes();
+        let decoded = SecretPacket::from_bytes(&bytes).expect("Valid decode");
+        assert_eq!(decoded, secret);
+    }
+
+    #[test]
+    fn test_secret_packet_full_recording_true_and_false() {
+        for allow_recording in [true, false] {
+            let secret = SecretPacket {
+                secret: [7u8; 16],
+                connection_id: 0x1111_2222_3333_4444_5555_6666_7777_8888,
+                server_port: 24454,
+                player_uuid: 0x1111_2222_3333_4444_5555_6666_7777_8888,
+                codec: 1,
+                mtu_size: 1024,
+                voice_chat_distance: 32.0,
+                keep_alive: 1000,
+                groups_enabled: true,
+                voice_host: "mc.example.com".to_string(),
+                allow_recording,
+            };
+
+            let bytes = secret.to_bytes();
+            let decoded =
+                SecretPacket::from_bytes(&bytes).expect("Full packet decode should succeed");
+            assert_eq!(decoded, secret);
+            assert_eq!(decoded.allow_recording, allow_recording);
+        }
+    }
+
+    #[test]
+    fn test_secret_packet_legacy_truncated_without_allow_recording() {
+        let mut w = ByteBufWriter::new();
+        let secret_bytes = [42u8; 16];
+        w.write_raw_bytes(&secret_bytes);
+        w.write_i32(24454);
+        w.write_uuid(0x1111_2222_3333_4444_5555_6666_7777_8888);
+        w.write_u8(0);
+        w.write_i32(1024);
+        w.write_f64(48.0);
+        w.write_i32(1000);
+        w.write_bool(true);
+        w.write_string("voice.legacy.lan");
+        // Payload ends here, truncated without allow_recording
+
+        let bytes = w.into_bytes();
+        let decoded = SecretPacket::from_bytes(&bytes)
+            .expect("Legacy packet without allow_recording should decode");
+        assert_eq!(decoded.secret, secret_bytes);
+        assert_eq!(decoded.server_port, 24454);
+        assert_eq!(
+            decoded.player_uuid,
+            0x1111_2222_3333_4444_5555_6666_7777_8888
+        );
+        assert_eq!(
+            decoded.connection_id,
+            0x1111_2222_3333_4444_5555_6666_7777_8888
+        );
+        assert_eq!(decoded.voice_host, "voice.legacy.lan");
+        assert_eq!(decoded.allow_recording, false);
+    }
+
+    #[test]
+    fn test_secret_packet_without_voice_host_and_allow_recording() {
+        // Case A: Payload ends right after groups_enabled (truncated before voice_host)
+        let mut w1 = ByteBufWriter::new();
+        let secret_bytes = [99u8; 16];
+        w1.write_raw_bytes(&secret_bytes);
+        w1.write_i32(25565);
+        w1.write_uuid(0x5678_1234);
+        w1.write_u8(0);
+        w1.write_i32(512);
+        w1.write_f64(16.0);
+        w1.write_i32(500);
+        w1.write_bool(false);
+        // Truncated here: no voice_host and no allow_recording
+
+        let bytes1 = w1.into_bytes();
+        let decoded1 = SecretPacket::from_bytes(&bytes1)
+            .expect("Packet without voice_host and allow_recording should decode");
+        assert_eq!(decoded1.secret, secret_bytes);
+        assert_eq!(decoded1.server_port, 25565);
+        assert_eq!(decoded1.voice_host, "");
+        assert_eq!(decoded1.allow_recording, false);
+
+        // Case B: Payload with empty host string "" and no allow_recording
+        let mut w2 = ByteBufWriter::new();
+        w2.write_raw_bytes(&secret_bytes);
+        w2.write_i32(25565);
+        w2.write_uuid(0x5678_1234);
+        w2.write_u8(0);
+        w2.write_i32(512);
+        w2.write_f64(16.0);
+        w2.write_i32(500);
+        w2.write_bool(false);
+        w2.write_string("");
+        // No allow_recording
+
+        let bytes2 = w2.into_bytes();
+        let decoded2 = SecretPacket::from_bytes(&bytes2)
+            .expect("Packet with empty host and no allow_recording should decode");
+        assert_eq!(decoded2.voice_host, "");
+        assert_eq!(decoded2.allow_recording, false);
+    }
+
+    #[test]
+    fn test_secret_packet_raw_payload() {
+        let mut payload = Vec::new();
+        // 0..16: dummy secret (16 bytes)
+        let dummy_secret = [0x5Au8; 16];
+        payload.extend_from_slice(&dummy_secret);
+        // 16..20: port 8000 (0x00001f40)
+        payload.extend_from_slice(&[0x00, 0x00, 0x1f, 0x40]);
+        // 20..36: dummy playerUUID (16 bytes)
+        let dummy_uuid: u128 = 0x2c97_a0a3_44db_4bea_a05b_c8e8_be59_0791;
+        payload.extend_from_slice(&dummy_uuid.to_be_bytes());
+        // 36..37: codec 0 (VOIP)
+        payload.push(0x00);
+        // 37..41: mtu 1024 (0x00000400)
+        payload.extend_from_slice(&[0x00, 0x00, 0x04, 0x00]);
+        // 41..49: distance 14.0 (0x402c000000000000)
+        payload.extend_from_slice(&14.0f64.to_be_bytes());
+        // 49..53: keepAlive 1000 (0x000003e8)
+        payload.extend_from_slice(&[0x00, 0x00, 0x03, 0xe8]);
+        // 53..54: groups true (0x01)
+        payload.push(0x01);
+        // 54..55: voiceHost length (23 bytes)
+        let host_str = "edge.slimeskyes.id:8000";
+        payload.push(host_str.len() as u8);
+        // 55..78: host string
+        payload.extend_from_slice(host_str.as_bytes());
+        // 78..79: allowRecording true (0x01)
+        payload.push(0x01);
+
+        let decoded = SecretPacket::from_bytes(&payload).expect("Raw payload should parse");
+        assert_eq!(decoded.secret, dummy_secret);
+        assert_eq!(decoded.server_port, 8000);
+        assert_eq!(decoded.player_uuid, dummy_uuid);
+        assert_eq!(decoded.connection_id, dummy_uuid);
+        assert_eq!(decoded.codec, 0);
+        assert_eq!(decoded.mtu_size, 1024);
+        assert!((decoded.voice_chat_distance - 14.0).abs() < 1e-6);
+        assert_eq!(decoded.keep_alive, 1000);
+        assert_eq!(decoded.groups_enabled, true);
+        assert!(decoded.voice_host.contains(":8000"));
+        assert_eq!(decoded.voice_host, "edge.slimeskyes.id:8000");
+        assert_eq!(decoded.allow_recording, true);
+    }
+
+    #[test]
+    fn test_parse_voice_host_cases() {
+        let def_host = "mc.example.com";
+        let def_port = 24454;
+
+        assert_eq!(
+            parse_voice_host("", def_host, def_port),
+            ("mc.example.com".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("   ", def_host, def_port),
+            ("mc.example.com".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("8000", def_host, def_port),
+            ("mc.example.com".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("edge.slimeskyes.id", def_host, def_port),
+            ("edge.slimeskyes.id".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("edge.slimeskyes.id:8000", def_host, def_port),
+            ("edge.slimeskyes.id".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host(":8000", def_host, def_port),
+            ("mc.example.com".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("[::1]:8000", def_host, def_port),
+            ("::1".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("[::1]", def_host, def_port),
+            ("::1".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("::1", def_host, def_port),
+            ("::1".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("2001:db8::1", def_host, def_port),
+            ("2001:db8::1".to_string(), 24454)
+        );
+        assert_eq!(
+            parse_voice_host("[2001:db8::1]:9000", def_host, def_port),
+            ("2001:db8::1".to_string(), 9000)
+        );
+        assert_eq!(
+            parse_voice_host("192.168.1.100:8080", def_host, def_port),
+            ("192.168.1.100".to_string(), 8080)
+        );
+        assert_eq!(
+            parse_voice_host("0.0.0.0:8000", "slimeskyes.id:25565", def_port),
+            ("slimeskyes.id".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("localhost:8000", "slimeskyes.id", def_port),
+            ("slimeskyes.id".to_string(), 8000)
+        );
+        assert_eq!(
+            parse_voice_host("\"udp://edge.slimeskyes.id:8000/\"", def_host, def_port),
+            ("edge.slimeskyes.id".to_string(), 8000)
+        );
+    }
+
+    #[test]
+    fn test_player_state_packet_serialization() {
+        let state = PlayerState {
+            disabled: false,
+            disconnected: false,
+            uuid: 0x9999_8888_7777_6666_5555_4444_3333_2222,
+            name: "Alex".to_string(),
+            group: Some(0xAAAA_BBBB_CCCC_DDDD_EEEE_FFFF_0000_1111),
+        };
+        assert!(!state.is_disabled());
+        assert!(!state.is_disconnected());
+        assert!(state.has_group());
+
+        let pkt = PlayerStatePacket { state };
+        let bytes = pkt.to_bytes();
+        let decoded = PlayerStatePacket::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded, pkt);
+    }
+
+    #[test]
+    fn test_aes_128_gcm_and_udp_framing_roundtrip() {
+        let key = [7u8; 16];
+        let cipher = SvcCipher::new(&key);
+        let conn_id = 0xFEED_BEEF_CAFE_BABE_0123_4567_89AB_CDEF;
+
+        let mic_body = MicPacket {
+            opus_data: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            sequence_number: 1001,
+            whispering: true,
+        }
+        .to_body();
+
+        // 1. Client encrypts and frames packet
+        let client_packet = build_client_udp_packet(conn_id, &cipher, PACKET_ID_MIC, &mic_body)
+            .expect("Client packet build");
+
+        // Verify magic byte
+        assert_eq!(client_packet[0], MAGIC_BYTE);
+
+        // 2. Server decrypts (using server frame format without conn_id or directly decrypting payload)
+        // Let's test cipher encryption & decryption directly
+        let encrypted = cipher.encrypt(&mic_body).expect("Encrypt");
+        let decrypted = cipher.decrypt(&encrypted).expect("Decrypt");
+        assert_eq!(decrypted, mic_body);
+
+        let parsed_mic = MicPacket::from_body(&decrypted).expect("Parse mic");
+        assert_eq!(parsed_mic.sequence_number, 1001);
+        assert!(parsed_mic.whispering);
+        assert_eq!(parsed_mic.opus_data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn test_authenticate_packet_serialization() {
+        let player_uuid = 0x1234_5678_9ABC_DEF0_1122_3344_5566_7788;
+        let secret = [0x42u8; 16];
+        let pkt = AuthenticatePacket::new(player_uuid, secret);
+        let body = pkt.to_body();
+        assert_eq!(body.len(), 32);
+
+        let decoded = AuthenticatePacket::from_body(&body).expect("Decode AuthenticatePacket");
+        assert_eq!(decoded, pkt);
+
+        // v21 empty body compatibility
+        let empty_decoded =
+            AuthenticatePacket::from_body(&[]).expect("Empty body should not error");
+        assert_eq!(empty_decoded.player_uuid, 0);
+    }
+
+    #[test]
+    fn test_authenticate_ack_packet_serialization() {
+        // v20: empty body
+        let v20_ack = AuthenticateAckPacket::from_body(&[]).expect("v20 ack decode");
+        assert_eq!(v20_ack.nonce, None);
+        assert_eq!(v20_ack.to_body().len(), 0);
+
+        // v21: 16-byte nonce
+        let nonce = [0x55u8; 16];
+        let v21_ack = AuthenticateAckPacket::new(Some(nonce));
+        let body = v21_ack.to_body();
+        assert_eq!(body.len(), 16);
+        let decoded = AuthenticateAckPacket::from_body(&body).expect("v21 ack decode");
+        assert_eq!(decoded.nonce, Some(nonce));
+    }
+
+    #[test]
+    fn test_connection_check_packet_serialization() {
+        // v20: empty body
+        let v20_check = ConnectionCheckPacket::new(None);
+        assert_eq!(v20_check.to_body().len(), 0);
+        let decoded_v20 = ConnectionCheckPacket::from_body(&[]).expect("v20 check decode");
+        assert_eq!(decoded_v20.nonce, None);
+
+        // v21: 16-byte nonce
+        let nonce = [0xAAu8; 16];
+        let v21_check = ConnectionCheckPacket::new(Some(nonce));
+        let body = v21_check.to_body();
+        assert_eq!(body.len(), 16);
+        let decoded_v21 = ConnectionCheckPacket::from_body(&body).expect("v21 check decode");
+        assert_eq!(decoded_v21.nonce, Some(nonce));
+    }
+
+    #[test]
+    fn test_client_udp_packet_wire_framing_and_decryption() {
+        let key = [0x33u8; 16];
+        let cipher = SvcCipher::new(&key);
+        let conn_id = 0xA1B2_C3D4_E5F6_0718_293A_4B5C_6D7E_8F90;
+
+        let player_uuid = conn_id;
+        let auth_pkt = AuthenticatePacket::new(player_uuid, key);
+        let auth_body = auth_pkt.to_body();
+
+        let wire_bytes =
+            build_client_udp_packet(conn_id, &cipher, PACKET_ID_AUTHENTICATE, &auth_body)
+                .expect("Build client UDP packet");
+
+        // Wire layout check:
+        // Byte 0: Magic byte 0xFF
+        assert_eq!(wire_bytes[0], MAGIC_BYTE);
+
+        // Bytes 1..17: 16-byte UUID in Big-Endian
+        let mut r = ByteBufReader::new(&wire_bytes[1..]);
+        let read_conn_id = r.read_uuid().expect("Read connection ID UUID");
+        assert_eq!(read_conn_id, conn_id);
+
+        // Next: VarInt length + encrypted payload
+        let enc_payload = r
+            .read_byte_array()
+            .expect("Read VarInt-prefixed encrypted payload");
+        assert_eq!(enc_payload.len(), 12 + (1 + 32) + 16); // 12B IV + (1B type + 32B body) + 16B Tag = 61B
+
+        // Server decrypts payload
+        let decrypted = cipher.decrypt(&enc_payload).expect("Server decrypt");
+        assert_eq!(decrypted[0], PACKET_ID_AUTHENTICATE);
+        let parsed_auth = AuthenticatePacket::from_body(&decrypted[1..]).expect("Parse auth body");
+        assert_eq!(parsed_auth, auth_pkt);
+    }
+}

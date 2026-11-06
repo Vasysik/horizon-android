@@ -26,6 +26,7 @@ pub mod command_block;
 pub mod containers;
 pub mod crash;
 pub mod datapack;
+pub mod device_tier;
 pub mod dynamic_light;
 pub mod effects;
 pub mod environment;

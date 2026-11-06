@@ -221,6 +221,19 @@ impl Game<'_> {
             self.boats[i] = b;
             // In front of a mob that shares the boat.
             Some(self.player_boat_seat(i))
+        } else if let Some(seat_pos) = self.remote_stand_seat(id) {
+            Some(seat_pos)
+        } else if let Some(i) = self.interactions.get(&(id as i32)) {
+            // Modern Paper/Spigot GSit Interaction seat entity (+0.5 above stair base)
+            Some(Vec3::new(i.position.x, i.position.y + 0.5, i.position.z))
+        } else if let Some((kind, pos)) = self.remote.as_ref().and_then(|r| r.tracked(id as i32)) {
+            // AreaEffectCloud or other tracked non-living seat entity
+            let lift = if kind == "minecraft:area_effect_cloud" {
+                0.5
+            } else {
+                0.5
+            };
+            Some(Vec3::new(pos[0], pos[1] + lift, pos[2]))
         } else {
             // A minecart: the server moves it, the rider sits in it.
             let cart = self.carts.iter().find(|c| c.id == id).map(|c| {
@@ -245,6 +258,55 @@ impl Game<'_> {
             p.fall_distance = 0.0;
         }
         true
+    }
+
+    /// Seat position for an armor stand (including GSit seats riding another player or entity).
+    fn remote_stand_seat(&mut self, id: u32) -> Option<Vec3> {
+        let i = self.armor_stands.iter().position(|a| a.id == id)?;
+        let vehicle = self.armor_stands[i].vehicle;
+        let marker = self.armor_stands[i].marker;
+        let small = self.armor_stands[i].small;
+        let invisible = self.armor_stands[i].invisible;
+        let mut pos = self.armor_stands[i].position;
+        // If the armor stand is a passenger of another entity (e.g. GSit player sit: Player B -> ArmorStand -> Me),
+        // resolve the host vehicle's attachment point so the seat tracks the host entity smoothly every tick.
+        if let Some(vehicle_id) = vehicle {
+            if let Some(m) = self.mobs.iter().find(|m| m.id == vehicle_id) {
+                pos = horizon_client::mobs::riders::seat(
+                    horizon_client::mobs::riders::passenger_attachment(m),
+                    0.0,
+                    m.position,
+                    m.yaw,
+                );
+                self.armor_stands[i].position = pos;
+            } else if let Some(b) = self.boats.iter().find(|b| b.id == vehicle_id) {
+                pos = b.seat(0, 1, false, 0.0, false);
+                self.armor_stands[i].position = pos;
+            } else if let Some(c) = self.carts.iter().find(|c| c.id == vehicle_id) {
+                pos = c
+                    .position
+                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
+                self.armor_stands[i].position = pos;
+            } else if let Some((_, tracked_pos)) = self
+                .remote
+                .as_ref()
+                .and_then(|r| r.tracked(vehicle_id as i32))
+            {
+                pos = Vec3::new(tracked_pos[0], tracked_pos[1], tracked_pos[2]);
+                self.armor_stands[i].position = pos;
+            }
+        }
+        let seat_y = if vehicle.is_some() {
+            // Seated atop an entity/player: pos is already the host's passenger attachment point.
+            pos.y
+        } else if marker || invisible || small {
+            // GSit seat on stairs/blocks: elevated by +0.5 to place body and camera on the stair tread.
+            pos.y + 0.5
+        } else {
+            // Full-size visible standalone ArmorStand.
+            pos.y + 1.975 - 0.6
+        };
+        Some(Vec3::new(pos.x, seat_y, pos.z))
     }
 
     /// `LocalPlayer.tick` for a passenger: the boat it controls goes to the

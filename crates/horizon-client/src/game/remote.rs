@@ -549,7 +549,7 @@ pub(super) struct Remote {
     players: HashMap<u128, String>,
     /// `ClientPacketListener.playerInfoMap` as player-list entries, and
     /// which of them are listed.
-    tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
+    pub(crate) tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
     /// Each listed profile's unpacked `textures` property.
     skin_textures: HashMap<u128, horizon_client::skins::Textures>,
     /// Active skin and cape from the services profile when the server sent none.
@@ -2889,6 +2889,9 @@ impl Game<'_> {
             C::CustomPayload(p) if p.channel == horizon_protocol::mod_net::CHANNEL => {
                 self.remote_native_net(&p.data);
             }
+            C::CustomPayload(p) if p.channel.starts_with("voicechat:") => {
+                self.remote_voicechat_payload(&p.channel, &p.data);
+            }
             // PingDebugMonitor.onPongReceived.
             C::PongResponse(p) => {
                 let delay = self.debug_millis() - p.time;
@@ -2937,6 +2940,7 @@ impl Game<'_> {
                 }
                 self.send(S::ClientInformation(info));
                 self.remote_chat_login();
+                self.initiate_voice_handshake();
             }
             C::Respawn(p) => {
                 // A new player, without effects (the server sends them
@@ -5115,6 +5119,81 @@ impl Game<'_> {
     pub(super) fn face_skin(&mut self, uuid: u128, skin: &str) -> String {
         self.drawn_skin(uuid, (skin.to_owned(), false)).0
     }
+
+    /// Resolves real player Gamertag and custom skin texture for Voice Chat UI.
+    /// Handles Offline-Mode servers and SkinsRestorer via UUID and name fallback.
+    pub(crate) fn voice_player_name_and_skin(
+        &mut self,
+        uuid_u128: u128,
+        known_name: &str,
+    ) -> (String, (String, bool)) {
+        let mut matched_uuid = uuid_u128;
+        let mut resolved_name: Option<String> = None;
+        let mut custom_skin: Option<(String, bool)> = None;
+
+        if let Some(r) = self.remote.as_ref() {
+            // Step 1: Look up by UUID in tab_players and players
+            if let Some(tp) = r.tab_players.get(&uuid_u128) {
+                resolved_name = Some(tp.name.clone());
+                if let Some(s) = r.skins.get(&uuid_u128) {
+                    custom_skin = Some((s.clone(), s.contains("/slim/")));
+                }
+            } else if let Some(pname) = r.players.get(&uuid_u128) {
+                resolved_name = Some(pname.clone());
+                if let Some(s) = r.skins.get(&uuid_u128) {
+                    custom_skin = Some((s.clone(), s.contains("/slim/")));
+                }
+            }
+
+            // Step 2: Fallback for Offline Mode / SkinsRestorer
+            // If custom skin is missing or name is placeholder, search by Gamertag
+            let should_fallback = custom_skin.is_none()
+                || resolved_name
+                    .as_ref()
+                    .is_some_and(|n| n.starts_with("Player "));
+            if should_fallback && !known_name.is_empty() && !known_name.starts_with("Player ") {
+                if let Some((&u, tp)) = r
+                    .tab_players
+                    .iter()
+                    .find(|(_, tp)| tp.name.eq_ignore_ascii_case(known_name))
+                {
+                    matched_uuid = u;
+                    resolved_name = Some(tp.name.clone());
+                    if let Some(s) = r.skins.get(&u) {
+                        custom_skin = Some((s.clone(), s.contains("/slim/")));
+                    }
+                } else if let Some((&u, pname)) = r
+                    .players
+                    .iter()
+                    .find(|(_, n)| n.eq_ignore_ascii_case(known_name))
+                {
+                    matched_uuid = u;
+                    resolved_name = Some(pname.clone());
+                    if let Some(s) = r.skins.get(&u) {
+                        custom_skin = Some((s.clone(), s.contains("/slim/")));
+                    }
+                }
+            }
+        }
+
+        let final_name = resolved_name
+            .filter(|n| !n.is_empty() && !n.starts_with("Player "))
+            .unwrap_or_else(|| {
+                if !known_name.is_empty() {
+                    known_name.to_string()
+                } else {
+                    format!("Player {:04x}", (uuid_u128 & 0xFFFF) as u16)
+                }
+            });
+
+        let raw_skin = custom_skin.unwrap_or_else(|| {
+            let def = horizon_client::tab_list::default_skin(matched_uuid);
+            (def.to_owned(), def.contains("/slim/"))
+        });
+
+        let drawn = self.drawn_skin(matched_uuid, raw_skin);
+        (final_name, drawn)
+    }
     /// ChatType.Bound.decorate (`Decoration::Chat`) and `decorateNarration`
     /// (`Decoration::Narration`): the chat type's decoration from the
     /// server's registry, applied to `content`.
@@ -5431,6 +5510,7 @@ impl Game<'_> {
         self.native_net.to_server = 0;
         self.native_tick();
         self.tick_chat_session();
+        self.tick_voice_chat();
         // Minecraft.tick sends this even when the player cannot tick yet,
         // including while waiting for chunks. Keep it outside early returns.
         if self.remote.as_ref().is_some_and(|r| r.joined) {
@@ -9143,6 +9223,162 @@ impl Game<'_> {
             "decode_errors": r.decode_errors,
             "chat": r.chat.iter().rev().take(10).rev().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
         }))
+    }
+
+    pub(super) fn remote_voicechat_payload(&mut self, channel: &str, data: &[u8]) {
+        match self.voice.handle_custom_payload(channel, data) {
+            Ok(Some((resp_channel, resp_data))) => {
+                self.send(S::CustomPayload(
+                    horizon_protocol::packets::configuration::CustomPayload {
+                        channel: resp_channel,
+                        data: resp_data,
+                    },
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("SVC: Failed to handle voicechat payload on {channel}: {e}");
+            }
+        }
+    }
+
+    pub(super) fn initiate_voice_handshake(&mut self) {
+        if let Some(r) = self.remote.as_ref() {
+            let addr = &r.session.address;
+            let host = addr.split(':').next().unwrap_or(addr);
+            self.voice.set_server_host(host);
+        }
+        let (ch, data) = self.voice.initiate_handshake();
+        self.send(S::CustomPayload(
+            horizon_protocol::packets::configuration::CustomPayload { channel: ch, data },
+        ));
+    }
+
+    pub(super) fn tick_voice_chat(&mut self) {
+        if self.server_packs.is_busy() || self.pack_reload.is_some() {
+            self.voice.delay_handshake_timer();
+        }
+        if let Some((ch, data)) = self.voice.check_handshake_timeout() {
+            self.send(S::CustomPayload(
+                horizon_protocol::packets::configuration::CustomPayload { channel: ch, data },
+            ));
+        }
+        if let Some(r) = self.remote.as_ref() {
+            for (&u128_val, info) in r.tab_players.iter() {
+                self.voice
+                    .register_known_player(u128_val, info.name.clone());
+            }
+            for (&u128_val, name) in r.players.iter() {
+                self.voice.register_known_player(u128_val, name.clone());
+            }
+            for (&_eid, &u) in self.persist.uuids.iter() {
+                let u128_val = horizon_client::lan::playerdata::ints_uuid(u);
+                let player_name = r
+                    .tab_players
+                    .get(&u128_val)
+                    .map(|p| p.name.clone())
+                    .or_else(|| r.players.get(&u128_val).cloned())
+                    .unwrap_or_default();
+                self.voice.register_known_player(u128_val, player_name);
+            }
+        }
+        let listener_pos = self.view.eye;
+        let listener_yaw = self.yaw;
+        let uuids = &self.persist.uuids;
+        let remote_ref = self.remote.as_ref();
+        let gamertag_map: std::collections::HashMap<u128, String> = self
+            .voice
+            .player_states
+            .iter()
+            .map(|(&u, st)| (u, st.name.clone()))
+            .chain(self.voice.known_players.iter().cloned())
+            .collect();
+
+        self.voice
+            .tick_audio(listener_pos, listener_yaw, |sender_uuid| {
+                let r = remote_ref?;
+                let target_u = [
+                    (sender_uuid >> 96) as i32,
+                    (sender_uuid >> 64) as i32,
+                    (sender_uuid >> 32) as i32,
+                    sender_uuid as i32,
+                ];
+
+                // Stage 1: Match by exact UUID across all alive entities in r.entities, pick the closest
+                let mut best_pos: Option<([f64; 3], f64)> = None;
+                for (&eid, &u) in uuids.iter() {
+                    if u == target_u {
+                        if let Some(tracked) = r.entities.get(&(eid as i32)) {
+                            let mut p = tracked.position;
+                            p[1] += 1.62;
+                            let d2 = (p[0] - listener_pos[0]).powi(2)
+                                + (p[1] - listener_pos[1]).powi(2)
+                                + (p[2] - listener_pos[2]).powi(2);
+                            if best_pos.map_or(true, |(_, best_d2)| d2 < best_d2) {
+                                best_pos = Some((p, d2));
+                            }
+                        }
+                    }
+                }
+                if let Some((pos, _)) = best_pos {
+                    return Some(pos);
+                }
+
+                // Stage 2: Fallback for Offline-Mode / Proxy servers where sender_uuid differs from world entity UUID
+                if let Some(sender_name) = gamertag_map
+                    .get(&sender_uuid)
+                    .filter(|n| !n.is_empty() && !n.starts_with("Player "))
+                {
+                    let matched_u128 = r
+                        .tab_players
+                        .iter()
+                        .find_map(|(&u, tp)| {
+                            if tp.name.eq_ignore_ascii_case(sender_name) {
+                                Some(u)
+                            } else {
+                                None
+                            }
+                        })
+                        .or_else(|| {
+                            r.players.iter().find_map(|(&u, pname)| {
+                                if pname.eq_ignore_ascii_case(sender_name) {
+                                    Some(u)
+                                } else {
+                                    None
+                                }
+                            })
+                        });
+
+                    if let Some(world_uuid) = matched_u128 {
+                        let world_u = [
+                            (world_uuid >> 96) as i32,
+                            (world_uuid >> 64) as i32,
+                            (world_uuid >> 32) as i32,
+                            world_uuid as i32,
+                        ];
+                        let mut best_fallback: Option<([f64; 3], f64)> = None;
+                        for (&eid, &u) in uuids.iter() {
+                            if u == world_u {
+                                if let Some(tracked) = r.entities.get(&(eid as i32)) {
+                                    let mut p = tracked.position;
+                                    p[1] += 1.62;
+                                    let d2 = (p[0] - listener_pos[0]).powi(2)
+                                        + (p[1] - listener_pos[1]).powi(2)
+                                        + (p[2] - listener_pos[2]).powi(2);
+                                    if best_fallback.map_or(true, |(_, best_d2)| d2 < best_d2) {
+                                        best_fallback = Some((p, d2));
+                                    }
+                                }
+                            }
+                        }
+                        if let Some((pos, _)) = best_fallback {
+                            return Some(pos);
+                        }
+                    }
+                }
+
+                None
+            });
     }
 }
 

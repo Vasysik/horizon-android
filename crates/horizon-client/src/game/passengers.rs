@@ -263,9 +263,10 @@ impl Game<'_> {
             return Some(glam::DVec3::new(at.x, at.y, at.z));
         }
         if let Some(a) = self.armor_stands.iter().find(|a| a.id == vehicle) {
-            // ArmorStand.getDefaultDimensions: a marker has no box to sit on.
-            let height = if a.marker {
-                0.0
+            // ArmorStand.getDefaultDimensions: marker/invisible seat entities (e.g. GSit)
+            // use +0.5 sitting offset so passengers rest on top of stair/block treads.
+            let height = if a.marker || a.invisible {
+                0.5
             } else if a.small {
                 0.9875
             } else {
@@ -277,6 +278,14 @@ impl Game<'_> {
                 a.position.z,
             ));
         }
+        if let Some(i) = self.interactions.get(&(vehicle as i32)) {
+            // Modern Paper/Spigot GSit Interaction seat entity (+0.5 above stair base)
+            return Some(glam::DVec3::new(
+                i.position.x,
+                i.position.y + 0.5,
+                i.position.z,
+            ));
+        }
         // Any other tracked entity sits on its feet; an area effect cloud is
         // 0.5 tall, and ModelEngine parks a model's pivot half a block below
         // its feet for exactly that.
@@ -284,7 +293,7 @@ impl Game<'_> {
         let lift = if kind == "minecraft:area_effect_cloud" {
             0.5
         } else {
-            0.0
+            0.5
         };
         Some(glam::DVec3::new(
             position[0],
