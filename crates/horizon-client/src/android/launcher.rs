@@ -36,6 +36,9 @@ struct PreparedAccount {
 }
 pub(super) struct Launcher {
     home: PathBuf,
+    direct_play: bool,
+    direct_started: bool,
+    direct_session: Option<PathBuf>,
     controller_edges: horizon_client::gamepad::Edges,
     controller_repeat: Option<(horizon_client::gamepad::Button, Instant, bool)>,
     window: Option<Arc<Window>>,
@@ -114,9 +117,17 @@ impl Launcher {
         }
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
+        let direct_play = crate::platform::intent_string("horizon.direct_play")
+            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
+        let direct_session = crate::platform::intent_string("horizon.session_file")
+            .map(PathBuf::from)
+            .filter(|path| path.is_file());
         Self {
             wardrobe: wardrobe::Wardrobe::new(&home),
             home,
+            direct_play,
+            direct_started: false,
+            direct_session,
             controller_edges: Default::default(),
             controller_repeat: None,
             window: None,
@@ -184,6 +195,10 @@ impl Launcher {
         self.catalog.page = Page::Play;
         if let Ok(message) = std::fs::read_to_string(self.home.join("android-error.txt")) {
             self.error = Some(message);
+        }
+        if self.direct_play {
+            events.exit();
+            return;
         }
         if let Err(error) = self.open(events) {
             self.fail(error);
@@ -278,6 +293,17 @@ impl Launcher {
             return Ok(());
         }
         if self.login.pending() {
+            return Ok(());
+        }
+        if self.direct_play && !self.session_ready {
+            if let Some(session) = self.direct_session.take() {
+                self.prepared_session = Some(session);
+                self.session_ready = true;
+            }
+        }
+        if self.direct_play && !horizon_client::official_install::ready(&self.home) {
+            self.fail("Minecraft 26.3 is not installed. Download it from the launcher first.");
+            events.exit();
             return Ok(());
         }
         crate::diagnostics::heartbeat(
@@ -456,6 +482,13 @@ impl ApplicationHandler for Launcher {
         if let Err(error) = self.open(events) {
             self.fail(error);
             events.exit();
+        }
+        if self.direct_play && !self.direct_started && self.game.is_none() {
+            self.direct_started = true;
+            if let Err(error) = self.action(events) {
+                self.fail(error);
+                events.exit();
+            }
         }
     }
     fn suspended(&mut self, events: &ActiveEventLoop) {
