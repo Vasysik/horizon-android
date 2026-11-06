@@ -1560,8 +1560,11 @@ impl PhysicalDeviceProperties {
             crate::auxil::db::nvidia::VENDOR,
             crate::auxil::db::amd::VENDOR,
             crate::auxil::db::imgtec::VENDOR,
+            0x13b5, // ARM (Mali)
+            0x5143, // Qualcomm (Adreno)
         ]
-        .contains(&self.properties.vendor_id);
+        .contains(&self.properties.vendor_id)
+            || cfg!(target_os = "android");
         let ignore_max_fragment_combined_output_resources_by_driver =
             self.is_driver(vk::DriverId::MESA_AGXV);
         let ignore_max_fragment_combined_output_resources =

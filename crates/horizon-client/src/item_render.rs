@@ -484,9 +484,9 @@ pub struct ItemRenderer {
     sprites: FileSprites,
     baked: Mutex<HashMap<String, Arc<BakedItemModel>>>,
     extents: Mutex<HashMap<String, Arc<Vec<Vec3>>>>,
-    /// GUI items already drawn: the HUD vertices of a static item at a GUI position
-    /// (`gui::draw`), which are the same every frame it stays there.
-    pub(crate) gui_drawn: Mutex<HashMap<gui::DrawnKey, Arc<[crate::hud::HudVertex]>>>,
+    /// GUI items already drawn: the HUD vertices (and any animated glint quad UVs)
+    /// of an item at a GUI position (`gui::draw`), reused across frames.
+    pub(crate) gui_drawn: Mutex<HashMap<gui::DrawnKey, Arc<gui::GuiCachedItem>>>,
     /// Entity model layers of the special renderers.
     parts: HashMap<String, ModelPart>,
     /// `colormap/grass.png` as ARGB.
@@ -786,6 +786,22 @@ pub fn tag_json(tag: &Tag) -> Value {
 }
 /// The resolver's view of a client stack: its item, count and component patch.
 pub fn stack_view(stack: &crate::items::ItemStack) -> StackView {
+    if stack.damage == 0 && stack.extra.is_none() {
+        return StackView::new(&stack.item, stack.count as i32);
+    }
+    thread_local! {
+        static CACHE: std::cell::RefCell<Vec<(crate::items::ItemStack, StackView)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    if let Some(hit) = CACHE.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|(s, _)| s == stack)
+            .map(|(_, v)| v.clone())
+    }) {
+        return hit;
+    }
     let mut view = StackView::new(&stack.item, stack.count as i32);
     view.bundle_selected = stack.data().map_or(-1, |d| d.bundle_selected.0);
     if let Some(Tag::Compound(c)) = crate::item_data::components_tag(stack.damage, stack.data()) {
@@ -797,6 +813,13 @@ pub fn stack_view(stack: &crate::items::ItemStack) -> StackView {
             };
         }
     }
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= 128 {
+            cache.clear();
+        }
+        cache.push((stack.clone(), view.clone()));
+    });
     view
 }
 

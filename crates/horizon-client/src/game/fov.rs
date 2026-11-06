@@ -138,6 +138,9 @@ impl Game<'_> {
     /// The pose `GameRenderer.renderLevel` multiplies into the projection:
     /// `bobHurt`, then `bobView` with the View Bobbing option.
     pub(super) fn bob_matrix(&self, partial: f32) -> glam::Mat4 {
+        if horizon_client::ui_theme::motion::game_animations_disabled() {
+            return glam::Mat4::IDENTITY;
+        }
         let Some(p) = self.player.as_ref() else {
             return glam::Mat4::IDENTITY;
         };

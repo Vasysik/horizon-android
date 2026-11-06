@@ -135,7 +135,9 @@ impl Game<'_> {
                     // Drop/join only after completion; leave_server's teardown
                     // can then run without blocking on the server's writes.
                     if save.quit {
-                        self.integrated.take().unwrap().stop()?;
+                        if let Some(server) = self.integrated.take() {
+                            server.stop()?;
+                        }
                     } else {
                         self.leave_server(None)?;
                     }

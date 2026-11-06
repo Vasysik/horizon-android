@@ -4,6 +4,8 @@ pub struct Sample {
     pub action: u32,
     pub x: f64,
     pub y: f64,
+    pub rel_x: f64,
+    pub rel_y: f64,
     pub wheel: (f32, f32),
     pub buttons: u32,
     pub relative: bool,
@@ -24,13 +26,15 @@ pub enum Event {
 pub struct MouseState {
     buttons: u32,
     inside: bool,
+    x: Option<f64>,
+    y: Option<f64>,
     touchpad_at: Option<(f64, f64)>,
 }
 
 impl MouseState {
     pub fn update(&mut self, sample: Sample) -> Vec<Event> {
         let mut events = Vec::new();
-        let ending = matches!(sample.action, 3 | 10);
+        let ending = sample.action == 3;
         if !ending && (!sample.x.is_finite() || !sample.y.is_finite()) {
             return events;
         }
@@ -40,6 +44,8 @@ impl MouseState {
                 events.push(Event::Leave);
             }
             self.inside = false;
+            self.x = None;
+            self.y = None;
             self.touchpad_at = None;
             return events;
         }
@@ -59,10 +65,31 @@ impl MouseState {
                 Some((sample.x, sample.y))
             };
         } else if sample.relative {
-            if sample.action == 2 && (sample.x != 0.0 || sample.y != 0.0) {
-                events.push(Event::Relative(sample.x, sample.y));
+            self.x = None;
+            self.y = None;
+            if matches!(sample.action, 2 | 7) {
+                let (dx, dy) = if sample.x != 0.0 || sample.y != 0.0 {
+                    (sample.x, sample.y)
+                } else {
+                    (sample.rel_x, sample.rel_y)
+                };
+                if dx != 0.0 || dy != 0.0 {
+                    events.push(Event::Relative(dx, dy));
+                }
             }
         } else {
+            if sample.rel_x != 0.0 || sample.rel_y != 0.0 {
+                events.push(Event::Relative(sample.rel_x, sample.rel_y));
+            } else if matches!(sample.action, 2 | 7) {
+                if let (Some(px), Some(py)) = (self.x, self.y) {
+                    let (dx, dy) = (sample.x - px, sample.y - py);
+                    if dx != 0.0 || dy != 0.0 {
+                        events.push(Event::Relative(dx, dy));
+                    }
+                }
+            }
+            self.x = Some(sample.x);
+            self.y = Some(sample.y);
             events.push(Event::Position(sample.x, sample.y));
         }
         let buttons = if sample.action == 1 {
@@ -105,6 +132,8 @@ mod tests {
             buttons,
             x: 100.0,
             y: 200.0,
+            rel_x: 0.0,
+            rel_y: 0.0,
             wheel: (0.0, 0.0),
             relative: false,
             touchpad: false,
@@ -125,6 +154,15 @@ mod tests {
         assert!(state
             .update(sample(1, 0))
             .contains(&Event::Button(1, false)));
+    }
+    #[test]
+    fn hover_exit_does_not_synthesize_leave_or_release_buttons() {
+        let mut state = MouseState::default();
+        state.update(sample(7, 0));
+        state.update(sample(0, 1));
+        let hover_exit = state.update(sample(10, 1));
+        assert!(!hover_exit.contains(&Event::Leave));
+        assert!(!hover_exit.contains(&Event::Button(1, false)));
     }
     #[test]
     fn simultaneous_buttons_release_independently_and_cancel_clears_all() {
@@ -151,6 +189,17 @@ mod tests {
         assert_eq!(
             state.update(relative),
             [Event::Enter, Event::Relative(9000.0, -8000.0)]
+        );
+        assert_eq!(
+            state.update(Sample {
+                action: 7,
+                x: 0.0,
+                y: 0.0,
+                rel_x: 12.0,
+                rel_y: -4.0,
+                ..relative
+            }),
+            [Event::Relative(12.0, -4.0)]
         );
         assert_eq!(
             state.update(Sample {

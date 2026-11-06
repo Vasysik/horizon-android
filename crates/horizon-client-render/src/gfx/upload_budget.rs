@@ -20,6 +20,42 @@ impl UploadBudget {
         }
         budget
     }
+    /// Frame-state aware budget for Android: prevents a missed VSync wait or
+    /// active camera/menu interaction from triggering multi-millisecond mesh upload stalls.
+    pub fn with_frame_state(
+        count_limit: usize,
+        byte_limit: u64,
+        mobile: bool,
+        wait: Duration,
+        frame_dt: Duration,
+        interactive: bool,
+    ) -> Self {
+        let mut budget = Self::with_wait(count_limit, byte_limit, mobile, wait);
+        if mobile {
+            let max_upload = if crate::android_runtime::gpu_batching() {
+                4 << 20
+            } else {
+                2 << 20
+            };
+            let max_time = if crate::android_runtime::gpu_batching() {
+                Duration::from_millis(3)
+            } else {
+                Duration::from_millis(2)
+            };
+            if frame_dt > Duration::from_millis(22) {
+                budget.byte_limit = budget.byte_limit.min(1 << 20);
+                budget.time_limit = Some(Duration::from_millis(1));
+            } else if frame_dt > Duration::from_millis(18) || interactive {
+                budget.byte_limit = budget.byte_limit.min(max_upload / 2);
+                budget.time_limit =
+                    Some(max_time.clamp(Duration::from_millis(1), Duration::from_millis(2)));
+            } else {
+                budget.byte_limit = budget.byte_limit.min(max_upload);
+                budget.time_limit = Some(max_time);
+            }
+        }
+        budget
+    }
     pub fn new(count_limit: usize, byte_limit: u64, mobile: bool) -> Self {
         Self {
             count_limit,

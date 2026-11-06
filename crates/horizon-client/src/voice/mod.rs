@@ -90,6 +90,9 @@ impl VoiceChatClient {
     }
 
     pub fn check_handshake_timeout(&mut self) -> Option<(String, Vec<u8>)> {
+        if !self.config.enabled {
+            return None;
+        }
         if let Some(timer) = self.fallback_timer
             && self.secret.is_none()
             && timer.elapsed() >= std::time::Duration::from_secs(8)
@@ -117,6 +120,9 @@ impl VoiceChatClient {
         channel: &str,
         data: &[u8],
     ) -> Result<Option<(String, Vec<u8>)>, String> {
+        if !self.config.enabled {
+            return Ok(None);
+        }
         match channel {
             CHANNEL_SECRET => {
                 log::info!("SVC: Received SecretPacket payload ({} bytes)", data.len());
@@ -315,6 +321,10 @@ impl VoiceChatClient {
     ) where
         F: Fn(u128) -> Option<[f64; 3]>,
     {
+        if !self.config.enabled {
+            self.is_talking = false;
+            return;
+        }
         let is_connected = self.udp_handle.as_ref().is_some_and(|h| h.is_connected());
         if !is_connected || self.config.disabled {
             self.is_talking = false;
@@ -612,6 +622,22 @@ impl VoiceChatClient {
     pub fn hud_status(&self) -> VoiceHudStatus {
         let conn = self.connection_state();
         ui::determine_hud_status(&conn, &self.config, self.is_talking, self.whispering)
+    }
+
+    pub fn set_feature_enabled(&mut self, enabled: bool) {
+        self.config.enabled = enabled;
+        let _ = self.config.save_to_dir(&self.config_dir);
+        if !enabled {
+            if let Some(handle) = self.udp_handle.take() {
+                handle.stop();
+            }
+            self.hardware_io.stop();
+            self.capture_pipeline.reset_encoder();
+            self.playback_pipeline.clear_decoders();
+            self.secret = None;
+            self.fallback_timer = None;
+            self.is_talking = false;
+        }
     }
 
     pub fn disconnect(&mut self) {

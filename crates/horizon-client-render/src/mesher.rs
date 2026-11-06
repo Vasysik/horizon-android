@@ -871,9 +871,9 @@ mod reuse_tests;
 pub const OPAQUE_LAYER: u16 = 1 << 15;
 /// The bits of `TerrainVertex::color`'s alpha byte that hold how brightly its face shines
 /// in HDR output (`gfx/hdr.rs`): 15 minus the tier, plus 4 for one that shines all over
-/// (`WHOLE`), so the usual 0xFF means none. The byte's high nibble carries the fluid face
-/// flags (`fluid_face`); the shaders ignore the vertex alpha, so both travel to the
-/// material stage untouched.
+/// (`WHOLE`), so the usual 0xFF means none. The byte's high nibble carries the quad's face
+/// (`fluid_face` adds the fluid marker); the shaders ignore the vertex alpha, so both
+/// travel to the material stage untouched.
 pub const EMISSION_BITS: u32 = 0x0F00_0000;
 /// HDR tiers, by the kind of light rather than its level: a candle's flame is as bright as
 /// a torch's, it only lights less around it. 0 stays as in SDR.
@@ -895,11 +895,12 @@ pub fn emitting(color: u32, tier: u8) -> u32 {
     };
     color & !EMISSION_BITS | u32::from(15 - code) << 24
 }
-/// The high nibble of `TerrainVertex::color`'s alpha byte: 8 plus the face (`Direction`
-/// as usize) on a fluid quad, 0xF on every other. `terrain.wgsl` reads only the low nibble
-/// (the emission), so only the material stage of Horizon's own packs reads it
-/// (`gfx/native_material.rs`); whether the fluid is water or lava follows from the pass
-/// that draws it.
+/// The high nibble of `TerrainVertex::color`'s alpha byte: the quad's face (`Direction`
+/// as usize, 0 to 5), with 0x8 added on a fluid quad. `terrain.wgsl` reads only the low
+/// nibble (the emission); the material stage of Horizon's own packs reads the high nibble
+/// (`gfx/native_material.rs`) and the non-flat atlas decode reads the face
+/// (`gfx/pack_atlas.rs`); whether the fluid is water or lava follows from the pass that
+/// draws it.
 pub const FLUID_FACE_BITS: u32 = 0xF000_0000;
 /// `color` marked as a fluid quad of face `face` (`Direction` as usize, 0 to 5).
 pub fn fluid_face(color: u32, face: usize) -> u32 {
@@ -1132,10 +1133,23 @@ impl Mesher<'_> {
                         out.lights
                             .push(([center.x * 16 + x, base_y + y, center.z * 16 + z], id));
                     }
-                    if state.solid
+                    let block_opaque = |s: &Info| s.solid || (!self.cutout_leaves && s.leaves);
+                    if block_opaque(state)
                         && Direction::ALL.iter().all(|d| {
                             let [dx, dy, dz] = d.normal();
-                            info[pad.blocks[pi(x + dx, y + dy, z + dz)] as usize].solid
+                            block_opaque(&info[pad.blocks[pi(x + dx, y + dy, z + dz)] as usize])
+                        })
+                    {
+                        continue;
+                    }
+                    // Cull buried interior leaf blocks surrounded on all 6 sides by leaves or
+                    // solid blocks so dense tree canopies do not emit thousands of hidden layers.
+                    if self.cutout_leaves
+                        && state.leaves
+                        && Direction::ALL.iter().all(|d| {
+                            let [dx, dy, dz] = d.normal();
+                            let ni = &info[pad.blocks[pi(x + dx, y + dy, z + dz)] as usize];
+                            ni.solid || ni.leaves
                         })
                     {
                         continue;
@@ -1170,28 +1184,50 @@ impl Mesher<'_> {
                         None => [x as f32, y as f32, z as f32],
                     };
                     let mut visible = [false; 6];
+                    let mut force_opaque_face = [false; 6];
                     for d in Direction::ALL {
                         let [dx, dy, dz] = d.normal();
                         let neighbor = pad.blocks[pi(x + dx, y + dy, z + dz)];
                         let other = &info[neighbor as usize];
-                        // LeavesBlock.skipRendering with opaque leaves.
-                        let opaque_leaves = !self.cutout_leaves && state.leaves && other.leaves;
-                        visible[d as usize] = !opaque_leaves
-                            && self
-                                .visibility
-                                .should_render_face(
-                                    BlockStateId(id),
-                                    BlockStateId(neighbor),
-                                    d,
-                                    true,
-                                )
-                                .unwrap_or(true);
+                        if state.leaves && other.leaves {
+                            if !self.cutout_leaves {
+                                visible[d as usize] = false;
+                                continue;
+                            }
+                            let other_surrounded = Direction::ALL.iter().all(|nd| {
+                                let [nx, ny, nz] = nd.normal();
+                                let ni = &info[pad.blocks[pi(x + dx + nx, y + dy + ny, z + dz + nz)]
+                                    as usize];
+                                ni.solid || ni.leaves
+                            });
+                            if other_surrounded {
+                                // Boundary between the outer cutout leaf shell and the buried
+                                // canopy core: render as opaque so looking through outer leaf
+                                // holes shows tinted foliage while Early-Z/FPK kills overdraw.
+                                visible[d as usize] = true;
+                                force_opaque_face[d as usize] = true;
+                            } else {
+                                // Shared seam between two outer-shell leaf blocks: cull internal
+                                // double-faces while keeping all outer air-facing sides cutout.
+                                visible[d as usize] = false;
+                            }
+                            continue;
+                        }
+                        visible[d as usize] = self
+                            .visibility
+                            .should_render_face(BlockStateId(id), BlockStateId(neighbor), d, true)
+                            .unwrap_or(true);
                     }
                     for model in &models {
                         for face in &model.faces {
                             if face.quad.cull.is_some_and(|d| !visible[d as usize]) {
                                 continue;
                             }
+                            let force_opaque = (!self.cutout_leaves && state.leaves)
+                                || face
+                                    .quad
+                                    .cull
+                                    .is_some_and(|d| force_opaque_face[d as usize]);
                             self.face(
                                 pad,
                                 &mut tints,
@@ -1201,6 +1237,7 @@ impl Mesher<'_> {
                                 face,
                                 ao,
                                 state,
+                                force_opaque,
                             );
                         }
                     }
@@ -1239,6 +1276,7 @@ impl Mesher<'_> {
         face: &BakedFace,
         ao: bool,
         state: &Info,
+        force_opaque: bool,
     ) {
         let q = &face.quad;
         // A quad's own light (a model's glowing part) may raise the tier; whether it
@@ -1285,12 +1323,13 @@ impl Mesher<'_> {
                 q.uv[i],
                 // Opaque leaves (forceOpaque) and quads over opaque texels draw in the
                 // solid layer: no alpha cutout (a dirt path's side skips its clear top row).
-                if face.opaque && !face.translucent || !self.cutout_leaves && state.leaves {
+                if (face.opaque && !face.translucent) || force_opaque {
                     face.layer as u16 | OPAQUE_LAYER
                 } else {
                     face.layer as u16
                 },
-                emitting(pack_rgb(rgb), tier),
+                (emitting(pack_rgb(rgb), tier) & !FLUID_FACE_BITS)
+                    | (((q.facing as u32) & 0x7) << 28),
                 pack_coords(lighting::with_emission(coords[i], q.light_emission)),
             ));
         }

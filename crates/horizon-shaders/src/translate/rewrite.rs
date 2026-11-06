@@ -60,7 +60,7 @@ impl Stage<'_> {
         if self.kind == ShaderStage::Vertex {
             p.push_str(
                 "const vec2 hz_quad[6] = vec2[6](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));\n\
-                 vec4 hz_Vertex; vec4 hz_Color; vec4 hz_SecondaryColor; vec3 hz_Normal; float hz_FogCoord;\n\
+                 vec4 hz_Vertex; vec4 hz_Color; vec4 hz_SecondaryColor; vec3 hz_Normal; float hz_FogCoord; vec4 hz_ClipVertex;\n\
                  vec4 hz_MultiTexCoord0; vec4 hz_MultiTexCoord1; vec4 hz_MultiTexCoord2; vec4 hz_MultiTexCoord3;\n\
                  vec4 hz_MultiTexCoord4; vec4 hz_MultiTexCoord5; vec4 hz_MultiTexCoord6; vec4 hz_MultiTexCoord7;\n",
             );
@@ -285,9 +285,15 @@ impl Stage<'_> {
                     None => None,
                 },
                 "gl_Color" if fragment => Some("hz_FrontColor".into()),
+                "gl_SecondaryColor" if fragment => Some("hz_SecondaryColor".into()),
                 "gl_FragCoord" if !fragment => None,
                 "gl_FragCoord" => Some("hz_FragCoord".into()),
-                "gl_FrontColor" => Some("hz_FrontColor".into()),
+                "gl_FrontColor" | "gl_BackColor" => Some("hz_FrontColor".into()),
+                "gl_FrontSecondaryColor" | "gl_BackSecondaryColor" => {
+                    Some("hz_SecondaryColor".into())
+                }
+                "gl_FogFragCoord" => Some("hz_FogFragCoord".into()),
+                "gl_ClipVertex" if !fragment => Some("hz_ClipVertex".into()),
                 "gl_Fog" => Some("hz_Fog".into()),
                 // Before the compatibility inputs, of which `gl_Vertex` is a prefix.
                 "gl_VertexID" => Some("gl_VertexIndex".into()),

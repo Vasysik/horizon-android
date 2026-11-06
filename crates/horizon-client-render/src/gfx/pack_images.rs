@@ -366,6 +366,12 @@ impl Buffers {
     pub(super) fn has(&self, binding: u32) -> bool {
         self.objects.contains_key(&binding)
     }
+
+    /// Returns the buffer for `binding` when allocated.
+    pub(super) fn buffer_for(&self, binding: u32) -> Option<&wgpu::Buffer> {
+        let idx = self.objects.keys().position(|&k| k == binding)?;
+        self.buffers.get(idx)
+    }
 }
 
 /// A debug readback of one of the pack's images (`HORIZON_SHADER_PACK_DUMP=<name>`): every 60

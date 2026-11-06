@@ -64,13 +64,13 @@ fn desired(window: &winit::window::Window) -> Option<[u32; 2]> {
     }
     let [_, _, width, height] =
         winit::platform::android::native_content_rect([physical.width, physical.height]);
-    let view = [width, height];
+    let view = [width.max(1), height.max(1)];
     let size = scale.buffer_size(view);
+    winit::platform::android::set_native_input_scale([
+        size[0] as f64 / view[0] as f64,
+        size[1] as f64 / view[1] as f64,
+    ]);
     if size == [current.width, current.height] {
-        winit::platform::android::set_native_input_scale([
-            size[0] as f64 / view[0] as f64,
-            size[1] as f64 / view[1] as f64,
-        ]);
         None
     } else {
         Some(size)
@@ -197,7 +197,9 @@ pub struct ScreenPreferences {
 impl Default for ScreenPreferences {
     fn default() -> Self {
         Self {
-            immersive: true,
+            // Toggling immersive system-bar hiding has freeze reports on some
+            // devices; keep navigation bars visible until that is understood.
+            immersive: false,
             avoid_cutout: false,
             aspect: Aspect::Native,
         }
@@ -207,9 +209,9 @@ impl Default for ScreenPreferences {
 mod screen_tests {
     use super::*;
     #[test]
-    fn missing_screen_preferences_hide_navigation_but_keep_explicit_off() {
+    fn missing_screen_preferences_keep_navigation_bars_visible() {
         let defaults: ScreenPreferences = serde_json::from_str("{}").unwrap();
-        assert!(defaults.immersive);
+        assert!(!defaults.immersive);
         let saved: ScreenPreferences =
             serde_json::from_str(r#"{"immersive":false,"aspect":"classic","avoid_cutout":true}"#)
                 .unwrap();

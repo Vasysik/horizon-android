@@ -42,7 +42,7 @@ impl<'a> Game<'a> {
 
     /// Renders bottom-left voice chat status indicator badge.
     pub(super) fn draw_voice_hud_indicator(&mut self, batch: &mut HudBatch) {
-        if self.screen != Screen::Playing {
+        if self.screen != Screen::Playing || !self.voice.config.enabled {
             return;
         }
 
@@ -404,6 +404,24 @@ impl<'a> Game<'a> {
                 true,
             );
 
+            // SVC Master Feature ON/OFF toggle at top-left of modal header
+            let svc_lbl = if self.voice.config.enabled {
+                "SVC: ON"
+            } else {
+                "SVC: OFF"
+            };
+            draw_btn(
+                batch,
+                &self.gui.atlas,
+                self.cursor,
+                x + 15.0,
+                y + 6.0,
+                72.0,
+                16.0,
+                svc_lbl,
+                !self.voice.config.enabled,
+            );
+
             // Protocol version badge at top-right of modal header
             let badge_w = 38.0;
             let badge_h = 16.0;
@@ -742,6 +760,19 @@ impl<'a> Game<'a> {
         } else {
             let col1_x = x + 15.0;
             let col1_w = 330.0;
+
+            // Header Master Feature Toggle (SVC: ON / OFF)
+            if ui::hovered(self.cursor, x + 15.0, y + 6.0, 72.0, 16.0) {
+                let next = !self.voice.config.enabled;
+                self.voice.set_feature_enabled(next);
+                self.pad.touch.settings.svc_enabled = next;
+                let _ = self.pad.touch.settings.save();
+                self.settings.touch = self.pad.touch.settings.clone();
+                if next && self.remote.is_some() {
+                    self.initiate_voice_handshake();
+                }
+                return;
+            }
 
             // Row 1: Mic Mute & Deafen
             if ui::hovered(self.cursor, col1_x, y + 40.0, 160.0, 18.0) {

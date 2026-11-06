@@ -56,10 +56,10 @@ fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color
     out.position = pos;
     out.spherical = length(pos);
     out.cylindrical = max(length(pos.xz), abs(pos.y));
-    // The colour's alpha byte (mesher.rs's `fluid_face` and `emitting`): a fluid quad's
-    // high nibble is 8 + its face (0..5), every other quad keeps 0xF there; the low nibble
-    // is 15 minus the face's HDR tier. Every corner of a quad carries the same byte, so the
-    // interpolated value rounds back exactly.
+    // The colour's alpha byte (mesher.rs's `fluid_face` and `emitting`): every terrain
+    // quad's high nibble is its face (0..5), with 0x8 added on a fluid quad; the low
+    // nibble is 15 minus the face's HDR tier. Every corner of a quad carries the same
+    // byte, so the interpolated value rounds back exactly.
     let flags = u32(round(color.a * 255.0));
     let high = flags >> 4u;
     let fluid = high >= 8u && (high & 7u) < 6u;

@@ -21,6 +21,7 @@ use std::{
 struct Request {
     kind: Kind,
     appearance: Option<crate::skins::library::Kind>,
+    target_dir: Option<PathBuf>,
     home: PathBuf,
     cache: PathBuf,
 }
@@ -118,6 +119,7 @@ pub fn begin(kind: Kind, home: PathBuf) -> std::result::Result<(), String> {
     STATE.lock().unwrap_or_else(|e| e.into_inner()).request = Some(Request {
         kind,
         appearance: None,
+        target_dir: None,
         home,
         cache,
     });
@@ -147,6 +149,7 @@ pub fn begin_appearance(
     STATE.lock().unwrap_or_else(|e| e.into_inner()).request = Some(Request {
         kind: Kind::Packs,
         appearance: Some(kind),
+        target_dir: None,
         home,
         cache,
     });
@@ -156,6 +159,80 @@ pub fn begin_appearance(
     }
     notice("Choose a skin or cape PNG", false);
     Ok(())
+}
+
+/// Opens Android's `ACTION_OPEN_DOCUMENT` picker to import a file directly into `target_dir`.
+pub fn begin_into_dir(target_dir: PathBuf) -> std::result::Result<(), String> {
+    if busy() {
+        return Err("Finish or cancel the current import first".into());
+    }
+    CANCEL.store(false, Ordering::Relaxed);
+    crate::platform::hide();
+    let cache = crate::platform::cache_dir()
+        .ok_or("Could not access the Android import cache")?
+        .join("file-manager-imports");
+    STATE.lock().unwrap_or_else(|e| e.into_inner()).request = Some(Request {
+        kind: Kind::Packs,
+        appearance: None,
+        target_dir: Some(target_dir),
+        home: PathBuf::new(),
+        cache,
+    });
+    if !crate::native_ime::pick_document() {
+        picker_failed("Android document picker is unavailable");
+        return Err("Android document picker is unavailable".into());
+    }
+    notice("Choose a file to import into this folder", false);
+    Ok(())
+}
+
+/// Exports or shares a local file via Android MediaStore / SAF DocumentsUI.
+pub fn export_file(
+    home: &std::path::Path,
+    profile: u32,
+    file_path: &std::path::Path,
+) -> std::result::Result<String, String> {
+    let meta = std::fs::symlink_metadata(file_path).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return Err("Only regular files can be exported.".into());
+    }
+    let file_name = file_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or("Invalid filename")?;
+    if file_name.to_ascii_lowercase().ends_with(".png") {
+        let _ = crate::gallery::save(file_path);
+        return Ok(format!(
+            "Exporting '{file_name}' to Pictures/HorizonAndroid..."
+        ));
+    }
+    let rel_str = file_path
+        .strip_prefix(home)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let saf_folder = if rel_str.contains("horizon-mods") {
+        crate::document_store::folder_id(profile, "mods")
+    } else if rel_str.contains("resourcepacks") {
+        crate::document_store::folder_id(profile, "packs")
+    } else if rel_str.contains("shaderpacks") {
+        crate::document_store::folder_id(profile, "shaders")
+    } else if rel_str.contains("saves") {
+        crate::document_store::folder_id(profile, "worlds")
+    } else if rel_str.contains("performance") {
+        "reports".into()
+    } else {
+        crate::document_store::ROOT.into()
+    };
+    if crate::platform::open_documents(&saf_folder) {
+        Ok(format!(
+            "Opened '{file_name}' in Android Files for sharing/export."
+        ))
+    } else {
+        Ok(format!(
+            "Ready to export '{file_name}' via system Files > Horizon Android."
+        ))
+    }
 }
 /// Called by the approved Activity result bridge, never from a game tick.
 /// Keep a conventional JNI export as well as explicit registration: Android
@@ -228,6 +305,59 @@ pub extern "system" fn document_result(
     }
 }
 fn stage(request: Request, mut input: std::fs::File, name: String) -> Result<()> {
+    if let Some(target_dir) = request.target_dir {
+        crate::document_store::validate_entry_name(&name)?;
+        std::fs::create_dir_all(&target_dir)?;
+        if std::fs::symlink_metadata(&target_dir)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err("Refusing a redirected destination folder".into());
+        }
+        std::fs::create_dir_all(&request.cache)?;
+        if std::fs::symlink_metadata(&request.cache)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err("Refusing a redirected import cache".into());
+        }
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let staged = request.cache.join(format!(".import-fm-{stamp}.part"));
+        let res = (|| -> Result<()> {
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&staged)?;
+            content_files::copy_bounded(&mut input, &mut output, |bytes| {
+                notice(format!("Importing {name}: {} KiB", bytes / 1024), false);
+                !CANCEL.load(Ordering::Relaxed)
+            })?;
+            output.sync_all()?;
+            drop(output);
+            if CANCEL.load(Ordering::Relaxed) {
+                return Err("Import cancelled".into());
+            }
+            let dest = crate::document_store::unique_destination_path(&target_dir, &name)?;
+            let final_name = dest
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if std::fs::rename(&staged, &dest).is_err() {
+                std::fs::copy(&staged, &dest)?;
+                let _ = std::fs::remove_file(&staged);
+            }
+            notice(
+                format!("Imported '{final_name}' into current folder."),
+                true,
+            );
+            Ok(())
+        })();
+        if res.is_err() {
+            let _ = std::fs::remove_file(&staged);
+        }
+        return res;
+    }
     if let Some(kind) = request.appearance {
         use std::io::Read;
         if !name.to_ascii_lowercase().ends_with(".png") {

@@ -3,7 +3,7 @@ run-name: Android dev · ${{ github.sha }}
 
 on:
   push:
-    branches: [android]
+    branches: [android, controls-overhaul-zip]
     paths:
       - 'crates/**'
       - 'Cargo.toml'
@@ -33,7 +33,7 @@ concurrency:
 jobs:
   build:
     # Never expose a signing secret to pull requests or arbitrary dispatch refs.
-    if: github.ref == 'refs/heads/android'
+    if: github.ref == 'refs/heads/android' || github.ref == 'refs/heads/controls-overhaul-zip'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
@@ -49,20 +49,40 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
-      - name: Restore dedicated dev signing identity
+      - name: Restore the CI signing identity
         env:
           DEV_KEYSTORE: ${{ secrets.ANDROID_DEV_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           python3 - <<'PY'
           import base64, os
           from pathlib import Path
-          value = os.environ.get('DEV_KEYSTORE', '')
-          if not value:
-              raise SystemExit('Set ANDROID_DEV_KEYSTORE_BASE64 first; see docs/android-dev-builds.md')
-          path = Path('.local/android/debug.keystore')
+          # A dedicated dev key wins when the repository has one; otherwise the release
+          # key signs dev builds too (the .dev package is a separate app, so the
+          # certificate is the only thing the APK carries -- never the key itself).
+          dev = os.environ.get('DEV_KEYSTORE', '')
+          release = os.environ.get('RELEASE_KEYSTORE', '')
+          if dev:
+              value, password, alias = dev, 'android', 'androiddebugkey'
+          elif release:
+              value = release
+              password = os.environ['RELEASE_KEYSTORE_PASSWORD']
+              alias = os.environ['RELEASE_KEY_ALIAS']
+          else:
+              raise SystemExit('Set ANDROID_KEYSTORE_BASE64 (or ANDROID_DEV_KEYSTORE_BASE64); see docs/android-dev-builds.md')
+          path = Path('.local/android/ci.keystore')
           path.parent.mkdir(parents=True, exist_ok=True)
           path.write_bytes(base64.b64decode(value, validate=True))
           path.chmod(0o600)
+          # Gradle resolves a relative storeFile against packaging/android, so pass an
+          # absolute path and the credentials that belong to this keystore.
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'HORIZON_ANDROID_KEYSTORE={path.resolve()}\n')
+              env.write(f'HORIZON_ANDROID_KEYSTORE_PASSWORD={password}\n')
+              env.write(f'HORIZON_ANDROID_KEY_ALIAS={alias}\n')
+              env.write(f'HORIZON_ANDROID_KEY_PASSWORD={password}\n')
           PY
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
@@ -145,4 +165,4 @@ jobs:
           retention-days: 14
       - name: Remove signing key
         if: always()
-        run: rm -f .local/android/debug.keystore
+        run: rm -f .local/android/ci.keystore .local/android/debug.keystore

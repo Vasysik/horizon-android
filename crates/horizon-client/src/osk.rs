@@ -6,6 +6,7 @@
 //! the way typed keys reach it.
 use crate::gamepad::{Button, GlyphStyle};
 use crate::ui_theme::{self, Face, Ui, color};
+use winit::keyboard::KeyCode;
 
 /// What a key press does to the focused field.
 #[derive(Clone, Debug, PartialEq)]
@@ -15,6 +16,9 @@ pub enum Output {
     Enter,
     /// The keyboard closes; the field keeps its text.
     Close,
+    /// A hardware key press, kept for editors that accept more than
+    /// Backspace, Enter and Close (the control editor's key bindings).
+    Key(KeyCode),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

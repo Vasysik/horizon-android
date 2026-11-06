@@ -23,6 +23,13 @@ impl Camera {
         self.yaw = (self.yaw + x).rem_euclid(360.0);
         self.pitch = (self.pitch + y).clamp(-65.0, 65.0);
     }
+    /// Applies a screen-space touch/mouse drag delta `(dx, dy)` in dp so that dragging right
+    /// (`dx > 0`) moves the visible camera-facing surface of the model right (`+screen_x`),
+    /// and dragging down (`dy > 0`) tilts the visible camera-facing surface down (`+screen_y`),
+    /// across both front (`yaw = 0°`) and back (`yaw = 180°`) orientations.
+    pub fn drag(&mut self, dx: f32, dy: f32) {
+        self.rotate(-dx * 0.7, -dy * 0.5);
+    }
     pub fn zoom(&mut self, factor: f32) {
         if factor.is_finite() {
             self.zoom = (self.zoom * factor).clamp(0.5, 2.0);
@@ -322,6 +329,65 @@ mod tests {
         assert_ne!(
             back,
             render(&skin, Some(&cape), Model::Slim, camera, [160, 200])
+        );
+    }
+
+    #[test]
+    fn drag_direction_matches_projected_screen_motion_front_and_back() {
+        let make_raster = |camera: Camera| Raster {
+            image: RgbaImage::new(160, 200),
+            depth: vec![],
+            camera,
+        };
+
+        // 1. Front orientation (yaw = 0, pitch = 0): front chest face is at [0.0, 18.0, -2.0]
+        let front_pt = [0.0, 18.0, -2.0];
+        let cam0 = Camera {
+            yaw: 0.0,
+            pitch: 0.0,
+            zoom: 1.0,
+        };
+        let p0 = make_raster(cam0).project(front_pt);
+
+        let mut cam_right = cam0;
+        cam_right.drag(20.0, 0.0);
+        let p_right = make_raster(cam_right).project(front_pt);
+        assert!(
+            p_right[0] > p0[0],
+            "dragging right (dx > 0) must move front surface right (+screen_x)"
+        );
+
+        let mut cam_down = cam0;
+        cam_down.drag(0.0, 20.0);
+        let p_down = make_raster(cam_down).project(front_pt);
+        assert!(
+            p_down[1] > p0[1],
+            "dragging down (dy > 0) must move front surface down (+screen_y)"
+        );
+
+        // 2. Back orientation (yaw = 180, pitch = 0): back cape face is at [0.0, 18.0, 3.0]
+        let back_pt = [0.0, 18.0, 3.0];
+        let cam_back0 = Camera {
+            yaw: 180.0,
+            pitch: 0.0,
+            zoom: 1.0,
+        };
+        let b0 = make_raster(cam_back0).project(back_pt);
+
+        let mut cam_back_right = cam_back0;
+        cam_back_right.drag(20.0, 0.0);
+        let b_right = make_raster(cam_back_right).project(back_pt);
+        assert!(
+            b_right[0] > b0[0],
+            "dragging right (dx > 0) in back view must move visible back/cape surface right (+screen_x)"
+        );
+
+        let mut cam_back_down = cam_back0;
+        cam_back_down.drag(0.0, 20.0);
+        let b_down = make_raster(cam_back_down).project(back_pt);
+        assert!(
+            b_down[1] > b0[1],
+            "dragging down (dy > 0) in back view must move visible back/cape surface down (+screen_y)"
         );
     }
 }

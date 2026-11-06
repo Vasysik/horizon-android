@@ -114,13 +114,20 @@ impl Game<'_> {
         // bindings can also change before the physical key is released.
         self.keys.clear();
         self.screen = Screen::Options;
+        self.capture(false);
         self.options_from_title = from_title;
         self.options_to_game = false;
+        let need_languages = self.ui.options.languages.is_empty() || page == Page::Language;
+        let need_packs = self.ui.options.pack_infos.is_empty() || page == Page::Packs;
         let ui = &mut self.ui.options;
         ui.open_at(!from_title && self.title.is_none(), page);
-        let root = self.options.resources.clone();
-        ui.languages = lang::available(&[&root]);
-        self.refresh_pack_lists();
+        if need_languages {
+            let root = self.options.resources.clone();
+            ui.languages = lang::available(&[&root]);
+        }
+        if need_packs {
+            self.refresh_pack_lists();
+        }
     }
     /// While the resource pack screen is open, `resourcepacks/` is looked at once a second
     /// and the list found again when its packs changed (`PackSelectionScreen.tick`'s
@@ -463,7 +470,8 @@ impl Game<'_> {
             r.fullbright = s.extras.fullbright;
             r.improved_transparency = s.improved_transparency;
             r.set_present_mode(s.vsync, s.horizon.present_mode);
-            r.animated_textures = s.horizon.animated_textures;
+            r.animated_textures = s.horizon.animated_textures
+                && !horizon_client::ui_theme::motion::game_animations_disabled();
             r.screenshot_quality = s.horizon.screenshot_quality;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
             r.set_texture_filtering(

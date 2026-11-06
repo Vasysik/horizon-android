@@ -143,20 +143,50 @@ pub fn draw(
     if state.is_empty() {
         return;
     }
-    // A static item drawn where it was drawn before gives the same vertices:
-    // take them instead of submitting, sorting and clipping its quads again.
+    // An item drawn where it was drawn before gives the same base vertices (and
+    // for foil items, the same clipped glint triangles with updated scroll UVs):
+    // reuse them instead of submitting, sorting and clipping its quads again.
     let key = DrawnKey::of(state, renderer, sprites, x, y);
     if let Some(key) = &key
-        && let Some(drawn) = renderer
+        && let Some(cached) = renderer
             .gui_drawn
             .lock()
             .ok()
             .and_then(|d| d.get(key).cloned())
     {
-        batch.vertices.extend_from_slice(&drawn);
+        let base = batch.vertices.len();
+        batch.vertices.extend_from_slice(&cached.vertices);
+        if !cached.glint_quads.is_empty() {
+            let glint = Glint {
+                speed: glint_speed,
+                alpha: glint_alpha,
+                millis: time * 1000.0,
+                scale: 8.0,
+            };
+            batch.glint_alpha = glint_alpha;
+            for &(rel_start, model_uvs) in cached.glint_quads.iter() {
+                let uvs = model_uvs.map(|uv| glint.uv(uv));
+                for (k, &i) in [0usize, 1, 2, 0, 2, 3].iter().enumerate() {
+                    batch.vertices[base + rel_start + k].glint_uv = uvs[i];
+                }
+            }
+            for r in cached.glint_blends.iter() {
+                let range = base as u32 + r.start..base as u32 + r.end;
+                match batch.blends.last_mut() {
+                    Some((last, b))
+                        if last.end == range.start && *b == crate::hud::Blend::Additive =>
+                    {
+                        last.end = range.end;
+                    }
+                    _ => batch.blends.push((range, crate::hud::Blend::Additive)),
+                }
+            }
+        }
         return;
     }
     let start = batch.vertices.len();
+    let blends_start = batch.blends.len();
+    let mut glint_quads = Vec::new();
     draw_now(
         state,
         renderer,
@@ -169,6 +199,7 @@ pub fn draw(
         glint_speed,
         glint_alpha,
         None,
+        key.is_some().then_some((start, &mut glint_quads)),
     );
     if let Some(key) = key
         && let Ok(mut drawn) = renderer.gui_drawn.lock()
@@ -177,7 +208,24 @@ pub fn draw(
         if drawn.len() >= DRAWN_LIMIT {
             drawn.clear();
         }
-        drawn.insert(key, batch.vertices[start..].into());
+        let mut glint_blends = Vec::new();
+        for (r, b) in &batch.blends[blends_start..] {
+            if *b == crate::hud::Blend::Additive && r.end > start as u32 {
+                let s = r.start.max(start as u32) - start as u32;
+                let e = r.end - start as u32;
+                if s < e {
+                    glint_blends.push(s..e);
+                }
+            }
+        }
+        drawn.insert(
+            key,
+            Arc::new(GuiCachedItem {
+                vertices: batch.vertices[start..].into(),
+                glint_quads: glint_quads.into(),
+                glint_blends: glint_blends.into(),
+            }),
+        );
     }
 }
 
@@ -210,23 +258,29 @@ pub fn draw_scissored(
         0.0,
         0.0,
         Some(scissor),
+        None,
     );
 }
 
 /// Entries of `ItemRenderer::gui_drawn` before it starts over.
 const DRAWN_LIMIT: usize = 8192;
 
+pub(crate) struct GuiCachedItem {
+    pub vertices: Arc<[crate::hud::HudVertex]>,
+    pub glint_quads: Arc<[(usize, [[f32; 2]; 4])]>,
+    pub glint_blends: Arc<[std::ops::Range<u32>]>,
+}
+
 /// What a GUI item's vertices depend on: its layers' baked models (kept for the
-/// renderer's life, so their addresses name them), tints and transforms, the
-/// atlas, and the exact position. None for items whose drawing changes with time
-/// or the host: a glint, or a special model renderer.
+/// renderer's life, so their addresses name them), tints, foil and transforms,
+/// the atlas, and the exact position. None for special model renderers.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DrawnKey {
     renderer: usize,
-    sprites: (usize, usize),
+    sprites: (usize, usize, bool),
     at: [u32; 2],
     oversized: bool,
-    layers: Vec<(usize, Vec<i32>, [u32; 16], bool)>,
+    layers: Vec<(usize, Vec<i32>, [u32; 16], bool, u8)>,
 }
 impl DrawnKey {
     fn of(
@@ -236,19 +290,22 @@ impl DrawnKey {
         x: f32,
         y: f32,
     ) -> Option<Self> {
-        if state.animated {
-            return None;
-        }
         let layers = state
             .layers
             .iter()
             .map(|layer| match &layer.geometry {
-                super::LayerGeometry::Quads(baked) if layer.foil == super::FoilType::None => {
+                super::LayerGeometry::Quads(baked) => {
+                    let foil = match layer.foil {
+                        super::FoilType::None => 0u8,
+                        super::FoilType::Standard => 1u8,
+                        super::FoilType::Special => 2u8,
+                    };
                     Some((
                         Arc::as_ptr(baked) as usize,
                         layer.tints.clone(),
                         layer.matrix.to_cols_array().map(f32::to_bits),
                         layer.uses_block_light,
+                        foil,
                     ))
                 }
                 _ => None,
@@ -256,7 +313,11 @@ impl DrawnKey {
             .collect::<Option<Vec<_>>>()?;
         Some(Self {
             renderer: std::ptr::from_ref(renderer) as usize,
-            sprites: (std::ptr::from_ref(sprites) as usize, sprites.len()),
+            sprites: (
+                std::ptr::from_ref(sprites) as usize,
+                sprites.len(),
+                sprites.contains_key("misc/enchanted_glint_item"),
+            ),
             at: [x.to_bits(), y.to_bits()],
             oversized: state.oversized_in_gui,
             layers,
@@ -278,6 +339,7 @@ fn draw_now(
     glint_speed: f32,
     glint_alpha: f32,
     scissor: Option<[f32; 4]>,
+    glint_record: Option<(usize, &mut Vec<(usize, [[f32; 2]; 4])>)>,
 ) {
     let pose = Mat4::from_translation(Vec3::new(x + 8.0, y + 8.0, 0.0))
         * Mat4::from_scale(Vec3::new(16.0, -16.0, 16.0));
@@ -316,7 +378,7 @@ fn draw_now(
             scale: 8.0,
         });
     batch.glint_alpha = glint_alpha;
-    draw_quads(&quads, lights, batch, rect, glint.as_ref());
+    draw_quads_recorded(&quads, lights, batch, rect, glint.as_ref(), glint_record);
 }
 
 /// Lights, culls, sorts far to near and clips `quads` (GUI positions) to
@@ -327,6 +389,17 @@ fn draw_quads(
     batch: &mut HudBatch,
     rect: [f32; 4],
     glint: Option<&Glint>,
+) {
+    draw_quads_recorded(quads, lights, batch, rect, glint, None);
+}
+
+fn draw_quads_recorded(
+    quads: &[ItemQuad],
+    lights: (Vec3, Vec3),
+    batch: &mut HudBatch,
+    rect: [f32; 4],
+    glint: Option<&Glint>,
+    mut glint_record: Option<(usize, &mut Vec<(usize, [[f32; 2]; 4])>)>,
 ) {
     for face in depth::sort(quads) {
         let q = &quads[face.quad];
@@ -348,6 +421,13 @@ fn draw_quads(
             }
             emit(batch, &fan, |_| color, None);
             if q.foil != Foil::None {
+                if let (Some(_), Some((base, rec))) = (glint, &mut glint_record) {
+                    for j in 1..fan.len().saturating_sub(1) {
+                        let corners = [fan[0], fan[j], fan[j + 1], fan[j + 1]];
+                        let rel = batch.vertices.len() - *base + (j - 1) * 6;
+                        rec.push((rel, corners.map(|v| v.glint_uv)));
+                    }
+                }
                 emit(batch, &fan, |_| color, glint);
             }
         }

@@ -429,6 +429,8 @@ pub struct Title {
     /// EditWorldScreen's and WorldOpenFlows' `SystemToast` and its slide.
     toast: Option<(crate::toasts::Slide, WorldToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
+    uploaded_icon_slots:
+        RefCell<std::collections::HashMap<usize, (usize, PathBuf, std::time::SystemTime)>>,
     splash: Option<String>,
     /// `SplashManager.getSplash` rolled the player's own name instead of a list entry.
     splash_you: bool,
@@ -698,6 +700,7 @@ impl Title {
             open_request: None,
             toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
+            uploaded_icon_slots: RefCell::new(std::collections::HashMap::new()),
             splash: choose_splash(&splashes, seed, (today.month(), today.day())),
             splash_you,
             recent: std::cell::RefCell::new(None),
@@ -1443,34 +1446,42 @@ impl Title {
     ) {
         let path = self.saves.join(&world.folder).join("icon.png");
         let mut icons = self.icons.borrow_mut();
-        let pixels = if let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) {
-            let cached = icons
-                .entry(path.clone())
-                .or_insert_with(|| (std::time::UNIX_EPOCH, None));
-            if cached.0 != modified {
-                *cached = (
+        if !icons.contains_key(&path) {
+            let entry = if let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) {
+                (
                     modified,
                     crate::hud::decode(&path)
                         .ok()
                         .filter(|(w, h, _)| *w == 64 && *h == 64)
                         .map(|(_, _, p)| p),
-                );
-            }
-            cached.1.as_ref()
-        } else {
-            None
-        };
+                )
+            } else {
+                (std::time::UNIX_EPOCH, None)
+            };
+            icons.insert(path.clone(), entry);
+        }
+        let entry_ref = icons.get(&path);
+        let modified = entry_ref.map_or(std::time::UNIX_EPOCH, |(m, _)| *m);
+        let pixels = entry_ref.and_then(|(_, p)| p.as_ref());
         let sprite = format!("horizon/world-icon{slot}");
         if let Some(pixels) = pixels
             && let Some(rect) = atlas.sprites.get(&sprite)
         {
-            batch.patches.push(crate::font::Patch {
-                x: (rect.u0 * atlas.width as f32).round() as u32,
-                y: (rect.v0 * atlas.height as f32).round() as u32,
-                width: 64,
-                height: 64,
-                rgba: pixels.clone(),
-            });
+            let atlas_id = atlas as *const HudAtlas as usize;
+            let mut uploaded = self.uploaded_icon_slots.borrow_mut();
+            let already_uploaded = uploaded
+                .get(&slot)
+                .is_some_and(|(aid, p, m)| *aid == atlas_id && *p == path && *m == modified);
+            if !already_uploaded {
+                batch.patches.push(crate::font::Patch {
+                    x: (rect.u0 * atlas.width as f32).round() as u32,
+                    y: (rect.v0 * atlas.height as f32).round() as u32,
+                    width: 64,
+                    height: 64,
+                    rgba: pixels.clone(),
+                });
+                uploaded.insert(slot, (atlas_id, path, modified));
+            }
             batch.sprite_scaled(atlas, &sprite, x, y, 32.0, 32.0, u32::MAX);
         } else {
             batch.sprite_scaled(atlas, "misc/unknown_server", x, y, 32.0, 32.0, u32::MAX);
