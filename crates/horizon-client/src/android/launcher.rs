@@ -574,6 +574,10 @@ impl ApplicationHandler for Launcher {
         }
     }
     fn device_event(&mut self, events: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
+        if matches!(event, DeviceEvent::Removed) {
+            self.mouse_down = false;
+            self.drag = None;
+        }
         if let Some(game) = &mut self.game {
             game.device_event(events, id, event);
         } else {

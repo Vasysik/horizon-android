@@ -151,6 +151,7 @@ pub struct TouchControls {
     pub swimming: bool,
     pub mounted: bool,
     pub sneaking: bool,
+    pub toggle_crouch: bool,
     /// Snapshotted by a world gesture; drift cannot turn eating into mining.
     pub hold_uses_item: bool,
     pub holding_use: bool,
@@ -687,6 +688,7 @@ impl TouchControls {
                 }
                 Some(Control::Sneak)
                     if self.settings.mode == Mode::Dpad
+                        && self.toggle_crouch
                         && !self.vertical_movement
                         && !self.swimming
                         && !self.mounted =>
@@ -1888,8 +1890,29 @@ mod tests {
         assert!(t.settings.left_handed);
     }
     #[test]
+    fn hold_crouch_starts_on_first_touch_and_ends_on_release() {
+        for mode in [Mode::Crosshair, Mode::Dpad] {
+            let mut t = TouchControls::default();
+            t.settings.mode = mode;
+            t.toggle_crouch = false;
+            let point = t.settings.placement(Control::Sneak).center;
+            t.update(1, point, true, false);
+            assert!(t.poll_state().held(Button::RightStick), "{mode:?}");
+            t.update(1, point, false, true);
+            assert!(!t.poll_state().held(Button::RightStick), "{mode:?}");
+            t.update(2, point, true, false);
+            assert!(
+                t.poll_state().held(Button::RightStick),
+                "second hold {mode:?}"
+            );
+            t.clear();
+            assert!(!t.poll_state().held(Button::RightStick));
+        }
+    }
+    #[test]
     fn dpad_can_slide_between_directions_and_mirror() {
         let mut t = TouchControls::default();
+        t.toggle_crouch = true;
         t.settings.mode = Mode::Dpad;
         t.update(1, [0.13, 0.66], true, false);
         assert_eq!(t.state().left, [0.0, 1.0]);

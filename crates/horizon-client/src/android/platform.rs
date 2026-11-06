@@ -700,6 +700,7 @@ pub fn poll_gamepad_connections() {
         Ok((values, controllers))
     });
     if let Some((ids, controllers)) = ids {
+        winit::platform::android::set_native_input_devices(&ids);
         horizon_client::android_runtime::retain_gamepads(&ids);
         if horizon_client::android_runtime::active_gamepad_id().is_none() {
             cancel_gamepad_vibration();

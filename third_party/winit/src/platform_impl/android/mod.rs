@@ -27,9 +27,15 @@ use crate::window::{
     WindowButtons, WindowLevel,
 };
 
+mod input_devices;
 mod keycodes;
 mod mouse_state;
 
+static INPUT_DEVICES: std::sync::LazyLock<Mutex<input_devices::Devices>> =
+    std::sync::LazyLock::new(|| Mutex::new(input_devices::Devices::default()));
+pub(crate) fn set_input_devices(ids: &[i32]) {
+    INPUT_DEVICES.lock().unwrap().update(ids);
+}
 static POINTER_DEVICES: Mutex<Vec<i32>> = Mutex::new(Vec::new());
 pub(crate) fn pointer_device(id: i32) -> bool {
     POINTER_DEVICES.lock().unwrap().contains(&id)
@@ -362,6 +368,13 @@ impl<T: 'static> EventLoop<T> {
                 MainEvent::Resume { .. } => {
                     debug!("App Resumed - is running");
                     self.running = true;
+                    callback(
+                        event::Event::WindowEvent {
+                            window_id: window::WindowId(WindowId),
+                            event: event::WindowEvent::Occluded(false),
+                        },
+                        self.window_target(),
+                    );
                 }
                 MainEvent::SaveState { .. } => {
                     // XXX: how to forward this state to applications?
@@ -371,6 +384,13 @@ impl<T: 'static> EventLoop<T> {
                 MainEvent::Pause => {
                     debug!("App Paused - stopped running");
                     self.running = false;
+                    callback(
+                        event::Event::WindowEvent {
+                            window_id: window::WindowId(WindowId),
+                            event: event::WindowEvent::Occluded(true),
+                        },
+                        self.window_target(),
+                    );
                 }
                 MainEvent::Stop => {
                     // XXX: how to forward this state to applications?
@@ -396,6 +416,23 @@ impl<T: 'static> EventLoop<T> {
         // temporarily decouple `android_app` from `self` so we aren't holding
         // a borrow of `self` while iterating
         let android_app = self.android_app.clone();
+
+        let removed = INPUT_DEVICES.lock().unwrap().take_removed();
+        for id in removed {
+            let mut pointers = POINTER_DEVICES.lock().unwrap();
+            if pointers.contains(&id) {
+                self.mouse = mouse_state::MouseState::default();
+                pointers.retain(|pointer| *pointer != id);
+            }
+            drop(pointers);
+            callback(
+                event::Event::DeviceEvent {
+                    device_id: event::DeviceId(DeviceId(id)),
+                    event: event::DeviceEvent::Removed,
+                },
+                self.window_target(),
+            );
+        }
 
         // Process input events
         match android_app.input_events_iter() {

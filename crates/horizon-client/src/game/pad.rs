@@ -200,6 +200,7 @@ impl Game<'_> {
                 crate::device_runtime::preferences().gpu_profile,
                 &crate::backend::game_home(),
             );
+            self.pad.touch.toggle_crouch = self.settings.toggle_crouch;
             self.pad.touch.inventory_mode = self.android_inventory_controls();
             if !self.pad.touch.inventory_mode {
                 self.pad.touch.inventory_shift = false;
@@ -262,7 +263,7 @@ impl Game<'_> {
             // dismounting once the player swims, flies or rides; there the
             // button holds, so the toggle ends.
             if crate::touch_visible()
-                && self.android_touch_descending()
+                && (!self.settings.toggle_crouch || self.android_touch_descending())
                 && self.toggles.drop_pad_toggle(SNEAK)
             {
                 self.sync_toggle(SNEAK);
@@ -514,7 +515,7 @@ impl Game<'_> {
     /// Touch fly/swim down and dismount are held even when ground sneaking
     /// is toggled. Any water counts, not only the sprint-swim pose: a toggled
     /// crouch there sinks the player (#71).
-    fn android_touch_descending(&self) -> bool {
+    pub(super) fn android_touch_descending(&self) -> bool {
         #[cfg(target_os = "android")]
         {
             self.pad.touch.vertical_movement
@@ -556,6 +557,16 @@ impl Game<'_> {
             }
             "key.sneak"
                 if self.settings.controller.toggle_sneak
+                    && {
+                        #[cfg(target_os = "android")]
+                        {
+                            !crate::touch_visible()
+                        }
+                        #[cfg(not(target_os = "android"))]
+                        {
+                            true
+                        }
+                    }
                     && !self.settings.toggle_crouch
                     && !self.android_touch_descending() =>
             {
