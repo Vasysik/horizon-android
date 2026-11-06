@@ -9969,10 +9969,25 @@ impl Game<'_> {
     /// and a sneak the key no longer held: #4166's in-game report), so a
     /// cached key set is not vanilla's answer.
     pub(super) fn has_shift_down(&self) -> bool {
+        #[cfg(target_os = "android")]
+        if (self.android_inventory_controls() && self.pad.touch.inventory_shift)
+            || self.pad.touch_ui.modifier_latched(KeyCode::ShiftLeft)
+            || self.pad.custom_keys.contains(&KeyCode::ShiftLeft)
+            || self.pad.custom_keys.contains(&KeyCode::ShiftRight)
+        {
+            return true;
+        }
         self.modifiers.shift_key()
     }
     /// The same live word for Control (`InputWithModifiers.hasControlDown`).
     pub(super) fn has_control_down(&self) -> bool {
+        #[cfg(target_os = "android")]
+        if self.pad.touch_ui.modifier_latched(KeyCode::ControlLeft)
+            || self.pad.custom_keys.contains(&KeyCode::ControlLeft)
+            || self.pad.custom_keys.contains(&KeyCode::ControlRight)
+        {
+            return true;
+        }
         self.modifiers.control_key()
     }
     /// Real events word the modifiers by their own `ModifiersChanged`; a
@@ -15258,6 +15273,7 @@ impl Game<'_> {
             shadow_cache: self.settings.horizon.shadow_cache,
             distance,
             detail_distance: (self.streaming.radius * 16) as f32,
+            distant_terrain: self.lod.is_some(),
             depth_far,
             underwater,
             water_plane: if title
@@ -16568,6 +16584,16 @@ impl Game<'_> {
                 && (self.pad.touch.owns_pointer(touch.id)
                     || (touch.phase == TouchPhase::Started
                         && self.pad.touch.control_at_point(overlay_point)));
+            if inventory_control
+                && touch.phase == TouchPhase::Started
+                && self.pad.touch.custom_at(overlay_point).is_none()
+                && self.pad.touch.control_at(overlay_point)
+                    == Some(horizon_client::touch::Control::Sneak)
+            {
+                self.pad.touch.inventory_shift ^= true;
+                self.pad.touch.ignore(touch.id);
+                return;
+            }
             if (menu_custom_hit || inventory_control)
                 && self.pad.touch.menu_update(
                     touch.id,
@@ -19971,6 +19997,7 @@ pub(crate) fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         shadow_cache: false,
         distance: 12.0,
         detail_distance: 12.0,
+        distant_terrain: false,
         depth_far: 1000.0,
         underwater: false,
         water_plane: None,

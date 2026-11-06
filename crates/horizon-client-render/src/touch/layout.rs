@@ -470,6 +470,7 @@ pub struct Settings {
     #[serde(default = "default_pointer_scale")]
     pub virtual_mouse_pointer_scale: f32,
     pub crosshair_gestures: bool,
+    pub attack_button_look: bool,
     pub gyroscope: bool,
     pub gyro_sensitivity: f32,
     pub attack_indicator_left: bool,
@@ -616,6 +617,7 @@ impl Default for Settings {
             virtual_mouse_sensitivity: 1.0,
             virtual_mouse_pointer_scale: default_pointer_scale(),
             crosshair_gestures: false,
+            attack_button_look: true,
             gyroscope: false,
             gyro_sensitivity: 1.0,
             attack_indicator_left: true,

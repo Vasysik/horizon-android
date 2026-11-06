@@ -196,6 +196,7 @@ pub struct TouchControls {
     pub in_menu: bool,
     /// True when `touch_ui::draw_goy_hud` renders GoyControl with `Ui::mobile` so `TouchControls::draw` skips duplicate boxy drawing.
     pub goy_rendered_by_ui: bool,
+    pub inventory_shift: bool,
     pub editor: Option<editor::Editor>,
     fingers: BTreeMap<u64, (Role, [f32; 2])>,
     passthrough_fingers: BTreeSet<u64>,
@@ -238,6 +239,7 @@ impl Default for TouchControls {
             shield_available: false,
             auxiliary_only: false,
             inventory_mode: false,
+            inventory_shift: false,
             in_menu: false,
             goy_rendered_by_ui: false,
             editor: None,
@@ -609,7 +611,12 @@ impl TouchControls {
             let held = (self.inventory_mode
                 && Self::inventory_token(control)
                     .is_some_and(|token| self.held_custom_tokens().any(|held| held == token)))
-                || (control == Control::Sneak && self.sneaking)
+                || (control == Control::Sneak
+                    && if self.inventory_mode {
+                        self.inventory_shift
+                    } else {
+                        self.sneaking
+                    })
                 || Self::button(control).is_some_and(|bt| {
                     state.held(bt)
                         || (bt == Button::LeftTrigger && state.triggers[0] > 0.0)
@@ -1007,6 +1014,8 @@ impl TouchControls {
             || self
                 .control_at(point)
                 .is_some_and(|c| self.placement(c).passthrough);
+        let attack_look =
+            self.settings.attack_button_look && self.crosshair() && !self.inventory_mode;
         if let Some((role, previous)) = self.fingers.get_mut(&id) {
             let delta = if let Role::Look {
                 start,
@@ -1027,7 +1036,12 @@ impl TouchControls {
                 } else {
                     [0.0; 2]
                 }
-            } else if matches!(role, Role::Button(_) | Role::Shield) && passthrough_at_point {
+            } else if (matches!(role, Role::Button(_) | Role::Shield)
+                && passthrough_at_point
+                && (!matches!(role, Role::Button(Button::RightTrigger))
+                    || self.settings.attack_button_look))
+                || (attack_look && matches!(role, Role::Button(Button::RightTrigger)))
+            {
                 let d = [point[0] - previous[0], point[1] - previous[1]];
                 *previous = point;
                 d
@@ -1040,6 +1054,7 @@ impl TouchControls {
         [0.0; 2]
     }
     pub fn clear(&mut self) {
+        self.inventory_shift = false;
         self.clear_custom();
         self.fingers.clear();
         self.passthrough_fingers.clear();
@@ -2512,6 +2527,24 @@ mod tests {
         t.update(2, [0.7, 0.4], false, false);
         t.update(2, [0.7, 0.4], false, true);
         assert_eq!(t.poll_state().triggers, [0.0; 2]);
+    }
+
+    #[test]
+    fn crosshair_attack_button_can_turn_without_releasing_attack() {
+        for enabled in [true, false] {
+            let mut touch = TouchControls::default();
+            touch.settings.mode = Mode::Crosshair;
+            assert!(touch.settings.attack_button_look);
+            touch.settings.attack_button_look = enabled;
+            let start = touch.placement(Control::Attack).center;
+            touch.update(1, start, true, false);
+            assert_eq!(touch.poll_state().triggers[1], 1.0);
+            let end = [start[0] - 0.2, start[1] - 0.1];
+            assert_eq!(touch.update(1, end, false, false) != [0.0; 2], enabled);
+            assert_eq!(touch.poll_state().triggers[1], 1.0);
+            touch.update(1, end, false, true);
+            assert_eq!(touch.poll_state().triggers[1], 0.0);
+        }
     }
 
     #[test]

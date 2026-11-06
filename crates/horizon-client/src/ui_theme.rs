@@ -2773,7 +2773,7 @@ mod tests {
                     .rect
                     .is_some()
             );
-            assert!(cache.corner(&atlas, 8, false).is_some());
+            assert!(cache.corner(&atlas, 8, 0).is_some());
             std::mem::take(&mut cache.pending)
         };
         let before = with_cache(&atlas, draw);
