@@ -64,6 +64,14 @@ def download_game(version, directory):
     versions = directory / 'versions' / version
     manifest_path = versions / f'{version}.json'
     lab.download(entry['url'], manifest_path, entry['sha1'])
+    pinned_manifest = ROOT / '.local/minecraft' / version / 'manifest.json'
+    if not pinned_manifest.exists():
+        pinned_manifest.parent.mkdir(parents=True, exist_ok=True)
+        lab.download(
+            f"https://piston-meta.mojang.com/v1/packages/{pins['manifest_sha1']}/{version}.json",
+            pinned_manifest,
+            pins['manifest_sha1'],
+        )
     manifest = json.loads(manifest_path.read_text())
     files = []
     for side in ['client', 'server']:
