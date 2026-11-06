@@ -852,8 +852,8 @@ impl TouchUi {
             button(b, a, "Back", b.width - 53.0, 3.0, 50.0);
             if self.virtual_mouse {
                 let [lmb, rmb] = mouse_button_rects(b.width, b.height);
-                button(b, a, "LMB", lmb[0], lmb[1], lmb[2]);
-                button(b, a, "RMB", rmb[0], rmb[1], rmb[2]);
+                button(b, a, "LMB", lmb.0[0], lmb.0[1], lmb.0[2]);
+                button(b, a, "RMB", rmb.0[0], rmb.0[1], rmb.0[2]);
             }
         }
         if !self.expanded {
@@ -2369,7 +2369,7 @@ impl TouchUi {
                 let spd_card = [cx, body_y + 180.0, cw, 50.0]; // Virtual Mouse Speed slider
                 let size_card = [cx, body_y + 238.0, cw, 50.0]; // Pointer Size slider
                 let r4 = [cx, body_y + 296.0, cw, row_h]; // Gyroscope Aiming
-                let r5 = [cx, body_y + 350.0, cw, row_h]; // Gyro Sensitivity
+                let _r5 = [cx, body_y + 350.0, cw, row_h]; // Gyro Sensitivity
                 if inside(r0) {
                     return Some(InGameMenuAction::CycleMovementMode);
                 }
