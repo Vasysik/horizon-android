@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use android_activity::input::{
@@ -502,7 +502,10 @@ impl<T: 'static> EventLoop<T> {
                         relative: source == Source::MouseRelative,
                         touchpad: source == Source::Touchpad,
                     };
-                    for mouse in self.mouse.update(sample) {
+                    let history = pointer
+                        .history()
+                        .map(|point| (f64::from(point.x()), f64::from(point.y())));
+                    for mouse in self.mouse.update_with_history(sample, history) {
                         use mouse_state::Event as M;
                         let event = match mouse {
                             M::Relative(x, y) => {

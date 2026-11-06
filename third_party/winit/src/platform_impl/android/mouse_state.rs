@@ -28,6 +28,28 @@ pub struct MouseState {
 }
 
 impl MouseState {
+    /// Captured deltas are per sample, rather than a total for the packet.
+    pub fn update_with_history(
+        &mut self,
+        mut sample: Sample,
+        history: impl IntoIterator<Item = (f64, f64)>,
+    ) -> Vec<Event> {
+        if sample.relative && !sample.touchpad && sample.action == 2 {
+            let current = (sample.x, sample.y);
+            sample.x = 0.0;
+            sample.y = 0.0;
+            for (x, y) in history {
+                if x.is_finite() && y.is_finite() {
+                    sample.x += x;
+                    sample.y += y;
+                }
+            }
+            sample.x += current.0;
+            sample.y += current.1;
+        }
+        self.update(sample)
+    }
+
     pub fn update(&mut self, sample: Sample) -> Vec<Event> {
         let mut events = Vec::new();
         let ending = matches!(sample.action, 3 | 10);
@@ -197,5 +219,103 @@ mod tests {
             })
             .iter()
             .any(|e| matches!(e, Event::Relative(..))));
+    }
+
+    #[test]
+    fn captured_batch_preserves_every_delta_and_only_one_button_edge() {
+        let mut state = MouseState::default();
+        let packet = Sample {
+            relative: true,
+            x: 2.0,
+            y: -3.0,
+            ..sample(2, 1)
+        };
+        assert_eq!(
+            state.update_with_history(packet, [(4.0, 1.0), (-1.0, 2.0)]),
+            [
+                Event::Enter,
+                Event::Relative(5.0, 0.0),
+                Event::Button(1, true)
+            ]
+        );
+        assert_eq!(
+            state.update_with_history(
+                Sample {
+                    x: 0.0,
+                    y: 0.0,
+                    ..packet
+                },
+                [(3.0, -2.0)]
+            ),
+            [Event::Relative(3.0, -2.0)]
+        );
+    }
+
+    #[test]
+    fn batching_does_not_change_total_motion_while_a_button_is_held() {
+        let mut state = MouseState::default();
+        let samples = [(2.0, 1.0), (3.0, -4.0), (-1.0, 2.0), (4.0, 3.0)];
+        let mut total = (0.0, 0.0);
+        for (x, y) in samples {
+            for event in state.update(Sample {
+                relative: true,
+                x,
+                y,
+                ..sample(2, 1)
+            }) {
+                if let Event::Relative(x, y) = event {
+                    total.0 += x;
+                    total.1 += y;
+                }
+            }
+        }
+        assert_eq!(total, (8.0, 2.0));
+        let mut batched = MouseState::default();
+        let result = batched.update_with_history(
+            Sample {
+                relative: true,
+                x: 4.0,
+                y: 3.0,
+                ..sample(2, 1)
+            },
+            samples[..3].iter().copied(),
+        );
+        assert!(result.contains(&Event::Relative(8.0, 2.0)));
+    }
+
+    #[test]
+    fn history_never_moves_absolute_or_button_only_packets() {
+        let mut state = MouseState::default();
+        assert_eq!(
+            state.update_with_history(sample(7, 0), [(500.0, -100.0)]),
+            [Event::Enter, Event::Position(100.0, 200.0)]
+        );
+        assert_eq!(
+            state.update_with_history(
+                Sample {
+                    relative: true,
+                    ..sample(11, 2)
+                },
+                [(500.0, -100.0)]
+            ),
+            [Event::Button(2, true)]
+        );
+    }
+
+    #[test]
+    fn invalid_history_does_not_discard_valid_relative_motion() {
+        let mut state = MouseState::default();
+        assert_eq!(
+            state.update_with_history(
+                Sample {
+                    relative: true,
+                    x: 1.0,
+                    y: 2.0,
+                    ..sample(2, 0)
+                },
+                [(f64::NAN, 4.0), (2.0, -1.0), (f64::INFINITY, 0.0)]
+            ),
+            [Event::Enter, Event::Relative(3.0, 1.0)]
+        );
     }
 }
