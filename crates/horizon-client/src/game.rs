@@ -202,6 +202,7 @@ mod native_entities;
 mod native_explosions;
 mod native_falling;
 mod native_hooks;
+mod veinminer;
 #[cfg(target_os = "android")]
 use android_bundled::{
     official_minimap, official_recipes, official_recipes_glue, official_zoom, smartf3,
@@ -5398,7 +5399,7 @@ impl Game<'_> {
     }
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
         self.lan_break_pos = Some(pos);
-        let broken = self.with_player_actor(|game| game.break_block_as_player(pos));
+        let broken = self.with_player_actor(|game| game.veinminer_break_block(pos));
         self.lan_break_pos = None;
         broken
     }
