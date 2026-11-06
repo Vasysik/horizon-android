@@ -218,16 +218,36 @@ fn bucket(quad: &[TerrainVertex; 4]) -> usize {
 /// cutout quads are also ordered front to back within each axis-facing
 /// bucket; stable sorting preserves the mesher's order for coplanar overlays.
 pub fn sort(solid: &mut Vec<TerrainVertex>) -> Sides {
-    if !GROUPED.load(Ordering::Relaxed) || !partition_safe(solid) {
+    if !GROUPED.load(Ordering::Relaxed) {
         return sort_legacy(solid);
     }
-    sort_parts(solid, true)
+    let buckets: Vec<u8> = solid
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|q| bucket(q) as u8)
+        .collect();
+    if !partition_safe_with_buckets(solid, &buckets) {
+        return sort_legacy_with_buckets(solid, buckets);
+    }
+    sort_parts_with_buckets(solid, true, buckets)
 }
 
 // Coplanar overlays need model order. A later opaque quad must not be moved
 // before an overlapping cutout. Nonplanar meshes and expensive proofs
 // conservatively retain their original ordering and single shader.
+#[cfg(test)]
 fn partition_safe(solid: &[TerrainVertex]) -> bool {
+    let buckets: Vec<u8> = solid
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|q| bucket(q) as u8)
+        .collect();
+    partition_safe_with_buckets(solid, &buckets)
+}
+
+fn partition_safe_with_buckets(solid: &[TerrainVertex], buckets: &[u8]) -> bool {
     let quads = solid.as_chunks::<4>().0;
     let opaque = |q: &[TerrainVertex; 4]| q[0].layer & OPAQUE_LAYER != 0;
     if quads.iter().all(opaque) || quads.iter().all(|q| !opaque(q)) {
@@ -236,8 +256,8 @@ fn partition_safe(solid: &[TerrainVertex]) -> bool {
     let mut cutouts = std::collections::BTreeMap::<(usize, u32), Vec<[f32; 4]>>::new();
     let mut sloped_cutouts: Vec<[glam::Vec3; 4]> = Vec::new();
     let mut comparisons = 0;
-    for q in quads {
-        let b = bucket(q);
+    for (q, &b) in quads.iter().zip(buckets) {
+        let b = usize::from(b);
         let Bucket::Side(axis, _) = BUCKETS[b] else {
             let points = q.map(|v| glam::Vec3::from(v.pos));
             let normal = (points[1] - points[0]).cross(points[2] - points[0]);
@@ -300,7 +320,22 @@ fn partition_safe(solid: &[TerrainVertex]) -> bool {
 }
 
 /// `sort`, with all the opaque parts first when `grouped`.
+#[cfg(test)]
 fn sort_parts(solid: &mut Vec<TerrainVertex>, grouped: bool) -> Sides {
+    let buckets: Vec<u8> = solid
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|q| bucket(q) as u8)
+        .collect();
+    sort_parts_with_buckets(solid, grouped, buckets)
+}
+
+fn sort_parts_with_buckets(
+    solid: &mut Vec<TerrainVertex>,
+    grouped: bool,
+    mut slots: Vec<u8>,
+) -> Sides {
     let (quads, rest) = solid.as_chunks::<4>();
     debug_assert!(rest.is_empty(), "solid vertices come in quads");
     let cutout = |q: &[TerrainVertex; 4]| q[0].layer & OPAQUE_LAYER == 0;
@@ -309,10 +344,9 @@ fn sort_parts(solid: &mut Vec<TerrainVertex>, grouped: bool) -> Sides {
         true => b + 7 * usize::from(cutout),
         false => b * 2 + usize::from(cutout),
     };
-    let slots: Vec<u8> = quads
-        .iter()
-        .map(|q| position(bucket(q), cutout(q)) as u8)
-        .collect();
+    for (quad, b) in quads.iter().zip(&mut slots) {
+        *b = position(usize::from(*b), cutout(quad)) as u8;
+    }
     let has_cutout = quads.iter().any(cutout);
     let mut counts = [0u32; 7];
     let mut slot_counts = [0u32; 14];
@@ -374,9 +408,18 @@ fn sort_parts(solid: &mut Vec<TerrainVertex>, grouped: bool) -> Sides {
 }
 
 fn sort_legacy(solid: &mut Vec<TerrainVertex>) -> Sides {
+    let buckets: Vec<u8> = solid
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|q| bucket(q) as u8)
+        .collect();
+    sort_legacy_with_buckets(solid, buckets)
+}
+
+fn sort_legacy_with_buckets(solid: &mut Vec<TerrainVertex>, buckets: Vec<u8>) -> Sides {
     let (quads, rest) = solid.as_chunks::<4>();
     debug_assert!(rest.is_empty(), "solid vertices come in quads");
-    let buckets: Vec<u8> = quads.iter().map(|q| bucket(q) as u8).collect();
     let has_cutout = quads.iter().any(|q| q[0].layer & OPAQUE_LAYER == 0);
     let mut counts = [0u32; 7];
     let mut planes = [0f32; 7];

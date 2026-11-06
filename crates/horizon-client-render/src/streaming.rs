@@ -2399,6 +2399,7 @@ mod tests {
         mesh.solid.resize(64, bytemuck::Zeroable::zeroed());
         mesh.translucent.resize(16, bytemuck::Zeroable::zeroed());
         mesh.block_entities.push(([1, 2, 3], 7));
+        mesh.lights.push(([4, 5, 6], 11));
         mesh.visibility = 0;
         mesh.sides = crate::mesher::Sides::unsorted(16);
         let capacities = mesh.capacity_bytes();
@@ -2415,6 +2416,7 @@ mod tests {
         assert!(reused.solid.is_empty());
         assert!(reused.translucent.is_empty());
         assert!(reused.block_entities.is_empty());
+        assert!(reused.lights.is_empty());
         assert_eq!(reused.visibility, crate::mesher::ALL_VISIBLE);
         assert_eq!(reused.sides, crate::mesher::Sides::default());
         assert_eq!(pool.bytes, 0);

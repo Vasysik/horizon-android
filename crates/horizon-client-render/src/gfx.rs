@@ -4090,6 +4090,9 @@ impl Renderer {
             return Err("split opaque terrain is unavailable on this backend".into());
         }
         self.opaque_terrain_on = on;
+        // Keep subsequently meshed sections in the layout being compared.
+        // Existing sections retain their own layout in Sides.
+        crate::mesher::group_parts(on);
         Ok(())
     }
     /// Developer-only comparison, with the ordinary path retained for packs and mirrors.

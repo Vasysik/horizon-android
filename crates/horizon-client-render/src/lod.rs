@@ -898,6 +898,9 @@ pub struct Lod {
     saved: Saved,
     reduced: Reduced,
     saved_order: VecDeque<(i32, i32)>,
+    /// Consecutive detail results share coarse tiles. Notify their neighbours
+    /// after the batch, before any result that can settle a mesh revision.
+    detail_changes: Option<FxHashSet<TileKey>>,
 }
 impl Lod {
     pub fn new(source: Arc<dyn LodSource>, context: Arc<WorkerContext>) -> Self {
@@ -1206,6 +1209,7 @@ impl Lod {
             saved: FxHashMap::default(),
             reduced: FxHashMap::default(),
             saved_order: VecDeque::new(),
+            detail_changes: None,
         }
     }
     /// The solid ground at block column (x, z): its top face's height and
@@ -1297,6 +1301,10 @@ impl Lod {
     /// ancestor clips around footprints, not column values, so only the tile
     /// and the neighbours whose edge columns read it need remeshing.
     fn mark_data_changed(&mut self, key: TileKey) {
+        if let Some(changes) = self.detail_changes.as_mut() {
+            changes.insert(key);
+            return;
+        }
         self.mark_mesh(key);
         self.mark_side_neighbors_of(key);
         if self.active.contains(&key) {
@@ -1567,7 +1575,9 @@ impl Lod {
         // A single generated chunk cannot describe a larger cell's area
         // (strides over 16 blocks, levels over 4); at each level up to that,
         // only the tile holding the chunk overlaps it.
-        for level in 0..=4u8 {
+        // apply_fine installed all level-zero samples and refreshed selection.
+        // Repeating that write clones and invalidates the same columns twice.
+        for level in 1..=4u8 {
             let size = 16 << level;
             let key = TileKey {
                 x: (cx * 16).div_euclid(size),
@@ -1848,8 +1858,23 @@ impl Lod {
         }
         self.wanted_stale = true;
     }
+    fn flush_detail_changes(&mut self) {
+        let Some(mut changes) = self.detail_changes.take() else {
+            return;
+        };
+        for key in changes.drain() {
+            self.mark_data_changed(key);
+        }
+        self.detail_changes = Some(changes);
+    }
     fn receive(&mut self, meshes: &mut Vec<(TileKey, SectionMesh)>) {
+        self.detail_changes = Some(FxHashSet::default());
         while let Ok(done) = self.results.try_recv() {
+            if !matches!(&done, Done::Detail(..) | Done::Observed(..)) {
+                // In particular, an older mesh result must still see the
+                // revision dirtied by every detail result that preceded it.
+                self.flush_detail_changes();
+            }
             match done {
                 Done::Detail(key, columns) => {
                     crate::spans::time("lod_detail", || self.finish_detail(key, columns))
@@ -1876,6 +1901,8 @@ impl Lod {
                 }
             }
         }
+        self.flush_detail_changes();
+        self.detail_changes = None;
     }
     /// A finished mesh: shown when it is newer than what the tile shows now.
     /// A result newer than the frame's current one is still useful while a
@@ -2380,6 +2407,88 @@ fn retiring_detail<'a>(
 mod tests {
     use super::*;
     use crate::mesher::TerrainVertex;
+    fn detail_batch_fixture() -> Lod {
+        let mut lod = Lod::scheduler_for_test();
+        for x in 0..2 {
+            let key = TileKey { x, z: 0, level: 2 };
+            lod.plan.nodes.insert(key);
+            lod.active.insert(key);
+            lod.ready
+                .insert(key, Arc::new(vec![Column::default(); 256]));
+        }
+        lod
+    }
+    fn detail_columns(height: i32) -> ReducedColumns {
+        ReducedColumns::new(Arc::new(std::array::from_fn(|_| Column {
+            surface: Some(Surface {
+                height,
+                state: BlockStateId(1),
+                water: None,
+                biome: 0,
+            }),
+            ..Column::default()
+        })))
+    }
+    #[test]
+    fn consecutive_details_keep_columns_and_coalesce_neighbor_invalidation() {
+        let mut direct = detail_batch_fixture();
+        let mut batched = detail_batch_fixture();
+        let (send, receive) = mpsc::channel();
+        batched.results = receive;
+        for z in 0..4 {
+            for x in 0..4 {
+                direct.finish_detail((x, z), detail_columns(64 + x + z * 4));
+                send.send(Done::Detail((x, z), detail_columns(64 + x + z * 4)))
+                    .unwrap();
+            }
+        }
+        batched.receive(&mut Vec::new());
+        assert_eq!(batched.ready, direct.ready);
+        assert_eq!(batched.detail_masks, direct.detail_masks);
+        let changed = |lod: &Lod| lod.dirty.keys().copied().collect::<FxHashSet<_>>();
+        assert_eq!(changed(&batched), changed(&direct));
+        assert_eq!(
+            batched.dirty.len(),
+            2,
+            "the coarse tile and its east neighbor"
+        );
+        assert!(
+            batched.next_version < direct.next_version,
+            "one pending remesh must cover all consecutive detail changes"
+        );
+        assert!(batched.detail_changes.is_none());
+    }
+    #[test]
+    fn details_invalidate_before_an_older_mesh_result_can_settle_the_cutout() {
+        let mut lod = detail_batch_fixture();
+        let key = TileKey {
+            x: 0,
+            z: 0,
+            level: 2,
+        };
+        lod.mark_mesh(key);
+        let old_version = lod.mesh_version[&key];
+        lod.dirty.clear(); // That revision has already been dispatched.
+        lod.cutout_pending = Some([(0, 0)].into_iter().collect());
+        lod.cutout_waiting.insert(key);
+        let (send, receive) = mpsc::channel();
+        lod.results = receive;
+        send.send(Done::Detail((0, 0), detail_columns(75))).unwrap();
+        send.send(Done::Mesh {
+            key,
+            version: old_version,
+            mesh: SectionMesh::default(),
+            canceled: Arc::new(AtomicBool::new(false)),
+        })
+        .unwrap();
+        lod.receive(&mut Vec::new());
+        assert!(lod.mesh_version[&key] > old_version);
+        assert!(lod.unmeshed.contains(&key));
+        assert!(lod.cutout_waiting.contains(&key));
+        lod.publish_cutout_if_ready();
+        assert!(lod.cutout.is_none());
+    }
+
     #[test]
     fn retiring_fine_stand_ins_request_detail_before_their_gpu_meshes_can_retire() {
         let column = (12, 0);

@@ -190,6 +190,7 @@ fn reused_mesh_matches_fresh_geometry_across_sections_and_resource_reload() {
                 bytemuck::cast_slice::<TerrainVertex, u8>(&recycled.translucent)
             );
             assert_eq!(fresh.block_entities, recycled.block_entities);
+            assert_eq!(fresh.lights, recycled.lights);
             assert_eq!(fresh.visibility, recycled.visibility);
             assert_eq!(fresh.sides, recycled.sides);
             assert_eq!(fresh.bounds, recycled.bounds);
