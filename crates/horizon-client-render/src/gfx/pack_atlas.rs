@@ -210,6 +210,28 @@ impl PackAtlas {
         let mut body = body;
         if flat {
             body.push_str(FACE);
+        } else {
+            body.push_str(
+                "    uint hz_face = min((uint(round(hz_v_color.a * 255.0)) >> 4u) & 7u, 5u);\n    \
+                 vec3 hz_faces[6] = vec3[6](\n        \
+                     vec3(0.0, -1.0, 0.0),\n        \
+                     vec3(0.0, 1.0, 0.0),\n        \
+                     vec3(0.0, 0.0, -1.0),\n        \
+                     vec3(0.0, 0.0, 1.0),\n        \
+                     vec3(-1.0, 0.0, 0.0),\n        \
+                     vec3(1.0, 0.0, 0.0)\n    \
+                 );\n    \
+                 vec4 hz_tangents[6] = vec4[6](\n        \
+                     vec4(1.0, 0.0, 0.0, -1.0),\n        \
+                     vec4(1.0, 0.0, 0.0, 1.0),\n        \
+                     vec4(-1.0, 0.0, 0.0, 1.0),\n        \
+                     vec4(1.0, 0.0, 0.0, 1.0),\n        \
+                     vec4(0.0, 0.0, 1.0, 1.0),\n        \
+                     vec4(0.0, 0.0, -1.0, 1.0)\n    \
+                 );\n    \
+                 hz_Normal = hz_faces[hz_face];\n    \
+                 hz_tangent = hz_tangents[hz_face];\n",
+            );
         }
         declarations.push_str("vec2 hz_cell; vec2 hz_scale; vec4 hz_tangent;\n");
         let entity = if flat || block_ids {
@@ -221,7 +243,7 @@ impl PackAtlas {
         let mid_block = if flat {
             "vec4((floor((hz_p0 + hz_p2) * 0.5 - 0.5 * hz_Normal) + 0.5 - hz_v_pos) * 64.0, 0.0)"
         } else {
-            "vec4(0.0)"
+            "vec4((floor(hz_v_pos - 0.5 * hz_Normal) + 0.5 - hz_v_pos) * 64.0, 0.0)"
         };
         let attributes = [
             ("mc_Entity", entity),

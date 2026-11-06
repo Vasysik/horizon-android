@@ -871,9 +871,9 @@ mod reuse_tests;
 pub const OPAQUE_LAYER: u16 = 1 << 15;
 /// The bits of `TerrainVertex::color`'s alpha byte that hold how brightly its face shines
 /// in HDR output (`gfx/hdr.rs`): 15 minus the tier, plus 4 for one that shines all over
-/// (`WHOLE`), so the usual 0xFF means none. The byte's high nibble carries the fluid face
-/// flags (`fluid_face`); the shaders ignore the vertex alpha, so both travel to the
-/// material stage untouched.
+/// (`WHOLE`), so the usual 0xFF means none. The byte's high nibble carries the quad's face
+/// (`fluid_face` adds the fluid marker); the shaders ignore the vertex alpha, so both
+/// travel to the material stage untouched.
 pub const EMISSION_BITS: u32 = 0x0F00_0000;
 /// HDR tiers, by the kind of light rather than its level: a candle's flame is as bright as
 /// a torch's, it only lights less around it. 0 stays as in SDR.
@@ -895,11 +895,12 @@ pub fn emitting(color: u32, tier: u8) -> u32 {
     };
     color & !EMISSION_BITS | u32::from(15 - code) << 24
 }
-/// The high nibble of `TerrainVertex::color`'s alpha byte: 8 plus the face (`Direction`
-/// as usize) on a fluid quad, 0xF on every other. `terrain.wgsl` reads only the low nibble
-/// (the emission), so only the material stage of Horizon's own packs reads it
-/// (`gfx/native_material.rs`); whether the fluid is water or lava follows from the pass
-/// that draws it.
+/// The high nibble of `TerrainVertex::color`'s alpha byte: the quad's face (`Direction`
+/// as usize, 0 to 5), with 0x8 added on a fluid quad. `terrain.wgsl` reads only the low
+/// nibble (the emission); the material stage of Horizon's own packs reads the high nibble
+/// (`gfx/native_material.rs`) and the non-flat atlas decode reads the face
+/// (`gfx/pack_atlas.rs`); whether the fluid is water or lava follows from the pass that
+/// draws it.
 pub const FLUID_FACE_BITS: u32 = 0xF000_0000;
 /// `color` marked as a fluid quad of face `face` (`Direction` as usize, 0 to 5).
 pub fn fluid_face(color: u32, face: usize) -> u32 {
@@ -1327,7 +1328,8 @@ impl Mesher<'_> {
                 } else {
                     face.layer as u16
                 },
-                emitting(pack_rgb(rgb), tier),
+                (emitting(pack_rgb(rgb), tier) & !FLUID_FACE_BITS)
+                    | (((q.facing as u32) & 0x7) << 28),
                 pack_coords(lighting::with_emission(coords[i], q.light_emission)),
             ));
         }

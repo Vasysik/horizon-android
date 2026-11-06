@@ -20,6 +20,11 @@ pub enum EditorDragKind {
         last_x: f32,
         moved: bool,
     },
+    PropsSlider {
+        tab: usize,
+        index: usize,
+        rect: [f32; 4],
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

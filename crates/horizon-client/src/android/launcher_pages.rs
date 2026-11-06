@@ -312,6 +312,7 @@ pub(super) enum Action {
     PerformanceHints,
     GpuProfile,
     // Video settings actions (options.txt)
+    RenderScaleDelta(i32),
     RenderDistDelta(i32),
     SimDistDelta(i32),
     CycleMaxFps,
@@ -557,25 +558,24 @@ fn draw_setting_card(
             | SettingControl::Button(_, _, true)
             | SettingControl::TextField { active: true, .. }
     );
-    ui.rounded(x, y, w, h, 16.0, my3_card_bg());
-    ui.border(
+    ui.rounded(
         x,
         y,
         w,
         h,
-        16.0,
+        18.0,
         if is_active_card {
-            color::with_alpha(my3_accent(), 0.55)
+            my3_surface_high()
         } else {
-            my3_card_border()
+            my3_card_bg()
         },
     );
     if is_active_card {
         ui.rounded(
             x + 4.0,
-            y + 10.0,
+            y + 12.0,
             3.5,
-            (h - 20.0).max(12.0),
+            (h - 24.0).max(12.0),
             1.8,
             my3_accent(),
         );
@@ -715,6 +715,8 @@ fn draw_setting_card(
             if let Some(c) = ui.clip_rect(right_half) {
                 targets.push((c, plus_action));
             }
+            list_targets.push((left_half, minus_action));
+            list_targets.push((right_half, plus_action));
             list_targets.push((minus_rect, minus_action));
             list_targets.push((plus_rect, plus_action));
             button(ui, targets, minus_rect, "-", minus_action, false);
@@ -3864,10 +3866,12 @@ impl Launcher {
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
 
                 let renderer_str = format!("{} v", c.renderer.label());
+                let res_pct = c.render_scale.percent().clamp(25, 100);
+                let res_frac = ((res_pct - 25) as f32 / 75.0).clamp(0.0, 1.0);
                 let res_str = if self.catalog.editing == Some("render_scale") {
                     self.catalog.render_scale_text.clone()
                 } else {
-                    format!("{}% v", c.render_scale.percent())
+                    format!("{res_pct}%")
                 };
                 let hz_str = format!("{} v", c.device.display_label());
                 let aspect_str = format!("{} v", c.screen.aspect.label());
@@ -3914,7 +3918,12 @@ impl Launcher {
                                 action: Action::Field("render_scale"),
                             }
                         } else {
-                            SettingControl::Button(&res_str, Action::RenderScale, false)
+                            SettingControl::Slider {
+                                value_label: &res_str,
+                                fraction: res_frac,
+                                minus_action: Action::RenderScaleDelta(-5),
+                                plus_action: Action::RenderScaleDelta(5),
+                            }
                         },
                     ),
                     (
@@ -5449,6 +5458,20 @@ impl Launcher {
                 );
             }
             // Video settings mutations
+            Some(Action::RenderScaleDelta(delta)) => {
+                let next_pct = (self.catalog.config.render_scale.percent() as i32 + delta)
+                    .clamp(25, 100) as u32;
+                let scale = crate::display::RenderScale::new(next_pct);
+                self.catalog.config.render_scale = scale;
+                let _ = self.catalog.config.save(&self.home);
+                crate::display::set_scale(scale);
+                self.modify_game_settings(|s| {
+                    s.horizon.resolution_scale = next_pct;
+                });
+                self.modify_touch_settings(|t| {
+                    t.resolution_scale_percent = next_pct;
+                });
+            }
             Some(Action::RenderDistDelta(delta)) => {
                 self.modify_game_settings(|s| {
                     s.render_distance = (s.render_distance + delta).clamp(2, 32);

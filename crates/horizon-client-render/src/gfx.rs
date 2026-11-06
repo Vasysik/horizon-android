@@ -48,6 +48,7 @@ pub use entity_batch::{
     TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY,
     WATER_MASK_OVERLAY, mark_oit,
 };
+pub use pack_post::PackPost;
 pub use view::{View, ViewSet};
 
 /// Cloneable GPU state for building `pack_post::PackPost` off the Android UI thread.
@@ -173,7 +174,6 @@ mod pack_entities;
 mod pack_hand;
 mod pack_images;
 mod pack_post;
-pub use pack_post::PackPost;
 mod pack_shadow;
 mod pack_sky;
 mod pack_textures;
@@ -5389,6 +5389,7 @@ impl Renderer {
         if self.pack_post.as_ref().is_some_and(|p| p.1.is_some()) {
             self.native = None;
         }
+        self.invalidate_menu_blur();
         report
     }
     /// Whether the loaded `shaders/` pack has at least one active pass.
@@ -5403,6 +5404,7 @@ impl Renderer {
         self.pack_post = None;
         self.native = None;
         self.pack_atlas = None;
+        self.invalidate_menu_blur();
     }
     /// Runs the sky, material and post stages of one of Horizon's own shader packs from now
     /// on (`None`: no pack), with its options' values; replaces a `shaders/` pack. Returns the

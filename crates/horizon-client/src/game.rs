@@ -14780,12 +14780,11 @@ impl Game<'_> {
         #[cfg(target_os = "android")]
         let in_world_stationary_overlay = !self.shows_panorama()
             && self.player.is_some()
+            && !self.pad.touch_ui.floating_menu
             && (self.singleplayer_paused()
                 || self.screen != Screen::Playing
-                || self.pad.touch_ui.floating_menu
                 || self.pad.touch.editor.is_some())
             && (self.singleplayer_paused()
-                || self.pad.touch_ui.floating_menu
                 || self.pad.touch.editor.is_some()
                 || self.pad.touch.state().left == [0.0, 0.0]);
         #[cfg(not(target_os = "android"))]
@@ -15229,7 +15228,7 @@ impl Game<'_> {
         } else {
             self.gather_dynamic_lights(camera, alpha);
         }
-        let pack_inputs = if skip_world {
+        let pack_inputs = if title {
             Default::default()
         } else {
             self.shader_pack_inputs(camera, alpha as f32)

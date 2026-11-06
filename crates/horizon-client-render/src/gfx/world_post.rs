@@ -65,6 +65,8 @@ pub struct Post {
     pub upscale: f32,
     /// TAA runs this frame (`jitter`): not on the title screen or under a shader pack.
     taa_on: bool,
+    /// Whether an external/native shader pack is active this frame.
+    pub pack_active: bool,
     target: Option<WorldTarget>,
     taa_resources: Option<TaaResources>,
     /// Frames jittered so far (the Halton index), and which history the next resolve writes.
@@ -243,6 +245,7 @@ impl Post {
             taa: false,
             upscale: 1.0,
             taa_on: false,
+            pack_active: false,
             target: None,
             taa_resources,
             taa_frame: 0,
@@ -258,7 +261,13 @@ impl Post {
 
     /// The world's rendered size and the size it is shown at (TAA's history).
     fn sizes(&self, window: [u32; 2]) -> ([u32; 2], [u32; 2]) {
-        let output = window.map(|v| ((v as f32 * self.scale).round() as u32).clamp(1, 8192));
+        let effective_scale =
+            if cfg!(target_os = "android") && self.pack_active && self.scale > 0.99 {
+                0.75
+            } else {
+                self.scale
+            };
+        let output = window.map(|v| ((v as f32 * effective_scale).round() as u32).clamp(1, 8192));
         let upscale = if self.taa_on { self.upscale } else { 1.0 };
         (
             output.map(|v| ((v as f32 / upscale).round() as u32).max(1)),
@@ -308,6 +317,7 @@ impl Post {
         window: [u32; 2],
         always: bool,
     ) -> Option<(wgpu::TextureView, wgpu::TextureView)> {
+        self.pack_active = always;
         if self.scale == 1.0 && !self.antialias && !self.taa_on && !always {
             self.target = None;
             return None;

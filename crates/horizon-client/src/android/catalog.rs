@@ -282,6 +282,8 @@ impl Config {
         if self.fast_chunk_upload {
             settings.horizon.upload_budget_kib = settings.horizon.upload_budget_kib.max(4096);
         }
+        settings.horizon.cave_culling = true;
+        settings.horizon.entity_culling = true;
         settings.horizon.resolution_scale = self.render_scale.percent().clamp(25, 100);
         settings.save(&options_path);
         let touch_path = game.join("horizon-touch.json");

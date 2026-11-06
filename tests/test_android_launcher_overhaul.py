@@ -636,6 +636,47 @@ class LauncherOverhaulTests(unittest.TestCase):
         self.assertIn("fn draw_diagnostics_summary_modal(", launcher_pages)
 
 
+
+    def test_mali_mrt_shader_ground_complementary_passthrough_and_m3_sliders(self) -> None:
+        adapter = (ROOT / "third_party/wgpu-hal/src/vulkan/adapter.rs").read_text(encoding="utf-8")
+        flat = (ROOT / "crates/horizon-client-render/src/gfx/flat.rs").read_text(encoding="utf-8")
+        mesher = (ROOT / "crates/horizon-client-render/src/mesher.rs").read_text(encoding="utf-8")
+        pack_atlas = (ROOT / "crates/horizon-client-render/src/gfx/pack_atlas.rs").read_text(encoding="utf-8")
+        pack_post = (ROOT / "crates/horizon-client-render/src/gfx/pack_post.rs").read_text(encoding="utf-8")
+        gfx = (ROOT / "crates/horizon-client-render/src/gfx.rs").read_text(encoding="utf-8")
+        game = (ROOT / "crates/horizon-client/src/game.rs").read_text(encoding="utf-8")
+        layout = (ROOT / "crates/horizon-client-render/src/touch/layout.rs").read_text(encoding="utf-8")
+        touch = (ROOT / "crates/horizon-client-render/src/touch.rs").read_text(encoding="utf-8")
+        editor = (ROOT / "crates/horizon-client-render/src/touch/editor.rs").read_text(encoding="utf-8")
+        touch_ui = (ROOT / "crates/horizon-client/src/touch_ui.rs").read_text(encoding="utf-8")
+        launcher_pages = (ROOT / "crates/horizon-client/src/android/launcher_pages.rs").read_text(encoding="utf-8")
+
+        # 1. ARM Mali (0x13b5) MRT limit fix & !flat terrain normal/tangent decoding
+        self.assertIn("0x13b5", adapter)
+        self.assertIn("0x5143", adapter)
+        self.assertIn('std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1")', flat)
+        self.assertIn("((q.facing as u32) & 0x7) << 28", mesher)
+        self.assertIn(
+            "uint hz_face = min((uint(round(hz_v_color.a * 255.0)) >> 4u) & 7u, 5u);",
+            pack_atlas,
+        )
+        self.assertIn("module.types.insert(", pack_post)
+        self.assertIn("pub use pack_post::PackPost;", gfx)
+
+        # 2. Complementary Reimagined loads while in-world menu is open (if title, not if skip_world)
+        self.assertIn("let pack_inputs = if title {", game)
+
+        # 3. Default MCPE Hit button (Control::Attack) passthrough & continuous camera drag
+        self.assertIn("passthrough_fingers: BTreeSet<u64>,", touch)
+        self.assertIn("row[Control::Attack as usize].passthrough = true;", layout)
+
+        # 4. Real-time continuous slider dragging in ButtonProperty & Video Settings
+        self.assertIn("PropsSlider {", editor)
+        self.assertIn("fn apply_props_slider(", touch_ui)
+        self.assertIn("fn draw_m3_selector_cell(", touch_ui)
+        self.assertIn("Action::RenderScaleDelta(", launcher_pages)
+
+
 if __name__ == "__main__":
 
     unittest.main()

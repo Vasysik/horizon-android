@@ -169,6 +169,7 @@ impl StartupMenu {
                 game.settings.horizon.resolution_scale =
                     game.pad.touch.settings.resolution_scale_percent;
             }
+            game.settings.touch = game.pad.touch.settings.clone();
             game.pad.touch_ui.pointer_off = !game.pad.touch.settings.virtual_mouse_enabled;
             game.pad.touch_ui.cursor_initialized = self.touch.cursor_initialized;
             game.pad.touch_ui.last_viewport = self.touch.last_viewport;
@@ -1855,11 +1856,25 @@ impl Loading {
                     }
                     InGameMenuAction::SetResolutionScale(pct) => {
                         let clamped = pct.clamp(25, 100);
+                        let changed = self.menu.controls.settings.resolution_scale_percent
+                            != clamped
+                            || self.settings.horizon.resolution_scale != clamped;
                         self.menu.controls.settings.resolution_scale_percent = clamped;
                         self.settings.horizon.resolution_scale = clamped;
-                        let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
-                        self.save_menu_settings();
+                        if let Some(r) = self.renderer.as_mut() {
+                            r.set_world_post(
+                                clamped as f32 / 100.0,
+                                self.settings.horizon.fxaa,
+                                self.settings.horizon.taa,
+                                self.settings.horizon.upscaling.ratio(),
+                            );
+                            r.invalidate_menu_blur();
+                        }
+                        if changed {
+                            let _ = self.menu.controls.settings.save();
+                            self.save_menu_settings();
+                        }
                     }
                     InGameMenuAction::ToggleGameAnimations => {
                         let next = !self.menu.controls.settings.disable_game_animations;
@@ -2360,14 +2375,13 @@ impl Loading {
             return;
         }
         #[cfg(target_os = "android")]
-        let control_editor_open = self.menu.controls.editor.is_some();
-        #[cfg(not(target_os = "android"))]
-        let control_editor_open = false;
         let android_boot_loading = cfg!(target_os = "android")
             && self.window.is_some()
             && self.loaded.is_none()
             && !self.menu.options_open
-            && !control_editor_open;
+            && self.menu.controls.editor.is_none();
+        #[cfg(not(target_os = "android"))]
+        let android_boot_loading = false;
         if self.menu.pending.is_some() || android_boot_loading {
             horizon_client::level_loading::draw_loading_overlay(
                 batch,

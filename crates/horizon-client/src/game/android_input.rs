@@ -962,9 +962,10 @@ impl Game<'_> {
                 }
                 InGameMenuAction::SetResolutionScale(pct) => {
                     let clamped = pct.clamp(25, 100);
+                    let changed = self.pad.touch.settings.resolution_scale_percent != clamped
+                        || self.settings.horizon.resolution_scale != clamped;
                     self.pad.touch.settings.resolution_scale_percent = clamped;
                     self.settings.horizon.resolution_scale = clamped;
-                    let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                     if let Some(r) = self.renderer.as_mut() {
                         r.set_world_post(
@@ -975,7 +976,10 @@ impl Game<'_> {
                         );
                         r.invalidate_menu_blur();
                     }
-                    self.settings.save(&Self::options_path());
+                    if changed {
+                        let _ = self.pad.touch.settings.save();
+                        self.settings.save(&Self::options_path());
+                    }
                 }
                 InGameMenuAction::ToggleGameAnimations => {
                     let next = !self.pad.touch.settings.disable_game_animations;

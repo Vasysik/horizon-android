@@ -220,31 +220,28 @@ fn trim_fragment_outputs(module: &mut naga::Module, targets: &[Option<wgpu::Colo
             new_members.push(m);
         }
         let new_span = (new_members.len() * 16) as u32;
-        let old_ty = module.types[res.ty].clone();
-        let trimmed = naga::Type {
-            name: old_ty.name,
-            inner: naga::TypeInner::Struct {
-                members: new_members,
-                span: new_span,
-            },
-        };
-        // Insert the trimmed type and point the result at it: `UniqueArena` has no
-        // mutable access, and reusing an equal type an earlier pass inserted is fine.
         let span = module.types.get_span(res.ty);
-        let new_ty = module.types.insert(trimmed, span);
-        if new_ty != res.ty {
-            if let Some(result) = &mut ep.function.result {
-                result.ty = new_ty;
-            }
+        let new_ty = module.types.insert(
+            naga::Type {
+                name: module.types[res.ty].name.clone(),
+                inner: naga::TypeInner::Struct {
+                    members: new_members,
+                    span: new_span,
+                },
+            },
+            span,
+        );
+        if let Some(r) = &mut ep.function.result {
+            r.ty = new_ty;
         }
         for (_, expr) in ep.function.expressions.iter_mut() {
             if let naga::Expression::Compose { ty, components } = expr
                 && *ty == res.ty
                 && components.len() == total
             {
+                *ty = new_ty;
                 let filtered: Vec<_> = kept_indices.iter().map(|&i| components[i]).collect();
                 *components = filtered;
-                *ty = new_ty;
             }
         }
     }
@@ -831,6 +828,11 @@ fn sampler(
 /// naga's backends turn a module they cannot write into a panic as the driver gets the pipeline
 /// (#3525), which a pack's program must not turn into a crash.
 fn checked<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, String> {
+    if cfg!(target_os = "android") {
+        // Yield briefly between pipeline compilations on Android so Mali's internal
+        // shader compiler mutex never starves the main render thread's frame submission.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
     let value = crate::crash::contain(create);
@@ -1042,7 +1044,7 @@ fn block_ids(
         count: None,
     };
     let entries: &[wgpu::BindGroupLayoutEntry] = if flat {
-        &[storage(0), storage(1), storage(2)]
+        &[storage(0), storage(1)]
     } else {
         &[storage(0)]
     };
@@ -1861,7 +1863,7 @@ fn build_compute(
 
 impl PackPost {
     /// Builds the pipelines of `post` for a screen of `screen` format.
-    pub(super) fn new(
+    pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         adapter: &wgpu::Adapter,
@@ -3280,7 +3282,7 @@ impl PackPost {
     }
 
     /// The clouds to draw this frame (`None`: none).
-    pub(super) fn set_clouds(&mut self, clouds: Option<Clouds>) {
+    pub fn set_clouds(&mut self, clouds: Option<Clouds>) {
         self.cloud_draw = clouds.filter(|c| c.quads > 0);
     }
 
@@ -3357,7 +3359,7 @@ impl PackPost {
     }
 
     /// The rain and snow to draw this frame (`None`: none).
-    pub(super) fn set_weather(&mut self, weather: Option<Weather>) {
+    pub fn set_weather(&mut self, weather: Option<Weather>) {
         self.weather_draw = weather;
     }
 
@@ -3388,7 +3390,7 @@ impl PackPost {
     }
 
     /// What the shadow camera draws of the terrain this frame, when the pack draws it.
-    pub(super) fn shadow_view(&self, frame: &super::Frame) -> Option<ShadowView> {
+    pub fn shadow_view(&self, frame: &super::Frame) -> Option<ShadowView> {
         self.shadow_targets.as_ref()?;
         if self.shadow_terrain.is_none() && self.shadow_water.is_none() {
             return None;
@@ -3853,7 +3855,7 @@ impl PackPost {
     /// Runs the pack over the world drawn into `world` (colour) and `world_depth`, then draws
     /// the result onto `screen`.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn run(
+    pub fn run(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -3866,7 +3868,7 @@ impl PackPost {
         size: [u32; 2],
         window: [u32; 2],
         pages: &[(u32, wgpu::Buffer)],
-        flat_indices: Option<&wgpu::Buffer>,
+        _flat_indices: Option<&wgpu::Buffer>,
         terrain: &mut TerrainDraw<'_>,
     ) {
         self.resize(device, size);
@@ -3891,10 +3893,6 @@ impl PackPost {
                             wgpu::BindGroupEntry {
                                 binding: 1,
                                 resource: buffer.as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: flat_indices.unwrap_or(ids).as_entire_binding(),
                             },
                         ],
                     });

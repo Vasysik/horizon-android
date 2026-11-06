@@ -1606,8 +1606,8 @@ impl TouchUi {
                     let sl_x = cx + 14.0;
                     let sl_w = (cw - 28.0).max(40.0);
                     let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
-                    let pct = (25.0 + t * 75.0).round() as u32;
-                    return Some(InGameMenuAction::SetResolutionScale(pct.clamp(25, 100)));
+                    let pct = (((25.0 + t * 75.0) / 5.0).round() as u32 * 5).clamp(25, 100);
+                    return Some(InGameMenuAction::SetResolutionScale(pct));
                 }
                 TouchPhase::Ended | TouchPhase::Cancelled => {
                     self.resolution_scale_dragging = false;
@@ -1970,6 +1970,7 @@ impl TouchUi {
         if phase == TouchPhase::Started {
             if !inside([dx, dy, dw, dh]) || inside([dx + dw - 76.0, dy + 10.0, 64.0, 30.0]) {
                 self.floating_menu = false;
+                self.resolution_scale_dragging = false;
                 self.sensitivity_dragging = false;
                 self.pointer_size_dragging = false;
                 self.mouse_speed_dragging = false;
@@ -1994,20 +1995,29 @@ impl TouchUi {
                 }
             }
 
-            // Check if touch started on sliders in Tab 0 (Recommended)
+            // Check if touch started on sliders or quick chips in Tab 0 (Recommended)
             if self.hub_tab == 0 && inside(content_pane) {
                 let body_y = body_top - self.hub_scroll;
                 let res_card_y = body_y + 18.0;
-                if inside([cx, res_card_y + 20.0, cw, 26.0]) {
+                let chip_y = res_card_y + 48.0;
+                let chip_gap = 6.0;
+                let chip_w = (cw - 28.0 - chip_gap * 4.0) / 5.0;
+                for (ci, pct) in [50u32, 65, 75, 85, 100].into_iter().enumerate() {
+                    let rx = cx + 14.0 + ci as f32 * (chip_w + chip_gap);
+                    if inside([rx, chip_y, chip_w, 26.0]) {
+                        return Some(InGameMenuAction::SetResolutionScale(pct));
+                    }
+                }
+                if inside([cx, res_card_y, cw, 47.0]) {
                     self.resolution_scale_dragging = true;
                     let sl_x = cx + 14.0;
                     let sl_w = (cw - 28.0).max(40.0);
                     let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
-                    let pct = (25.0 + t * 75.0).round() as u32;
-                    return Some(InGameMenuAction::SetResolutionScale(pct.clamp(25, 100)));
+                    let pct = (((25.0 + t * 75.0) / 5.0).round() as u32 * 5).clamp(25, 100);
+                    return Some(InGameMenuAction::SetResolutionScale(pct));
                 }
                 let sens_card_y = body_y + 118.0;
-                if inside([cx, sens_card_y + 22.0, cw, 28.0]) {
+                if inside([cx, sens_card_y, cw, 50.0]) {
                     self.sensitivity_dragging = true;
                     let sl_x = cx + 10.0;
                     let sl_w = (cw - 20.0).max(40.0);
@@ -2016,7 +2026,7 @@ impl TouchUi {
                     return Some(InGameMenuAction::SetTouchSensitivity(sens));
                 }
                 let spd_card_y = body_y + 230.0;
-                if inside([cx, spd_card_y + 22.0, cw, 28.0]) {
+                if inside([cx, spd_card_y, cw, 50.0]) {
                     self.mouse_speed_dragging = true;
                     let sl_x = cx + 14.0;
                     let sl_w = (cw - 28.0).max(40.0);
@@ -2025,11 +2035,11 @@ impl TouchUi {
                 }
             }
 
-            // Check if touch started on the Sensitivity slider track in Tab 1 (Controls)
+            // Check if touch started on the Sensitivity slider card in Tab 1 (Controls)
             if self.hub_tab == 1 && inside(content_pane) {
                 let body_y = body_top - self.hub_scroll;
                 let sens_card_y = body_y + 138.0;
-                let track_r = [cx, sens_card_y + 22.0, cw, 28.0];
+                let track_r = [cx, sens_card_y, cw, 50.0];
                 if inside(track_r) {
                     self.sensitivity_dragging = true;
                     let sl_x = cx + 10.0;
@@ -3765,18 +3775,17 @@ fn draw_m3_stepper_cell(
     label: &str,
     fraction: f32,
     accent: u32,
-    _accent_soft: u32,
+    accent_soft: u32,
     bg_hi: u32,
-    border_c: u32,
+    _border_c: u32,
     text_c: u32,
 ) {
-    use crate::ui_theme::{Face, Icon};
+    use crate::ui_theme::Face;
     let [rx, ry, cw, ch] = rect;
-    let rad = (ch * 0.20).clamp(9.0, 12.0);
+    let rad = (ch * 0.22).clamp(10.0, 14.0);
+    // Clean Material 3 Expressive tonal container (no harsh border stroke)
     ui.rounded(rx, ry, cw, ch, rad, bg_hi);
-    ui.border(rx, ry, cw, ch, rad, border_c);
 
-    // Split "Title|Value" or last whitespace token so both tall studio cards and compact cells look crisp
     let (title_part, val_part) = if let Some((t_str, v_str)) = label.split_once('|') {
         (t_str.trim(), v_str.trim())
     } else if let Some((t_str, v_str)) = label.rsplit_once(' ') {
@@ -3787,74 +3796,109 @@ fn draw_m3_stepper_cell(
 
     let t = fraction.clamp(0.0, 1.0);
     if ch >= 52.0 {
-        // Tall Studio Slider Card (90511.png style)
-        ui.icon(Icon::Settings, rx + 8.0, ry + 8.0, 12.0, accent);
         ui.text_clipped(
-            Face::SemiBold,
-            9.6,
-            rx + 23.0,
-            ry + 6.0,
-            (cw - 28.0).max(24.0),
+            Face::Medium,
+            9.8,
+            rx + 12.0,
+            ry + 8.0,
+            (cw - 24.0).max(24.0),
             text_c,
             title_part,
         );
 
-        // Value Pill Badge on right-middle
-        let pill_w = (ui.measure(Face::SemiBold, 9.2, val_part) + 14.0).clamp(36.0, cw - 16.0);
-        let pill_x = rx + cw - pill_w - 8.0;
+        let pill_w = (ui.measure(Face::SemiBold, 9.4, val_part) + 14.0).clamp(38.0, cw - 20.0);
+        let pill_x = rx + cw - pill_w - 10.0;
         let pill_y = ry + 23.0;
-        ui.rounded(pill_x, pill_y, pill_w, 18.0, 7.0, rgba(9, 14, 24, 230));
-        ui.border(pill_x, pill_y, pill_w, 18.0, 7.0, border_c);
+        ui.rounded(pill_x, pill_y, pill_w, 18.0, 9.0, accent_soft);
         ui.centered_fit(
             Face::SemiBold,
             9.2,
             [pill_x + 3.0, pill_y, pill_w - 6.0, 18.0],
-            text_c,
+            accent,
             val_part,
         );
 
-        // Horizontal Cyan Slider Track + White Circular Thumb Knob at bottom
-        let track_x = rx + 10.0;
-        let track_w = (cw - 20.0).max(20.0);
-        let track_y = ry + ch - 14.0;
-        ui.rounded(track_x, track_y, track_w, 5.0, 2.5, rgba(8, 12, 20, 235));
-        let fill_w = (track_w * t).max(5.0);
-        ui.rounded(track_x, track_y, fill_w, 5.0, 2.5, accent);
-        let thumb_x = (track_x + track_w * t - 6.0).clamp(track_x - 2.0, track_x + track_w - 10.0);
-        ui.rounded(
-            thumb_x,
-            track_y - 3.5,
-            12.0,
-            12.0,
-            6.0,
-            rgba(255, 255, 255, 255),
-        );
-        ui.stroke_rounded(thumb_x, track_y - 3.5, 12.0, 12.0, 6.0, 1.5, accent);
+        // Material 3 Expressive 8dp Slider Track + Vertical Pill Handle
+        let track_x = rx + 12.0;
+        let track_w = (cw - 24.0).max(20.0);
+        let track_y = ry + ch - 16.0;
+        ui.rounded(track_x, track_y, track_w, 8.0, 4.0, accent_soft);
+        let fill_w = (track_w * t).max(8.0);
+        ui.rounded(track_x, track_y, fill_w, 8.0, 4.0, accent);
+        let thumb_x = (track_x + track_w * t - 3.0).clamp(track_x, track_x + track_w - 6.0);
+        ui.rounded(thumb_x, track_y - 3.0, 6.0, 14.0, 3.0, text_c);
     } else {
-        // Compact Studio Slider Cell
-        let track_x = rx + 8.0;
-        let track_w = (cw - 16.0).max(16.0);
-        let track_y = ry + ch - 7.0;
-        ui.rounded(track_x, track_y, track_w, 4.0, 2.0, rgba(8, 12, 20, 225));
-        let fill_w = (track_w * t).max(4.0);
-        ui.rounded(track_x, track_y, fill_w, 4.0, 2.0, accent);
-        let thumb_x = (track_x + track_w * t - 4.5).clamp(track_x - 1.0, track_x + track_w - 8.0);
-        ui.rounded(
-            thumb_x,
-            track_y - 2.5,
+        let track_x = rx + 10.0;
+        let track_w = (cw - 20.0).max(16.0);
+        let track_y = ry + ch - 10.0;
+        ui.rounded(track_x, track_y, track_w, 6.0, 3.0, accent_soft);
+        let fill_w = (track_w * t).max(6.0);
+        ui.rounded(track_x, track_y, fill_w, 6.0, 3.0, accent);
+        let thumb_x = (track_x + track_w * t - 2.5).clamp(track_x, track_x + track_w - 5.0);
+        ui.rounded(thumb_x, track_y - 2.0, 5.0, 10.0, 2.5, text_c);
+        ui.text_clipped(
+            Face::Medium,
             9.0,
-            9.0,
-            4.5,
-            rgba(255, 255, 255, 255),
+            rx + 10.0,
+            ry + 4.0,
+            (cw * 0.58).max(20.0),
+            text_c,
+            title_part,
         );
-        ui.centered_fit(
+        ui.text_clipped(
             Face::SemiBold,
             9.0,
-            [rx + 4.0, ry + 1.0, (cw - 8.0).max(16.0), ch - 8.0],
-            text_c,
-            &format!("{title_part} {val_part}"),
+            rx + cw - (ui.measure(Face::SemiBold, 9.0, val_part) + 10.0).min(cw * 0.45),
+            ry + 4.0,
+            (cw * 0.42).max(16.0),
+            accent,
+            val_part,
         );
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_m3_selector_cell(
+    ui: &mut crate::ui_theme::Ui,
+    rect: [f32; 4],
+    title: &str,
+    value: &str,
+    accent: u32,
+    accent_soft: u32,
+    bg_hi: u32,
+    text_c: u32,
+    muted_c: u32,
+) {
+    use crate::ui_theme::Face;
+    let [rx, ry, cw, ch] = rect;
+    let rad = (ch * 0.22).clamp(10.0, 14.0);
+    ui.rounded(rx, ry, cw, ch, rad, bg_hi);
+    ui.text_clipped(
+        Face::Medium,
+        9.6,
+        rx + 12.0,
+        ry + 8.0,
+        (cw - 24.0).max(24.0),
+        muted_c,
+        title,
+    );
+    let pill_r = [rx + 10.0, ry + ch - 34.0, (cw - 20.0).max(24.0), 24.0];
+    ui.rounded(
+        pill_r[0],
+        pill_r[1],
+        pill_r[2],
+        pill_r[3],
+        12.0,
+        accent_soft,
+    );
+    ui.centered_fit(
+        Face::SemiBold,
+        9.6,
+        [pill_r[0] + 6.0, pill_r[1], pill_r[2] - 12.0, pill_r[3]],
+        accent,
+        &format!("‹  {value}  ›"),
+    );
+    let _ = text_c;
 }
 
 /// Circular Swatch Chip matching `90511.png` with a crisp white outer selection ring.
@@ -4392,20 +4436,19 @@ pub fn draw_hud_editor(
         let dx = (w - dw) * 0.5;
         let dy = (h - dh) * 0.5;
 
-        // Studio Slate-Navy Palette & Cyan Accent (#1DB4F6) from `90511.png`
-        let st_outer = rgba(11, 16, 28, 252);
-        let st_inner = rgba(16, 23, 38, 252);
-        let st_card = rgba(22, 32, 50, 252);
-        let st_border = rgba(33, 49, 74, 255);
-        let st_cyan = rgba(29, 180, 246, 255);
-        let st_cyan_soft = rgba(29, 180, 246, 42);
-        let st_cyan_fg = rgba(4, 18, 30, 255);
-        let st_text = rgba(241, 245, 249, 255);
-        let st_muted = rgba(148, 163, 184, 255);
+        // Material Design 3 Expressive Tonal Surface Palette synchronized with active theme
+        let st_outer = theme.bg_solid;
+        let st_inner = theme.surface;
+        let st_card = theme.surface_bright;
+        let st_border = color::with_alpha(theme.border, 0.28);
+        let st_cyan = theme.accent;
+        let st_cyan_soft = theme.surface_selected;
+        let st_cyan_fg = theme.accent_text;
+        let st_text = theme.text_primary;
+        let st_muted = theme.text_muted;
 
-        ui.rounded(dx + 3.0, dy + 8.0, dw, dh, 22.0, rgba(0, 0, 0, 175));
-        ui.rounded(dx, dy, dw, dh, 22.0, st_outer);
-        ui.stroke_rounded(dx, dy, dw, dh, 22.0, 1.5, st_border);
+        ui.rounded(dx + 2.0, dy + 6.0, dw, dh, 24.0, rgba(0, 0, 0, 165));
+        ui.rounded(dx, dy, dw, dh, 24.0, st_outer);
 
         let is_joystick = ed.selected == Some(Control::Move) && ed.selected_custom.is_none();
         let is_mcpe_mode = tc.settings.control_style == ControlStyle::Mcpe;
@@ -4535,76 +4578,9 @@ pub fn draw_hud_editor(
         );
         ui.centered_fit(Face::SemiBold, 10.2, close_r, st_cyan_fg, "✓ Done");
 
-        // Left Vertical 3-Card Navigation Rail (`90511.png`)
-        let rail_x = dx + 12.0;
-        let rail_y = dy + 46.0;
-        let rail_w = 60.0;
-        let rail_h = dh - 58.0;
-        let nav_card_h = (rail_h - 12.0) / 3.0;
-        let nav_items: [(Icon, &str, &str); 3] = if is_joystick {
-            [
-                (Icon::Gamepad, "Stick &", "Style"),
-                (Icon::Settings, "Analog", "Base"),
-                (Icon::Monitor, "Zone &", "Vis"),
-            ]
-        } else {
-            [
-                (Icon::Gamepad, "Style &", "Colors"),
-                (Icon::Settings, "Shape &", "Stroke"),
-                (Icon::Monitor, "Events &", "Behavior"),
-            ]
-        };
-        for (ni, (ic, l1, l2)) in nav_items.into_iter().enumerate() {
-            let ny = rail_y + ni as f32 * (nav_card_h + 6.0);
-            let active = ed.props_tab == ni;
-            ui.rounded(
-                rail_x,
-                ny,
-                rail_w,
-                nav_card_h,
-                12.0,
-                if active { st_cyan_soft } else { st_inner },
-            );
-            ui.stroke_rounded(
-                rail_x,
-                ny,
-                rail_w,
-                nav_card_h,
-                12.0,
-                if active { 1.6 } else { 1.0 },
-                if active { st_cyan } else { st_border },
-            );
-            if active {
-                ui.rounded(
-                    rail_x,
-                    ny + nav_card_h * 0.22,
-                    3.0,
-                    nav_card_h * 0.56,
-                    1.5,
-                    st_cyan,
-                );
-            }
-            let fg = if active { st_cyan } else { st_muted };
-            ui.icon(ic, rail_x + (rail_w - 18.0) * 0.5, ny + 10.0, 18.0, fg);
-            ui.centered_fit(
-                Face::SemiBold,
-                8.8,
-                [rail_x + 3.0, ny + 32.0, rail_w - 6.0, 13.0],
-                if active { st_text } else { st_muted },
-                l1,
-            );
-            ui.centered_fit(
-                Face::SemiBold,
-                8.8,
-                [rail_x + 3.0, ny + 44.0, rail_w - 6.0, 13.0],
-                if active { st_text } else { st_muted },
-                l2,
-            );
-        }
-
-        // Right Workspace Area (`wx..wx + ww`)
-        let wx = dx + 80.0;
-        let ww = dw - 92.0;
+        // Full-Width M3 Workspace Area (single clean top segmented tab bar, no duplicate left rail)
+        let wx = dx + 14.0;
+        let ww = dw - 28.0;
 
         // Top 3-Segment Pill Bar synchronized with the Left Navigation Rail
         let tab_y = dy + 46.0;
@@ -5146,33 +5122,39 @@ pub fn draw_hud_editor(
                     let cards_y = body_y + 28.0;
                     let card_h = 74.0;
                     let icon_lbl = control_icon_label(p.icon_id);
-                    for (i, (txt, frac)) in [
-                        (
-                            format!("Opacity|{:.0}%", p.opacity * 100.0),
-                            (p.opacity - 0.15) / 0.85,
-                        ),
-                        (
-                            format!("Icon Badge|{icon_lbl}"),
-                            f32::from(p.icon_id) / 12.0,
-                        ),
-                        (format!("Hint Label|{cur_hint}"), 1.0),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
-                        draw_m3_stepper_cell(
-                            &mut ui,
-                            [rx, cards_y, cw3, card_h],
-                            &txt,
-                            frac,
-                            st_cyan,
-                            st_cyan_soft,
-                            st_card,
-                            st_border,
-                            st_text,
-                        );
-                    }
+                    draw_m3_stepper_cell(
+                        &mut ui,
+                        [wx + 12.0, cards_y, cw3, card_h],
+                        &format!("Opacity|{:.0}%", p.opacity * 100.0),
+                        (p.opacity - 0.15) / 0.85,
+                        st_cyan,
+                        st_cyan_soft,
+                        st_card,
+                        st_border,
+                        st_text,
+                    );
+                    draw_m3_selector_cell(
+                        &mut ui,
+                        [wx + 12.0 + (cw3 + 8.0), cards_y, cw3, card_h],
+                        "Icon Badge",
+                        icon_lbl,
+                        st_cyan,
+                        st_cyan_soft,
+                        st_card,
+                        st_text,
+                        st_muted,
+                    );
+                    draw_m3_selector_cell(
+                        &mut ui,
+                        [wx + 12.0 + (cw3 + 8.0) * 2.0, cards_y, cw3, card_h],
+                        "Hint Label",
+                        &cur_hint,
+                        st_cyan,
+                        st_cyan_soft,
+                        st_card,
+                        st_text,
+                        st_muted,
+                    );
 
                     // Live Button Preview Box with Cyan Corner Framing Brackets (`⌜ ⌝ ⌞ ⌟`)
                     let prev_r = [wx + ww - preview_w - 12.0, cards_y, preview_w, card_h];
@@ -5352,8 +5334,8 @@ pub fn draw_hud_editor(
                     let row2_y = cards_y + 39.0;
                     for (i, (txt, frac)) in [
                         (
-                            format!("Margin|{:.1}dp", p.stroke_margin),
-                            (p.stroke_margin + 4.0) / 12.0,
+                            format!("Scale|{:.0}%", p.size * 100.0),
+                            (p.size - 0.05) / 0.39,
                         ),
                         (
                             format!("Width|{:.0}%", p.width_ratio * 100.0),
@@ -5458,13 +5440,7 @@ pub fn draw_hud_editor(
                     ];
                     ui.rounded(act_r[0], act_r[1], act_r[2], act_r[3], 10.0, st_inner);
                     ui.stroke_rounded(act_r[0], act_r[1], act_r[2], act_r[3], 10.0, 1.5, st_cyan);
-                    ui.centered_fit(
-                        Face::SemiBold,
-                        8.8,
-                        act_r,
-                        st_text,
-                        &format!("Cycle Icon: {}", control_icon_label(p.icon_id)),
-                    );
+                    ui.centered_fit(Face::SemiBold, 8.8, act_r, st_text, "Reset Shape & Scale");
                 }
                 _ => {
                     // Button Tab 2: Events, Behavior Toggles & Visibility Checkboxes
@@ -6169,6 +6145,63 @@ pub fn draw_hud_editor(
 
 /// Handles touch input for the MCPE + GoyControl Editor (`draw_hud_editor`).
 /// Returns `true` when the user completes saving or discarding to exit the editor.
+fn apply_props_slider(
+    tc: &mut crate::touch::TouchControls,
+    ed: &crate::touch::Editor,
+    tab: usize,
+    index: usize,
+    t: f32,
+) {
+    use crate::touch::Control;
+    let t = t.clamp(0.0, 1.0);
+    let is_joystick = ed.selected == Some(Control::Move) && ed.selected_custom.is_none();
+    let mode_idx = tc.settings.mode.index();
+    if is_joystick {
+        let slot = tc.settings.slot(Control::Move);
+        match (tab, index) {
+            (0, 0) => tc.settings.joystick_style.stick_size = (0.20 + t * 0.65).clamp(0.20, 0.85),
+            (0, 1) => tc.settings.joystick_style.stick_opacity = (0.15 + t * 0.85).clamp(0.15, 1.0),
+            (0, _) => {
+                tc.settings.joystick_style.stick_stroke = ((t * 16.0).round() * 0.5).clamp(0.0, 8.0)
+            }
+            (1, 0) => tc.settings.joystick_style.base_opacity = (0.15 + t * 0.85).clamp(0.15, 1.0),
+            (1, 1) => {
+                tc.settings.joystick_style.base_stroke = ((t * 16.0).round() * 0.5).clamp(0.0, 8.0)
+            }
+            (1, _) => {
+                tc.settings.joystick_style.base_roundness = (t * 50.0).round().clamp(0.0, 50.0)
+            }
+            (_, _) => {
+                tc.settings.layouts[mode_idx][slot].size = (0.12 + t * 0.33).clamp(0.12, 0.45)
+            }
+        }
+        return;
+    }
+    let apply_pl = |pl: &mut crate::touch::Placement| match (tab, index) {
+        (0, 0) => pl.opacity = (0.15 + t * 0.85).clamp(0.15, 1.0),
+        (1, 0) => pl.stroke_size = ((t * 16.0).round() * 0.5).clamp(0.0, 8.0),
+        (1, 1) => {
+            pl.roundness = (t * 50.0).round().clamp(0.0, 50.0);
+            pl.stroke_roundness = pl.roundness;
+        }
+        (1, 2) => pl.shadow_size = (t * 12.0).round().clamp(0.0, 12.0),
+        (1, 3) => pl.size = (0.05 + t * 0.39).clamp(0.05, 0.44),
+        (1, 4) => pl.width_ratio = (0.50 + t * 1.50).clamp(0.50, 2.00),
+        (1, 5) => pl.height_ratio = (0.50 + t * 1.50).clamp(0.50, 2.00),
+        _ => {}
+    };
+    if let Some(idx) = ed.selected_custom {
+        if let Some(btn) = tc.settings.custom_buttons.get_mut(idx) {
+            for m in 0..3 {
+                apply_pl(&mut btn.layouts[m]);
+            }
+        }
+    } else if let Some(c) = ed.selected {
+        let slot = tc.settings.slot(c);
+        apply_pl(&mut tc.settings.layouts[mode_idx][slot]);
+    }
+}
+
 pub fn touch_hud_editor(
     tc: &mut crate::touch::TouchControls,
     b: &mut HudBatch,
@@ -6377,6 +6410,17 @@ pub fn touch_hud_editor(
                                 let slot = tc.settings.slot(c);
                                 apply_resize(&mut tc.settings.layouts[mode_idx][slot]);
                             }
+                            if ended {
+                                ed.active_drag = None;
+                                let _ = tc.settings.save();
+                            }
+                        }
+                        EditorDragKind::PropsSlider { tab, index, rect } => {
+                            let pad = if rect[3] >= 52.0 { 12.0 } else { 10.0 };
+                            let track_x = rect[0] + pad;
+                            let track_w = (rect[2] - pad * 2.0).max(16.0);
+                            let t = ((p[0] - track_x) / track_w).clamp(0.0, 1.0);
+                            apply_props_slider(tc, &ed, tab, index, t);
                             if ended {
                                 ed.active_drag = None;
                                 let _ = tc.settings.save();
@@ -6689,24 +6733,9 @@ pub fn touch_hud_editor(
                 return false;
             }
 
-            // Left Vertical 3-Card Navigation Rail clicks
-            let rail_x = dx + 12.0;
-            let rail_y = dy + 46.0;
-            let rail_w = 60.0;
-            let rail_h = dh - 58.0;
-            let nav_card_h = (rail_h - 12.0) / 3.0;
-            for ni in 0..3 {
-                let ny = rail_y + ni as f32 * (nav_card_h + 6.0);
-                if inside([rail_x, ny, rail_w, nav_card_h]) {
-                    ed.props_tab = ni;
-                    tc.clicked = true;
-                    return false;
-                }
-            }
-
-            // Right Workspace & Top 3-Segment Pill Bar clicks
-            let wx = dx + 80.0;
-            let ww = dw - 92.0;
+            // Full-Width Workspace & Top 3-Segment Pill Bar clicks
+            let wx = dx + 14.0;
+            let ww = dw - 28.0;
             let tab_y = dy + 46.0;
             let tab_w = (ww - 8.0) / 3.0;
             for ti in 0..3 {
@@ -6745,26 +6774,20 @@ pub fn touch_hud_editor(
                         let card_h = 74.0;
                         for i in 0..3 {
                             let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
-                            if inside([rx, cards_y, cw3, card_h]) {
+                            let rect = [rx, cards_y, cw3, card_h];
+                            if inside(rect) {
                                 push_undo_snapshot(&mut ed, &tc.settings);
-                                let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
-                                match i {
-                                    0 => {
-                                        tc.settings.joystick_style.stick_size =
-                                            (tc.settings.joystick_style.stick_size + sign * 0.05)
-                                                .clamp(0.20, 0.85)
-                                    }
-                                    1 => {
-                                        tc.settings.joystick_style.stick_opacity =
-                                            (tc.settings.joystick_style.stick_opacity + sign * 0.10)
-                                                .clamp(0.15, 1.0)
-                                    }
-                                    _ => {
-                                        tc.settings.joystick_style.stick_stroke =
-                                            (tc.settings.joystick_style.stick_stroke + sign * 0.5)
-                                                .clamp(0.0, 8.0)
-                                    }
-                                }
+                                let t =
+                                    ((p[0] - (rx + 12.0)) / (cw3 - 24.0).max(16.0)).clamp(0.0, 1.0);
+                                apply_props_slider(tc, &ed, 0, i, t);
+                                ed.active_drag = Some((
+                                    id,
+                                    EditorDragKind::PropsSlider {
+                                        tab: 0,
+                                        index: i,
+                                        rect,
+                                    },
+                                ));
                                 let _ = tc.settings.save();
                                 tc.clicked = true;
                                 return false;
@@ -6836,26 +6859,20 @@ pub fn touch_hud_editor(
                         let card_h = 74.0;
                         for i in 0..3 {
                             let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
-                            if inside([rx, cards_y, cw3, card_h]) {
+                            let rect = [rx, cards_y, cw3, card_h];
+                            if inside(rect) {
                                 push_undo_snapshot(&mut ed, &tc.settings);
-                                let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
-                                match i {
-                                    0 => {
-                                        tc.settings.joystick_style.base_opacity =
-                                            (tc.settings.joystick_style.base_opacity + sign * 0.10)
-                                                .clamp(0.15, 1.0)
-                                    }
-                                    1 => {
-                                        tc.settings.joystick_style.base_stroke =
-                                            (tc.settings.joystick_style.base_stroke + sign * 0.5)
-                                                .clamp(0.0, 8.0)
-                                    }
-                                    _ => {
-                                        tc.settings.joystick_style.base_roundness =
-                                            (tc.settings.joystick_style.base_roundness + sign * 5.0)
-                                                .clamp(0.0, 50.0)
-                                    }
-                                }
+                                let t =
+                                    ((p[0] - (rx + 12.0)) / (cw3 - 24.0).max(16.0)).clamp(0.0, 1.0);
+                                apply_props_slider(tc, &ed, 1, i, t);
+                                ed.active_drag = Some((
+                                    id,
+                                    EditorDragKind::PropsSlider {
+                                        tab: 1,
+                                        index: i,
+                                        rect,
+                                    },
+                                ));
                                 let _ = tc.settings.save();
                                 tc.clicked = true;
                                 return false;
@@ -6908,12 +6925,20 @@ pub fn touch_hud_editor(
                             return false;
                         }
                         let sz_x = wx + 12.0 + hw + 8.0;
-                        if inside([sz_x, area_y, hw, 38.0]) {
+                        let sz_rect = [sz_x, area_y, hw, 38.0];
+                        if inside(sz_rect) {
                             push_undo_snapshot(&mut ed, &tc.settings);
-                            let sign = if p[0] < sz_x + hw * 0.5 { -1.0 } else { 1.0 };
-                            tc.settings.layouts[mode_idx][slot].size =
-                                (tc.settings.layouts[mode_idx][slot].size + sign * 0.025)
-                                    .clamp(0.12, 0.45);
+                            let t =
+                                ((p[0] - (sz_x + 10.0)) / (hw - 20.0).max(16.0)).clamp(0.0, 1.0);
+                            apply_props_slider(tc, &ed, 2, 0, t);
+                            ed.active_drag = Some((
+                                id,
+                                EditorDragKind::PropsSlider {
+                                    tab: 2,
+                                    index: 0,
+                                    rect: sz_rect,
+                                },
+                            ));
                             let _ = tc.settings.save();
                             tc.clicked = true;
                             return false;
@@ -6979,15 +7004,23 @@ pub fn touch_hud_editor(
                     let card_h = 74.0;
                     for i in 0..3 {
                         let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
-                        if inside([rx, cards_y, cw3, card_h]) {
+                        let rect = [rx, cards_y, cw3, card_h];
+                        if inside(rect) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
                             match i {
                                 0 => {
-                                    let delta = sign * 0.10;
-                                    mutate_placement(tc, &ed, &move |pl| {
-                                        pl.opacity = (pl.opacity + delta).clamp(0.15, 1.0);
-                                    });
+                                    let t = ((p[0] - (rx + 12.0)) / (cw3 - 24.0).max(16.0))
+                                        .clamp(0.0, 1.0);
+                                    apply_props_slider(tc, &ed, 0, 0, t);
+                                    ed.active_drag = Some((
+                                        id,
+                                        EditorDragKind::PropsSlider {
+                                            tab: 0,
+                                            index: 0,
+                                            rect,
+                                        },
+                                    ));
                                 }
                                 1 => {
                                     mutate_placement(tc, &ed, &move |pl| {
@@ -7094,19 +7127,19 @@ pub fn touch_hud_editor(
                     let card_h = 35.0;
                     for i in 0..3 {
                         let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
-                        if inside([rx, cards_y, cw3, card_h]) {
+                        let rect = [rx, cards_y, cw3, card_h];
+                        if inside(rect) {
                             push_undo_snapshot(&mut ed, &tc.settings);
-                            let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
-                            mutate_placement(tc, &ed, &move |pl| match i {
-                                0 => pl.stroke_size = (pl.stroke_size + sign * 0.5).clamp(0.0, 8.0),
-                                1 => {
-                                    pl.roundness = (pl.roundness + sign * 3.0).clamp(0.0, 50.0);
-                                    pl.stroke_roundness = pl.roundness;
-                                }
-                                _ => {
-                                    pl.shadow_size = (pl.shadow_size + sign * 1.0).clamp(0.0, 12.0)
-                                }
-                            });
+                            let t = ((p[0] - (rx + 10.0)) / (cw3 - 20.0).max(16.0)).clamp(0.0, 1.0);
+                            apply_props_slider(tc, &ed, 1, i, t);
+                            ed.active_drag = Some((
+                                id,
+                                EditorDragKind::PropsSlider {
+                                    tab: 1,
+                                    index: i,
+                                    rect,
+                                },
+                            ));
                             let _ = tc.settings.save();
                             tc.clicked = true;
                             return false;
@@ -7115,22 +7148,19 @@ pub fn touch_hud_editor(
                     let row2_y = cards_y + 39.0;
                     for i in 0..3 {
                         let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
-                        if inside([rx, row2_y, cw3, card_h]) {
+                        let rect = [rx, row2_y, cw3, card_h];
+                        if inside(rect) {
                             push_undo_snapshot(&mut ed, &tc.settings);
-                            let sign = if p[0] < rx + cw3 * 0.5 { -1.0 } else { 1.0 };
-                            mutate_placement(tc, &ed, &move |pl| match i {
-                                0 => {
-                                    pl.stroke_margin =
-                                        (pl.stroke_margin + sign * 1.0).clamp(-4.0, 8.0)
-                                }
-                                1 => {
-                                    pl.width_ratio = (pl.width_ratio + sign * 0.10).clamp(0.45, 3.0)
-                                }
-                                _ => {
-                                    pl.height_ratio =
-                                        (pl.height_ratio + sign * 0.10).clamp(0.45, 3.0)
-                                }
-                            });
+                            let t = ((p[0] - (rx + 10.0)) / (cw3 - 20.0).max(16.0)).clamp(0.0, 1.0);
+                            apply_props_slider(tc, &ed, 1, 3 + i, t);
+                            ed.active_drag = Some((
+                                id,
+                                EditorDragKind::PropsSlider {
+                                    tab: 1,
+                                    index: 3 + i,
+                                    rect,
+                                },
+                            ));
                             let _ = tc.settings.save();
                             tc.clicked = true;
                             return false;
@@ -7167,7 +7197,15 @@ pub fn touch_hud_editor(
                         28.0,
                     ]) {
                         push_undo_snapshot(&mut ed, &tc.settings);
-                        mutate_placement(tc, &ed, &|pl| pl.icon_id = (pl.icon_id + 1) % 13);
+                        mutate_placement(tc, &ed, &|pl| {
+                            pl.shape = 0;
+                            pl.roundness = 12.0;
+                            pl.stroke_roundness = 12.0;
+                            pl.width_ratio = 1.0;
+                            pl.height_ratio = 1.0;
+                            pl.stroke_size = 1.5;
+                            pl.shadow_size = 4.0;
+                        });
                         let _ = tc.settings.save();
                         tc.clicked = true;
                         return false;

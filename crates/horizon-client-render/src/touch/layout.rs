@@ -587,6 +587,7 @@ impl Default for Settings {
                 row[c as usize].visible_in_game = true;
                 row[c as usize].visible_in_menu = false;
             }
+            row[Control::Attack as usize].passthrough = true;
         }
         Self {
             mode: Mode::Crosshair,
@@ -766,6 +767,11 @@ impl Settings {
             self.mode = Mode::Crosshair;
             self.split_controls = false;
             self.crosshair_gestures = true;
+        }
+        if self.control_style == ControlStyle::Mcpe && self.is_default_preset() {
+            for row in &mut self.layouts {
+                row[Control::Attack as usize].passthrough = true;
+            }
         }
         if self.sprint_toggle != self.toggle_sprint {
             let latched = self.sprint_toggle || self.toggle_sprint;

@@ -494,8 +494,20 @@ impl Graphics {
                     g.lod_distance = number(g.lod_distance).min(crate::lod::MAX_CHUNKS)
                 }
                 "farDetail" => g.far_detail = FarDetail::parse(value),
-                "caveCulling" => g.cave_culling = flag(g.cave_culling),
-                "entityCulling" => g.entity_culling = flag(g.entity_culling),
+                "caveCulling" => {
+                    g.cave_culling = if cfg!(target_os = "android") {
+                        true
+                    } else {
+                        flag(g.cave_culling)
+                    }
+                }
+                "entityCulling" => {
+                    g.entity_culling = if cfg!(target_os = "android") {
+                        true
+                    } else {
+                        flag(g.entity_culling)
+                    }
+                }
                 "chunkUpdates" => g.chunk_updates = number(g.chunk_updates).min(512),
                 "uploadBudgetKiB" => g.upload_budget_kib = number(g.upload_budget_kib).min(65536),
                 "textureBudgetMiB" => {

@@ -2,7 +2,7 @@
 use crate::gamepad::{Button, PadState};
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicU32, Ordering},
     time::{Duration, Instant},
 };
@@ -198,8 +198,9 @@ pub struct TouchControls {
     pub goy_rendered_by_ui: bool,
     pub editor: Option<editor::Editor>,
     fingers: BTreeMap<u64, (Role, [f32; 2])>,
+    passthrough_fingers: BTreeSet<u64>,
     custom_fingers: BTreeMap<u64, String>,
-    latched_custom: std::collections::BTreeSet<String>,
+    latched_custom: BTreeSet<String>,
     latched_controls: u16,
     custom_events: Vec<(String, bool)>,
     pending: PadState,
@@ -241,8 +242,9 @@ impl Default for TouchControls {
             goy_rendered_by_ui: false,
             editor: None,
             fingers: BTreeMap::new(),
+            passthrough_fingers: BTreeSet::new(),
             custom_fingers: BTreeMap::new(),
-            latched_custom: std::collections::BTreeSet::new(),
+            latched_custom: BTreeSet::new(),
             latched_controls: 0,
             custom_events: Vec::new(),
             pending: PadState::default(),
@@ -389,6 +391,7 @@ impl TouchControls {
     pub fn clear_world_gesture(&mut self) {
         self.fingers
             .retain(|_, (role, _)| matches!(role, Role::Ignore));
+        self.passthrough_fingers.clear();
         self.sprint_latched = false;
         self.pending = PadState::default();
         self.aim = None;
@@ -842,6 +845,7 @@ impl TouchControls {
             return [0.0; 2];
         }
         if ended {
+            self.passthrough_fingers.remove(&id);
             if let Some((
                 Role::Look {
                     start,
@@ -913,6 +917,9 @@ impl TouchControls {
                     Role::Move(anchor)
                 }
                 Some(Control::Shield) => {
+                    if self.placement(Control::Shield).passthrough {
+                        self.passthrough_fingers.insert(id);
+                    }
                     self.clicked = true;
                     self.pending.triggers[0] = 1.0;
                     Role::Shield
@@ -971,7 +978,12 @@ impl TouchControls {
                     self.latched_controls ^= 1 << (c as u16);
                     Role::Ignore
                 }
-                Some(c) => Self::button(c).map_or(Role::Ignore, Role::Button),
+                Some(c) => {
+                    if self.placement(c).passthrough {
+                        self.passthrough_fingers.insert(id);
+                    }
+                    Self::button(c).map_or(Role::Ignore, Role::Button)
+                }
                 None => Role::Look {
                     start: point,
                     since: Instant::now(),
@@ -991,9 +1003,10 @@ impl TouchControls {
             return [0.0; 2];
         }
         let aspect = self.aspect();
-        let passthrough_at_point = self
-            .control_at(point)
-            .is_some_and(|c| self.placement(c).passthrough);
+        let passthrough_at_point = self.passthrough_fingers.contains(&id)
+            || self
+                .control_at(point)
+                .is_some_and(|c| self.placement(c).passthrough);
         if let Some((role, previous)) = self.fingers.get_mut(&id) {
             let delta = if let Role::Look {
                 start,
@@ -1029,6 +1042,7 @@ impl TouchControls {
     pub fn clear(&mut self) {
         self.clear_custom();
         self.fingers.clear();
+        self.passthrough_fingers.clear();
         self.latched_controls = 0;
         self.last_sneak_tap = None;
         self.sprint_latched = false;
