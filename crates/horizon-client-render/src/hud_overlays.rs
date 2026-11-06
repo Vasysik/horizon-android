@@ -1032,8 +1032,8 @@ impl Subtitle {
                     Some(b)
                         if b.time > p.time
                             || b.time == p.time
-                                && distance_sqr(b.location, position).sqrt()
-                                    >= distance_sqr(p.location, position).sqrt() =>
+                                && distance_sqr(b.location, position)
+                                    >= distance_sqr(p.location, position) =>
                     {
                         Some(b)
                     }
