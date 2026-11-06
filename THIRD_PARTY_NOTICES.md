@@ -84,3 +84,12 @@ copyright 2026 d3grando, MIT. Exact revisions and adaptation notes are recorded 
 module retains its full MIT LICENSE. Changes provide static Android hook
 adapters, opt-in configuration, profile-state reset and compatibility guards.
 These are a fixed compiled set, not support for loading arbitrary native mods.
+
+## Horizon Veinminer
+
+The native Veinminer implementation is adapted from
+[levzzz5154/horizon-veinminer](https://github.com/levzzz5154/horizon-veinminer),
+version 0.3.2, copyright 2026 Horizon Veinminer contributors, under the MIT
+license. Its full license is preserved in `third_party/veinminer/LICENSE`;
+source and compatibility details are recorded in
+`third_party/veinminer/README.md`.

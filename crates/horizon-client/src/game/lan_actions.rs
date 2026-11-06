@@ -2783,9 +2783,7 @@ impl Game<'_> {
         command: &str,
         signed: Option<Vec<(String, horizon_client::lan::hub::chat::ChatMessage)>>,
     ) {
-        if command.trim_start_matches('/').split_whitespace().next()
-            == Some("veinminer")
-        {
+        if command.trim_start_matches('/').split_whitespace().next() == Some("veinminer") {
             if let Some(permission) = host.hub.guest(conn).map(|g| g.permission) {
                 host.commands.push(GuestCommand {
                     conn,

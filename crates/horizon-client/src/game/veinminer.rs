@@ -1,5 +1,7 @@
 // Native adapter for Horizon 028f60881678a9a0e3e198f693a82858fa475c76.
 use super::{Game, Result};
+
+pub(super) const ID: &str = "veinminer";
 mod engine {
     // Original Rust implementation of the documented vein-mining behavior.
     use serde::{Deserialize, Serialize};
@@ -437,6 +439,7 @@ use engine::{Block, Config, Host, Player, Position, Runtime, Tool};
 pub(super) struct State {
     runtime: Runtime,
     config: Option<Config>,
+    global_enabled: Option<bool>,
 }
 
 thread_local! {
@@ -574,6 +577,13 @@ impl Host for Native<'_, '_> {
     }
 }
 impl Game<'_> {
+    pub(super) fn veinminer_set_global_enabled(&mut self, enabled: bool) {
+        with_state(self, |game, state| {
+            game.native_set_setting(ID, "enabled", if enabled { "true" } else { "false" });
+            state.global_enabled = Some(enabled);
+        });
+    }
+
     pub(super) fn veinminer_break_block(&mut self, pos: Position) -> Result<()> {
         with_state(self, |game, state| {
             if state.config.is_none() {
@@ -584,10 +594,16 @@ impl Game<'_> {
                     config
                 }));
             }
-            let config = state.config.as_ref().unwrap();
+            let enabled = *state.global_enabled.get_or_insert_with(|| {
+                game.native_setting(ID, "enabled").as_deref() != Some("false")
+            });
+            let mut config = state.config.as_ref().unwrap().clone();
+            if !enabled {
+                config.settings.enabled = false;
+            }
             state
                 .runtime
-                .mine(&mut Native { game }, config, pos)
+                .mine(&mut Native { game }, &config, pos)
                 .map(|_| ())
         })
     }
@@ -599,15 +615,24 @@ impl Game<'_> {
             }
             let args: Vec<_> = words.collect();
             let actor = game.acting_player_uuid();
+            let globally_enabled = *state.global_enabled.get_or_insert_with(|| {
+                game.native_setting(ID, "enabled").as_deref() != Some("false")
+            });
             let message = match args.as_slice() {
-                [] | ["status"] => format!(
-                    "Veinminer: {}",
-                    if state.runtime.enabled(actor) {
-                        "on"
+                [] | ["status"] => {
+                    if !globally_enabled {
+                        "Veinminer: off (disabled in Options > Mods)".into()
                     } else {
-                        "off"
+                        format!(
+                            "Veinminer: {}",
+                            if state.runtime.enabled(actor) {
+                                "on"
+                            } else {
+                                "off"
+                            }
+                        )
                     }
-                ),
+                }
                 ["toggle"] | ["on"] | ["off"] => {
                     let on = match args[0] {
                         "on" => true,
@@ -615,7 +640,14 @@ impl Game<'_> {
                         _ => !state.runtime.enabled(actor),
                     };
                     state.runtime.set_enabled(actor, on);
-                    format!("Veinminer: {}", if on { "on" } else { "off" })
+                    if !globally_enabled {
+                        format!(
+                            "Veinminer player preference: {} (global setting is OFF)",
+                            if on { "on" } else { "off" }
+                        )
+                    } else {
+                        format!("Veinminer: {}", if on { "on" } else { "off" })
+                    }
                 }
                 ["reload"] => {
                     if game.ui.registries.permission < 2 {
