@@ -831,7 +831,6 @@ pub enum Opt {
     TouchMouseSensitivity,
     TouchCrosshairGestures,
     TouchControlHub,
-    TouchControlHubStyle,
     TouchUiVibration,
     TouchGameVibration,
     TouchAttackButtonLook,

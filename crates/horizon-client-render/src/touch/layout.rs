@@ -489,8 +489,6 @@ pub struct Settings {
     pub ui_vibrate: bool,
     #[serde(default = "default_feedback_enabled")]
     pub show_control_hub: bool,
-    #[serde(default)]
-    pub classic_control_hub: bool,
     #[serde(deserialize_with = "deserialize_visibility")]
     pub button_visibility: [u8; 14],
     pub horizontal_margin: f32,
@@ -536,7 +534,7 @@ fn default_feedback_enabled() -> bool {
     true
 }
 fn default_floating_pos() -> [f32; 2] {
-    [0.0, 0.0]
+    [0.44, 0.05]
 }
 fn default_pointer_scale() -> f32 {
     1.0
@@ -637,7 +635,6 @@ impl Default for Settings {
             vibrate: true,
             ui_vibrate: false,
             show_control_hub: true,
-            classic_control_hub: false,
             button_visibility: [0; 14],
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
@@ -1251,7 +1248,7 @@ impl Settings {
         let prev_pointer_scale = self.virtual_mouse_pointer_scale;
         let prev_vibrate = self.vibrate;
         let prev_ui_vibrate = self.ui_vibrate;
-        let prev_hub = (self.show_control_hub, self.classic_control_hub);
+        let prev_hub = self.show_control_hub;
         let prev_auto_jump = self.auto_jump;
         let mut loaded = Self::load_preset(game_home, style, id);
         let clean = loaded.preset_id.clone();
@@ -1272,7 +1269,7 @@ impl Settings {
         loaded.virtual_mouse_pointer_scale = prev_pointer_scale;
         loaded.vibrate = prev_vibrate;
         loaded.ui_vibrate = prev_ui_vibrate;
-        (loaded.show_control_hub, loaded.classic_control_hub) = prev_hub;
+        loaded.show_control_hub = prev_hub;
         loaded.auto_jump = prev_auto_jump;
         *self = loaded;
         let _ = self.save_to(&game_home.join("horizon-touch.json"));
@@ -1309,7 +1306,7 @@ impl Settings {
         let prev_pointer_scale = self.virtual_mouse_pointer_scale;
         let prev_vibrate = self.vibrate;
         let prev_ui_vibrate = self.ui_vibrate;
-        let prev_hub = (self.show_control_hub, self.classic_control_hub);
+        let prev_hub = self.show_control_hub;
         let prev_auto_jump = self.auto_jump;
         let mut loaded = Self::load_preset(game_home, target, &target_preset_id);
         loaded.control_style = target;
@@ -1322,7 +1319,7 @@ impl Settings {
         loaded.virtual_mouse_pointer_scale = prev_pointer_scale;
         loaded.vibrate = prev_vibrate;
         loaded.ui_vibrate = prev_ui_vibrate;
-        (loaded.show_control_hub, loaded.classic_control_hub) = prev_hub;
+        loaded.show_control_hub = prev_hub;
         loaded.auto_jump = prev_auto_jump;
         *self = loaded;
         let _ = self.save_to(&game_home.join("horizon-touch.json"));
@@ -1789,7 +1786,7 @@ impl Settings {
             let prev_pointer_scale = self.virtual_mouse_pointer_scale;
             let prev_vibrate = self.vibrate;
             let prev_ui_vibrate = self.ui_vibrate;
-            let prev_hub = (self.show_control_hub, self.classic_control_hub);
+            let prev_hub = self.show_control_hub;
             let prev_auto_jump = self.auto_jump;
             *self = Self::default_for_style(style);
             self.active_mcpe_preset = prev_mcpe;
@@ -1801,7 +1798,7 @@ impl Settings {
             self.virtual_mouse_pointer_scale = prev_pointer_scale;
             self.vibrate = prev_vibrate;
             self.ui_vibrate = prev_ui_vibrate;
-            (self.show_control_hub, self.classic_control_hub) = prev_hub;
+            self.show_control_hub = prev_hub;
             self.auto_jump = prev_auto_jump;
             match style {
                 ControlStyle::Mcpe => self.active_mcpe_preset = "default".into(),
@@ -1839,7 +1836,6 @@ impl Settings {
         loaded.vibrate = active.vibrate;
         loaded.ui_vibrate = active.ui_vibrate;
         loaded.show_control_hub = active.show_control_hub;
-        loaded.classic_control_hub = active.classic_control_hub;
         loaded.auto_jump = active.auto_jump;
         match loaded.control_style {
             ControlStyle::Mcpe => loaded.active_mcpe_preset = loaded.preset_id.clone(),
@@ -1939,16 +1935,14 @@ mod tests {
         assert!(!settings.ui_vibrate);
         assert!(!settings.vibrate);
         assert!(settings.show_control_hub);
-        assert_eq!(settings.floating_menu_pos, [0.0, 0.0]);
+        assert_eq!(settings.floating_menu_pos, [0.44, 0.05]);
         settings.ui_vibrate = true;
         settings.show_control_hub = false;
-        settings.classic_control_hub = true;
         let restored: Settings =
             serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
         assert!(restored.ui_vibrate);
         assert!(!restored.vibrate);
         assert!(!restored.show_control_hub);
-        assert!(restored.classic_control_hub);
     }
 
     #[test]

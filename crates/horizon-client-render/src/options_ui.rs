@@ -194,7 +194,6 @@ impl Opt {
             Opt::TouchMode => "Control scheme",
             Opt::TouchCrosshairGestures => "Touch gestures",
             Opt::TouchControlHub => "Control hub button",
-            Opt::TouchControlHubStyle => "Control hub appearance",
             Opt::TouchUiVibration => "UI vibration",
             Opt::TouchGameVibration => "Gameplay vibration",
             Opt::TouchAttackButtonLook => "Look while attacking",
@@ -575,14 +574,6 @@ impl Opt {
                     "ON"
                 } else {
                     "OFF"
-                }
-                .into(),
-            ),
-            Opt::TouchControlHubStyle => Some(
-                if s.touch.classic_control_hub {
-                    "..."
-                } else {
-                    "H"
                 }
                 .into(),
             ),
@@ -1149,7 +1140,6 @@ impl Opt {
             Opt::TouchDynamicJoystick => s.touch.dynamic_joystick ^= true,
             Opt::TouchCrosshairGestures => s.touch.crosshair_gestures ^= true,
             Opt::TouchControlHub => s.touch.show_control_hub ^= true,
-            Opt::TouchControlHubStyle => s.touch.classic_control_hub ^= true,
             Opt::TouchUiVibration => s.touch.ui_vibrate ^= true,
             Opt::TouchGameVibration => s.touch.vibrate ^= true,
             Opt::TouchAttackButtonLook => s.touch.attack_button_look ^= true,
@@ -2808,7 +2798,6 @@ impl OptionsUi {
                 rows.push(Row::Header("Control Hub & Feedback"));
                 rows.extend(pairs(&[
                     Opt::TouchControlHub,
-                    Opt::TouchControlHubStyle,
                     Opt::TouchUiVibration,
                     Opt::TouchGameVibration,
                 ]));

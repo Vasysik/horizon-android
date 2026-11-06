@@ -13600,11 +13600,23 @@ impl Game<'_> {
         // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
         // LevelExtractor.allChanged when they change.
         let (s, st) = (&self.settings, &self.streaming);
-        let remesh = (s.biome_blend, s.smooth_lighting, s.cutout_leaves)
-            != (st.biome_blend, st.smooth_lighting, st.cutout_leaves);
+        let leaf_culling = cfg!(target_os = "android")
+            && horizon_client::android_runtime::experimental_leaf_culling();
+        let remesh = (
+            s.biome_blend,
+            s.smooth_lighting,
+            s.cutout_leaves,
+            leaf_culling,
+        ) != (
+            st.biome_blend,
+            st.smooth_lighting,
+            st.cutout_leaves,
+            st.experimental_leaf_culling,
+        );
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
         self.streaming.cutout_leaves = self.settings.cutout_leaves;
+        self.streaming.experimental_leaf_culling = leaf_culling;
         if remesh {
             self.all_sections_changed();
         }

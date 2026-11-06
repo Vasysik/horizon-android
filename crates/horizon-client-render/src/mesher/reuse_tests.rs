@@ -81,6 +81,7 @@ fn a_shader_pack_lights_the_faces_itself() {
             blend_radius: 0,
             smooth_lighting: false,
             cutout_leaves: true,
+            experimental_leaf_culling: false,
         };
         let mut colours: Vec<u32> = mesher
             .mesh(&region, 0)
@@ -156,6 +157,7 @@ fn reused_mesh_matches_fresh_geometry_across_sections_and_resource_reload() {
             blend_radius: 2,
             smooth_lighting: reload == 0,
             cutout_leaves: reload == 0,
+            experimental_leaf_culling: false,
         };
         for (case, (center, east)) in [
             (&empty, None),
@@ -296,6 +298,7 @@ fn fancy_leaf_cluster_keeps_internal_cutout_faces() {
         blend_radius: 0,
         smooth_lighting: false,
         cutout_leaves: true,
+        experimental_leaf_culling: false,
     };
     let fancy = mesher.mesh(&region, 0);
     // Eight cubes, six cutout faces each, four vertices per face.
@@ -305,4 +308,8 @@ fn fancy_leaf_cluster_keeps_internal_cutout_faces() {
     // Fast leaves draw the six exterior faces of a 2x2x2 cube.
     let fast = mesher.mesh(&region, 0);
     assert_eq!(fast.solid.len(), 6 * 4 * 4);
+    mesher.cutout_leaves = true;
+    mesher.experimental_leaf_culling = true;
+    let simplified = mesher.mesh(&region, 0);
+    assert_eq!(simplified.solid.len(), 6 * 4 * 4);
 }

@@ -139,6 +139,7 @@ fn main() -> Result<(), Error> {
             blend_radius: 2,
             smooth_lighting: true,
             cutout_leaves: true,
+            experimental_leaf_culling: false,
             assets: &context.assets,
             render: &context.render,
             tables: &context.tables,

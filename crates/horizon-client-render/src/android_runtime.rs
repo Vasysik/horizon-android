@@ -259,3 +259,11 @@ mod cache_budget_tests {
         }
     }
 }
+
+static EXPERIMENTAL_LEAF_CULLING: AtomicBool = AtomicBool::new(false);
+pub fn set_experimental_leaf_culling(enabled: bool) {
+    EXPERIMENTAL_LEAF_CULLING.store(enabled, Ordering::Relaxed);
+}
+pub fn experimental_leaf_culling() -> bool {
+    EXPERIMENTAL_LEAF_CULLING.load(Ordering::Relaxed)
+}
