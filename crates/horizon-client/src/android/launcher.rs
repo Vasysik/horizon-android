@@ -38,6 +38,8 @@ pub(super) struct Launcher {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     gui: Option<game::UiResources>,
+    wallpaper: Option<crate::wallpapers::LiveWallpaper>,
+    wallpaper_frame: Option<usize>,
     pub(super) audio: Option<horizon_client::audio::Audio>,
     game: Option<Box<dyn ApplicationHandler>>,
     cursor: (f64, f64),
@@ -108,6 +110,8 @@ impl Launcher {
             window: None,
             renderer: None,
             gui: None,
+            wallpaper: None,
+            wallpaper_frame: None,
             audio: None,
             game: None,
             cursor: (0.0, 0.0),
@@ -213,6 +217,12 @@ impl Launcher {
                 pixels: [0u8; 4].repeat(6),
             }),
         };
+        if self.wallpaper.is_none()
+            && let Some(name) = self.catalog.config.wallpaper_name.clone()
+            && let Err(error) = crate::wallpapers::load_async(&self.home, &name)
+        {
+            self.catalog.status = format!("Could not load saved wallpaper: {error}");
+        }
         self.renderer = Some(game::loading_renderer(
             window.clone(),
             false,
@@ -228,6 +238,7 @@ impl Launcher {
         )?);
         self.window = Some(window);
         self.gui = Some(gui);
+        self.wallpaper_frame = None;
         Ok(())
     }
 
@@ -354,6 +365,10 @@ impl Launcher {
             self.renderer = None;
             self.window = None;
             self.gui = None;
+            // Release decoded GIF frames while Minecraft owns the mobile
+            // memory budget; the private source is decoded again on return.
+            self.wallpaper = None;
+            self.wallpaper_frame = None;
             horizon_client::ui_theme::reset_atlas();
             self.game = Some(game);
             self.game.as_mut().unwrap().resumed(events);
@@ -587,6 +602,49 @@ impl ApplicationHandler for Launcher {
         for result in crate::gallery::poll() {
             self.catalog.status = result.unwrap_or_else(|e| format!("File export failed: {e}"));
         }
+        if let Some(completion) = crate::wallpapers::poll() {
+            self.redraw_now = true;
+            match completion.wallpaper {
+                Ok(mut wallpaper) => {
+                    if let Some(gui) = &self.gui
+                        && let Some(rect) = gui
+                            .atlas
+                            .sprites
+                            .get(horizon_client::hud::LAUNCHER_WALLPAPER_SPRITE)
+                    {
+                        let (width, height) = rect.texels((gui.atlas.width, gui.atlas.height));
+                        wallpaper.resize_to(width, height);
+                    }
+                    let name = wallpaper.name().to_owned();
+                    if !completion.from_saved_file {
+                        self.catalog.config.wallpaper_name = Some(name.clone());
+                    }
+                    self.wallpaper = Some(wallpaper);
+                    self.wallpaper_frame = None;
+                    self.catalog.status = if completion.from_saved_file {
+                        format!("Live wallpaper loaded: {name}")
+                    } else {
+                        match self.catalog.config.save(&self.home) {
+                            Ok(()) => format!("Live wallpaper set: {name}"),
+                            Err(error) => format!(
+                                "Wallpaper is active, but its setting was not saved: {error}"
+                            ),
+                        }
+                    };
+                }
+                Err(error) if completion.from_saved_file => {
+                    let _ = crate::wallpapers::remove(&self.home);
+                    self.catalog.config.wallpaper_name = None;
+                    self.catalog.status = match self.catalog.config.save(&self.home) {
+                        Ok(()) => format!("Saved wallpaper could not be loaded: {error}"),
+                        Err(save_error) => format!(
+                            "Saved wallpaper could not be loaded: {error}. Could not clear its setting: {save_error}"
+                        ),
+                    };
+                }
+                Err(error) => self.catalog.status = error,
+            }
+        }
         self.login.poll();
         if let Some(result) = self.session_worker.as_ref().and_then(|w| w.try_recv().ok()) {
             self.session_worker = None;
@@ -602,11 +660,9 @@ impl ApplicationHandler for Launcher {
             }
         }
 
-        // Repainting an unchanged launcher ten times a second burns scarce
-        // CPU and GPU on Helio A22 class devices for identical frames. Keep
-        // the 100 ms wake for channel polling, repaint at once after real
-        // events or while anything visibly animates, and heartbeat idle
-        // frames at 2 Hz so polled state changes still appear quickly.
+        // Avoid wasting CPU/GPU on Helio A22 devices while idle. Visible UI
+        // animation is event-driven, GIFs use frame deadlines, and wallpaper
+        // import/loading is polled at 100 ms.
         let animating = self.feedback.is_some()
             || self.catalog.editing.is_some()
             || self.catalog.animating()
@@ -615,19 +671,32 @@ impl ApplicationHandler for Launcher {
             || self.diagnostic_export.is_some()
             || self.login.visible
             || crate::documents::busy();
-        // No frame cap: while anything animates, or right after a real
-        // event, the launcher repaints at the display's own rate. Every
-        // background poll source (downloads, sessions, imports, login) is
-        // in `animating`, so their frames keep arriving too; with nothing
-        // moving the loop sleeps until the next event instead of
-        // repainting on a clock.
+        let now = Instant::now();
+        let mut wake_at = None;
+        if let Some(wallpaper) = self
+            .wallpaper
+            .as_ref()
+            .filter(|wallpaper| wallpaper.is_animated())
+        {
+            if self.wallpaper_frame != Some(wallpaper.frame(now).0) {
+                self.redraw_now = true;
+            }
+            wake_at = Some(now + wallpaper.until_next_frame(now));
+        }
+        if crate::wallpapers::busy() {
+            let poll_at = now + std::time::Duration::from_millis(100);
+            wake_at = Some(wake_at.map_or(poll_at, |deadline: Instant| deadline.min(poll_at)));
+        }
+        // Repaint only after real events or while the rest of the launcher
+        // visibly animates. The GIF timer schedules its own frame deadlines;
+        // worker polling wakes every 100 ms without spinning the renderer.
         if animating || self.redraw_now {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
         }
         self.redraw_now = false;
-        events.set_control_flow(ControlFlow::Wait);
+        events.set_control_flow(wake_at.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
     fn exiting(&mut self, events: &ActiveEventLoop) {
         if let Some(game) = &mut self.game {

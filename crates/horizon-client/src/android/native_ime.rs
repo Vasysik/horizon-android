@@ -33,6 +33,7 @@ enum Command {
     Capture(bool),
     Bounds,
     ImportDocument,
+    ImportWallpaper,
     Screen(bool, bool),
 }
 struct Ui {
@@ -368,6 +369,52 @@ impl Ui {
                     let _ = env.exception_clear();
                     log::warn!("Document picker: {error}");
                     crate::documents::picker_failed("No Android document picker is available");
+                }
+            }
+            Command::ImportWallpaper => {
+                let result = (|| -> jni::errors::Result<()> {
+                    let action =
+                        JObject::from(env.new_string("android.intent.action.OPEN_DOCUMENT")?);
+                    let intent = env.new_object(
+                        "android/content/Intent",
+                        "(Ljava/lang/String;)V",
+                        &[JValue::Object(&action)],
+                    )?;
+                    let category =
+                        JObject::from(env.new_string("android.intent.category.OPENABLE")?);
+                    env.call_method(
+                        &intent,
+                        "addCategory",
+                        "(Ljava/lang/String;)Landroid/content/Intent;",
+                        &[JValue::Object(&category)],
+                    )?;
+                    let mime = JObject::from(env.new_string("image/gif")?);
+                    env.call_method(
+                        &intent,
+                        "setType",
+                        "(Ljava/lang/String;)Landroid/content/Intent;",
+                        &[JValue::Object(&mime)],
+                    )?;
+                    env.call_method(
+                        &intent,
+                        "addFlags",
+                        "(I)Landroid/content/Intent;",
+                        &[JValue::Int(1)],
+                    )?;
+                    env.call_method(
+                        &self.activity,
+                        "startActivityForResult",
+                        "(Landroid/content/Intent;I)V",
+                        &[JValue::Object(&intent), JValue::Int(4102)],
+                    )?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    let _ = env.exception_clear();
+                    log::warn!("Wallpaper picker: {error}");
+                    crate::wallpapers::picker_failed(
+                        "No Android file picker for GIF wallpapers is available",
+                    );
                 }
             }
             Command::Show(text) => {
@@ -708,6 +755,13 @@ pub fn pick_document() -> bool {
         return false;
     };
     ui.enqueue(Command::ImportDocument);
+    true
+}
+pub fn pick_wallpaper() -> bool {
+    let Some(ui) = UI.get().filter(|ui| !ui.failed.load(Ordering::Acquire)) else {
+        return false;
+    };
+    ui.enqueue(Command::ImportWallpaper);
     true
 }
 

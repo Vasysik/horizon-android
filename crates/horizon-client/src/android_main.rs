@@ -45,6 +45,8 @@ mod exit_reports;
 mod gallery;
 #[path = "android/native_ime.rs"]
 mod native_ime;
+#[path = "android/wallpapers.rs"]
+mod wallpapers;
 #[path = "android/performance.rs"]
 mod performance;
 #[path = "android/platform.rs"]

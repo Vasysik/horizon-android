@@ -138,6 +138,10 @@ pub extern "system" fn document_result(
     result: i32,
     uri: JString<'_>,
 ) {
+    if request == 4102 {
+        crate::wallpapers::document_result(env, activity, result, uri);
+        return;
+    }
     if request != 4101 {
         return;
     }

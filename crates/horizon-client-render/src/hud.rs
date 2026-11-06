@@ -91,6 +91,9 @@ pub const MAX_ATLAS_SIZE: u32 = 16384;
 pub const MAP_SLOTS: usize = 256;
 /// The atlas slot the minimap extra draws into.
 pub const MINIMAP_SPRITE: &str = "horizon/minimap";
+/// Persistent launcher wallpaper pixels, patched by the native Android UI.
+pub const LAUNCHER_WALLPAPER_SPRITE: &str = "horizon/launcher-wallpaper";
+pub const LAUNCHER_WALLPAPER_SIZE: (u32, u32) = (384, 216);
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
 /// Vanilla registers a texture per skin. Here the slots are shared
 /// (`skins::SkinSlots`): skins drawn in the last frame keep theirs, and a
@@ -391,6 +394,15 @@ impl HudAtlas {
                 vec![0; side * side * 4],
             ));
         }
+        // A fixed-aspect slot so launcher wallpaper imports can update without
+        // rebuilding the HUD atlas or changing the game's ordinary sprite animations.
+        let (wallpaper_width, wallpaper_height) = LAUNCHER_WALLPAPER_SIZE;
+        images.push((
+            LAUNCHER_WALLPAPER_SPRITE.into(),
+            wallpaper_width,
+            wallpaper_height,
+            vec![0; (wallpaper_width * wallpaper_height * 4) as usize],
+        ));
         // The on-screen keyboard's text and corner masks (ui_theme), rasterized at run time.
         images.push((
             "horizon/ui-text".into(),

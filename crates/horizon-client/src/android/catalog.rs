@@ -83,6 +83,9 @@ impl PerfPreset {
 fn default_uncapped() -> bool {
     true
 }
+fn default_launcher_opacity() -> u8 {
+    80
+}
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -118,6 +121,11 @@ pub struct Config {
     /// The graphics preset bundle the launcher writes into the game's
     /// options; `Off` leaves the game's own choices alone.
     pub perf_preset: PerfPreset,
+    /// Launcher controls and page veil opacity, independent of the wallpaper.
+    #[serde(default = "default_launcher_opacity")]
+    pub launcher_opacity: u8,
+    /// Original display name for the private looping GIF wallpaper file.
+    pub wallpaper_name: Option<String>,
     #[serde(flatten)]
     pub device: crate::device_preferences::Settings,
     pub shader_source: crate::shader_catalog::Origin,
@@ -171,6 +179,11 @@ impl Config {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         let mut config: Self = serde_json::from_value(value.clone()).unwrap_or_default();
+        config.launcher_opacity = if config.launcher_opacity == 0 {
+            default_launcher_opacity()
+        } else {
+            config.launcher_opacity.clamp(30, 100)
+        };
         if cfg!(target_pointer_width = "32") && value.get("renderer").is_none() {
             config.renderer = RendererMode::OpenGl;
         }

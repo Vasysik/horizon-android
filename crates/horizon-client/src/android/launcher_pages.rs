@@ -59,6 +59,9 @@ pub(super) enum Action {
     GpuProfile,
     FpsCap,
     PerfPreset,
+    UiOpacity,
+    Wallpaper,
+    ClearWallpaper,
 }
 
 /// Is `point` (dp) inside `rect`?
@@ -209,6 +212,15 @@ impl Launcher {
     }
 
     pub(super) fn draw_pages(&mut self) -> Result<()> {
+        if let (Some(wallpaper), Some(gui)) = (self.wallpaper.as_mut(), self.gui.as_ref())
+            && let Some(rect) = gui
+                .atlas
+                .sprites
+                .get(horizon_client::hud::LAUNCHER_WALLPAPER_SPRITE)
+        {
+            let (width, height) = rect.texels((gui.atlas.width, gui.atlas.height));
+            wallpaper.resize_to(width, height);
+        }
         let (Some(r), Some(gui)) = (&mut self.renderer, &self.gui) else {
             return Ok(());
         };
@@ -222,6 +234,49 @@ impl Launcher {
         self.list_targets.clear();
         self.list_view = None;
         let mut b = HudBatch::new([r.config.width, r.config.height]);
+        if let Some(wallpaper) = self.wallpaper.as_ref() {
+            let (index, frame) = wallpaper.frame(Instant::now());
+            if let Some(rect) = gui
+                .atlas
+                .sprites
+                .get(horizon_client::hud::LAUNCHER_WALLPAPER_SPRITE)
+                .copied()
+            {
+                if self.wallpaper_frame != Some(index) {
+                    let (width, height) = rect.texels((gui.atlas.width, gui.atlas.height));
+                    let x = (rect.u0 * gui.atlas.width as f32).round() as u32;
+                    let y = (rect.v0 * gui.atlas.height as f32).round() as u32;
+                    b.patches.push(horizon_client::font::Patch {
+                        x,
+                        y,
+                        width,
+                        height,
+                        rgba: frame.rgba.clone(),
+                    });
+                    self.wallpaper_frame = Some(index);
+                }
+                let (source_width, source_height) =
+                    horizon_client::hud::LAUNCHER_WALLPAPER_SIZE;
+                let source_aspect = source_width as f32 / source_height as f32;
+                let (x, y, width, height) = if b.width / b.height > source_aspect {
+                    let height = b.width / source_aspect;
+                    (0.0, (b.height - height) / 2.0, b.width, height)
+                } else {
+                    let width = b.height * source_aspect;
+                    ((b.width - width) / 2.0, 0.0, width, b.height)
+                };
+                b.sprite_scaled(
+                    &gui.atlas,
+                    horizon_client::hud::LAUNCHER_WALLPAPER_SPRITE,
+                    x,
+                    y,
+                    width,
+                    height,
+                    u32::MAX,
+                );
+            }
+        }
+        let ui_opacity_start = b.vertices.len();
         let mut ui = Ui::mobile(&gui.atlas, &mut b, (0.0, 0.0));
         // OEM navigation bars can remain visible even in fullscreen (keypad phones).
         // Inset the launcher layout only; keep surface and input coordinates intact.
@@ -893,12 +948,25 @@ impl Launcher {
             self.catalog.scroll = self
                 .catalog
                 .scroll
-                .clamp(0.0, (17.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
+                .clamp(0.0, (20.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
             self.list_view = Some([
                 195.0,
                 h - 130.0,
-                (17.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
+                (20.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
             ]);
+            let wallpaper_label = c
+                .wallpaper_name
+                .as_deref()
+                .map(|name| {
+                    let mut chars = name.chars();
+                    let short: String = chars.by_ref().take(24).collect();
+                    if chars.next().is_some() {
+                        format!("{short}...")
+                    } else {
+                        short
+                    }
+                })
+                .unwrap_or_else(|| "Tap to choose animated GIF".into());
             for (i, (title, value, action)) in [
                 ("Rendering", c.renderer.label().to_owned(), Action::Renderer),
                 (
@@ -951,6 +1019,22 @@ impl Launcher {
                     "Graphics preset",
                     c.perf_preset.label().to_owned(),
                     Action::PerfPreset,
+                ),
+                (
+                    "Launcher UI opacity",
+                    format!("{}%", c.launcher_opacity.clamp(30, 100)),
+                    Action::UiOpacity,
+                ),
+                ("Custom live wallpaper", wallpaper_label, Action::Wallpaper),
+                (
+                    "Clear live wallpaper",
+                    if c.wallpaper_name.is_some() {
+                        "Remove current wallpaper"
+                    } else {
+                        "No wallpaper selected"
+                    }
+                    .into(),
+                    Action::ClearWallpaper,
                 ),
                 (
                     "Performance hints",
@@ -1223,6 +1307,11 @@ impl Launcher {
         }
         crate::documents::draw_ui(&mut ui);
         ui.finish();
+        let opacity = u32::from(self.catalog.config.launcher_opacity.clamp(30, 100));
+        for vertex in &mut b.vertices[ui_opacity_start..] {
+            let alpha = vertex.color >> 24;
+            vertex.color = (vertex.color & 0x00ff_ffff) | ((alpha * opacity / 100) << 24);
+        }
 
         if !r.render(&game::loading_frame(&b))? && !b.patches.is_empty() {
             // A suspended/lost surface skips the frame, including its glyph
@@ -1254,7 +1343,7 @@ impl Launcher {
                 (*x..*x + *w).contains(&p[0]) && (*y..*y + *h).contains(&p[1])
             })
             .map(|(_, a)| *a);
-        if self.catalog.busy() || crate::documents::busy() {
+        if self.catalog.busy() || crate::documents::busy() || crate::wallpapers::busy() {
             return Ok(());
         }
         self.feedback = action.map(|action| (action, std::time::Instant::now()));
@@ -1342,6 +1431,39 @@ impl Launcher {
                     "Preset written to the game options. Settings you change in-game stay until a preset is picked here again."
                 }
                 .into();
+            }
+            Some(Action::UiOpacity) => {
+                let current = self.catalog.config.launcher_opacity.clamp(30, 100);
+                let opacity = if current >= 100 {
+                    30
+                } else {
+                    current.saturating_add(10).min(100)
+                };
+                self.catalog.config.launcher_opacity = opacity;
+                self.catalog.config.save(&self.home)?;
+                self.catalog.status = format!(
+                    "Launcher UI opacity set to {opacity}%. The wallpaper stays at full brightness."
+                );
+                self.redraw_now = true;
+            }
+            Some(Action::Wallpaper) => {
+                self.catalog.status = match crate::wallpapers::begin(&self.home) {
+                    Ok(()) => "Choose an animated GIF (max 16 MiB and 48 frames).".into(),
+                    Err(error) => error,
+                };
+            }
+            Some(Action::ClearWallpaper) => {
+                if self.catalog.config.wallpaper_name.is_some() {
+                    crate::wallpapers::remove(&self.home)?;
+                    self.catalog.config.wallpaper_name = None;
+                    self.catalog.config.save(&self.home)?;
+                    self.wallpaper = None;
+                    self.wallpaper_frame = None;
+                    self.redraw_now = true;
+                    self.catalog.status = "Live wallpaper cleared.".into();
+                } else {
+                    self.catalog.status = "No live wallpaper is selected.".into();
+                }
             }
 
             Some(Action::ModSource(origin)) => {

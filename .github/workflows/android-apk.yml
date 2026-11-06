@@ -201,7 +201,10 @@ jobs:
           - **Oxide-Android-${version}-arm64-v8a.apk** - 64-bit ARMv8 devices
             (native 64-bit mode)
 
-          Includes the Minecraft-styled dark stone launcher UI (PR #1). Release-optimized
+          Includes the Minecraft-styled dark stone launcher UI (PR #1), adjustable launcher
+          opacity, custom looping GIF wallpapers (up to 16 MiB, 48 frames and 2048 pixels per
+          side), and the oxidation-themed voxel-block app icon. Wallpapers run in the launcher
+          only; the game keeps Oxide's existing rendering and resource behavior. Release-optimized
           (opt-level 3, ThinLTO), non-debuggable, payload-audited; original game resources
           download from Mojang on first run.
 
