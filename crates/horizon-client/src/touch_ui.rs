@@ -537,8 +537,11 @@ impl TouchUi {
         }
         match controls.settings.control_style {
             crate::touch::ControlStyle::Mcpe => {
-                let mcpe_visible = controls.mcpe_controls_visible(in_menu, hide_gui, touch_active);
-                !mcpe_visible && (in_menu || !captured || !mcpe_visible)
+                if in_menu {
+                    return true;
+                }
+                let mcpe_visible = controls.mcpe_controls_visible(false, hide_gui, touch_active);
+                !mcpe_visible || !captured || self.goy_in_game_mouse
             }
             crate::touch::ControlStyle::GoyControl => in_menu || self.goy_in_game_mouse,
         }
@@ -847,6 +850,11 @@ impl TouchUi {
     pub fn draw(&self, b: &mut HudBatch, a: &HudAtlas, menu: bool) {
         if menu && !self.goy_mode && crate::touch::current_hud_opacity_scale() > 0.01 {
             button(b, a, "Back", b.width - 53.0, 3.0, 50.0);
+            if self.virtual_mouse {
+                let [lmb, rmb] = mouse_button_rects(b.width, b.height);
+                button(b, a, "LMB", lmb[0], lmb[1], lmb[2]);
+                button(b, a, "RMB", rmb[0], rmb[1], rmb[2]);
+            }
         }
         if !self.expanded {
             return;
@@ -1392,11 +1400,9 @@ pub fn draw_goy_hud(
     }
     let is_goy_system = tc.settings.control_style == ControlStyle::GoyControl;
     let has_goy_move = is_goy_system || tc.placement(Control::Move).use_goy_style;
-    let has_goy_custom = is_goy_system
-        || (0..tc.settings.custom_buttons.len()).any(|i| {
-            tc.custom_visible_for_state(i, in_menu) && tc.custom_placement(i).use_goy_style
-        });
-    if !has_goy_move && !has_goy_custom {
+    let has_any_custom =
+        (0..tc.settings.custom_buttons.len()).any(|i| tc.custom_visible_for_state(i, in_menu));
+    if !has_goy_move && !has_any_custom {
         return;
     }
     let hud_scale = tc.hud_opacity_scale.clamp(0.0, 1.0);
@@ -1440,15 +1446,12 @@ pub fn draw_goy_hud(
         }
     }
 
-    // 2. Custom GoyControl Static Buttons (respecting `visible_in_game` and `visible_in_menu`)
+    // 2. Custom Buttons in BOTH GoyControl and MCPE modes (100% parity with `draw_hud_editor`)
     for (i, custom) in tc.settings.custom_buttons.iter().enumerate() {
         if !tc.custom_visible_for_state(i, in_menu) {
             continue;
         }
         let p = tc.custom_placement(i);
-        if !is_goy_system && !p.use_goy_style {
-            continue;
-        }
         let [nx, ny, nw, nh] = p.rect(tc.aspect());
         let [rx, ry, rw, rh] = [nx * w, ny * h, nw * w, nh * h];
         let alpha = (p.opacity.clamp(0.15, 1.0) * hud_scale).clamp(0.0, 1.0);
@@ -1466,43 +1469,98 @@ pub fn draw_goy_hud(
         let held = is_active_token && !p.toggleable;
         let toggled = (is_active_token && p.toggleable) || is_vmouse_on;
 
-        let raw_fill = if held {
-            p.on_click_color
-        } else if toggled {
-            p.on_toggle_color
+        if is_goy_system || p.use_goy_style {
+            let raw_fill = if held {
+                p.on_click_color
+            } else if toggled {
+                p.on_toggle_color
+            } else {
+                p.button_color
+            };
+            let raw_stroke = if held {
+                p.on_click_stroke_color
+            } else if toggled {
+                p.on_toggle_stroke_color
+            } else {
+                p.stroke_color
+            };
+            let fill_c = color::with_alpha(raw_fill, alpha);
+            let stroke_c = color::with_alpha(raw_stroke, alpha);
+            let shadow_c = color::with_alpha(p.shadow_color, alpha);
+            ui.goy_box(
+                rx,
+                ry,
+                rw,
+                rh,
+                p.shape,
+                p.roundness,
+                fill_c,
+                p.stroke_size,
+                p.stroke_margin,
+                p.stroke_roundness,
+                stroke_c,
+                0.0,
+                shadow_c,
+            );
         } else {
-            p.button_color
-        };
-        let raw_stroke = if held {
-            p.on_click_stroke_color
-        } else if toggled {
-            p.on_toggle_stroke_color
-        } else {
-            p.stroke_color
-        };
-        let fill_c = color::with_alpha(raw_fill, alpha);
-        let stroke_c = color::with_alpha(raw_stroke, alpha);
-        let shadow_c = color::with_alpha(p.shadow_color, alpha);
-        ui.goy_box(
-            rx,
-            ry,
-            rw,
-            rh,
-            p.shape,
-            p.roundness,
-            fill_c,
-            p.stroke_size,
-            p.stroke_margin,
-            p.stroke_roundness,
-            stroke_c,
-            0.0,
-            shadow_c,
-        );
+            draw_mcpe_custom_plate(&mut ui, [rx, ry, rw, rh], alpha, held || toggled);
+        }
         let fg_col = color::with_alpha(text_c, (alpha.max(0.75) * hud_scale).clamp(0.0, 1.0));
         draw_button_icon_and_label(&mut ui, [rx, ry, rw, rh], p.icon_id, &label, fg_col);
     }
 
     ui.finish();
+}
+
+fn draw_mcpe_custom_plate(
+    ui: &mut crate::ui_theme::Ui,
+    rect: [f32; 4],
+    alpha: f32,
+    pressed: bool,
+) {
+    let [rx, ry, rw, rh] = rect;
+    let a_u8 = (alpha * 255.0).round() as u8;
+    ui.rounded(rx, ry, rw, rh, 3.0, rgba(18, 20, 24, a_u8));
+    let inner_col = if pressed {
+        rgba(38, 42, 48, (alpha * 225.0).round() as u8)
+    } else {
+        rgba(58, 62, 70, (alpha * 210.0).round() as u8)
+    };
+    ui.rounded(
+        rx + 2.0,
+        ry + 2.0,
+        (rw - 4.0).max(2.0),
+        (rh - 4.0).max(2.0),
+        2.0,
+        inner_col,
+    );
+    let (top_left_col, bot_right_col) = if pressed {
+        (
+            rgba(28, 30, 36, (alpha * 215.0).round() as u8),
+            rgba(145, 152, 164, (alpha * 185.0).round() as u8),
+        )
+    } else {
+        (
+            rgba(175, 182, 194, (alpha * 195.0).round() as u8),
+            rgba(28, 30, 36, (alpha * 215.0).round() as u8),
+        )
+    };
+    ui.fill(rx + 2.0, ry + 2.0, (rw - 4.0).max(2.0), 2.0, top_left_col);
+    ui.fill(rx + 2.0, ry + 4.0, 2.0, (rh - 6.0).max(2.0), top_left_col);
+    ui.fill(
+        rx + 2.0,
+        ry + rh - 4.0,
+        (rw - 4.0).max(2.0),
+        2.0,
+        bot_right_col,
+    );
+    ui.fill(
+        rx + rw - 4.0,
+        ry + 4.0,
+        2.0,
+        (rh - 6.0).max(2.0),
+        bot_right_col,
+    );
 }
 
 fn hub_metrics(w: f32, h: f32) -> (f32, f32, f32, f32, f32, f32, f32, f32, f32) {
@@ -4318,20 +4376,6 @@ pub fn draw_hud_editor(
             crate::touch::draw_single_mcpe_control(
                 tc, ui.batch, ui.atlas, c, gui_bounds, mcpe_col, is_sel,
             );
-            if matches!(c, Control::Offhand | Control::Shield) {
-                let lbl = if c == Control::Offhand {
-                    "Swap"
-                } else {
-                    "Shield"
-                };
-                ui.centered_fit(
-                    Face::SemiBold,
-                    (rh * 0.28).clamp(9.0, 13.0),
-                    [rx, ry, rw, rh],
-                    text_c,
-                    lbl,
-                );
-            }
         }
 
         if !vis {
@@ -4377,47 +4421,10 @@ pub fn draw_hud_editor(
                 shadow_c,
             );
         } else {
-            // Classic MCPE stone bevel plate for MCPE custom buttons
-            let a_u8 = (alpha * 255.0).round() as u8;
-            ui.rounded(rx, ry, rw, rh, 3.0, rgba(18, 20, 24, a_u8));
-            ui.rounded(
-                rx + 2.0,
-                ry + 2.0,
-                (rw - 4.0).max(2.0),
-                (rh - 4.0).max(2.0),
-                2.0,
-                rgba(58, 62, 70, (alpha * 210.0).round() as u8),
-            );
-            ui.fill(
-                rx + 2.0,
-                ry + 2.0,
-                (rw - 4.0).max(2.0),
-                2.0,
-                rgba(175, 182, 194, (alpha * 195.0).round() as u8),
-            );
-            ui.fill(
-                rx + 2.0,
-                ry + 4.0,
-                2.0,
-                (rh - 6.0).max(2.0),
-                rgba(175, 182, 194, (alpha * 195.0).round() as u8),
-            );
-            ui.fill(
-                rx + 2.0,
-                ry + rh - 4.0,
-                (rw - 4.0).max(2.0),
-                2.0,
-                rgba(28, 30, 36, (alpha * 215.0).round() as u8),
-            );
-            ui.fill(
-                rx + rw - 4.0,
-                ry + 4.0,
-                2.0,
-                (rh - 6.0).max(2.0),
-                rgba(28, 30, 36, (alpha * 215.0).round() as u8),
-            );
+            draw_mcpe_custom_plate(&mut ui, [rx, ry, rw, rh], alpha, false);
         }
-        draw_button_icon_and_label(&mut ui, [rx, ry, rw, rh], p.icon_id, &label, text_c);
+        let fg_col = crate::ui_theme::color::with_alpha(text_c, alpha.max(0.75).clamp(0.0, 1.0));
+        draw_button_icon_and_label(&mut ui, [rx, ry, rw, rh], p.icon_id, &label, fg_col);
 
         if is_sel {
             selected_rect_and_title = Some(([rx, ry, rw, rh], format!("Button: {label}")));

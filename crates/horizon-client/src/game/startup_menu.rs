@@ -2491,21 +2491,21 @@ impl Loading {
                     self.menu.controls.settings.virtual_mouse_pointer_scale,
                 );
             }
-            if is_goy {
-                horizon_client::touch_ui::draw_goy_hud(
-                    &self.menu.controls,
-                    batch,
-                    &gui.atlas,
-                    hud_in_menu,
-                    self.menu.touch.virtual_mouse,
-                );
-            } else if !hud_in_menu
-                || self.menu.controls.settings.layouts[self.menu.controls.settings.mode.index()]
-                    .iter()
-                    .any(|p| p.visible_in_menu)
+            if !is_goy
+                && (!hud_in_menu
+                    || self.menu.controls.settings.layouts[self.menu.controls.settings.mode.index()]
+                        .iter()
+                        .any(|p| p.visible_in_menu))
             {
                 self.menu.controls.draw(batch, &gui.atlas);
             }
+            horizon_client::touch_ui::draw_goy_hud(
+                &self.menu.controls,
+                batch,
+                &gui.atlas,
+                hud_in_menu,
+                self.menu.touch.virtual_mouse,
+            );
             self.menu.touch.draw(batch, &gui.atlas, true);
             self.menu
                 .touch

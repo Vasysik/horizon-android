@@ -9970,7 +9970,8 @@ impl Game<'_> {
     /// cached key set is not vanilla's answer.
     pub(super) fn has_shift_down(&self) -> bool {
         #[cfg(target_os = "android")]
-        if (self.android_inventory_controls() && self.pad.touch.inventory_shift)
+        if (matches!(self.screen, Screen::Inventory | Screen::Creative)
+            && self.pad.touch.inventory_shift)
             || self.pad.touch_ui.modifier_latched(KeyCode::ShiftLeft)
             || self.pad.custom_keys.contains(&KeyCode::ShiftLeft)
             || self.pad.custom_keys.contains(&KeyCode::ShiftRight)
@@ -15081,11 +15082,14 @@ impl Game<'_> {
             let waiting_for_key = self.screen == Screen::Options && self.options_waiting_for_key();
             let hud_in_menu = in_menu && !waiting_for_key;
             self.pad.touch.in_menu = hud_in_menu;
+            self.pad.touch.in_inventory =
+                matches!(self.screen, Screen::Inventory | Screen::Creative);
             self.pad.touch.goy_rendered_by_ui = true;
             if (in_menu || !self.ui.hide_gui)
                 && (self.player.is_some() || self.settings.keypad.enabled)
                 && (!hud_in_menu
                     || self.android_inventory_controls()
+                    || self.pad.touch.in_inventory
                     || self.pad.touch.settings.layouts[self.pad.touch.settings.mode.index()]
                         .iter()
                         .any(|p| p.visible_in_menu))
@@ -16592,9 +16596,19 @@ impl Game<'_> {
             let in_menu = self.pad_in_menu();
             let waiting_for_key = self.screen == Screen::Options && self.options_waiting_for_key();
             self.pad.touch.in_menu = in_menu && !waiting_for_key;
+            self.pad.touch.in_inventory =
+                matches!(self.screen, Screen::Inventory | Screen::Creative);
             let touch_controls_hidden = !crate::touch_visible()
                 && self.pad.touch.hud_opacity_scale <= 0.01
                 && self.pad.touch.editor.is_none();
+            if in_menu
+                && self.pad.touch.consume_ignored(
+                    touch.id,
+                    matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled),
+                )
+            {
+                return;
+            }
             let menu_custom_hit = !touch_controls_hidden
                 && in_menu
                 && !self.settings.keypad.enabled
@@ -16602,7 +16616,7 @@ impl Game<'_> {
                     || (touch.phase == TouchPhase::Started
                         && self.pad.touch.custom_at(overlay_point).is_some()));
             let inventory_control = !touch_controls_hidden
-                && self.android_inventory_controls()
+                && (self.android_inventory_controls() || self.pad.touch.in_menu)
                 && (self.pad.touch.owns_pointer(touch.id)
                     || (touch.phase == TouchPhase::Started
                         && self.pad.touch.control_at_point(overlay_point)));
@@ -16613,6 +16627,8 @@ impl Game<'_> {
                     == Some(horizon_client::touch::Control::Sneak)
             {
                 self.pad.touch.inventory_shift ^= true;
+                self.audio.play_button_click();
+                self.android_touch_haptic(10);
                 self.pad.touch.ignore(touch.id);
                 return;
             }
@@ -16652,7 +16668,7 @@ impl Game<'_> {
                 }
                 return;
             }
-            if !self.pad_in_menu() || inventory_control {
+            if !self.pad_in_menu() || (inventory_control && self.android_inventory_controls()) {
                 if touch_controls_hidden
                     || (!crate::touch_visible() && !self.settings.keypad.enabled)
                 {

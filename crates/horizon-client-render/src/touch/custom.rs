@@ -478,6 +478,9 @@ impl TouchControls {
             .extend(all_tokens.into_iter().map(|k| (k, false)));
     }
     pub(super) fn draw_custom(&self, b: &mut HudBatch, a: &HudAtlas) {
+        if self.goy_rendered_by_ui && self.editor.is_none() {
+            return;
+        }
         let hud_scale = if self.editor.is_some() {
             1.0
         } else {

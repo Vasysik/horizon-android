@@ -194,6 +194,8 @@ pub struct TouchControls {
     pub inventory_mode: bool,
     /// True when a menu (Main Title Menu, Inventory, Pause, Options) is open so `visible_in_menu` controls apply.
     pub in_menu: bool,
+    /// True when an inventory or container screen (`Screen::Inventory | Screen::Creative`) is open.
+    pub in_inventory: bool,
     /// True when `touch_ui::draw_goy_hud` renders GoyControl with `Ui::mobile` so `TouchControls::draw` skips duplicate boxy drawing.
     pub goy_rendered_by_ui: bool,
     pub inventory_shift: bool,
@@ -241,6 +243,7 @@ impl Default for TouchControls {
             inventory_mode: false,
             inventory_shift: false,
             in_menu: false,
+            in_inventory: false,
             goy_rendered_by_ui: false,
             editor: None,
             fingers: BTreeMap::new(),
@@ -409,6 +412,20 @@ impl TouchControls {
     pub fn ignore(&mut self, id: u64) {
         self.fingers.insert(id, (Role::Ignore, [0.0; 2]));
     }
+    pub fn consume_ignored(&mut self, id: u64, ended: bool) -> bool {
+        if !self.custom_fingers.contains_key(&id)
+            && self
+                .fingers
+                .get(&id)
+                .is_some_and(|(role, _)| matches!(role, Role::Ignore))
+        {
+            if ended {
+                self.fingers.remove(&id);
+            }
+            return true;
+        }
+        false
+    }
     pub fn tap(&mut self, button: Button) {
         self.pending.set(button, true);
     }
@@ -421,15 +438,7 @@ impl TouchControls {
         if self.settings.control_style != ControlStyle::Mcpe {
             return false;
         }
-        if self.editor.is_some() || hide_gui || !touch_active {
-            return false;
-        }
-        if in_menu && !self.inventory_mode {
-            return Control::ALL
-                .into_iter()
-                .any(|c| self.visible_for_state(c, true));
-        }
-        if in_menu && self.inventory_mode {
+        if self.editor.is_some() || hide_gui || !touch_active || in_menu {
             return false;
         }
         Control::ALL
@@ -446,6 +455,12 @@ impl TouchControls {
         }
         let p = self.placement(c);
         if in_menu {
+            if self.in_inventory
+                && self.settings.control_style == ControlStyle::Mcpe
+                && matches!(c, Control::Sneak | Control::Inventory)
+            {
+                return true;
+            }
             p.visible_in_menu
         } else {
             p.visible_in_game
@@ -612,8 +627,11 @@ impl TouchControls {
                 && Self::inventory_token(control)
                     .is_some_and(|token| self.held_custom_tokens().any(|held| held == token)))
                 || (control == Control::Sneak
-                    && if self.inventory_mode {
+                    && if self.inventory_mode || self.in_inventory {
                         self.inventory_shift
+                            || self
+                                .held_custom_tokens()
+                                .any(|held| held == "key.keyboard.left.shift")
                     } else {
                         self.sneaking
                     })

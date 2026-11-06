@@ -330,7 +330,7 @@ pub struct Placement {
     #[serde(default = "default_true")]
     pub visible_in_game: bool,
     /// Whether this control/button is visible & interactive while a menu/inventory/title screen is open.
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub visible_in_menu: bool,
 }
 impl Placement {
@@ -360,7 +360,7 @@ impl Placement {
             on_toggle_color: 0xFF543B94,
             on_toggle_stroke_color: 0xFFEADDFF,
             visible_in_game: true,
-            visible_in_menu: true,
+            visible_in_menu: false,
         }
     }
     pub fn rect(self, aspect: f32) -> [f32; 4] {
@@ -770,9 +770,18 @@ impl Settings {
             self.split_controls = false;
             self.crosshair_gestures = true;
         }
-        if self.control_style == ControlStyle::Mcpe && self.is_default_preset() {
+        if self.control_style == ControlStyle::Mcpe {
+            if self.is_default_preset() {
+                for row in &mut self.layouts {
+                    row[Control::Attack as usize].passthrough = true;
+                }
+            }
             for row in &mut self.layouts {
-                row[Control::Attack as usize].passthrough = true;
+                if row.iter().all(|p| p.visible_in_menu) {
+                    for p in row.iter_mut() {
+                        p.visible_in_menu = false;
+                    }
+                }
             }
         }
         if self.sprint_toggle != self.toggle_sprint {

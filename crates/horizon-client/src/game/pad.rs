@@ -245,8 +245,9 @@ impl Game<'_> {
                 crate::device_runtime::preferences().gpu_profile,
                 &crate::backend::game_home(),
             );
+            self.pad.touch.in_inventory = matches!(self.screen, Screen::Inventory | Screen::Creative);
             self.pad.touch.inventory_mode = self.android_inventory_controls();
-            if !self.pad.touch.inventory_mode {
+            if !self.pad.touch.in_inventory {
                 self.pad.touch.inventory_shift = false;
             }
             self.android_virtual_mouse_clicks(event_loop);
