@@ -7,6 +7,8 @@ mod chooser;
 mod gesture;
 #[path = "login.rs"]
 mod login;
+#[path = "launcher_home.rs"]
+mod home;
 #[path = "launcher_pages.rs"]
 mod pages;
 #[path = "wardrobe.rs"]
@@ -15,7 +17,7 @@ use horizon_client::{
     Result,
     gfx::Renderer,
     hud::{HudAtlas, HudBatch},
-    ui_theme::{Face, Ui},
+    ui_theme::Ui,
 };
 use std::{
     path::PathBuf,
@@ -64,6 +66,7 @@ pub(super) struct Launcher {
     prepared_session: Option<PathBuf>,
     focus: Option<usize>,
     diagnostic_export: Option<mpsc::Receiver<std::result::Result<String, String>>>,
+    home_state: home::Home,
 }
 
 impl Launcher {
@@ -78,6 +81,9 @@ impl Launcher {
     }
 
     fn edit_text(&mut self, output: horizon_client::osk::Output) {
+        if self.edit_home(&output) {
+            return;
+        }
         if self.login.edit(self.catalog.editing, &output) {
             if matches!(
                 output,
@@ -144,7 +150,16 @@ impl Launcher {
             prepared_session: None,
             focus: None,
             diagnostic_export: None,
+            home_state: home::Home::default(),
         }
+        .opened()
+    }
+
+    /// Reads Home's lists and the published builds, once the app is up.
+    fn opened(mut self) -> Self {
+        self.reload_home();
+        self.load_releases();
+        self
     }
 
     fn restore_launcher(&mut self, events: &ActiveEventLoop) {
@@ -182,6 +197,14 @@ impl Launcher {
         self.login.refresh_status();
         crate::diagnostics::heartbeat("returned_to_launcher", || serde_json::json!({}));
         self.catalog.page = Page::Play;
+        if let Some((id, since)) = self.home_state.started.take() {
+            let home = self.home.clone();
+            let mut list = crate::launcher_data::Instances::load(&home);
+            if let Err(error) = list.record_play(&home, id, since.elapsed()) {
+                log::warn!("Could not save play time: {error}");
+            }
+        }
+        self.reload_home();
         if let Ok(message) = std::fs::read_to_string(self.home.join("android-error.txt")) {
             self.error = Some(message);
         }
@@ -252,6 +275,8 @@ impl Launcher {
         crate::platform::hide();
         if self.exit_confirmation {
             self.exit_confirmation = false;
+        } else if self.close_overlay() {
+            // Back closes what is over the page first.
         } else if self.login.visible {
             self.login.hide();
         } else if self.chooser.take().is_some() {
@@ -356,7 +381,7 @@ impl Launcher {
                 self.wardrobe
                     .prepare_game(&self.catalog.config.name, &game_home)?;
             }
-            let extra_arguments = if crate::PUBLIC_BUILD {
+            let mut extra_arguments = if crate::PUBLIC_BUILD {
                 Vec::new()
             } else {
                 match std::fs::read(self.home.join("android-launch.json")) {
@@ -365,6 +390,13 @@ impl Launcher {
                     Err(e) => return Err(e.into()),
                 }
             };
+            extra_arguments.extend(crate::launcher_data::split_args(
+                &self.catalog.config.game_args,
+            ));
+            if let Some(world) = self.home_state.once_world.take() {
+                extra_arguments.extend(["--world".into(), world]);
+            }
+            let once_server = self.home_state.once_server.take();
 
             self.audio = None;
             self.error = None;
@@ -394,7 +426,7 @@ impl Launcher {
                 game_home,
                 session_file: self.prepared_session.take(),
                 offline_name: crate::catalog::truncate_player_name(&self.catalog.config.name),
-                server: self.catalog.config.server.clone(),
+                server: once_server.unwrap_or_else(|| self.catalog.config.server.clone()),
                 control_socket: (!crate::PUBLIC_BUILD).then(|| self.home.join("control.json")),
                 extra_arguments,
                 open_gl: self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl,
@@ -409,6 +441,7 @@ impl Launcher {
                     return Err(error);
                 }
             };
+            self.home_state.started = Some((self.catalog.config.profile, Instant::now()));
             // Android has one native window; release its surface before handing it over.
             self.renderer = None;
             self.window = None;
@@ -637,6 +670,7 @@ impl ApplicationHandler for Launcher {
             audio.tick(false, &Default::default());
         }
         self.catalog.poll(&self.home);
+        self.poll_home();
         self.wardrobe.poll();
         if let Some(notice) = crate::documents::poll() {
             self.wardrobe.reload();
@@ -766,7 +800,7 @@ impl Launcher {
             } else if b == Button::East {
                 crate::platform::hide();
                 self.catalog.editing = None;
-                if self.chooser.take().is_none() {
+                if self.chooser.take().is_none() && !self.close_overlay() {
                     if self.login.visible {
                         self.login.visible = false;
                     } else {

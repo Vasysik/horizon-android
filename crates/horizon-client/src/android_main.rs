@@ -31,6 +31,40 @@ mod device_runtime;
 mod diagnostics;
 #[path = "android/display.rs"]
 mod display;
+// The desktop launcher's own worlds, screenshots and data packs; the Android side of each is
+// `android/launcher_home.rs`.
+#[allow(dead_code)]
+#[path = "android/launcher_datapacks.rs"]
+mod datapacks;
+mod desktop_seams {
+    /// Android has no trash the app can reach: what the player confirms is deleted.
+    pub fn to_trash(path: &std::path::Path) -> Result<(), String> {
+        crate::launcher_data::remove(path)
+    }
+}
+#[path = "android/launcher_data.rs"]
+mod launcher_data;
+#[path = "android/launcher_glass.rs"]
+mod launcher_glass;
+#[allow(dead_code)]
+#[path = "android/launcher_scene.rs"]
+mod launcher_scene;
+#[path = "android/launcher_servers.rs"]
+mod server_list;
+#[allow(dead_code)]
+#[path = "android/launcher_tokens.rs"]
+mod launcher_tokens;
+#[path = "android/launcher_view.rs"]
+mod launcher_view;
+use launcher_data::packs;
+#[rustfmt::skip]
+#[allow(dead_code)]
+#[path = "../../../launcher/src/screenshots.rs"]
+mod screenshots;
+#[rustfmt::skip]
+#[allow(dead_code)]
+#[path = "../../../launcher/src/worlds.rs"]
+mod worlds;
 #[path = "android/document_bridge.rs"]
 mod document_bridge;
 #[path = "android/document_provider.rs"]
@@ -179,7 +213,9 @@ fn init_logging() {
                 return;
             }
             log::Log::log(&self.0, record);
-            diagnostics::log_line(record.level(), record.target(), &record.args().to_string());
+            let line = record.args().to_string();
+            launcher_data::remember_log(record.level(), record.target(), &line);
+            diagnostics::log_line(record.level(), record.target(), &line);
         }
         fn flush(&self) {
             diagnostics::request_flush();

@@ -1,10 +1,13 @@
 //! Explicit, scrollable selections. Values never cycle on repeated button taps.
-use super::{
-    Launcher,
-    pages::{Action, button},
-};
+use super::{Launcher, pages::Action};
 use crate::catalog::RendererMode;
-use horizon_client::ui_theme::{Face, Ui, color};
+use crate::launcher_glass::{Art, Kind as Look, Plate, clip, fitted, paragraph, white};
+use crate::launcher_tokens::{fill, ink, radius};
+use crate::launcher_view::{head, scrim};
+use horizon_client::ui_theme::{Face, Ui, color::hex};
+
+/// A choice's height.
+const ROW: f32 = 58.0;
 
 pub(super) enum Kind {
     Aspect,
@@ -13,7 +16,6 @@ pub(super) enum Kind {
     WorkerLimit,
     Renderer,
     RenderScale,
-    Profile,
     Orientation,
     InputHost,
 }
@@ -23,6 +25,10 @@ pub(super) struct Chooser {
     device: Option<String>,
     choices: Vec<(String, String, Action, bool)>,
     pub scroll: f32,
+    /// Where the list was drawn: its top and bottom, and its left and width.
+    top: f32,
+    bottom: f32,
+    frame: [f32; 2],
 }
 impl Launcher {
     pub(super) fn open_chooser(&mut self, kind: Kind) {
@@ -199,54 +205,6 @@ impl Launcher {
                     ),
                 ],
             ),
-            Kind::Profile => {
-                let mut ids = vec![0, c.profile];
-                ids.extend(
-                    std::fs::read_dir(self.home.join("profiles"))
-                        .into_iter()
-                        .flatten()
-                        .flatten()
-                        .filter(|e| e.path().is_dir())
-                        .filter_map(|e| {
-                            e.file_name()
-                                .to_str()?
-                                .strip_prefix("profile-")?
-                                .parse::<u32>()
-                                .ok()
-                        }),
-                );
-                ids.sort_unstable();
-                ids.dedup();
-                let next = ids.last().copied().unwrap_or(0).checked_add(1);
-                let mut choices: Vec<_> = ids
-                    .into_iter()
-                    .map(|id| {
-                        (
-                            format!("Profile {id}"),
-                            if id == 0 {
-                                "Default profile".into()
-                            } else {
-                                "Separate saves, mods and packs".into()
-                            },
-                            Action::ChooseProfile(id),
-                            id == c.profile,
-                        )
-                    })
-                    .collect();
-                if let Some(id) = next {
-                    choices.push((
-                        "Create profile".into(),
-                        format!("Create Profile {id}"),
-                        Action::ChooseProfile(id),
-                        false,
-                    ));
-                }
-                (
-                    "Choose profile",
-                    "Each profile keeps its own game settings and saves.",
-                    choices,
-                )
-            }
         };
         self.chooser = Some(Chooser {
             title,
@@ -254,6 +212,9 @@ impl Launcher {
             choices,
             device,
             scroll: 0.0,
+            top: 0.0,
+            bottom: 0.0,
+            frame: [0.0, 0.0],
         });
     }
 }
@@ -273,69 +234,104 @@ impl Chooser {
                 ("Cancel".into(), String::new(), Action::Dismiss, true),
             ],
             scroll: 0.0,
+            top: 0.0,
+            bottom: 0.0,
+            frame: [0.0, 0.0],
         }
     }
-    pub(super) fn navigation(&self, width: f32) -> Vec<([f32; 4], Action)> {
+    pub(super) fn navigation(&self, _width: f32) -> Vec<([f32; 4], Action)> {
+        let [x, w] = self.frame;
         self.choices
             .iter()
             .enumerate()
             .map(|(i, (_, _, action, _))| {
                 (
-                    [
-                        32.0,
-                        137.0 + i as f32 * 84.0 - self.scroll,
-                        width - 64.0,
-                        76.0,
-                    ],
+                    [x, self.top + i as f32 * ROW - self.scroll, w, ROW - 2.0],
                     *action,
                 )
             })
             .collect()
     }
-    pub(super) fn viewport(&self, height: f32) -> [f32; 3] {
+    pub(super) fn viewport(&self, _height: f32) -> [f32; 3] {
         [
-            137.0,
-            height - 100.0,
-            (self.choices.len() as f32 * 84.0 - (height - 237.0)).max(0.0),
+            self.top,
+            self.bottom,
+            (self.choices.len() as f32 * ROW - (self.bottom - self.top)).max(0.0),
         ]
     }
-    pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>) {
-        let (w, h) = (ui.w, ui.h);
+    pub fn draw(&mut self, art: &Art, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>) {
         targets.clear();
-        ui.rounded(0.0, 0.0, w, h, 0.0, color::BG);
-        ui.text(Face::Medium, 28.0, 32.0, 35.0, color::TEXT, self.title);
-        ui.text(Face::Regular, 15.0, 32.0, 85.0, color::MUTED, self.help);
+        scrim(ui);
+        let w = (ui.w - 24.0).min(520.0);
+        let h = (ui.h - 24.0).min(680.0);
+        let (x, y) = ((ui.w - w) / 2.0, (ui.h - h) / 2.0);
+        art.plate(ui, [x, y, w, h], radius::MODAL, Plate::Float);
+        let mut top = head(ui, x + 24.0, y + 20.0, w - 48.0, self.title, self.help);
         if let Some(device) = &self.device {
-            ui.text(Face::Regular, 13.0, 32.0, 111.0, color::MUTED, device);
+            top += paragraph(
+                ui,
+                Face::Regular,
+                13.0,
+                x + 24.0,
+                top,
+                w - 48.0,
+                white(ink::QUIET),
+                device,
+            ) + 4.0;
         }
-        let top = 137.0;
-        let bottom = h - 100.0;
+        top += 6.0;
+        let bottom = y + h - 74.0;
+        self.top = top;
+        self.bottom = bottom;
+        self.frame = [x + 12.0, w - 24.0];
         self.scroll = self.scroll.clamp(
             0.0,
-            (self.choices.len() as f32 * 84.0 - (bottom - top)).max(0.0),
+            (self.choices.len() as f32 * ROW - (bottom - top)).max(0.0),
         );
+        let start = ui.batch.vertices.len();
         for (i, (label, detail, action, selected)) in self.choices.iter().enumerate() {
-            let y = top + i as f32 * 84.0 - self.scroll;
-            if y < top || y + 76.0 > bottom {
+            let row = top + i as f32 * ROW - self.scroll;
+            if row + ROW < top || row > bottom {
                 continue;
             }
-            ui.rounded(34.0, y + 10.0, 22.0, 22.0, 11.0, color::TEXT);
-            ui.rounded(36.0, y + 12.0, 18.0, 18.0, 9.0, color::BG);
+            let rect = [x + 12.0, row, w - 24.0, ROW - 2.0];
             if *selected {
-                ui.rounded(40.0, y + 16.0, 10.0, 10.0, 5.0, color::TEXT);
+                ui.rounded(rect[0], rect[1], rect[2], rect[3], radius::ROW, white(fill::SELECTED));
+                art.icon(
+                    ui,
+                    "tick-02",
+                    rect[0] + rect[2] - 34.0,
+                    row + (ROW - 22.0) / 2.0,
+                    20.0,
+                    hex(art.look.accent_soft, 255),
+                );
             }
-            ui.text(Face::Medium, 19.0, 80.0, y + 8.0, color::TEXT, label);
-            ui.text(Face::Regular, 14.0, 80.0, y + 40.0, color::MUTED, detail);
-            ui.rounded(32.0, y + 75.0, w - 64.0, 1.0, 0.0, color::BORDER);
-            targets.push(([32.0, y, w - 64.0, 76.0], *action));
+            let room = rect[2] - 56.0;
+            let text_y = if detail.is_empty() { row + 16.0 } else { row + 7.0 };
+            fitted(ui, Face::Medium, 15.0, x + 24.0, text_y, room, white(ink::FULL), label);
+            fitted(
+                ui,
+                Face::Regular,
+                13.0,
+                x + 24.0,
+                row + 29.0,
+                room,
+                white(ink::QUIET),
+                detail,
+            );
+            let (y0, y1) = (rect[1].max(top), (rect[1] + rect[3]).min(bottom));
+            if y1 - y0 >= 8.0 {
+                targets.push(([rect[0], y0, rect[2], y1 - y0], *action));
+            }
         }
-        button(
+        clip(ui, start, [x, top, w, bottom - top]);
+        art.button(
             ui,
             targets,
-            [32.0, h - 78.0, 160.0, 44.0],
+            [x + 24.0, y + h - 60.0, w - 48.0, 42.0],
             "Cancel",
             Action::Dismiss,
-            false,
+            Look::Secondary,
         );
     }
 }

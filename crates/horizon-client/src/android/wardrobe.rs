@@ -11,9 +11,11 @@ use crate::{
         preview,
     },
 };
+use crate::launcher_glass::{Art, Kind as Look, paragraph, white};
+use crate::launcher_tokens::{ink, radius};
 use horizon_client::{
     hud::rgba,
-    ui_theme::{Face, Ui, color},
+    ui_theme::{Face, Ui},
 };
 use std::{
     path::{Path, PathBuf},
@@ -33,7 +35,6 @@ pub(super) struct Wardrobe {
     pub capes: bool,
     pub camera: preview::Camera,
     cache: cloud::Cache,
-    pub view: [f32; 3],
     worker: Option<mpsc::Receiver<(String, Result<(cloud::Cache, bool), String>)>>,
     bitmap: Vec<([f32; 4], u32)>,
     rect: [f32; 4],
@@ -62,7 +63,6 @@ impl Wardrobe {
             worker: None,
             bitmap: vec![],
             rect: [0.0; 4],
-            view: [0.0; 3],
             fingers: Default::default(),
             note,
             damaged,
@@ -386,40 +386,45 @@ impl Wardrobe {
         self.preview();
         true
     }
-    pub fn draw(&mut self, ui: &mut Ui, targets: &mut Vec<([f32; 4], Action)>, scroll: f32) {
-        let width = ui.w;
-        let compact = width < 700.0;
-        let top = 160.0;
-        ui.text(Face::Medium, 26.0, 32.0, top, color::TEXT, "Skins & Capes");
-        ui.text(
+    /// The page, in `area`, scrolled by `scroll`. Returns where it ends, as if not scrolled.
+    pub fn draw(
+        &mut self,
+        art: &Art,
+        ui: &mut Ui,
+        targets: &mut Vec<([f32; 4], Action)>,
+        scroll: f32,
+        area: [f32; 4],
+    ) -> f32 {
+        let [ax, ay, width, _] = area;
+        let compact = width < 620.0;
+        let top = ay + 8.0 - scroll;
+        let size = if compact { 34.0 } else { 46.0 };
+        ui.text(Face::Display, size, ax + 4.0, top + 8.0, white(ink::FULL), "Skins");
+        let intro = top + 8.0 + size * 1.45;
+        let intro_h = paragraph(
+            ui,
             Face::Regular,
-            13.0,
-            32.0,
-            top + 36.0,
-            color::MUTED,
+            15.0,
+            ax + 4.0,
+            intro,
+            width - 8.0,
+            white(ink::BODY),
             "Local choices change your view. Cloud buttons update your account.",
         );
-        let preview_width = if compact {
-            (width - 64.0).min(260.0)
-        } else {
-            300.0
-        };
-        let preview_height = if compact {
-            (ui.h - 560.0).clamp(100.0, 190.0)
-        } else {
-            300.0
-        };
-        let px = if compact {
-            (width - preview_width) * 0.5
-        } else {
-            32.0
-        };
-        let py = top + 66.0;
+        let py = intro + intro_h + 16.0;
+        let preview_width = if compact { width } else { 300.0 };
+        let preview_height = if compact { 300.0 } else { 380.0 };
+        let px = ax;
         self.rect = [px, py, preview_width, preview_height];
-        ui.rounded(px, py, preview_width, preview_height, 4.0, color::RAISED);
-        let scale = (preview_width / 160.0).min(preview_height / 200.0);
+        art.plate(
+            ui,
+            self.rect,
+            radius::PANEL,
+            crate::launcher_glass::Plate::Glass,
+        );
+        let scale = (preview_width / 160.0).min((preview_height - 96.0) / 200.0);
         let ox = px + (preview_width - 160.0 * scale) * 0.5;
-        let oy = py + (preview_height - 200.0 * scale) * 0.5;
+        let oy = py + 8.0;
         for ([x, y, w, h], color) in &self.bitmap {
             ui.rounded(
                 ox + x * scale,
@@ -430,21 +435,22 @@ impl Wardrobe {
                 *color,
             );
         }
-        let controls = py + preview_height + 6.0;
-        for (i, (label, action)) in [
-            ("<", Action::WardrobeRotate(-1)),
-            (">", Action::WardrobeRotate(1)),
-            ("-", Action::WardrobeZoom(false)),
-            ("+", Action::WardrobeZoom(true)),
+        let controls = py + preview_height - 86.0;
+        let each = (preview_width - 24.0 - 24.0) / 4.0;
+        for (i, (icon, action)) in [
+            ("arrow-right-01", Action::WardrobeRotate(-1)),
+            ("refresh", Action::WardrobeRotate(1)),
+            ("minus-sign", Action::WardrobeZoom(false)),
+            ("plus-sign", Action::WardrobeZoom(true)),
         ]
         .into_iter()
         .enumerate()
         {
-            button(
+            art.icon_button(
                 ui,
                 targets,
-                [px + i as f32 * 44.0, controls, 38.0, 30.0],
-                label,
+                [px + 12.0 + i as f32 * (each + 8.0), controls, each, 36.0],
+                icon,
                 action,
                 false,
             );
@@ -458,7 +464,7 @@ impl Wardrobe {
         button(
             ui,
             targets,
-            [px, controls + 38.0, preview_width, 32.0],
+            [px + 12.0, controls + 42.0, preview_width - 24.0, 36.0],
             if model == Model::Slim {
                 "Alex / Slim"
             } else {
@@ -467,39 +473,35 @@ impl Wardrobe {
             Action::WardrobeModel,
             false,
         );
-        let lx = if compact { 32.0 } else { 370.0 };
-        let lw = if compact {
-            width - 64.0
+        let (lx, lw) = if compact {
+            (ax, width)
         } else {
-            width - lx - 32.0
+            (ax + preview_width + 12.0, width - preview_width - 12.0)
         };
-        let listtop = if compact { controls + 82.0 } else { top + 66.0 };
-        button(
+        let listtop = if compact { py + preview_height + 12.0 } else { py };
+        let panel_start = ui.batch.vertices.len();
+        let (ix, iw) = (lx + 12.0, lw - 24.0);
+        let mut row = listtop + 12.0;
+        art.segments(
             ui,
             targets,
-            [lx, listtop, (lw - 8.0) * 0.5, 32.0],
-            "Skins",
-            Action::WardrobeKind(false),
-            !self.capes,
+            [ix, row, iw, 44.0],
+            &[
+                ("Skins", Action::WardrobeKind(false), !self.capes),
+                ("Capes", Action::WardrobeKind(true), self.capes),
+            ],
         );
-        button(
+        row += 52.0;
+        art.icon_label(
             ui,
             targets,
-            [lx + (lw + 8.0) * 0.5, listtop, (lw - 8.0) * 0.5, 32.0],
-            "Capes",
-            Action::WardrobeKind(true),
-            self.capes,
-        );
-        button(
-            ui,
-            targets,
-            [lx, listtop + 40.0, lw, 34.0],
+            [ix, row, iw, 40.0],
+            Some("upload-04"),
             "Import PNG to local gallery",
             Action::WardrobeImport,
-            true,
+            Look::Primary,
         );
-        let mut row = listtop + 84.0 - scroll;
-        let bottom = ui.h - 80.0;
+        row += 50.0;
         let selection = self
             .library
             .selections
@@ -511,126 +513,104 @@ impl Wardrobe {
         } else {
             selection.skin.as_deref()
         };
+        let mut entry = |ui: &mut Ui, label: &str, action: Action, on: bool, row: &mut f32| {
+            let label = ui.fit_text(Face::Medium, 14.0, label, iw - 24.0);
+            button(ui, targets, [ix, *row, iw, 38.0], &label, action, on);
+            *row += 44.0;
+        };
         if self.capes && self.provider.is_some() {
             for (index, cape) in self.cache.snapshot.capes.iter().enumerate() {
-                if row >= listtop + 80.0 && row + 32.0 <= bottom {
-                    let label = ui.fit_text(
-                        Face::Medium,
-                        14.0,
-                        &format!(
-                            "{} · cloud{}",
-                            cape.title,
-                            if cape.active {
-                                " · active"
-                            } else {
-                                " · activate"
-                            }
-                        ),
-                        lw - 24.0,
-                    );
-                    button(
-                        ui,
-                        targets,
-                        [lx, row, lw, 32.0],
-                        &label,
-                        Action::WardrobeActivateCape(index),
-                        cape.active,
-                    );
-                }
-                row += 38.0;
+                entry(
+                    ui,
+                    &format!(
+                        "{} · cloud{}",
+                        cape.title,
+                        if cape.active { " · active" } else { " · activate" }
+                    ),
+                    Action::WardrobeActivateCape(index),
+                    cape.active,
+                    &mut row,
+                );
             }
         }
-        for (index, entry) in self
+        for (index, item) in self
             .library
             .entries
             .iter()
             .enumerate()
             .filter(|(_, e)| e.kind == self.kind())
         {
-            if row >= listtop + 80.0 && row + 32.0 <= bottom {
-                let label = ui.fit_text(
-                    Face::Medium,
-                    14.0,
-                    &format!(
-                        "{}  · local{}",
-                        entry.title,
-                        if selected == Some(&entry.id) {
-                            " · selected"
-                        } else {
-                            ""
-                        }
-                    ),
-                    lw - 24.0,
-                );
-                button(
-                    ui,
-                    targets,
-                    [lx, row, lw, 32.0],
-                    &label,
-                    Action::WardrobeSelect(index),
-                    selected == Some(&entry.id),
-                );
-            }
-            row += 38.0;
+            let on = selected == Some(&item.id);
+            entry(
+                ui,
+                &format!("{} · local{}", item.title, if on { " · selected" } else { "" }),
+                Action::WardrobeSelect(index),
+                on,
+                &mut row,
+            );
         }
         if self.provider.is_none() {
-            if row >= listtop + 80.0 && row + 32.0 <= bottom {
-                button(
+            entry(
+                ui,
+                "Reset to default locally",
+                Action::WardrobeUseCloud,
+                false,
+                &mut row,
+            );
+        } else {
+            entry(
+                ui,
+                "Use current cloud appearance",
+                Action::WardrobeUseCloud,
+                false,
+                &mut row,
+            );
+            entry(ui, "Refresh cloud profile", Action::WardrobeCloud, false, &mut row);
+            if !self.capes {
+                entry(
                     ui,
-                    targets,
-                    [lx, row, lw, 32.0],
-                    "Reset to default locally",
-                    Action::WardrobeUseCloud,
+                    if self.provider == Some(Provider::Microsoft) {
+                        "Upload selected skin to Microsoft"
+                    } else {
+                        "Manage Ely.by cloud skin on website"
+                    },
+                    Action::WardrobeUpload,
                     false,
+                    &mut row,
                 );
             }
-            row += 38.0;
         }
-        if self.provider.is_some() {
-            for (label, action) in [
-                ("Use current cloud appearance", Action::WardrobeUseCloud),
-                ("Refresh cloud profile", Action::WardrobeCloud),
-            ] {
-                if row >= listtop + 80.0 && row + 32.0 <= bottom {
-                    button(ui, targets, [lx, row, lw, 32.0], label, action, false);
-                }
-                row += 38.0;
-            }
-            if !self.capes {
-                if row >= listtop + 80.0 && row + 32.0 <= bottom {
-                    button(
-                        ui,
-                        targets,
-                        [lx, row, lw, 32.0],
-                        if self.provider == Some(Provider::Microsoft) {
-                            "Upload selected skin to Microsoft"
-                        } else {
-                            "Manage Ely.by cloud skin on website"
-                        },
-                        Action::WardrobeUpload,
-                        false,
-                    );
-                }
-                row += 38.0;
-            } else {
-            }
-        }
-        if self.capes && row >= listtop + 80.0 && row + 32.0 <= bottom {
-            button(
+        if self.capes {
+            entry(
                 ui,
-                targets,
-                [lx, row, lw, 32.0],
                 "Hide / show cape locally",
                 Action::WardrobeHideCape,
                 false,
+                &mut row,
             );
         }
-        self.view = [
-            listtop + 80.0,
-            bottom,
-            (row + scroll + 38.0 - bottom).max(0.0),
-        ];
-        let note = ui.fit_text(Face::Regular, 12.0, &self.note, width - 64.0);
-        ui.text(Face::Regular, 12.0, 32.0, ui.h - 60.0, color::MUTED, &note);
+        if !self.note.is_empty() {
+            row += paragraph(
+                ui,
+                Face::Regular,
+                13.0,
+                ix,
+                row,
+                iw,
+                white(ink::QUIET),
+                &self.note,
+            ) + 6.0;
+        }
+        row += 8.0;
+        let list_start = ui.batch.vertices.len();
+        art.plate(
+            ui,
+            [lx, listtop, lw, row - listtop],
+            radius::PANEL,
+            crate::launcher_glass::Plate::Glass,
+        );
+        let plate_len = ui.batch.vertices.len() - list_start;
+        ui.batch.vertices[panel_start..].rotate_right(plate_len);
+        row.max(py + preview_height) + scroll
     }
 }
