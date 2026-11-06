@@ -263,7 +263,11 @@ impl Download {
     }
 
     fn open(&self) -> Result<fs::File> {
-        cache_input::open(&self.path, || self.get())
+        cache_input::open(
+            &self.path,
+            |file| Ok(file.metadata()?.len() == self.size && hash(file)? == self.sha1),
+            || self.get(),
+        )
     }
 }
 
@@ -446,7 +450,9 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
     fs::create_dir(&stage)?;
     let result = (|| -> Result<()> {
         report(InstallStage::Extract, 0, 0);
-        let mut zip = zip::ZipArchive::new(files[0].open()?)?;
+        let mut zip = zip::ZipArchive::new(files[0].open()?).map_err(|error| {
+            format!("Could not unpack verified Minecraft client archive: {error}")
+        })?;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i)?;
             let name = entry.name()?;
@@ -476,7 +482,8 @@ pub fn install_with_progress(home: &Path, progress: impl Fn(InstallProgress) + S
             std::io::copy(&mut input.open()?, &mut fs::File::create(&path)?)
                 .map_err(|error| format!("Could not prepare Minecraft asset {name}: {error}"))?;
         }
-        crate::resource_install::extract(&home.join("engine-data.zip"), &stage)?;
+        crate::resource_install::extract(&home.join("engine-data.zip"), &stage)
+            .map_err(|error| format!("Could not unpack APK engine tables: {error}"))?;
         report(InstallStage::WorldData, 0, 0);
         crate::android_resources::rebuild(&stage)?;
         report(InstallStage::Controls, 0, 0);

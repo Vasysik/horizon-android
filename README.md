@@ -85,8 +85,6 @@ licensed under Horizon's MIT license. Game files, prepared resources, accounts,
 APKs and signing keys stay outside Git. This project is not affiliated with or
 endorsed by Mojang or Microsoft.
 
-Optional: [support development on Boosty](https://boosty.to/vasys).
-
 <details>
 <summary>Upstream Horizon documentation (desktop)</summary>
 

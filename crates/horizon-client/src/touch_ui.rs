@@ -146,6 +146,7 @@ pub enum InGameMenuAction {
     ToggleSprintMode,
     ToggleInventoryControls,
     ToggleVibrate,
+    ToggleUiVibrate,
     ToggleAutoJump,
     SetTouchSensitivity(f32),
     StepTouchSensitivity(i32),
@@ -817,20 +818,20 @@ impl TouchUi {
                 return Some(Action::Key(KeyCode::Escape));
             }
         }
-        if self.expanded && (3.0..23.0).contains(&p[1]) {
+        if (self.expanded || !self.goy_mode) && (3.0..23.0).contains(&p[1]) {
             if (3.0..36.0).contains(&p[0]) {
                 return Some(Action::More);
             }
-            if (39.0..72.0).contains(&p[0]) {
+            if self.expanded && (75.0..108.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::F3));
             }
-            if (75.0..108.0).contains(&p[0]) {
+            if self.expanded && (111.0..144.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::F5));
             }
-            if (111.0..144.0).contains(&p[0]) {
+            if self.expanded && (147.0..180.0).contains(&p[0]) {
                 return Some(Action::Key(KeyCode::KeyT));
             }
-            if (147.0..186.0).contains(&p[0]) {
+            if self.expanded && (183.0..222.0).contains(&p[0]) {
                 return Some(Action::Keyboard);
             }
         }
@@ -857,14 +858,17 @@ impl TouchUi {
             }
         }
         if !self.expanded {
+            if !self.goy_mode && crate::touch::current_hud_opacity_scale() > 0.01 {
+                button(b, a, "...", 3.0, 3.0, 33.0);
+            }
             return;
         }
         for (label, x, width) in [
             ("...", 3.0, 33.0),
-            ("F3", 39.0, 33.0),
-            ("F5", 75.0, 33.0),
-            ("Chat", 111.0, 33.0),
-            ("Keys", 147.0, 39.0),
+            ("F3", 75.0, 33.0),
+            ("F5", 111.0, 33.0),
+            ("Chat", 147.0, 33.0),
+            ("Keys", 183.0, 39.0),
         ] {
             button(
                 b,
@@ -1513,12 +1517,7 @@ pub fn draw_goy_hud(
     ui.finish();
 }
 
-fn draw_mcpe_custom_plate(
-    ui: &mut crate::ui_theme::Ui,
-    rect: [f32; 4],
-    alpha: f32,
-    pressed: bool,
-) {
+fn draw_mcpe_custom_plate(ui: &mut crate::ui_theme::Ui, rect: [f32; 4], alpha: f32, pressed: bool) {
     let [rx, ry, rw, rh] = rect;
     let a_u8 = (alpha * 255.0).round() as u8;
     ui.rounded(rx, ry, rw, rh, 3.0, rgba(18, 20, 24, a_u8));
@@ -1625,6 +1624,11 @@ impl TouchUi {
     ) -> Option<InGameMenuAction> {
         use crate::touch::ControlStyle;
         self.goy_mode = settings.control_style == ControlStyle::GoyControl;
+        if !settings.show_control_hub {
+            self.floating_menu = false;
+            self.floating_drag = None;
+            return None;
+        }
         self.pointer_off = !settings.virtual_mouse_enabled;
         let ui = crate::ui_theme::Ui::mobile(a, b, (0.0, 0.0));
         let (w, h) = (ui.w, ui.h);
@@ -1636,19 +1640,32 @@ impl TouchUi {
             p[0] >= r[0] && p[0] <= r[0] + r[2] && p[1] >= r[1] && p[1] <= r[1] + r[3]
         };
 
-        let (btn_w, btn_h) = if settings.control_style == ControlStyle::Mcpe {
-            (42.0, 42.0)
+        let gui_unit = ui.batch.scale / ui.density;
+        let (btn_x, btn_y, btn_w, btn_h) = if self.goy_mode {
+            let (bw, bh) = (48.0, 42.0);
+            (
+                (settings.floating_menu_pos[0] * w).clamp(6.0, (w - bw - 6.0).max(6.0)),
+                (settings.floating_menu_pos[1] * h).clamp(4.0, (h - bh - 4.0).max(4.0)),
+                bw,
+                bh,
+            )
         } else {
-            (48.0, 42.0)
+            (
+                39.0 * gui_unit,
+                3.0 * gui_unit,
+                33.0 * gui_unit,
+                20.0 * gui_unit,
+            )
         };
-        let btn_x = (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
-        let btn_y = (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
         let btn_rect = [btn_x, btn_y, btn_w, btn_h];
 
         if let Some((drag_id, offset, mut moved)) = self.floating_drag {
             if drag_id == id {
                 match phase {
                     TouchPhase::Moved => {
+                        if !self.goy_mode {
+                            return Some(InGameMenuAction::Close);
+                        }
                         let nx = (p[0] - offset[0]).clamp(6.0, (w - btn_w - 6.0).max(6.0));
                         let ny = (p[1] - offset[1]).clamp(4.0, (h - btn_h - 4.0).max(4.0));
                         if (nx - btn_x).hypot(ny - btn_y) > 5.0 {
@@ -1695,7 +1712,7 @@ impl TouchUi {
             }
         }
 
-        if phase == TouchPhase::Started && !self.expanded && inside(btn_rect) {
+        if phase == TouchPhase::Started && inside(btn_rect) {
             self.floating_drag = Some((id, [p[0] - btn_x, p[1] - btn_y], false));
             return Some(InGameMenuAction::Close);
         }
@@ -2428,7 +2445,11 @@ impl TouchUi {
                 let row_h = 46.0;
                 let step = 54.0;
                 if inside([cx, body_y + 18.0, cw, row_h]) {
-                    return Some(InGameMenuAction::ToggleVibrate);
+                    return Some(if p[0] < cx + cw * 0.5 {
+                        InGameMenuAction::ToggleUiVibrate
+                    } else {
+                        InGameMenuAction::ToggleVibrate
+                    });
                 }
                 if inside([cx, body_y + 18.0 + step, cw, row_h]) {
                     return Some(InGameMenuAction::ToggleAutoJump);
@@ -2489,6 +2510,9 @@ impl TouchUi {
     ) {
         use crate::touch::ControlStyle;
         use crate::ui_theme::{Face, Icon, Ui, color};
+        if !settings.show_control_hub {
+            return;
+        }
         let hud_scale = crate::touch::current_hud_opacity_scale();
         if hud_scale <= 0.001 && !self.floating_menu {
             return;
@@ -2518,78 +2542,53 @@ impl TouchUi {
             hud_scale.clamp(0.0, 1.0)
         };
 
-        // Draw moveable Floating Menu Button (MCPE 42x42dp stone-bevel H button OR GoyControl 48x42dp '=' pill)
-        if !self.expanded && bubble_alpha > 0.001 {
+        if bubble_alpha > 0.001 {
+            let gui_unit = ui.batch.scale / ui.density;
+            let (bx, by, bw, bh) = if settings.control_style == ControlStyle::Mcpe {
+                (
+                    39.0 * gui_unit,
+                    3.0 * gui_unit,
+                    33.0 * gui_unit,
+                    20.0 * gui_unit,
+                )
+            } else {
+                let (bw, bh) = (48.0, 42.0);
+                (
+                    (settings.floating_menu_pos[0] * w).clamp(6.0, (w - bw - 6.0).max(6.0)),
+                    (settings.floating_menu_pos[1] * h).clamp(4.0, (h - bh - 4.0).max(4.0)),
+                    bw,
+                    bh,
+                )
+            };
             if settings.control_style == ControlStyle::Mcpe {
-                let btn_w = 42.0;
-                let btn_h = 42.0;
-                let btn_x =
-                    (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
-                let btn_y =
-                    (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
-                let scale_rgba = |r: u8, g: u8, bl: u8, al: u8| -> u32 {
-                    rgba(r, g, bl, (f32::from(al) * bubble_alpha).round() as u8)
-                };
-                // Drop shadow
-                ui.rounded(
-                    btn_x + 1.5,
-                    btn_y + 2.5,
-                    btn_w,
-                    btn_h,
-                    4.0,
-                    scale_rgba(0, 0, 0, 125),
+                ui.fill(
+                    bx,
+                    by,
+                    bw,
+                    bh,
+                    color::with_alpha(rgba(0, 0, 0, 120), bubble_alpha),
                 );
-                // Dark MCPE outer border
-                ui.rounded(btn_x, btn_y, btn_w, btn_h, 4.0, scale_rgba(18, 20, 24, 225));
-                // Translucent MCPE stone-slate body (or emerald-slate when active)
-                let body_col = if self.floating_menu {
-                    scale_rgba(88, 130, 72, 225)
-                } else {
-                    scale_rgba(58, 62, 70, 205)
-                };
-                ui.rounded(
-                    btn_x + 2.0,
-                    btn_y + 2.0,
-                    btn_w - 4.0,
-                    btn_h - 4.0,
-                    2.5,
-                    body_col,
-                );
-                // Classic MCPE 3D top/left light highlight bevel & bottom/right dark shadow bevel
-                let hi_bevel = scale_rgba(165, 172, 184, 180);
-                let lo_bevel = scale_rgba(28, 30, 36, 200);
-                ui.fill(btn_x + 2.0, btn_y + 2.0, btn_w - 4.0, 2.0, hi_bevel);
-                ui.fill(btn_x + 2.0, btn_y + 4.0, 2.0, btn_h - 6.0, hi_bevel);
-                ui.fill(btn_x + 2.0, btn_y + btn_h - 4.0, btn_w - 4.0, 2.0, lo_bevel);
-                ui.fill(btn_x + btn_w - 4.0, btn_y + 4.0, 2.0, btn_h - 6.0, lo_bevel);
-                // Horizon 'H' icon crisp and centered inside the MCPE button
                 ui.icon(
                     Icon::HorizonLogo,
-                    btn_x + (btn_w - 22.0) * 0.5,
-                    btn_y + (btn_h - 22.0) * 0.5,
-                    22.0,
-                    scale_rgba(244, 246, 250, 245),
+                    bx + bw * 0.25,
+                    by + bh * 0.1,
+                    bh * 0.8,
+                    color::with_alpha(text_c, bubble_alpha),
                 );
             } else {
-                let btn_w = 48.0;
-                let btn_h = 42.0;
-                let btn_x =
-                    (settings.floating_menu_pos[0] * w).clamp(6.0, (w - btn_w - 6.0).max(6.0));
-                let btn_y =
-                    (settings.floating_menu_pos[1] * h).clamp(4.0, (h - btn_h - 4.0).max(4.0));
                 ui.rounded(
-                    btn_x + 1.5,
-                    btn_y + 3.0,
-                    btn_w,
-                    btn_h,
+                    bx + 1.5,
+                    by + 3.0,
+                    bw,
+                    bh,
                     14.0,
-                    rgba(0, 0, 0, (135.0 * bubble_alpha).round() as u8),
+                    color::with_alpha(rgba(0, 0, 0, 135), bubble_alpha),
                 );
                 ui.rounded(
-                    btn_x,
-                    btn_y,
-                    btn_w,
-                    btn_h,
+                    bx,
+                    by,
+                    bw,
+                    bh,
                     14.0,
                     color::with_alpha(
                         if self.floating_menu { accent } else { card_bg },
@@ -2597,21 +2596,18 @@ impl TouchUi {
                     ),
                 );
                 ui.stroke_rounded(
-                    btn_x,
-                    btn_y,
-                    btn_w,
-                    btn_h,
+                    bx,
+                    by,
+                    bw,
+                    bh,
                     14.0,
                     1.6,
-                    color::with_alpha(
-                        if self.floating_menu { text_c } else { accent },
-                        bubble_alpha,
-                    ),
+                    color::with_alpha(accent, bubble_alpha),
                 );
                 ui.icon(
                     Icon::MenuEquals,
-                    btn_x + (btn_w - 22.0) * 0.5,
-                    btn_y + (btn_h - 22.0) * 0.5,
+                    bx + (bw - 22.0) * 0.5,
+                    by + (bh - 22.0) * 0.5,
                     22.0,
                     color::with_alpha(
                         if self.floating_menu {
@@ -3394,7 +3390,12 @@ impl TouchUi {
                 ui.centered_fit(
                     Face::SemiBold,
                     9.4,
-                    [cx + cw - gyro_pill_w - 12.0, gyro_y + 6.0, gyro_pill_w, 18.0],
+                    [
+                        cx + cw - gyro_pill_w - 12.0,
+                        gyro_y + 6.0,
+                        gyro_pill_w,
+                        18.0,
+                    ],
                     accent_hi,
                     &gyro_pct,
                 );
@@ -3483,14 +3484,7 @@ impl TouchUi {
                     accent,
                 );
                 let sc_thumb_x = sc_sl_x + sc_sl_w * sc_frac;
-                ui.rounded(
-                    sc_thumb_x - 7.0,
-                    sc_sl_y - 4.0,
-                    14.0,
-                    14.0,
-                    7.0,
-                    accent_hi,
-                );
+                ui.rounded(sc_thumb_x - 7.0, sc_sl_y - 4.0, 14.0, 14.0, 7.0, accent_hi);
                 ui.border(sc_thumb_x - 7.0, sc_sl_y - 4.0, 14.0, 14.0, 7.0, text_c);
                 draw_toggle_row(
                     &mut ui,
@@ -3528,13 +3522,42 @@ impl TouchUi {
                     "FEEDBACK, GAMEPLAY & SHORTCUTS",
                 );
                 let step = 54.0;
-                draw_toggle_row(
-                    &mut ui,
+                let feedback_width = (cw - 8.0) * 0.5;
+                ui.rounded(cx, body_y + 18.0, feedback_width, 46.0, 8.0, card_bg);
+                ui.rounded(
+                    cx + feedback_width + 8.0,
                     body_y + 18.0,
-                    "Haptic Feedback",
-                    "Vibrate on block break, damage and touch button presses",
-                    Some(settings.vibrate),
-                    None,
+                    feedback_width,
+                    46.0,
+                    8.0,
+                    card_bg,
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    11.0,
+                    [cx, body_y + 18.0, feedback_width, 46.0],
+                    text_c,
+                    if settings.ui_vibrate {
+                        "UI vibration: ON"
+                    } else {
+                        "UI vibration: OFF"
+                    },
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    11.0,
+                    [
+                        cx + feedback_width + 8.0,
+                        body_y + 18.0,
+                        feedback_width,
+                        46.0,
+                    ],
+                    text_c,
+                    if settings.vibrate {
+                        "Gameplay vibration: ON"
+                    } else {
+                        "Gameplay vibration: OFF"
+                    },
                 );
                 draw_toggle_row(
                     &mut ui,
@@ -4259,6 +4282,11 @@ pub fn draw_hud_editor(
             JoystickMoveArea::AbsoluteFixed => None,
         };
         if let Some([zx, zy, zw, zh]) = zone {
+            let zx = if tc.settings.left_handed {
+                w - zx - zw
+            } else {
+                zx
+            };
             ui.rounded(
                 zx + 2.0,
                 zy + 2.0,
@@ -4434,12 +4462,7 @@ pub fn draw_hud_editor(
             ];
             let mcpe_col = rgba(255, 255, 255, (alpha * 255.0).round() as u8);
             crate::touch::draw_mcpe_custom_button(
-                ui.batch,
-                ui.atlas,
-                gui_bounds,
-                &label,
-                false,
-                mcpe_col,
+                ui.batch, ui.atlas, gui_bounds, &label, false, mcpe_col,
             );
         }
 
@@ -7849,6 +7872,19 @@ pub fn touch_hud_editor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mcpe_extra_keys_leave_a_separate_slot_for_the_control_hub() {
+        let mut ui = TouchUi::default();
+        assert!(matches!(ui.action(400.0, 240.0, [10.0, 10.0], false), Some(Action::More)));
+        assert!(ui.action(400.0, 240.0, [50.0, 10.0], false).is_none());
+        ui.expanded = true;
+        assert!(matches!(ui.action(400.0, 240.0, [80.0, 10.0], false), Some(Action::Key(KeyCode::F3))));
+        assert!(matches!(ui.action(400.0, 240.0, [160.0, 30.0], false), Some(Action::Key(KeyCode::F4))));
+        ui.expanded = false;
+        ui.goy_mode = true;
+        assert!(ui.action(400.0, 240.0, [10.0, 10.0], false).is_none());
+    }
+
     #[test]
     fn explicit_mouse_drag_does_not_generate_an_extra_tap_or_hold_click() {
         let mut ui = TouchUi::default();

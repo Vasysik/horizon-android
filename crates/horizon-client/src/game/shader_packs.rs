@@ -855,6 +855,7 @@ mod native_pack_tests {
             problem: None,
             dev: false,
             native: Some(NativePage::default()),
+            has_settings: false,
         });
         let owned = "native-horizon_better_visuals";
         assert_eq!(active_pack(owned, &mods), owned);

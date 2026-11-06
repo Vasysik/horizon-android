@@ -346,6 +346,19 @@ impl Launcher {
         } else {
             self.home.join("installer")
         };
+        // Discover the adapter limit before packing any shared sprites.
+        let mut renderer = game::loading_renderer(
+            window.clone(),
+            false,
+            None,
+            None,
+            None,
+            if self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl {
+                horizon_client::graphics::GraphicsApi::OpenGl
+            } else {
+                horizon_client::graphics::GraphicsApi::Auto
+            },
+        )?;
         let gui = game::UiResources {
             atlas: HudAtlas::build(&atlas_root)?,
             panorama: Arc::new(horizon_client::gfx::panorama::Faces {
@@ -356,18 +369,8 @@ impl Launcher {
                 &atlas_root,
             )),
         };
-        self.renderer = Some(game::loading_renderer(
-            window.clone(),
-            false,
-            Some(&gui.atlas),
-            Some(gui.panorama.as_ref()),
-            None,
-            if self.catalog.config.renderer == crate::catalog::RendererMode::OpenGl {
-                horizon_client::graphics::GraphicsApi::OpenGl
-            } else {
-                horizon_client::graphics::GraphicsApi::Auto
-            },
-        )?);
+        renderer.set_loading_ui(&gui.atlas, gui.panorama.as_ref())?;
+        self.renderer = Some(renderer);
         self.window = Some(window);
         self.gui = Some(gui);
         Ok(())
@@ -801,6 +804,10 @@ impl ApplicationHandler for Launcher {
         }
     }
     fn device_event(&mut self, events: &ActiveEventLoop, id: DeviceId, event: DeviceEvent) {
+        if matches!(event, DeviceEvent::Removed) {
+            self.mouse_down = false;
+            self.drag = None;
+        }
         if let Some(game) = &mut self.game {
             game.device_event(events, id, event);
         } else {

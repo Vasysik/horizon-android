@@ -92,6 +92,8 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub fast_chunk_upload: bool,
     #[serde(default)]
+    pub experimental_leaf_culling: bool,
+    #[serde(default)]
     pub disable_launcher_animations: bool,
     #[serde(default)]
     pub disable_game_animations: bool,
@@ -245,6 +247,9 @@ impl Config {
         }
     }
     pub fn apply_experimental_to_game(&self, home: &Path) {
+        horizon_client::android_runtime::set_experimental_leaf_culling(
+            self.experimental_leaf_culling,
+        );
         let game = self.game_home(home);
         let _ = std::fs::create_dir_all(&game);
         let options_path = game.join("options.txt");
@@ -815,18 +820,28 @@ impl Catalog {
         // Also scan horizon-native-mods/ for any .hnmod or .hmod files on disk.
         let native_dir = game.join("horizon-native-mods");
         if std::fs::symlink_metadata(&native_dir).is_ok_and(|m| !m.file_type().is_symlink()) {
-            for entry in std::fs::read_dir(&native_dir).into_iter().flatten().flatten() {
+            for entry in std::fs::read_dir(&native_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
                 if !entry.file_type().is_ok_and(|t| t.is_file()) {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
                 if !horizon_client::content_files::plain_name(&name)
-                    || (!name.ends_with(".hnmod") && !name.ends_with(".hmod") && !name.ends_with(".jar"))
+                    || (!name.ends_with(".hnmod")
+                        && !name.ends_with(".hmod")
+                        && !name.ends_with(".jar"))
                 {
                     continue;
                 }
                 let rel = format!("horizon-native-mods/{name}");
-                if self.local.iter().any(|item| item.file == name || item.file == rel) {
+                if self
+                    .local
+                    .iter()
+                    .any(|item| item.file == name || item.file == rel)
+                {
                     continue;
                 }
                 let mod_id = name
@@ -842,7 +857,10 @@ impl Catalog {
                     enabled: on.enabled.contains(mod_id) && !on.disabled.contains(mod_id),
                     size_bytes,
                     badge: "MOD",
-                    subtitle: format!("Horizon Native Mod (.hnmod)  •  {}  •  {name}", format_file_size(size_bytes)),
+                    subtitle: format!(
+                        "Horizon Native Mod (.hnmod)  •  {}  •  {name}",
+                        format_file_size(size_bytes)
+                    ),
                 });
             }
         }
@@ -1555,7 +1573,10 @@ impl Catalog {
                 items.len()
             )
         } else if self.page == Page::Mods {
-            format!("{} Horizon mods available (playhorizon.dev/mods) - select Install to download", items.len())
+            format!(
+                "{} Horizon mods available (playhorizon.dev/mods) - select Install to download",
+                items.len()
+            )
         } else {
             format!("{} results - select Install to download", items.len())
         };

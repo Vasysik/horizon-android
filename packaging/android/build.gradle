@@ -1,13 +1,5 @@
 plugins { id 'com.android.application' version '8.11.1' }
 
-// The permanent release key, when the caller has it (CI reads it from the
-// ANDROID_KEYSTORE_BASE64 secret). Without it, builds keep the development key.
-def releaseKeyStore = System.getenv('HORIZON_ANDROID_KEYSTORE')
-def releaseKeyStorePassword = System.getenv('HORIZON_ANDROID_KEYSTORE_PASSWORD')
-def releaseKeyAlias = System.getenv('HORIZON_ANDROID_KEY_ALIAS')
-def releaseKeyPassword = System.getenv('HORIZON_ANDROID_KEY_PASSWORD')
-def hasReleaseKey = releaseKeyStore && releaseKeyStorePassword && releaseKeyAlias && releaseKeyPassword
-
 android {
     namespace 'dev.horizon.android'
     compileSdk 35
@@ -15,8 +7,8 @@ android {
         applicationId providers.gradleProperty('appId').getOrElse('dev.horizon.android')
         minSdk providers.gradleProperty('minSdk').getOrElse('28').toInteger()
         targetSdk 35
-        versionCode providers.gradleProperty('devVersionCode').getOrElse('29').toInteger()
-        versionName '0.7.7' + (providers.gradleProperty('devVersionCode').isPresent() ? '-dev.' + providers.gradleProperty('devBuild').get() : '')
+        versionCode providers.gradleProperty('devVersionCode').getOrElse('30').toInteger()
+        versionName '0.7.8' + (providers.gradleProperty('devVersionCode').isPresent() ? '-dev.' + providers.gradleProperty('devBuild').get() : '')
         ndk { abiFilters providers.gradleProperty('abi').get() }
     }
     signingConfigs {
@@ -25,14 +17,6 @@ android {
             storePassword 'android'
             keyAlias 'androiddebugkey'
             keyPassword 'android'
-        }
-        if (hasReleaseKey) {
-            releaseKey {
-                storeFile file(releaseKeyStore)
-                storePassword releaseKeyStorePassword
-                keyAlias releaseKeyAlias
-                keyPassword releaseKeyPassword
-            }
         }
     }
     buildTypes {
@@ -45,10 +29,9 @@ android {
             debuggable false
             jniDebuggable false
             minifyEnabled false
-            // The permanent key lets one APK update the previous install in place
-            // (Android needs the same certificate and a higher versionCode).
-            // Only the public certificate enters the APK; the key never does.
-            signingConfig hasReleaseKey ? signingConfigs.releaseKey : signingConfigs.development
+            // Retain the existing installation's signing identity for upgrades.
+            // Only the public certificate enters the APK; the key stays in .local/.
+            signingConfig signingConfigs.development
         }
     }
     sourceSets.main {

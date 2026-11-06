@@ -221,6 +221,7 @@ pub struct TouchControls {
     pub swimming: bool,
     pub mounted: bool,
     pub sneaking: bool,
+    pub toggle_crouch: bool,
     /// Snapshotted by a world gesture; drift cannot turn eating into mining.
     pub hold_uses_item: bool,
     pub holding_use: bool,
@@ -267,6 +268,7 @@ impl Default for TouchControls {
             swimming: false,
             mounted: false,
             sneaking: false,
+            toggle_crouch: false,
             hold_uses_item: false,
             holding_use: false,
             holding: false,
@@ -904,17 +906,22 @@ impl TouchControls {
             let joy_zone_supported = self.settings.control_style == ControlStyle::GoyControl
                 || self.settings.mode != Mode::Dpad;
             if control.is_none() && !has_move && joy_zone_supported && self.visible(Control::Move) {
+                let zone_x = if self.settings.left_handed {
+                    1.0 - point[0]
+                } else {
+                    point[0]
+                };
                 match self.settings.joystick_style.move_area {
-                    JoystickMoveArea::MidBottomLeft if point[0] < 0.45 && point[1] > 0.35 => {
+                    JoystickMoveArea::MidBottomLeft if zone_x < 0.45 && point[1] > 0.35 => {
                         control = Some(Control::Move);
                     }
-                    JoystickMoveArea::RightSideAnywhere if point[0] >= 0.50 => {
+                    JoystickMoveArea::RightSideAnywhere if zone_x >= 0.50 => {
                         control = Some(Control::Move);
                     }
                     JoystickMoveArea::FollowFinger
                         if (!self.dynamic_joystick()
                             || self.settings.control_style == ControlStyle::GoyControl)
-                            && point[0] < 0.48
+                            && zone_x < 0.48
                             && point[1] > 0.25 =>
                     {
                         control = Some(Control::Move);
@@ -975,6 +982,7 @@ impl TouchControls {
                 }
                 Some(Control::Sneak)
                     if self.settings.mode == Mode::Dpad
+                        && self.toggle_crouch
                         && !self.vertical_movement
                         && !self.swimming
                         && !self.mounted =>
@@ -1925,6 +1933,37 @@ fn line(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn joystick_active_zones_mirror_with_left_handed_layouts() {
+        for (area, start) in [
+            (JoystickMoveArea::MidBottomLeft, [0.25, 0.42]),
+            (JoystickMoveArea::RightSideAnywhere, [0.70, 0.20]),
+            (JoystickMoveArea::FollowFinger, [0.25, 0.42]),
+        ] {
+            for left_handed in [false, true] {
+                let mut touch = TouchControls::default();
+                touch.viewport(1920, 1080);
+                touch.settings.control_style = ControlStyle::GoyControl;
+                touch.settings.mode = Mode::Crosshair;
+                touch.settings.left_handed = left_handed;
+                touch.settings.joystick_style.move_area = area;
+                let x = if left_handed {
+                    1.0 - start[0]
+                } else {
+                    start[0]
+                };
+                touch.update(1, [x, start[1]], true, false);
+                touch.update(1, [x + 0.05, start[1]], false, false);
+                assert!(
+                    touch.poll_state().left[0] > 0.0,
+                    "{area:?}, left_handed={left_handed}"
+                );
+                touch.update(1, [x + 0.05, start[1]], false, true);
+                assert_eq!(touch.poll_state().left, [0.0; 2]);
+            }
+        }
+    }
+
+    #[test]
     fn factory_swap_stays_beside_inventory_without_covering_action_buttons() {
         for (w, h) in [(2560, 1600), (2400, 1080), (1080, 2400), (240, 320)] {
             for left_handed in [false, true] {
@@ -2651,8 +2690,29 @@ mod tests {
         assert!(t.settings.left_handed);
     }
     #[test]
+    fn hold_crouch_starts_on_first_touch_and_ends_on_release() {
+        for mode in [Mode::Crosshair, Mode::Dpad] {
+            let mut t = TouchControls::default();
+            t.settings.mode = mode;
+            t.toggle_crouch = false;
+            let point = t.settings.placement(Control::Sneak).center;
+            t.update(1, point, true, false);
+            assert!(t.poll_state().held(Button::RightStick), "{mode:?}");
+            t.update(1, point, false, true);
+            assert!(!t.poll_state().held(Button::RightStick), "{mode:?}");
+            t.update(2, point, true, false);
+            assert!(
+                t.poll_state().held(Button::RightStick),
+                "second hold {mode:?}"
+            );
+            t.clear();
+            assert!(!t.poll_state().held(Button::RightStick));
+        }
+    }
+    #[test]
     fn dpad_can_slide_between_directions_and_mirror() {
         let mut t = TouchControls::default();
+        t.toggle_crouch = true;
         t.settings.mode = Mode::Dpad;
         t.update(1, [0.13, 0.66], true, false);
         assert_eq!(t.state().left, [0.0, 1.0]);

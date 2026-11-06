@@ -312,6 +312,7 @@ pub(super) enum Action {
     ToggleBundled(&'static str),
     WorldFiles,
     GameFiles,
+    StarlingDownload,
     WorkerLimit,
     ChooseWorkerLimit(u32),
     PerformanceHints,
@@ -338,6 +339,7 @@ pub(super) enum Action {
     ToggleMaxFpsMode,
     ToggleZeroLatencyTouch,
     ToggleFastChunkUpload,
+    ToggleExperimentalLeaves,
     // Controls & Control Editor actions
     OpenControlEditor,
     CloseControlEditor,
@@ -364,6 +366,8 @@ pub(super) enum Action {
     PointerSizeDelta(f32),
     CycleJoystickZone,
     ToggleTouchVibrate,
+    ToggleTouchUiVibrate,
+    ToggleControlHub,
     ToggleAutoJump,
     ToggleInventoryControls,
     // Theme customization actions (Settings -> Launcher Settings -> Theme)
@@ -1384,7 +1388,7 @@ impl Launcher {
                 );
             } else {
                 let card_y = 66.0 + slide_y;
-                let card_h = (h - 178.0).clamp(148.0, 236.0);
+                let card_h = (h - 178.0).clamp(220.0, 280.0);
                 ui.rounded(content_x, card_y, content_w, card_h, 20.0, my3_surface());
                 ui.border(content_x, card_y, content_w, card_h, 20.0, my3_border());
 
@@ -1415,32 +1419,76 @@ impl Launcher {
                     ),
                 );
 
-                let rows = if installed {
-                    [
-                        "• Native Rust client with hardware Vulkan & OpenGL ES rendering",
-                        "• Browse Mods, Resource Packs & Shaders with Modrinth previews",
-                        "• Customize MCPE & GoyControl HUD layouts in Settings → Controls",
-                    ]
-                } else {
-                    [
-                        "• Downloads official Minecraft 26.3 assets directly from Mojang",
-                        "• Live download speed, ETA and 6-step verification",
-                        "• Play offline or sign in with your Microsoft account",
-                    ]
-                };
-                for (index, line) in rows.iter().enumerate() {
-                    let fitted =
-                        ui.fit_text(Face::Regular, 13.5, line, (content_w - 44.0).max(80.0));
+                ui.text(
+                    Face::SemiBold,
+                    15.0,
+                    content_x + 22.0,
+                    card_y + 84.0,
+                    my3_text(),
+                    "Horizon Android is becoming Starling",
+                );
+                let notice = "Some Horizon Android features are still being transferred and merged. Export your worlds through Android Files (SAF) before moving.";
+                let mut line_y = card_y + 108.0;
+                let font_size = 11.5;
+                let mut line = String::new();
+                for word in notice.split_whitespace() {
+                    let candidate = if line.is_empty() {
+                        word.to_owned()
+                    } else {
+                        format!("{line} {word}")
+                    };
+                    if !line.is_empty()
+                        && ui.measure(Face::Regular, font_size, &candidate) > content_w - 44.0
+                    {
+                        ui.text(
+                            Face::Regular,
+                            font_size,
+                            content_x + 22.0,
+                            line_y,
+                            my3_muted(),
+                            &line,
+                        );
+                        line_y += 15.0;
+                        line.clear();
+                    }
+                    if !line.is_empty() {
+                        line.push(' ');
+                    }
+                    line.push_str(word);
+                }
+                if !line.is_empty() {
                     ui.text(
                         Face::Regular,
-                        13.5,
+                        font_size,
                         content_x + 22.0,
-                        card_y + 86.0 + index as f32 * 25.0,
+                        line_y,
                         my3_muted(),
-                        &fitted,
+                        &line,
                     );
                 }
-
+                let migration_y = line_y + 24.0;
+                let migration_w = (content_w - 52.0) * 0.5;
+                button(
+                    &mut ui,
+                    &mut self.targets,
+                    [content_x + 22.0, migration_y, migration_w, 34.0],
+                    "Download Starling",
+                    Action::StarlingDownload,
+                    false,
+                );
+                button(
+                    &mut ui,
+                    &mut self.targets,
+                    [
+                        content_x + 30.0 + migration_w,
+                        migration_y,
+                        migration_w,
+                        34.0,
+                    ],
+                    "Export worlds (SAF)",
+                    Action::WorldFiles,
+                    false,
+                );
                 let btn_y = (h - 92.0).max(card_y + card_h + 12.0);
                 let play_w = content_w.min(256.0);
                 let is_launching = self.launching || self.session_worker.is_some();
@@ -4808,7 +4856,7 @@ impl Launcher {
                 let invert_y_active = opts.invert_y || touch_cfg.invert_y;
                 let sprint_latch_active = opts.toggle_sprint || touch_cfg.sprint_toggle;
 
-                let rows: [(&str, &str, SettingControl<'_>); 25] = [
+                let rows: [(&str, &str, SettingControl<'_>); 27] = [
                     (
                         "LAYOUT EDITOR & PRESET PROFILES",
                         "Visual HUD canvas editor, multi-profile switcher, duplication & JSON export",
@@ -4951,8 +4999,21 @@ impl Launcher {
                         SettingControl::Toggle(opts.auto_jump, Action::ToggleAutoJump),
                     ),
                     (
-                        "Haptic Touch Vibration",
-                        "Tactile vibration feedback when pressing HUD buttons and breaking blocks",
+                        "Control Hub Button",
+                        "Show the top-left control menu button",
+                        SettingControl::Toggle(
+                            touch_cfg.show_control_hub,
+                            Action::ToggleControlHub,
+                        ),
+                    ),
+                    (
+                        "UI Vibration",
+                        "Vibration when pressing interface buttons",
+                        SettingControl::Toggle(touch_cfg.ui_vibrate, Action::ToggleTouchUiVibrate),
+                    ),
+                    (
+                        "Gameplay Vibration",
+                        "Vibration for damage and block breaking",
                         SettingControl::Toggle(touch_cfg.vibrate, Action::ToggleTouchVibrate),
                     ),
                     (
@@ -5141,7 +5202,7 @@ impl Launcher {
             }
             SettingsCategory::Experimental => {
                 let c = &self.catalog.config;
-                let count = 9;
+                let count = 10;
                 let max_scroll = (count as f32 * step_y - (list_bottom - list_top)).max(0.0);
                 self.catalog.scroll = self.catalog.scroll.clamp(0.0, max_scroll);
                 self.list_view = Some([list_top, list_bottom, max_scroll]);
@@ -5156,7 +5217,7 @@ impl Launcher {
                     "Balanced Default"
                 };
 
-                let rows: [(&str, &str, SettingControl<'_>); 9] = [
+                let rows: [(&str, &str, SettingControl<'_>); 10] = [
                     (
                         "PERFORMANCE PROFILES & GPU PIPELINE",
                         "Hardware-tuned presets for Mali-G52 / Adreno GPUs and high-refresh displays",
@@ -5207,6 +5268,14 @@ impl Launcher {
                         "Detailed GPU Pass Profiling",
                         "Records per-pass GPU timings in diagnostic reports (adds minor overhead)",
                         SettingControl::Toggle(c.device.gpu_profile, Action::GpuProfile),
+                    ),
+                    (
+                        "Experimental Leaf Culling",
+                        "Simplifies dense foliage and changes its appearance; applies on next Play",
+                        SettingControl::Toggle(
+                            c.experimental_leaf_culling,
+                            Action::ToggleExperimentalLeaves,
+                        ),
                     ),
                 ];
 
@@ -5597,6 +5666,10 @@ impl Launcher {
                 }
                 .into();
             }
+            Some(Action::ToggleExperimentalLeaves) => {
+                self.catalog.config.experimental_leaf_culling ^= true;
+                self.catalog.config.save(&self.home)?;
+            }
             Some(Action::ToggleFastChunkUpload) => {
                 self.catalog.config.fast_chunk_upload = !self.catalog.config.fast_chunk_upload;
                 self.catalog.config.save(&self.home)?;
@@ -5829,6 +5902,12 @@ impl Launcher {
                     t.joystick_style.move_area = t.joystick_style.move_area.next();
                 });
             }
+            Some(Action::ToggleTouchUiVibrate) => {
+                self.modify_touch_settings(|t| t.ui_vibrate = !t.ui_vibrate);
+            }
+            Some(Action::ToggleControlHub) => {
+                self.modify_touch_settings(|t| t.show_control_hub = !t.show_control_hub);
+            }
             Some(Action::ToggleTouchVibrate) => {
                 self.modify_touch_settings(|t| t.vibrate = !t.vibrate);
             }
@@ -5865,6 +5944,14 @@ impl Launcher {
             Some(Action::ToggleBundled(id)) => {
                 self.toggle_bundled_mod(id)?;
             }
+            Some(Action::StarlingDownload) => {
+                if !crate::platform::open_url(
+                    "https://github.com/JuanLuci/starling/releases/latest",
+                ) {
+                    self.catalog.status =
+                        "Open github.com/JuanLuci/starling/releases to download Starling.".into();
+                }
+            }
             Some(Action::GameFiles) => {
                 self.catalog.status = if crate::platform::open_documents(crate::document_store::ROOT) {
                     "Game files opened. Worlds, mods, packs, shaders and reports are available here."
@@ -5873,7 +5960,7 @@ impl Launcher {
             Some(Action::WorldFiles) => {
                 let id = crate::document_store::folder_id(self.catalog.config.profile, "worlds");
                 self.catalog.status = if crate::platform::open_documents(&id) {
-                    "Copy a complete world folder to back up or import. Finish copying before Play; never replace an existing world silently."
+                    "In Android Files, select a complete world folder, then Copy to a folder you choose. Keep Horizon Android installed until you verify your worlds in Starling."
                 } else { "Open system Files > Horizon Android > Worlds. Copy complete world folders while the game is closed." }.into();
             }
             Some(Action::WorkerLimit) => self.open_chooser(chooser::Kind::WorkerLimit),
@@ -6801,7 +6888,9 @@ impl Launcher {
             }
             Action::PointerSizeDelta(_) => {
                 let v = ((0.50 + t * 1.50) * 100.0).round() / 100.0;
-                self.modify_touch_settings(|ts| ts.virtual_mouse_pointer_scale = v.clamp(0.50, 2.0));
+                self.modify_touch_settings(|ts| {
+                    ts.virtual_mouse_pointer_scale = v.clamp(0.50, 2.0)
+                });
             }
             Action::GyroSensDelta(_) => {
                 let v = ((0.10 + t * 2.90) * 100.0).round() / 100.0;

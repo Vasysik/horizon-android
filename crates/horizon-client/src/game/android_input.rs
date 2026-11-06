@@ -480,7 +480,7 @@ impl Game<'_> {
     }
 
     pub(super) fn android_touch_haptic(&self, millis: u32) {
-        if self.pad.touch.settings.vibrate {
+        if self.pad.touch.settings.ui_vibrate {
             crate::platform::vibrate(horizon_client::gamepad::Pulse {
                 strong: 0.30,
                 weak: 0.55,
@@ -850,12 +850,18 @@ impl Game<'_> {
                     self.settings.touch = self.pad.touch.settings.clone();
                     self.android_sync_pointer();
                 }
-                InGameMenuAction::ToggleVibrate => {
-                    let next = !self.pad.touch.settings.vibrate;
-                    self.pad.touch.settings.vibrate = next;
+                InGameMenuAction::ToggleVibrate | InGameMenuAction::ToggleUiVibrate => {
+                    let ui = matches!(menu_act, InGameMenuAction::ToggleUiVibrate);
+                    let value = if ui {
+                        &mut self.pad.touch.settings.ui_vibrate
+                    } else {
+                        &mut self.pad.touch.settings.vibrate
+                    };
+                    *value = !*value;
+                    let next = *value;
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
-                    if next {
+                    if next && ui {
                         self.android_touch_haptic(22);
                     } else {
                         crate::platform::cancel_vibration();

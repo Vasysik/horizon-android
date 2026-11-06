@@ -1747,12 +1747,18 @@ impl Loading {
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
-                    InGameMenuAction::ToggleVibrate => {
-                        let next = !self.menu.controls.settings.vibrate;
-                        self.menu.controls.settings.vibrate = next;
+                    InGameMenuAction::ToggleVibrate | InGameMenuAction::ToggleUiVibrate => {
+                        let ui = matches!(hub_act, InGameMenuAction::ToggleUiVibrate);
+                        let value = if ui {
+                            &mut self.menu.controls.settings.ui_vibrate
+                        } else {
+                            &mut self.menu.controls.settings.vibrate
+                        };
+                        *value = !*value;
+                        let next = *value;
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
-                        if next {
+                        if next && ui {
                             crate::platform::vibrate(horizon_client::gamepad::Pulse {
                                 strong: 0.30,
                                 weak: 0.55,
@@ -2492,9 +2498,10 @@ impl Loading {
             }
             if !is_goy
                 && (!hud_in_menu
-                    || self.menu.controls.settings.layouts[self.menu.controls.settings.mode.index()]
-                        .iter()
-                        .any(|p| p.visible_in_menu))
+                    || self.menu.controls.settings.layouts
+                        [self.menu.controls.settings.mode.index()]
+                    .iter()
+                    .any(|p| p.visible_in_menu))
             {
                 self.menu.controls.draw(batch, &gui.atlas);
             }
@@ -2627,6 +2634,10 @@ mod tests {
             receiver,
             loaded: None,
             renderer_job: None,
+            renderer_job_gl: false,
+            backgrounded: false,
+            surface_lost: false,
+            cancel_renderer: false,
             prepared_renderer: None,
             delivered: false,
             handle: None,
@@ -2638,27 +2649,30 @@ mod tests {
 
     #[test]
     fn renderer_preparation_does_not_wait_for_its_worker() {
-        let (_sender, receiver) = std::sync::mpsc::channel();
-        let (release, wait) = std::sync::mpsc::channel();
-        let mut loading = loading(receiver);
-        loading.renderer_job = Some(std::thread::spawn(move || {
-            wait.recv().unwrap();
-            Err("test renderer failure".into())
-        }));
-        loading.prepare_renderer().unwrap();
-        assert!(!loading.renderer_job.as_ref().unwrap().is_finished());
-        release.send(()).unwrap();
-        while !loading.renderer_job.as_ref().unwrap().is_finished() {
-            std::thread::yield_now();
+        for gl in [false, true] {
+            let (_sender, receiver) = std::sync::mpsc::channel();
+            let (release, wait) = std::sync::mpsc::channel();
+            let mut loading = loading(receiver);
+            loading.renderer_job_gl = gl;
+            loading.renderer_job = Some(std::thread::spawn(move || {
+                wait.recv().unwrap();
+                Err("test renderer failure".into())
+            }));
+            loading.prepare_renderer().unwrap();
+            assert!(!loading.renderer_job.as_ref().unwrap().is_finished());
+            release.send(()).unwrap();
+            while !loading.renderer_job.as_ref().unwrap().is_finished() {
+                std::thread::yield_now();
+            }
+            assert!(
+                loading
+                    .prepare_renderer()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("test renderer failure")
+            );
+            assert!(loading.renderer_job.is_none());
         }
-        assert!(
-            loading
-                .prepare_renderer()
-                .unwrap_err()
-                .to_string()
-                .contains("test renderer failure")
-        );
-        assert!(loading.renderer_job.is_none());
     }
 
     #[test]

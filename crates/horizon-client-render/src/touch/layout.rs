@@ -483,8 +483,12 @@ pub struct Settings {
     pub dynamic_area_y: f32,
     #[serde(default)]
     pub auto_jump: bool,
-    #[serde(default)]
+    #[serde(default = "default_feedback_enabled")]
     pub vibrate: bool,
+    #[serde(default)]
+    pub ui_vibrate: bool,
+    #[serde(default = "default_feedback_enabled")]
+    pub show_control_hub: bool,
     #[serde(deserialize_with = "deserialize_visibility")]
     pub button_visibility: [u8; 14],
     pub horizontal_margin: f32,
@@ -525,6 +529,9 @@ fn default_mcpe_preset_desc() -> String {
 }
 fn default_goy_preset_desc() -> String {
     "Custom layout with more options".into()
+}
+fn default_feedback_enabled() -> bool {
+    true
 }
 fn default_floating_pos() -> [f32; 2] {
     [0.44, 0.05]
@@ -626,6 +633,8 @@ impl Default for Settings {
             dynamic_area_y: 1.0,
             auto_jump: false,
             vibrate: true,
+            ui_vibrate: false,
+            show_control_hub: true,
             button_visibility: [0; 14],
             horizontal_margin: 0.0,
             vertical_margin: 0.0,
@@ -909,10 +918,13 @@ impl Settings {
             self.preset_name = self.preset_id.clone();
         }
         self.joystick_style.sanitize();
+        if self.floating_menu_pos == [0.44, 0.05] {
+            self.floating_menu_pos = default_floating_pos();
+        }
         for (i, v) in self.floating_menu_pos.iter_mut().enumerate() {
             let def = default_floating_pos()[i];
             *v = if v.is_finite() {
-                v.clamp(0.04, 0.94)
+                v.clamp(0.0, 0.94)
             } else {
                 def
             };
@@ -1235,6 +1247,8 @@ impl Settings {
         let prev_vm_sens = self.virtual_mouse_sensitivity;
         let prev_pointer_scale = self.virtual_mouse_pointer_scale;
         let prev_vibrate = self.vibrate;
+        let prev_ui_vibrate = self.ui_vibrate;
+        let prev_hub = self.show_control_hub;
         let prev_auto_jump = self.auto_jump;
         let mut loaded = Self::load_preset(game_home, style, id);
         let clean = loaded.preset_id.clone();
@@ -1254,6 +1268,8 @@ impl Settings {
         loaded.virtual_mouse_sensitivity = prev_vm_sens;
         loaded.virtual_mouse_pointer_scale = prev_pointer_scale;
         loaded.vibrate = prev_vibrate;
+        loaded.ui_vibrate = prev_ui_vibrate;
+        loaded.show_control_hub = prev_hub;
         loaded.auto_jump = prev_auto_jump;
         *self = loaded;
         let _ = self.save_to(&game_home.join("horizon-touch.json"));
@@ -1289,6 +1305,8 @@ impl Settings {
         let prev_vm_sens = self.virtual_mouse_sensitivity;
         let prev_pointer_scale = self.virtual_mouse_pointer_scale;
         let prev_vibrate = self.vibrate;
+        let prev_ui_vibrate = self.ui_vibrate;
+        let prev_hub = self.show_control_hub;
         let prev_auto_jump = self.auto_jump;
         let mut loaded = Self::load_preset(game_home, target, &target_preset_id);
         loaded.control_style = target;
@@ -1300,6 +1318,8 @@ impl Settings {
         loaded.virtual_mouse_sensitivity = prev_vm_sens;
         loaded.virtual_mouse_pointer_scale = prev_pointer_scale;
         loaded.vibrate = prev_vibrate;
+        loaded.ui_vibrate = prev_ui_vibrate;
+        loaded.show_control_hub = prev_hub;
         loaded.auto_jump = prev_auto_jump;
         *self = loaded;
         let _ = self.save_to(&game_home.join("horizon-touch.json"));
@@ -1765,6 +1785,8 @@ impl Settings {
             let prev_vm_sens = self.virtual_mouse_sensitivity;
             let prev_pointer_scale = self.virtual_mouse_pointer_scale;
             let prev_vibrate = self.vibrate;
+            let prev_ui_vibrate = self.ui_vibrate;
+            let prev_hub = self.show_control_hub;
             let prev_auto_jump = self.auto_jump;
             *self = Self::default_for_style(style);
             self.active_mcpe_preset = prev_mcpe;
@@ -1775,6 +1797,8 @@ impl Settings {
             self.virtual_mouse_sensitivity = prev_vm_sens;
             self.virtual_mouse_pointer_scale = prev_pointer_scale;
             self.vibrate = prev_vibrate;
+            self.ui_vibrate = prev_ui_vibrate;
+            self.show_control_hub = prev_hub;
             self.auto_jump = prev_auto_jump;
             match style {
                 ControlStyle::Mcpe => self.active_mcpe_preset = "default".into(),
@@ -1810,6 +1834,8 @@ impl Settings {
         loaded.virtual_mouse_sensitivity = active.virtual_mouse_sensitivity;
         loaded.virtual_mouse_pointer_scale = active.virtual_mouse_pointer_scale;
         loaded.vibrate = active.vibrate;
+        loaded.ui_vibrate = active.ui_vibrate;
+        loaded.show_control_hub = active.show_control_hub;
         loaded.auto_jump = active.auto_jump;
         match loaded.control_style {
             ControlStyle::Mcpe => loaded.active_mcpe_preset = loaded.preset_id.clone(),
@@ -1895,6 +1921,30 @@ pub fn contains([x, y, w, h]: [f32; 4], p: [f32; 2]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_feedback_and_hub_preferences_migrate_and_roundtrip() {
+        let mut legacy = serde_json::to_value(Settings::default()).unwrap();
+        let fields = legacy.as_object_mut().unwrap();
+        for name in ["ui_vibrate", "show_control_hub", "classic_control_hub"] {
+            fields.remove(name);
+        }
+        fields.insert("floating_menu_pos".into(), serde_json::json!([0.44, 0.05]));
+        fields.insert("vibrate".into(), serde_json::json!(false));
+        let mut settings: Settings = serde_json::from_value(legacy).unwrap();
+        settings.sanitize();
+        assert!(!settings.ui_vibrate);
+        assert!(!settings.vibrate);
+        assert!(settings.show_control_hub);
+        assert_eq!(settings.floating_menu_pos, [0.44, 0.05]);
+        settings.ui_vibrate = true;
+        settings.show_control_hub = false;
+        let restored: Settings =
+            serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+        assert!(restored.ui_vibrate);
+        assert!(!restored.vibrate);
+        assert!(!restored.show_control_hub);
+    }
+
     #[test]
     fn gyro_preferences_roundtrip_and_reject_bad_values() {
         let mut s = super::Settings::default();
@@ -2162,7 +2212,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
 
         let mut settings = Settings::default();
-        assert!(settings.virtual_mouse_enabled);
         settings.virtual_mouse_enabled = false;
         settings.virtual_mouse_sensitivity = 1.75;
         settings.virtual_mouse_pointer_scale = 1.6;

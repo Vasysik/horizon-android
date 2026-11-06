@@ -1078,6 +1078,7 @@ pub struct Mesher<'a> {
     pub smooth_lighting: bool,
     /// The `cutoutLeaves` option (fancy graphics); off makes leaves opaque.
     pub cutout_leaves: bool,
+    pub experimental_leaf_culling: bool,
 }
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
@@ -1133,18 +1134,18 @@ impl Mesher<'_> {
                         out.lights
                             .push(([center.x * 16 + x, base_y + y, center.z * 16 + z], id));
                     }
-                    let block_opaque = |s: &Info| s.solid || (!self.cutout_leaves && s.leaves);
-                    if block_opaque(state)
+                    if state.solid
                         && Direction::ALL.iter().all(|d| {
                             let [dx, dy, dz] = d.normal();
-                            block_opaque(&info[pad.blocks[pi(x + dx, y + dy, z + dz)] as usize])
+                            info[pad.blocks[pi(x + dx, y + dy, z + dz)] as usize].solid
                         })
                     {
                         continue;
                     }
                     // Cull buried interior leaf blocks surrounded on all 6 sides by leaves or
                     // solid blocks so dense tree canopies do not emit thousands of hidden layers.
-                    if self.cutout_leaves
+                    if self.experimental_leaf_culling
+                        && self.cutout_leaves
                         && state.leaves
                         && Direction::ALL.iter().all(|d| {
                             let [dx, dy, dz] = d.normal();
@@ -1189,7 +1190,7 @@ impl Mesher<'_> {
                         let [dx, dy, dz] = d.normal();
                         let neighbor = pad.blocks[pi(x + dx, y + dy, z + dz)];
                         let other = &info[neighbor as usize];
-                        if state.leaves && other.leaves {
+                        if self.experimental_leaf_culling && state.leaves && other.leaves {
                             if !self.cutout_leaves {
                                 visible[d as usize] = false;
                                 continue;
@@ -1213,10 +1214,18 @@ impl Mesher<'_> {
                             }
                             continue;
                         }
-                        visible[d as usize] = self
-                            .visibility
-                            .should_render_face(BlockStateId(id), BlockStateId(neighbor), d, true)
-                            .unwrap_or(true);
+                        // LeavesBlock.skipRendering with opaque leaves.
+                        let opaque_leaves = !self.cutout_leaves && state.leaves && other.leaves;
+                        visible[d as usize] = !opaque_leaves
+                            && self
+                                .visibility
+                                .should_render_face(
+                                    BlockStateId(id),
+                                    BlockStateId(neighbor),
+                                    d,
+                                    true,
+                                )
+                                .unwrap_or(true);
                     }
                     for model in &models {
                         for face in &model.faces {

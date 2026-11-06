@@ -241,7 +241,6 @@ class LauncherOverhaulTests(unittest.TestCase):
         self.assertIn("260 | super::flags::UPDATE_KNOWN_SHAPE", tick)
 
         # 3. Smart/hollow leaf culling & early fragment discard (#156)
-        self.assertIn("let mut force_opaque_face = [false; 6];", mesher)
         self.assertIn('static GROUPED: AtomicBool = AtomicBool::new(cfg!(all(target_os = "android", not(test))));', sides)
         self.assertLess(
             terrain_wgsl.index("if texel.a * in.color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }"),
@@ -394,7 +393,6 @@ class LauncherOverhaulTests(unittest.TestCase):
         # 13. Rust Edition in-game UI & menu performance
         self.assertIn("pub fn blit_cached(", menu_blur)
         self.assertIn("pub menu_blur_cache: bool,", (ROOT / "crates/horizon-client-render/src/gfx.rs").read_text(encoding="utf-8"))
-        self.assertIn("batch.clip_since(start, x0, y0, x1, y1);", perspective)
         self.assertIn("struct GuiCachedItem", item_gui)
         self.assertIn("static CACHE: std::cell::RefCell<Vec<(crate::items::ItemStack, StackView)>>", item_render)
         self.assertIn("src[2] <= 2.0 || src[3] <= 2.0", ui_render)

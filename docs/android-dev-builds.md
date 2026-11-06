@@ -12,15 +12,9 @@ version contains the run number and source commit. Test data is separate;
 worlds and accounts are not automatically copied from the release app.
 The workflow does not publish GitHub Releases or send Discord messages.
 
-## Signing
+## One-time maintainer setup
 
-Dev APKs are signed with the repository's release key (`ANDROID_KEYSTORE_BASE64`
-and its password/alias secrets), so a push builds and uploads an APK with no
-further setup. The `.dev` package is a separate app, and only its public
-certificate enters the APK.
-
-A dedicated dev key is optional. When `ANDROID_DEV_KEYSTORE_BASE64` exists it
-takes precedence over the release key. To create one, in PowerShell:
+Create a **new, dedicated dev key**, not the release signing key. In PowerShell:
 
 ```powershell
 keytool -genkeypair -keystore "$env:TEMP/horizon-ci-dev.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -validity 10000 -dname "CN=Horizon Android Dev CI"
@@ -30,12 +24,12 @@ keytool -genkeypair -keystore "$env:TEMP/horizon-ci-dev.keystore" -storepass and
 In repository Settings → Secrets and variables → Actions, add
 `ANDROID_DEV_KEYSTORE_BASE64` with the clipboard contents. Keep a private backup
 of this key outside the repository. The password/alias above match the existing
-build configuration (`android` / `androiddebugkey`). Clear the clipboard
-afterwards. Never attach the key to an issue, artifact, release or message.
+build configuration. Clear the clipboard afterwards. Never attach the key to an
+issue, artifact, release or message.
 
-The workflow fails early only when neither key secret exists. Keeping the same
-key permits in-place updates between CI dev builds; replacing it requires
-reinstalling the dev app. Existing locally signed debug APKs may use a different key as well.
+The workflow fails early if the secret is absent. Keeping the same key permits
+in-place updates between CI dev builds; replacing it requires reinstalling the
+dev app. Existing locally signed debug APKs may use a different key as well.
 Back up their test data before uninstalling. Normal release installations are
 unaffected. Do not reset this workflow's run counter: its increasing value is
 used as Android's dev-channel version code.
