@@ -71,9 +71,11 @@ impl TouchControls {
                     Settings::default().layouts[self.settings.mode.index()];
                 self.settings.button_visibility = [0; 14];
                 for (i, button) in self.settings.custom_buttons.iter_mut().enumerate() {
+                    let mut fresh = CustomButton::new(button.key.clone(), i);
+                    fresh.keys = button.keys.clone();
+                    fresh.label = button.label.clone();
                     button.layouts[self.settings.mode.index()] =
-                        CustomButton::new(button.key.clone(), i).layouts
-                            [self.settings.mode.index()];
+                        fresh.layouts[self.settings.mode.index()];
                 }
             } else if layout::contains([0.02, 0.13, 0.335, 0.075], p) {
                 e.palette = !e.palette;
@@ -373,7 +375,9 @@ impl TouchControls {
                         if layout::contains(key_rect(i), p)
                             && let Some(index) = e.selected_custom
                         {
-                            self.settings.custom_buttons[index].key = token;
+                            let button = &mut self.settings.custom_buttons[index];
+                            button.key = token.clone();
+                            button.keys = vec![token];
                             e.key_picker = false;
                             break;
                         }
@@ -491,7 +495,9 @@ impl TouchControls {
             && e.key_picker
             && let Some(i) = e.selected_custom
         {
-            self.settings.custom_buttons[i].key = name.into();
+            let button = &mut self.settings.custom_buttons[i];
+            button.key = name.into();
+            button.keys = vec![name.into()];
             e.key_picker = false;
             true
         } else {

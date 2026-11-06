@@ -220,6 +220,32 @@ pub(crate) fn with_context<R>(
         }
     })
 }
+pub fn intent_string(key: &str) -> Option<String> {
+    with_context(|env, activity| {
+        let intent = env
+            .call_method(activity, "getIntent", "()Landroid/content/Intent;", &[])?
+            .l()?;
+        if intent.is_null() {
+            return Ok(None);
+        }
+        let key = JObject::from(env.new_string(key)?);
+        let value = env
+            .call_method(
+                &intent,
+                "getStringExtra",
+                "(Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(&key)],
+            )?
+            .l()?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        let value = jni::objects::JString::from(value);
+        Ok(Some(env.get_string(&value)?.into()))
+    })
+    .flatten()
+}
+
 pub fn clipboard_get() -> Option<String> {
     with_context(|env, activity| {
         let name = JObject::from(env.new_string("clipboard")?);
