@@ -15124,6 +15124,28 @@ impl Game<'_> {
                     &self.gui.atlas,
                     &self.pad.touch.settings,
                 );
+                if let Some(status) = shader_packs::pending_shader_pack_status() {
+                    let mut ui = horizon_client::ui_theme::Ui::mobile(
+                        &self.gui.atlas,
+                        &mut hud,
+                        (0.0, 0.0),
+                    );
+                    let theme = horizon_client::ui_theme::active_theme();
+                    let bw = (ui.measure(horizon_client::ui_theme::Face::SemiBold, 11.0, &status) + 28.0)
+                        .clamp(180.0, (ui.w - 24.0).max(180.0));
+                    let bx = (ui.w - bw) * 0.5;
+                    let by = 38.0;
+                    ui.rounded(bx, by, bw, 28.0, 14.0, theme.bg_solid);
+                    ui.border(bx, by, bw, 28.0, 14.0, theme.accent);
+                    ui.centered_fit(
+                        horizon_client::ui_theme::Face::SemiBold,
+                        10.5,
+                        [bx + 8.0, by, bw - 16.0, 28.0],
+                        theme.accent_text,
+                        &status,
+                    );
+                    ui.finish();
+                }
             }
         }
         self.flush_ime(&mut hud);

@@ -38,6 +38,10 @@ pub struct TouchUi {
     pub mouse_speed_dragging: bool,
     /// The real-time 3D resolution scale slider of the Recommended tab is being dragged.
     pub resolution_scale_dragging: bool,
+    /// The gyroscope sensitivity slider of the Aiming tab is being dragged.
+    pub gyro_sensitivity_dragging: bool,
+    /// The global button scale slider of the Buttons tab is being dragged.
+    pub button_scale_dragging: bool,
     /// Step state for the Floating Menu "Send Custom Input" picker modal.
     pub custom_input_picker: crate::touch::PickerStep,
     /// Horizontal scroll offset for the Floating Menu custom keyboard picker.
@@ -86,6 +90,8 @@ impl Default for TouchUi {
             pointer_size_dragging: false,
             mouse_speed_dragging: false,
             resolution_scale_dragging: false,
+            gyro_sensitivity_dragging: false,
+            button_scale_dragging: false,
             custom_input_picker: crate::touch::PickerStep::None,
             custom_kb_scroll_x: 0.0,
             custom_kb_drag: None,
@@ -146,7 +152,9 @@ pub enum InGameMenuAction {
     SetVirtualMouseSpeed(f32),
     StepVirtualMouseSpeed(i32),
     SetVirtualMousePointerSize(f32),
+    SetGyroSensitivity(f32),
     StepGyroSensitivity(i32),
+    SetButtonScale(f32),
     StepButtonScale(i32),
     TriggerKey(KeyCode),
     OpenKeyboard,
@@ -1487,7 +1495,7 @@ pub fn draw_goy_hud(
             p.stroke_margin,
             p.stroke_roundness,
             stroke_c,
-            p.shadow_size,
+            0.0,
             shadow_c,
         );
         let fg_col = color::with_alpha(text_c, (alpha.max(0.75) * hud_scale).clamp(0.0, 1.0));
@@ -1616,6 +1624,8 @@ impl TouchUi {
                                 self.sensitivity_dragging = false;
                                 self.pointer_size_dragging = false;
                                 self.mouse_speed_dragging = false;
+                                self.gyro_sensitivity_dragging = false;
+                                self.button_scale_dragging = false;
                                 self.hub_scroll_drag = None;
                             }
                         }
@@ -1702,6 +1712,40 @@ impl TouchUi {
                 }
                 TouchPhase::Ended | TouchPhase::Cancelled => {
                     self.pointer_size_dragging = false;
+                    return Some(InGameMenuAction::Close);
+                }
+                _ => {}
+            }
+        }
+
+        // Handle ongoing gyroscope-sensitivity slider drag on Tab 2
+        if self.gyro_sensitivity_dragging {
+            match phase {
+                TouchPhase::Moved => {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetGyroSensitivity(0.10 + t * 2.90));
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    self.gyro_sensitivity_dragging = false;
+                    return Some(InGameMenuAction::Close);
+                }
+                _ => {}
+            }
+        }
+
+        // Handle ongoing global-button-scale slider drag on Tab 3
+        if self.button_scale_dragging {
+            match phase {
+                TouchPhase::Moved => {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetButtonScale(0.50 + t * 1.50));
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => {
+                    self.button_scale_dragging = false;
                     return Some(InGameMenuAction::Close);
                 }
                 _ => {}
@@ -2013,6 +2057,8 @@ impl TouchUi {
                 self.sensitivity_dragging = false;
                 self.pointer_size_dragging = false;
                 self.mouse_speed_dragging = false;
+                self.gyro_sensitivity_dragging = false;
+                self.button_scale_dragging = false;
                 self.custom_input_picker = crate::touch::PickerStep::None;
                 self.custom_kb_drag = None;
                 self.hub_scroll_drag = None;
@@ -2077,7 +2123,7 @@ impl TouchUi {
             // Check if touch started on the Sensitivity slider card in Tab 1 (Controls)
             if self.hub_tab == 1 && inside(content_pane) {
                 let body_y = body_top - self.hub_scroll;
-                let sens_card_y = body_y + 138.0;
+                let sens_card_y = body_y + 148.0;
                 let track_r = [cx, sens_card_y, cw, 50.0];
                 if inside(track_r) {
                     self.sensitivity_dragging = true;
@@ -2107,6 +2153,27 @@ impl TouchUi {
                     let sl_w = (cw - 28.0).max(40.0);
                     let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
                     return Some(InGameMenuAction::SetVirtualMousePointerSize(0.5 + t * 1.5));
+                }
+                let gyro_card_y = body_y + 350.0;
+                if inside([cx, gyro_card_y, cw, 50.0]) {
+                    self.gyro_sensitivity_dragging = true;
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetGyroSensitivity(0.10 + t * 2.90));
+                }
+            }
+
+            // Check if touch started on the Global Button Scale slider track in Tab 3 (Buttons)
+            if self.hub_tab == 3 && inside(content_pane) {
+                let body_y = body_top - self.hub_scroll;
+                let scale_card_y = body_y + 18.0;
+                if inside([cx, scale_card_y, cw, 50.0]) {
+                    self.button_scale_dragging = true;
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetButtonScale(0.50 + t * 1.50));
                 }
             }
 
@@ -2269,12 +2336,11 @@ impl TouchUi {
                 if inside(r4) {
                     return Some(InGameMenuAction::ToggleGyro);
                 }
-                if inside(r5) {
-                    return if p[0] < cx + cw * 0.5 {
-                        Some(InGameMenuAction::StepGyroSensitivity(-1))
-                    } else {
-                        Some(InGameMenuAction::StepGyroSensitivity(1))
-                    };
+                if inside([cx, body_y + 350.0, cw, 50.0]) {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetGyroSensitivity(0.10 + t * 2.90));
                 }
             }
             3 => {
@@ -2282,11 +2348,11 @@ impl TouchUi {
                 let row_h = 46.0;
                 let step = 54.0;
                 let scale_y = body_y + 18.0;
-                if inside([cx, scale_y, cw * 0.5, row_h]) {
-                    return Some(InGameMenuAction::StepButtonScale(-1));
-                }
-                if inside([cx + cw * 0.5, scale_y, cw * 0.5, row_h]) {
-                    return Some(InGameMenuAction::StepButtonScale(1));
+                if inside([cx, scale_y, cw, 50.0]) {
+                    let sl_x = cx + 14.0;
+                    let sl_w = (cw - 28.0).max(40.0);
+                    let t = ((p[0] - sl_x) / sl_w).clamp(0.0, 1.0);
+                    return Some(InGameMenuAction::SetButtonScale(0.50 + t * 1.50));
                 }
                 if inside([cx, body_y + 18.0 + step, cw, row_h]) {
                     return Some(InGameMenuAction::ToggleLeftHanded);
@@ -3236,14 +3302,66 @@ impl TouchUi {
                     Some(settings.gyroscope),
                     None,
                 );
-                draw_toggle_row(
-                    &mut ui,
-                    body_y + 350.0,
+                let _ = gyro_spd_lbl;
+                let gyro_y = body_y + 350.0;
+                ui.rounded(cx, gyro_y, cw, 50.0, 11.0, card_bg);
+                ui.border(cx, gyro_y, cw, 50.0, 11.0, border_c);
+                ui.text(
+                    Face::SemiBold,
+                    10.8,
+                    cx + 14.0,
+                    gyro_y + 6.0,
+                    text_c,
                     "Gyroscope Sensitivity",
-                    &gyro_spd_lbl,
-                    None,
-                    Some("−   +"),
                 );
+                let gyro_pct = format!("{:.0}%", settings.gyro_sensitivity * 100.0);
+                let gyro_pill_w = 48.0;
+                ui.rounded(
+                    cx + cw - gyro_pill_w - 12.0,
+                    gyro_y + 6.0,
+                    gyro_pill_w,
+                    18.0,
+                    6.0,
+                    card_sel,
+                );
+                ui.border(
+                    cx + cw - gyro_pill_w - 12.0,
+                    gyro_y + 6.0,
+                    gyro_pill_w,
+                    18.0,
+                    6.0,
+                    accent,
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    9.4,
+                    [cx + cw - gyro_pill_w - 12.0, gyro_y + 6.0, gyro_pill_w, 18.0],
+                    accent_hi,
+                    &gyro_pct,
+                );
+                let gyro_sl_x = cx + 14.0;
+                let gyro_sl_w = (cw - 28.0).max(40.0);
+                let gyro_sl_y = gyro_y + 33.0;
+                let gyro_frac = ((settings.gyro_sensitivity - 0.10) / 2.90).clamp(0.0, 1.0);
+                ui.rounded(gyro_sl_x, gyro_sl_y, gyro_sl_w, 6.0, 3.0, sidebar_bg);
+                ui.rounded(
+                    gyro_sl_x,
+                    gyro_sl_y,
+                    (gyro_sl_w * gyro_frac).max(6.0),
+                    6.0,
+                    3.0,
+                    accent,
+                );
+                let gyro_thumb_x = gyro_sl_x + gyro_sl_w * gyro_frac;
+                ui.rounded(
+                    gyro_thumb_x - 7.0,
+                    gyro_sl_y - 4.0,
+                    14.0,
+                    14.0,
+                    7.0,
+                    accent_hi,
+                );
+                ui.border(gyro_thumb_x - 7.0, gyro_sl_y - 4.0, 14.0, 14.0, 7.0, text_c);
             }
             3 => {
                 // Tab 3: Buttons & Layout Options
@@ -3256,18 +3374,65 @@ impl TouchUi {
                     "BUTTON SIZING, HANDEDNESS & BEHAVIOR",
                 );
                 let step = 54.0;
-                let scale_title = format!(
-                    "Global Button Scale ({:.0}%)",
-                    settings.button_scale * 100.0
+                let scale_y = body_y + 18.0;
+                ui.rounded(cx, scale_y, cw, 50.0, 11.0, card_bg);
+                ui.border(cx, scale_y, cw, 50.0, 11.0, border_c);
+                ui.text(
+                    Face::SemiBold,
+                    10.8,
+                    cx + 14.0,
+                    scale_y + 6.0,
+                    text_c,
+                    "Global Button Scale",
                 );
-                draw_toggle_row(
-                    &mut ui,
-                    body_y + 18.0,
-                    &scale_title,
-                    "Tap left half (−) or right half (+) to resize HUD buttons",
-                    None,
-                    Some("−   +"),
+                let sc_pct = format!("{:.0}%", settings.button_scale * 100.0);
+                let sc_pill_w = 48.0;
+                ui.rounded(
+                    cx + cw - sc_pill_w - 12.0,
+                    scale_y + 6.0,
+                    sc_pill_w,
+                    18.0,
+                    6.0,
+                    card_sel,
                 );
+                ui.border(
+                    cx + cw - sc_pill_w - 12.0,
+                    scale_y + 6.0,
+                    sc_pill_w,
+                    18.0,
+                    6.0,
+                    accent,
+                );
+                ui.centered_fit(
+                    Face::SemiBold,
+                    9.4,
+                    [cx + cw - sc_pill_w - 12.0, scale_y + 6.0, sc_pill_w, 18.0],
+                    accent_hi,
+                    &sc_pct,
+                );
+                let sc_sl_x = cx + 14.0;
+                let sc_sl_w = (cw - 28.0).max(40.0);
+                let sc_sl_y = scale_y + 33.0;
+                let sc_frac = ((settings.button_scale - 0.50) / 1.50).clamp(0.0, 1.0);
+                ui.rounded(sc_sl_x, sc_sl_y, sc_sl_w, 6.0, 3.0, sidebar_bg);
+                ui.rounded(
+                    sc_sl_x,
+                    sc_sl_y,
+                    (sc_sl_w * sc_frac).max(6.0),
+                    6.0,
+                    3.0,
+                    accent,
+                );
+                let sc_thumb_x = sc_sl_x + sc_sl_w * sc_frac;
+                ui.rounded(
+                    sc_thumb_x - 7.0,
+                    sc_sl_y - 4.0,
+                    14.0,
+                    14.0,
+                    7.0,
+                    accent_hi,
+                );
+                ui.border(sc_thumb_x - 7.0, sc_sl_y - 4.0, 14.0, 14.0, 7.0, text_c);
                 draw_toggle_row(
                     &mut ui,
                     body_y + 18.0 + step,
@@ -7167,7 +7332,7 @@ pub fn touch_hud_editor(
                     for i in 0..3 {
                         let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
                         let rect = [rx, cards_y, cw3, card_h];
-                        if inside(rect) {
+                        if inside([rx, cards_y - 2.0, cw3, card_h + 4.0]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             let t = ((p[0] - (rx + 10.0)) / (cw3 - 20.0).max(16.0)).clamp(0.0, 1.0);
                             apply_props_slider(tc, &ed, 1, i, t);
@@ -7188,7 +7353,7 @@ pub fn touch_hud_editor(
                     for i in 0..3 {
                         let rx = wx + 12.0 + i as f32 * (cw3 + 8.0);
                         let rect = [rx, row2_y, cw3, card_h];
-                        if inside(rect) {
+                        if inside([rx, row2_y - 2.0, cw3, card_h + 4.0]) {
                             push_undo_snapshot(&mut ed, &tc.settings);
                             let t = ((p[0] - (rx + 10.0)) / (cw3 - 20.0).max(16.0)).clamp(0.0, 1.0);
                             apply_props_slider(tc, &ed, 1, 3 + i, t);

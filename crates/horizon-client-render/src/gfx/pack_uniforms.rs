@@ -184,6 +184,14 @@ pub const NAMES: &[&str] = &[
     "currentPlayerArmor",
     "maxBlindnessDarkness",
     "isEyeInCave",
+    "lightningBoltPosition",
+    "normalMatrix",
+    "isNether",
+    "is_on_ground",
+    "heightLimit",
+    "logicalHeightLimit",
+    "hasSkylight",
+    "hasCeiling",
 ];
 
 /// Values carried from frame to frame.
@@ -462,6 +470,13 @@ impl FrameUniforms {
                 "currentPlayerArmor" => Value::f(&[0.0]),
                 "maxBlindnessDarkness" => Value::f(&[inputs.blindness.max(frame.darkness.0)]),
                 "isEyeInCave" => Value::i(&[i32::from(eye[1] < 4.0 && frame.camera.y < 60.0)]),
+                "lightningBoltPosition" => Value::f(&[0.0, 10000.0, 0.0, 0.0]),
+                "normalMatrix" => m4(view),
+                "isNether" => Value::i(&[i32::from(inputs.biome_category == 16)]),
+                "is_on_ground" => Value::i(&[1]),
+                "heightLimit" | "logicalHeightLimit" => Value::i(&[384]),
+                "hasSkylight" => Value::i(&[i32::from(inputs.biome_category != 16 && inputs.biome_category != 8)]),
+                "hasCeiling" => Value::i(&[i32::from(inputs.biome_category == 16)]),
                 // renderStage is NONE outside gbuffers draws.
                 _ => Value::i(&[0]),
             }
@@ -528,8 +543,9 @@ fn components(name: &str) -> usize {
         | "shadowLightPosition"
         | "fogColor"
         | "skyColor" => 3,
+        "lightningBoltPosition" => 4,
         "eyeBrightness" | "eyeBrightnessSmooth" | "atlasSize" => 2,
-        n if n.starts_with("gbuffer") || n.starts_with("shadow") && n != "shadowAngle" => 16,
+        n if n == "normalMatrix" || n.starts_with("gbuffer") || n.starts_with("shadow") && n != "shadowAngle" => 16,
         _ => 1,
     }
 }

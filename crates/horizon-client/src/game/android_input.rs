@@ -905,6 +905,11 @@ impl Game<'_> {
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }
+                InGameMenuAction::SetGyroSensitivity(val) => {
+                    self.pad.touch.settings.gyro_sensitivity = val.clamp(0.10, 3.00);
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
                 InGameMenuAction::StepGyroSensitivity(dir) => {
                     self.pad.touch.settings.gyro_sensitivity =
                         (self.pad.touch.settings.gyro_sensitivity + dir as f32 * 0.20)
@@ -920,6 +925,11 @@ impl Game<'_> {
                 InGameMenuAction::StepTouchSensitivity(dir) => {
                     self.pad.touch.settings.sensitivity =
                         (self.pad.touch.settings.sensitivity + dir as f32 * 0.15).clamp(0.10, 3.0);
+                    let _ = self.pad.touch.settings.save();
+                    self.settings.touch = self.pad.touch.settings.clone();
+                }
+                InGameMenuAction::SetButtonScale(val) => {
+                    self.pad.touch.settings.button_scale = val.clamp(0.50, 2.00);
                     let _ = self.pad.touch.settings.save();
                     self.settings.touch = self.pad.touch.settings.clone();
                 }

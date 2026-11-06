@@ -44,6 +44,7 @@ pub fn markdown() -> String {
         let key = match kind {
             StageKind::Post => "[[post]]",
             StageKind::Sky => "[sky]",
+            StageKind::Vertex => "[vertex]",
             StageKind::Material => "[material]",
             StageKind::Weather => "[weather]",
         };
@@ -63,7 +64,7 @@ pub fn markdown() -> String {
             out += &format!("| {} | `{}` | {} |\n", r.binding, r.ty, r.doc);
         }
         out += "\n";
-        if kind != StageKind::Sky {
+        if !matches!(kind, StageKind::Sky | StageKind::Vertex) {
             out += "Helpers:\n\n";
         }
         if kind == StageKind::Post {
@@ -82,7 +83,7 @@ pub fn markdown() -> String {
                     `fn block_specular_map_level(uv: vec2<f32>, lod: f32) -> vec4<f32>`: the same at mip level `lod`.\n\
                     - `fn block_pbr_size() -> vec2<f32>`: the LabPBR maps' size in texels.\n";
         }
-        if kind != StageKind::Sky {
+        if !matches!(kind, StageKind::Sky | StageKind::Vertex) {
             out += "- `fn shadow_position(position: vec3<f32>) -> vec3<f32>`: where the camera-relative point `position` is\n  \
                     stored in the shadow map, for `textureSampleCompareLevel`.\n\
                     - `fn shadow_distort(xy: vec2<f32>) -> vec2<f32>`: the map's distortion of a point at shadow clip `xy`.\n\n";

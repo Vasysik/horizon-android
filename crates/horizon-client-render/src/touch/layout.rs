@@ -255,7 +255,7 @@ fn default_button_color() -> u32 {
     0xFF1E1B2E
 }
 fn default_shadow_size() -> f32 {
-    3.0
+    0.0
 }
 fn default_shadow_color() -> u32 {
     0x96000000
@@ -352,7 +352,7 @@ impl Placement {
             stroke_roundness: 10.0,
             stroke_color: 0xFF8A7AE6,
             button_color: 0xFF1E1B2E,
-            shadow_size: 3.0,
+            shadow_size: 0.0,
             shadow_color: 0x96000000,
             roundness: 10.0,
             on_click_color: 0xFF423675,
@@ -417,7 +417,7 @@ impl Placement {
         self.shadow_size = if self.shadow_size.is_finite() {
             self.shadow_size.clamp(0.0, 12.0)
         } else {
-            3.0
+            0.0
         };
         self.roundness = if self.roundness.is_finite() {
             self.roundness.clamp(0.0, 50.0)
@@ -1445,7 +1445,7 @@ impl Settings {
             p.stroke_margin = 0.0;
             p.roundness = 12.0;
             p.stroke_roundness = 12.0;
-            p.shadow_size = 3.2;
+            p.shadow_size = 0.0;
             p.visible_in_game = in_game;
             p.visible_in_menu = in_menu;
             super::CustomButton {

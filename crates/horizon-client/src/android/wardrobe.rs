@@ -707,13 +707,11 @@ impl Wardrobe {
         let control_y = preview_y + preview_h - 36.0;
         let btn_w = 34.0;
         let gap = 6.0;
-        let cluster = 4.0 * btn_w + 3.0 * gap;
+        let cluster = 2.0 * btn_w + gap;
         let cx = px + (preview_w - cluster) * 0.5;
         for (i, (label, action)) in [
             ("<", Action::WardrobeRotate(-1)),
             (">", Action::WardrobeRotate(1)),
-            ("−", Action::WardrobeZoom(false)),
-            ("+", Action::WardrobeZoom(true)),
         ]
         .into_iter()
         .enumerate()

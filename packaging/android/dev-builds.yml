@@ -121,7 +121,7 @@ jobs:
       - name: Check public source and packaging boundaries
         run: |
           python3 tools/check_public_tree.py
-          python3 -m unittest discover -s tests -p 'test_android_release_audit.py'
+          python3 -m unittest discover -s tests -p 'test_android*.py'
       - name: Prepare private engine inputs from official downloads
         run: python3 tools/android_prepare.py --java-home "$JAVA_HOME"
       - name: Build optimized public dev APK

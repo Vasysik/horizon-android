@@ -11,6 +11,11 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
 };
 
+thread_local! {
+    static ACTIVE_SLIDER_DRAG: std::cell::Cell<Option<(Action, f32, f32)>> = const { std::cell::Cell::new(None) };
+    static SLIDER_TRACK_TARGETS: std::cell::RefCell<Vec<([f32; 4], Action, f32, f32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Centralized dynamic theme accessors backed by `horizon_client::ui_theme::active_theme()`.
 #[inline]
 fn my3_bg() -> u32 {
@@ -709,6 +714,9 @@ fn draw_setting_card(
 
             let left_half = [track_x, pill_y, track_w * 0.5, 36.0];
             let right_half = [track_x + track_w * 0.5, pill_y, track_w * 0.5, 36.0];
+            if let Some(c) = ui.clip_rect([track_x, pill_y, track_w, 36.0]) {
+                SLIDER_TRACK_TARGETS.with(|t| t.borrow_mut().push((c, minus_action, bar_x, bar_w)));
+            }
             if let Some(c) = ui.clip_rect(left_half) {
                 targets.push((c, minus_action));
             }
@@ -1053,6 +1061,7 @@ impl Launcher {
             return Ok(());
         }
         self.targets.clear();
+        SLIDER_TRACK_TARGETS.with(|t| t.borrow_mut().clear());
         self.list_targets.clear();
         self.list_view = None;
 
@@ -6750,6 +6759,58 @@ impl Launcher {
         }
     }
 
+    fn apply_slider_fraction(&mut self, action: Action, frac: f32) {
+        let t = frac.clamp(0.0, 1.0);
+        match action {
+            Action::RenderScaleDelta(_) => {
+                let next_pct = (25.0 + t * 75.0).round() as u32;
+                let scale = crate::display::RenderScale::new(next_pct);
+                self.catalog.config.render_scale = scale;
+                let _ = self.catalog.config.save(&self.home);
+                crate::display::set_scale(scale);
+                self.modify_game_settings(|s| {
+                    s.horizon.resolution_scale = next_pct;
+                });
+                self.modify_touch_settings(|ts| {
+                    ts.resolution_scale_percent = next_pct;
+                });
+            }
+            Action::RenderDistDelta(_) => {
+                let rd = (2.0 + t * 30.0).round() as i32;
+                self.modify_game_settings(|s| s.render_distance = rd.clamp(2, 32));
+            }
+            Action::SimDistDelta(_) => {
+                let sd = (5.0 + t * 27.0).round() as i32;
+                self.modify_game_settings(|s| s.simulation_distance = sd.clamp(5, 32));
+            }
+            Action::FovDelta(_) => {
+                let fov = (30.0 + t * 80.0).round();
+                self.modify_game_settings(|s| s.fov = fov.clamp(30.0, 110.0));
+            }
+            Action::TouchSensDelta(_) => {
+                let v = ((0.10 + t * 2.90) * 100.0).round() / 100.0;
+                self.modify_touch_settings(|ts| ts.sensitivity = v.clamp(0.10, 3.0));
+            }
+            Action::MouseSensDelta(_) => {
+                let v = ((0.05 + t * 0.95) * 100.0).round() / 100.0;
+                self.modify_game_settings(|s| s.sensitivity = v.clamp(0.05, 1.0));
+            }
+            Action::ButtonScaleDelta(_) => {
+                let v = ((0.60 + t * 1.00) * 100.0).round() / 100.0;
+                self.modify_touch_settings(|ts| ts.button_scale = v.clamp(0.60, 1.60));
+            }
+            Action::PointerSizeDelta(_) => {
+                let v = ((0.50 + t * 1.50) * 100.0).round() / 100.0;
+                self.modify_touch_settings(|ts| ts.virtual_mouse_size = v.clamp(0.50, 2.0));
+            }
+            Action::GyroSensDelta(_) => {
+                let v = ((0.10 + t * 2.90) * 100.0).round() / 100.0;
+                self.modify_touch_settings(|ts| ts.gyro_sensitivity = v.clamp(0.10, 3.0));
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn ui_density(&self) -> f32 {
         let (Some(r), Some(gui)) = (&self.renderer, &self.gui) else {
             return 1.0;
@@ -6831,34 +6892,62 @@ impl Launcher {
             return Ok(());
         }
 
+        let density = self.ui_density();
+        let px = t.location.x as f32 / density;
+        let py = t.location.y as f32 / density;
         match t.phase {
             TouchPhase::Started => {
-                self.drag = Some(super::gesture::Drag::new(t.location.x, t.location.y));
+                let hit_slider = SLIDER_TRACK_TARGETS.with(|list| {
+                    list.borrow()
+                        .iter()
+                        .rev()
+                        .find(|([x, y, w, h], _, _, _)| {
+                            (*x..*x + *w).contains(&px) && (*y..*y + *h).contains(&py)
+                        })
+                        .map(|(_, action, bar_x, bar_w)| (*action, *bar_x, *bar_w))
+                });
+                if let Some((action, bar_x, bar_w)) = hit_slider {
+                    ACTIVE_SLIDER_DRAG.with(|c| c.set(Some((action, bar_x, bar_w))));
+                    self.drag = None;
+                    let frac = ((px - bar_x) / bar_w.max(1.0)).clamp(0.0, 1.0);
+                    self.apply_slider_fraction(action, frac);
+                } else {
+                    ACTIVE_SLIDER_DRAG.with(|c| c.set(None));
+                    self.drag = Some(super::gesture::Drag::new(t.location.x, t.location.y));
+                }
             }
             TouchPhase::Moved => {
-                let density = self.ui_density() as f64;
-                if let Some(drag) = &mut self.drag {
-                    let delta = drag.update(t.location.x, t.location.y, density);
-                    if drag.moved {
-                        if let Some(chooser) = &mut self.chooser {
-                            chooser.scroll = (chooser.scroll + delta).max(0.0);
-                        } else if let Some(modal) = &mut self.catalog.project_modal {
-                            modal.scroll = (modal.scroll + delta).max(0.0);
-                        } else if self
-                            .list_view
-                            .is_some_and(|view| drag.origin_y() / density >= view[0] as f64)
-                        {
-                            self.catalog.scroll = (self.catalog.scroll + delta).max(0.0);
+                if let Some((action, bar_x, bar_w)) = ACTIVE_SLIDER_DRAG.with(|c| c.get()) {
+                    let frac = ((px - bar_x) / bar_w.max(1.0)).clamp(0.0, 1.0);
+                    self.apply_slider_fraction(action, frac);
+                } else {
+                    let density_f64 = density as f64;
+                    if let Some(drag) = &mut self.drag {
+                        let delta = drag.update(t.location.x, t.location.y, density_f64);
+                        if drag.moved {
+                            if let Some(chooser) = &mut self.chooser {
+                                chooser.scroll = (chooser.scroll + delta).max(0.0);
+                            } else if let Some(modal) = &mut self.catalog.project_modal {
+                                modal.scroll = (modal.scroll + delta).max(0.0);
+                            } else if self
+                                .list_view
+                                .is_some_and(|view| drag.origin_y() / density_f64 >= view[0] as f64)
+                            {
+                                self.catalog.scroll = (self.catalog.scroll + delta).max(0.0);
+                            }
                         }
                     }
                 }
             }
             TouchPhase::Ended => {
-                if self.drag.take().is_some_and(|drag| !drag.moved) {
+                if ACTIVE_SLIDER_DRAG.with(|c| c.take()).is_some() {
+                    self.drag = None;
+                } else if self.drag.take().is_some_and(|drag| !drag.moved) {
                     self.activate(events)?;
                 }
             }
             TouchPhase::Cancelled => {
+                ACTIVE_SLIDER_DRAG.with(|c| c.set(None));
                 self.drag = None;
             }
         }

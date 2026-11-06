@@ -19,6 +19,10 @@ def strip_rust_comments_and_literals(source: str) -> str:
     return token_re.sub(" ", source)
 
 
+def read_text(p: str) -> str:
+    return (ROOT / p).read_text(encoding="utf-8")
+
+
 class LauncherOverhaulTests(unittest.TestCase):
     def test_rust_delimiter_and_syntax_sanity_across_modified_files(self) -> None:
         modified_files = [
@@ -79,6 +83,18 @@ class LauncherOverhaulTests(unittest.TestCase):
             "crates/horizon-client-render/src/gfx/pack_images.rs",
             "crates/horizon-client-render/src/gfx/flat.rs",
             "crates/horizon-client/src/game/fov.rs",
+            "crates/horizon-shader-api/src/manifest.rs",
+            "crates/horizon-shader-api/src/stages.rs",
+            "crates/horizon-shader-api/src/reference.rs",
+            "crates/horizon-shader-api/src/inputs.rs",
+            "crates/horizon-shader-api/src/check.rs",
+            "crates/horizon-shader-api/tests/reference.rs",
+            "crates/horizon-shaders/src/biomes.rs",
+            "crates/horizon-shaders/src/block_ids.rs",
+            "crates/horizon-shaders/src/macros.rs",
+            "crates/horizon-shaders/src/translate/mod.rs",
+            "crates/horizon-client-render/src/gfx/native_material.rs",
+            "crates/horizon-client-render/src/gfx/native_pack.rs",
         ]
         for rel in modified_files:
             path = ROOT / rel
@@ -675,6 +691,39 @@ class LauncherOverhaulTests(unittest.TestCase):
         self.assertIn("fn apply_props_slider(", touch_ui)
         self.assertIn("fn draw_m3_selector_cell(", touch_ui)
         self.assertIn("Action::RenderScaleDelta(", launcher_pages)
+
+
+    def test_final_polish_vertex_shaders_mods_2d_goy_skins_and_sliders(self):
+        manifest = read_text("crates/horizon-shader-api/src/manifest.rs")
+        stages = read_text("crates/horizon-shader-api/src/stages.rs")
+        pack_shadow = read_text("crates/horizon-client-render/src/gfx/pack_shadow.rs")
+        pack_uniforms = read_text("crates/horizon-client-render/src/gfx/pack_uniforms.rs")
+        perspective = read_text("crates/horizon-client/src/game/perspective.rs")
+        shader_packs = read_text("crates/horizon-client/src/game/shader_packs.rs")
+        rewrite = read_text("crates/horizon-shaders/src/translate/rewrite.rs")
+        catalog = read_text("crates/horizon-client/src/android/catalog.rs")
+        wardrobe = read_text("crates/horizon-client/src/android/wardrobe.rs")
+        layout = read_text("crates/horizon-client-render/src/touch/layout.rs")
+        touch_ui = read_text("crates/horizon-client/src/touch_ui.rs")
+        launcher_pages = read_text("crates/horizon-client/src/android/launcher_pages.rs")
+
+        self.assertIn("pub vertex: Option<Stage>,", manifest)
+        self.assertIn("StageKind::Vertex", stages)
+        self.assertIn(".min(4096)", pack_shadow)
+        self.assertIn('"lightningBoltPosition"', pack_uniforms)
+        self.assertIn('"normalMatrix"', pack_uniforms)
+        self.assertIn("self.pack_shadow_casters.0", perspective)
+        self.assertIn("pub fn pending_shader_pack_status()", shader_packs)
+        self.assertIn("hz_dot", rewrite)
+        self.assertIn("{ if (true) discard; }", rewrite)
+        self.assertIn("builtin:", catalog)
+        self.assertIn("query.limit = 100;", catalog)
+        self.assertNotIn("Action::WardrobeZoom(false)", wardrobe)
+        self.assertIn("fn default_shadow_size() -> f32 {\n    0.0\n}", layout)
+        self.assertIn("let sens_card_y = body_y + 148.0;", touch_ui)
+        self.assertIn("pub gyro_sensitivity_dragging: bool,", touch_ui)
+        self.assertIn("pub button_scale_dragging: bool,", touch_ui)
+        self.assertIn("ACTIVE_SLIDER_DRAG", launcher_pages)
 
 
 if __name__ == "__main__":

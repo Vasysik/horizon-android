@@ -1642,11 +1642,8 @@ impl<'a> Ui<'a> {
                 (w + stroke_margin * 2.0).min(h + stroke_margin * 2.0) * 0.5,
             ),
         };
-        // 1. Drop shadow plate
-        if shadow_size > 0.1 && (shadow_color >> 24) > 0 {
-            let so = shadow_size.clamp(0.5, 14.0);
-            self.rounded(x + so * 0.45, y + so * 0.75, w, h, eff_radius, shadow_color);
-        }
+        // Flat 2D GoyControl plate (3D drop shadow disabled for clean 2D look & lower GPU cost)
+        let _ = (shadow_size, shadow_color);
         // 2. Main Fill Shape
         match shape {
             3 => {
@@ -1696,7 +1693,11 @@ impl<'a> Ui<'a> {
             let sy = y - stroke_margin;
             let sw = (w + stroke_margin * 2.0).max(2.0);
             let sh = (h + stroke_margin * 2.0).max(2.0);
-            self.stroke_rounded(sx, sy, sw, sh, eff_stroke_r, stroke_size, stroke_color);
+            if stroke_size <= 2.2 {
+                self.border(sx, sy, sw, sh, eff_stroke_r, stroke_color);
+            } else {
+                self.stroke_rounded(sx, sy, sw, sh, eff_stroke_r, stroke_size, stroke_color);
+            }
         }
     }
 

@@ -1665,17 +1665,7 @@ pub fn draw_goy_static_button(
     } else {
         scale_alpha(p.stroke_color, opacity)
     };
-    if p.shadow_size > 0.2 {
-        let so = (p.shadow_size * 0.65).clamp(1.0, 8.0);
-        b.fill(
-            a,
-            x + so * 0.5,
-            y + so,
-            w,
-            h,
-            scale_alpha(p.shadow_color, opacity),
-        );
-    }
+    // Flat 2D GoyControl button: no 3D drop shadow pass
     b.fill(a, x, y, w, h, fill_c);
     if p.stroke_size > 0.1 {
         let sm = p.stroke_margin;

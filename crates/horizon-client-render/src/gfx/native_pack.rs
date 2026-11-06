@@ -100,10 +100,11 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Sky)
             .map(|stage| NativeSky::new(device, globals, &frame, stage, constants, format))
             .transpose()?;
+        let vertex_stage = others.iter().find(|s| s.kind == StageKind::Vertex);
         let material = others
             .iter()
             .find(|s| s.kind == StageKind::Material)
-            .map(|stage| NativeMaterial::new(device, terrain, &frame, stage, constants, fog))
+            .map(|stage| NativeMaterial::new(device, terrain, &frame, stage, vertex_stage, constants, fog))
             .transpose()?;
         let post = (!post.is_empty())
             .then(|| NativePost::new(device, post, &report.manifest, constants, format, &frame))

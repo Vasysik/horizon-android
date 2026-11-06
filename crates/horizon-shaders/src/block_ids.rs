@@ -40,6 +40,9 @@ impl BlockIds {
                 continue;
             };
             for word in e.value.split_whitespace() {
+                if word == "=" || word.starts_with('=') {
+                    continue;
+                }
                 if word.starts_with('%') {
                     out.notes.push(format!(
                         "line {}: block tags are not read yet: {word}",

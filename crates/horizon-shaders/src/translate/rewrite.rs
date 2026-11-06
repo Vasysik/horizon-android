@@ -201,13 +201,13 @@ impl Stage<'_> {
             }
             // `float specular`: a variable of the same name as a sampler, from here to the
             // function's end; `.specular` a member.
-            if sampler_ty.contains_key(t) && !params.contains_key(t) {
+            if (sampler_ty.contains_key(t) || uniforms.contains_key(t)) && !params.contains_key(t) {
                 let before = prev(i).map(|j| self.tokens[j]);
                 if before == Some(".") {
                     out.push_str(t);
                     continue;
                 }
-                if before.is_some_and(|b| is_ident(b) && !matches!(b, "return" | "case" | "else")) {
+                if before.is_some_and(|b| is_ident(b) && !matches!(b, "return" | "case" | "else" | "in" | "out" | "inout")) {
                     hidden.push(t);
                 }
             }
@@ -242,10 +242,22 @@ impl Stage<'_> {
                 // naga's frontend leaves the code after an unconditional `discard` or `return;`
                 // unreachable but half-built (a module that fails validation): behind an `if`
                 // it stays reachable as far as naga knows.
-                "discard" => Some("if (true) discard".into()),
-                "return" if next(i).is_some_and(|j| self.tokens[j] == ";") => {
-                    Some("if (true) return".into())
-                }
+                "discard" => Some(
+                    if next(i).and_then(&next).is_some_and(|k| self.tokens[k] == "else") {
+                        "{ if (true) discard; }".into()
+                    } else {
+                        "if (true) discard".into()
+                    },
+                ),
+                "return" if next(i).is_some_and(|j| self.tokens[j] == ";") => Some(
+                    if next(i).and_then(&next).is_some_and(|k| self.tokens[k] == "else") {
+                        "{ if (true) return; }".into()
+                    } else {
+                        "if (true) return".into()
+                    },
+                ),
+                "dot" if called => Some("hz_dot".into()),
+                "normalMatrix" if !uniforms.contains_key("normalMatrix") => Some("hz_NormalMatrix".into()),
                 // GLSL's `modf`, which naga's frontend lacks.
                 "modf" if called => Some("hz_modf".into()),
                 // Matrix inverse, which naga writes for neither Metal nor WGSL.
