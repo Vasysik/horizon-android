@@ -1133,23 +1133,10 @@ impl Mesher<'_> {
                         out.lights
                             .push(([center.x * 16 + x, base_y + y, center.z * 16 + z], id));
                     }
-                    let block_opaque = |s: &Info| s.solid || (!self.cutout_leaves && s.leaves);
-                    if block_opaque(state)
+                    if state.solid
                         && Direction::ALL.iter().all(|d| {
                             let [dx, dy, dz] = d.normal();
-                            block_opaque(&info[pad.blocks[pi(x + dx, y + dy, z + dz)] as usize])
-                        })
-                    {
-                        continue;
-                    }
-                    // Cull buried interior leaf blocks surrounded on all 6 sides by leaves or
-                    // solid blocks so dense tree canopies do not emit thousands of hidden layers.
-                    if self.cutout_leaves
-                        && state.leaves
-                        && Direction::ALL.iter().all(|d| {
-                            let [dx, dy, dz] = d.normal();
-                            let ni = &info[pad.blocks[pi(x + dx, y + dy, z + dz)] as usize];
-                            ni.solid || ni.leaves
+                            info[pad.blocks[pi(x + dx, y + dy, z + dz)] as usize].solid
                         })
                     {
                         continue;
@@ -1184,50 +1171,29 @@ impl Mesher<'_> {
                         None => [x as f32, y as f32, z as f32],
                     };
                     let mut visible = [false; 6];
-                    let mut force_opaque_face = [false; 6];
                     for d in Direction::ALL {
                         let [dx, dy, dz] = d.normal();
                         let neighbor = pad.blocks[pi(x + dx, y + dy, z + dz)];
                         let other = &info[neighbor as usize];
-                        if state.leaves && other.leaves {
-                            if !self.cutout_leaves {
-                                visible[d as usize] = false;
-                                continue;
-                            }
-                            let other_surrounded = Direction::ALL.iter().all(|nd| {
-                                let [nx, ny, nz] = nd.normal();
-                                let ni = &info[pad.blocks[pi(x + dx + nx, y + dy + ny, z + dz + nz)]
-                                    as usize];
-                                ni.solid || ni.leaves
-                            });
-                            if other_surrounded {
-                                // Boundary between the outer cutout leaf shell and the buried
-                                // canopy core: render as opaque so looking through outer leaf
-                                // holes shows tinted foliage while Early-Z/FPK kills overdraw.
-                                visible[d as usize] = true;
-                                force_opaque_face[d as usize] = true;
-                            } else {
-                                // Shared seam between two outer-shell leaf blocks: cull internal
-                                // double-faces while keeping all outer air-facing sides cutout.
-                                visible[d as usize] = false;
-                            }
-                            continue;
-                        }
-                        visible[d as usize] = self
-                            .visibility
-                            .should_render_face(BlockStateId(id), BlockStateId(neighbor), d, true)
-                            .unwrap_or(true);
+                        // LeavesBlock.skipRendering with opaque leaves.
+                        let opaque_leaves = !self.cutout_leaves && state.leaves && other.leaves;
+                        visible[d as usize] = !opaque_leaves
+                            && self
+                                .visibility
+                                .should_render_face(
+                                    BlockStateId(id),
+                                    BlockStateId(neighbor),
+                                    d,
+                                    true,
+                                )
+                                .unwrap_or(true);
                     }
                     for model in &models {
                         for face in &model.faces {
                             if face.quad.cull.is_some_and(|d| !visible[d as usize]) {
                                 continue;
                             }
-                            let force_opaque = (!self.cutout_leaves && state.leaves)
-                                || face
-                                    .quad
-                                    .cull
-                                    .is_some_and(|d| force_opaque_face[d as usize]);
+                            let force_opaque = !self.cutout_leaves && state.leaves;
                             self.face(
                                 pad,
                                 &mut tints,

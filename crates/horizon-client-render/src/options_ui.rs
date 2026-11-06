@@ -193,6 +193,10 @@ impl Opt {
         match self {
             Opt::TouchMode => "Control scheme",
             Opt::TouchCrosshairGestures => "Touch gestures",
+            Opt::TouchControlHub => "Control hub button",
+            Opt::TouchControlHubStyle => "Control hub appearance",
+            Opt::TouchUiVibration => "UI vibration",
+            Opt::TouchGameVibration => "Gameplay vibration",
             Opt::TouchAttackButtonLook => "Look while attacking",
             Opt::TouchMouseSensitivity => "Virtual mouse sensitivity",
             Opt::TouchAnalog => "360-degree movement",
@@ -566,6 +570,24 @@ impl Opt {
                 }
                 .into(),
             ),
+            Opt::TouchControlHub => Some(
+                if s.touch.show_control_hub {
+                    "ON"
+                } else {
+                    "OFF"
+                }
+                .into(),
+            ),
+            Opt::TouchControlHubStyle => Some(
+                if s.touch.classic_control_hub {
+                    "..."
+                } else {
+                    "H"
+                }
+                .into(),
+            ),
+            Opt::TouchUiVibration => Some(if s.touch.ui_vibrate { "ON" } else { "OFF" }.into()),
+            Opt::TouchGameVibration => Some(if s.touch.vibrate { "ON" } else { "OFF" }.into()),
             Opt::TouchCrosshairGestures => Some(
                 if s.touch.crosshair_gestures {
                     "ON"
@@ -1126,6 +1148,10 @@ impl Opt {
             Opt::TouchInventoryControls => s.touch.inventory_controls ^= true,
             Opt::TouchDynamicJoystick => s.touch.dynamic_joystick ^= true,
             Opt::TouchCrosshairGestures => s.touch.crosshair_gestures ^= true,
+            Opt::TouchControlHub => s.touch.show_control_hub ^= true,
+            Opt::TouchControlHubStyle => s.touch.classic_control_hub ^= true,
+            Opt::TouchUiVibration => s.touch.ui_vibrate ^= true,
+            Opt::TouchGameVibration => s.touch.vibrate ^= true,
             Opt::TouchAttackButtonLook => s.touch.attack_button_look ^= true,
             Opt::AndroidInputMode => {
                 let all = crate::android_gamepad::InputMode::ALL;
@@ -2778,6 +2804,13 @@ impl OptionsUi {
                     Opt::TouchSensitivity,
                     Opt::TouchSensitivityHorizontal,
                     Opt::TouchSensitivityVertical,
+                ]));
+                rows.push(Row::Header("Control Hub & Feedback"));
+                rows.extend(pairs(&[
+                    Opt::TouchControlHub,
+                    Opt::TouchControlHubStyle,
+                    Opt::TouchUiVibration,
+                    Opt::TouchGameVibration,
                 ]));
                 rows.push(Row::Header("HUD Buttons & Layout"));
                 rows.extend(pairs(&[

@@ -1748,12 +1748,18 @@ impl Loading {
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
                     }
-                    InGameMenuAction::ToggleVibrate => {
-                        let next = !self.menu.controls.settings.vibrate;
-                        self.menu.controls.settings.vibrate = next;
+                    InGameMenuAction::ToggleVibrate | InGameMenuAction::ToggleUiVibrate => {
+                        let ui = matches!(hub_act, InGameMenuAction::ToggleUiVibrate);
+                        let value = if ui {
+                            &mut self.menu.controls.settings.ui_vibrate
+                        } else {
+                            &mut self.menu.controls.settings.vibrate
+                        };
+                        *value = !*value;
+                        let next = *value;
                         let _ = self.menu.controls.settings.save();
                         self.settings.touch = self.menu.controls.settings.clone();
-                        if next {
+                        if next && ui {
                             crate::platform::vibrate(horizon_client::gamepad::Pulse {
                                 strong: 0.30,
                                 weak: 0.55,
@@ -2493,9 +2499,10 @@ impl Loading {
             }
             if !is_goy
                 && (!hud_in_menu
-                    || self.menu.controls.settings.layouts[self.menu.controls.settings.mode.index()]
-                        .iter()
-                        .any(|p| p.visible_in_menu))
+                    || self.menu.controls.settings.layouts
+                        [self.menu.controls.settings.mode.index()]
+                    .iter()
+                    .any(|p| p.visible_in_menu))
             {
                 self.menu.controls.draw(batch, &gui.atlas);
             }

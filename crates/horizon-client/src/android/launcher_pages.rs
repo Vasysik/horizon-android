@@ -364,6 +364,9 @@ pub(super) enum Action {
     PointerSizeDelta(f32),
     CycleJoystickZone,
     ToggleTouchVibrate,
+    ToggleTouchUiVibrate,
+    ToggleControlHub,
+    ToggleControlHubStyle,
     ToggleAutoJump,
     ToggleInventoryControls,
     // Theme customization actions (Settings -> Launcher Settings -> Theme)
@@ -4808,7 +4811,7 @@ impl Launcher {
                 let invert_y_active = opts.invert_y || touch_cfg.invert_y;
                 let sprint_latch_active = opts.toggle_sprint || touch_cfg.sprint_toggle;
 
-                let rows: [(&str, &str, SettingControl<'_>); 25] = [
+                let rows: [(&str, &str, SettingControl<'_>); 28] = [
                     (
                         "LAYOUT EDITOR & PRESET PROFILES",
                         "Visual HUD canvas editor, multi-profile switcher, duplication & JSON export",
@@ -4951,8 +4954,29 @@ impl Launcher {
                         SettingControl::Toggle(opts.auto_jump, Action::ToggleAutoJump),
                     ),
                     (
-                        "Haptic Touch Vibration",
-                        "Tactile vibration feedback when pressing HUD buttons and breaking blocks",
+                        "Control Hub Button",
+                        "Show the top-left control menu button",
+                        SettingControl::Toggle(
+                            touch_cfg.show_control_hub,
+                            Action::ToggleControlHub,
+                        ),
+                    ),
+                    (
+                        "Classic Hub Button (...)",
+                        "Use the three-dot appearance instead of H",
+                        SettingControl::Toggle(
+                            touch_cfg.classic_control_hub,
+                            Action::ToggleControlHubStyle,
+                        ),
+                    ),
+                    (
+                        "UI Vibration",
+                        "Vibration when pressing interface buttons",
+                        SettingControl::Toggle(touch_cfg.ui_vibrate, Action::ToggleTouchUiVibrate),
+                    ),
+                    (
+                        "Gameplay Vibration",
+                        "Vibration for damage and block breaking",
                         SettingControl::Toggle(touch_cfg.vibrate, Action::ToggleTouchVibrate),
                     ),
                     (
@@ -5828,6 +5852,15 @@ impl Launcher {
                 self.modify_touch_settings(|t| {
                     t.joystick_style.move_area = t.joystick_style.move_area.next();
                 });
+            }
+            Some(Action::ToggleTouchUiVibrate) => {
+                self.modify_touch_settings(|t| t.ui_vibrate = !t.ui_vibrate);
+            }
+            Some(Action::ToggleControlHub) => {
+                self.modify_touch_settings(|t| t.show_control_hub = !t.show_control_hub);
+            }
+            Some(Action::ToggleControlHubStyle) => {
+                self.modify_touch_settings(|t| t.classic_control_hub = !t.classic_control_hub);
             }
             Some(Action::ToggleTouchVibrate) => {
                 self.modify_touch_settings(|t| t.vibrate = !t.vibrate);
@@ -6801,7 +6834,9 @@ impl Launcher {
             }
             Action::PointerSizeDelta(_) => {
                 let v = ((0.50 + t * 1.50) * 100.0).round() / 100.0;
-                self.modify_touch_settings(|ts| ts.virtual_mouse_pointer_scale = v.clamp(0.50, 2.0));
+                self.modify_touch_settings(|ts| {
+                    ts.virtual_mouse_pointer_scale = v.clamp(0.50, 2.0)
+                });
             }
             Action::GyroSensDelta(_) => {
                 let v = ((0.10 + t * 2.90) * 100.0).round() / 100.0;

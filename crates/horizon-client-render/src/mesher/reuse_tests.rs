@@ -257,3 +257,52 @@ fn benchmark_padded_reuse() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires prepared 26.3 resources"]
+fn fancy_leaf_cluster_keeps_internal_cutout_faces() {
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+    let assets = Assets::load(&root).unwrap();
+    let facts = BlockFacts::load(&root, assets.registry).unwrap();
+    let biomes = Biomes::load(&root).unwrap();
+    let render = assets.reload(&root).unwrap();
+    let visibility = crate::models::load_visibility(&root, assets.registry).unwrap();
+    let tables = MeshTables::new(&assets, &render, &facts, visibility.clone()).unwrap();
+    let leaves = assets
+        .registry
+        .default_state("minecraft:oak_leaves")
+        .unwrap()
+        .0;
+    let mut chunk = Chunk::empty(0, 0);
+    for y in 6..8 {
+        for z in 6..8 {
+            for x in 6..8 {
+                chunk.set(x, MIN_Y + y, z, leaves);
+            }
+        }
+    }
+    let mut region = [[None; 3]; 3];
+    region[1][1] = Some(&chunk);
+    let mut mesher = Mesher {
+        nether_shading: false,
+        shader_pack_lighting: false,
+        assets: &assets,
+        render: &render,
+        tables: &tables,
+        biomes: &biomes,
+        visibility,
+        zoom: BiomeZoom::new(0),
+        blend_radius: 0,
+        smooth_lighting: false,
+        cutout_leaves: true,
+    };
+    let fancy = mesher.mesh(&region, 0);
+    // Eight cubes, six cutout faces each, four vertices per face.
+    assert_eq!(fancy.solid.len(), 8 * 6 * 4);
+    assert!(fancy.solid.iter().all(|v| v.layer & OPAQUE_LAYER == 0));
+    mesher.cutout_leaves = false;
+    // Fast leaves draw the six exterior faces of a 2x2x2 cube.
+    let fast = mesher.mesh(&region, 0);
+    assert_eq!(fast.solid.len(), 6 * 4 * 4);
+}
