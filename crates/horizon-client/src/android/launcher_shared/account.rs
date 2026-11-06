@@ -27,8 +27,7 @@ pub const SERVICE: &str = "dev.playhorizon.launcher";
 const SCOPE: &str = "XboxLive.signin offline_access";
 #[cfg(target_os = "android")]
 pub const NOT_CONFIGURED: &str =
-    "Microsoft sign-in is coming soon. Until then the game plays offline: single player, \
-     LAN and servers in offline mode work.";
+    "This build has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.";
 #[cfg(not(target_os = "android"))]
 pub const NOT_CONFIGURED: &str = "This build of the launcher has no Microsoft sign-in (HORIZON_MSA_CLIENT_ID), so it can't start the game.";
 /// What every Play says while no account in the launcher owns the game.
@@ -1587,6 +1586,15 @@ static UNSAVED: Mutex<Option<String>> = Mutex::new(None);
 /// What the last launch couldn't save in the keychain, once.
 pub fn take_unsaved() -> Option<String> {
     UNSAVED.lock().ok()?.take()
+}
+
+/// Whether a Microsoft account signed in here was last told it owns Minecraft: Java Edition. The
+/// answer is the one [`launch`] keeps, so a player who passed is not blocked while offline.
+#[cfg(target_os = "android")]
+pub fn has_owner() -> bool {
+    Accounts::load().accounts.iter().any(|a| {
+        secrets_in(store(), &a.key()).is_some_and(|s| s.owns && s.provider == Provider::Microsoft)
+    })
 }
 
 /// The owner gate: the game starts only while an account in the launcher owns Minecraft: Java

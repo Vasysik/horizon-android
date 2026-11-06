@@ -10,10 +10,6 @@ pub fn source_only_mod(project: &Project) -> bool {
         && project.loaders.iter().any(|loader| loader == "hnmod")
 }
 
-/// Temporary dev registration published as Minecraft Nintendo Switch by PrismarineJS.
-/// Account tokens and client secrets are never bundled.
-pub const MICROSOFT_CLIENT_ID: &str = "00000000441cc96b";
-
 /// Minecraft player names are at most 16 UTF-16 units; a longer name fails
 /// the integrated-server handshake with only a generic disconnect. Truncate
 /// to that limit, counting UTF-16 units so characters outside the BMP count
@@ -139,9 +135,8 @@ impl Config {
         if cfg!(target_pointer_width = "32") && value.get("renderer").is_none() {
             config.renderer = RendererMode::OpenGl;
         }
-        // Ignore saved app registrations while this dev build uses the fixed ID.
-        config.microsoft_client_id =
-            crate::account::client_id().unwrap_or_else(|| MICROSOFT_CLIENT_ID.into());
+        // The app registration comes from the build (HORIZON_MSA_CLIENT_ID), never from saved data.
+        config.microsoft_client_id = crate::account::client_id().unwrap_or_default();
         if value.get("renderer").is_none() && value["gpu_batching"].as_bool() == Some(true) {
             config.renderer = RendererMode::Vulkan;
         }

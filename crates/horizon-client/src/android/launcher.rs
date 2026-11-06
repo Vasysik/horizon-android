@@ -302,6 +302,14 @@ impl Launcher {
         if self.login.pending() {
             return Ok(());
         }
+        // The owner gate: no game files are fetched and no game starts until an account here
+        // owns Minecraft: Java Edition. Offline names and offline-mode servers play behind it.
+        if !crate::account::has_owner() {
+            self.catalog.status = crate::account::NEEDS_OWNER.into();
+            self.login.visible = true;
+            self.login.choosing = true;
+            return Ok(());
+        }
         crate::diagnostics::heartbeat(
             "play_requested",
             || serde_json::json!({"renderer":self.catalog.config.renderer.label(),"resolution_percent":self.catalog.config.render_scale.percent()}),
