@@ -104,7 +104,7 @@ pub(crate) fn touch_input(touch: bool) {
 }
 pub(crate) fn save_input_mode() {
     APP.with(|app| {
-        if let Some(home) = app.borrow().as_ref().and_then(|a| a.internal_data_path()) {
+        if let Some(home) = app.borrow().as_ref().and_then(game_home) {
             let mut config = catalog::Config::load(&home);
             let mode = horizon_client::android_runtime::input_mode();
             if config.input_host != mode {
@@ -115,6 +115,26 @@ pub(crate) fn save_input_mode() {
             }
         }
     });
+}
+/// The game's data folder. `HorizonActivity` writes the folder it picked (shared storage when
+/// "All files access" is granted, otherwise the private folder) into `home-path.txt` before the
+/// native code starts; the DocumentsProvider resolves the same folder in Java. Any problem with
+/// the chosen folder falls back to the private one, as in the original build.
+pub(crate) fn game_home(app: &AndroidApp) -> Option<std::path::PathBuf> {
+    let internal = app.internal_data_path()?;
+    let chosen = std::fs::read_to_string(internal.join("home-path.txt"))
+        .ok()
+        .map(|text| std::path::PathBuf::from(text.trim()))
+        .filter(|path| path.is_absolute() && *path != internal);
+    if let Some(dir) = chosen {
+        let probe = dir.join(".horizon-write-test");
+        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&probe, b"").is_ok() {
+            let _ = std::fs::remove_file(&probe);
+            return Some(dir);
+        }
+        log::warn!("Shared data folder {} is not writable; using private storage", dir.display());
+    }
+    Some(internal)
 }
 pub(crate) const PUBLIC_BUILD: bool = match option_env!("HORIZON_ANDROID_PUBLIC") {
     Some(value) => value.len() == 1 && value.as_bytes()[0] == b'1',
@@ -208,7 +228,7 @@ fn android_main(app: AndroidApp) {
         app.enable_motion_axis(axis);
     }
     init_logging();
-    let Some(home) = app.internal_data_path() else {
+    let Some(home) = game_home(&app) else {
         log::error!("Android supplied no application data directory");
         return;
     };

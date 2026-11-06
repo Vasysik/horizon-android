@@ -520,7 +520,19 @@ impl RegionWriter {
         }
         self.file.sync_all()?;
         // Hard-link publication fails atomically if another writer won the name.
-        fs::hard_link(&self.temporary, &self.destination)?;
+        match fs::hard_link(&self.temporary, &self.destination) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Err(error),
+            Err(_) => {
+                // Android shared storage has no hard links. Claim the name first so a
+                // competing writer still fails, then move the finished file over it.
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&self.destination)?;
+                fs::rename(&self.temporary, &self.destination)?;
+            }
+        }
         self.committed = true;
         Ok(())
     }
