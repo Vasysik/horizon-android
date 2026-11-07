@@ -550,9 +550,14 @@ impl<T: 'static> EventLoop<T> {
                         relative: source == Source::MouseRelative,
                         touchpad: source == Source::Touchpad,
                     };
-                    let history = pointer
-                        .history()
-                        .map(|point| (f64::from(point.x()), f64::from(point.y())));
+                    let history = pointer.history().map(|point| {
+                        (
+                            f64::from(point.x()),
+                            f64::from(point.y()),
+                            f64::from(point.axis_value(Axis::RelativeX)),
+                            f64::from(point.axis_value(Axis::RelativeY)),
+                        )
+                    });
                     for mouse in self.mouse.update_with_history(sample, history) {
                         use mouse_state::Event as M;
                         let event = match mouse {
