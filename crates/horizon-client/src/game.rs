@@ -21429,6 +21429,14 @@ impl Loading {
         } else {
             self.draw_menu(&mut batch);
         }
+        // The inbox's note over the setup, which polls it: what a file picked there, or Horizon
+        // Android's worlds, added.
+        if self.failure.is_some()
+            && !self.menu.options_open
+            && let Some(gui) = &self.gui
+        {
+            self.imports.draw(&gui.atlas, &mut batch);
+        }
         self.draw_menu_touch_editor(&mut batch, size);
         self.menu.frame_drawn((batch.width, batch.height));
         let mut frame = loading_frame(&batch);
