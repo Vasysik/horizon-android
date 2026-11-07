@@ -1554,8 +1554,15 @@ impl Launcher {
             if matches!(page, Page::Shaders | Page::Mods) {
                 use crate::shader_catalog::Origin;
                 let seg_w = 100.0;
-                for (i, origin) in [Origin::Horizon, Origin::Modrinth].into_iter().enumerate() {
-                    let rx = content_x + content_w - (2 - i) as f32 * (seg_w + 6.0) + 6.0;
+                // Mods have no Modrinth source; only Shaders keep both choices.
+                let origins = if page == Page::Mods {
+                    vec![Origin::Horizon]
+                } else {
+                    vec![Origin::Horizon, Origin::Modrinth]
+                };
+                let slots = origins.len();
+                for (i, origin) in origins.into_iter().enumerate() {
+                    let rx = content_x + content_w - (slots - i) as f32 * (seg_w + 6.0) + 6.0;
                     let rect = [rx, header_y - 2.0, seg_w, 30.0];
                     let active = (if page == Page::Mods {
                         self.catalog.config.mod_source

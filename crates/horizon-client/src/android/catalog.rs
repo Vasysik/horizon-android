@@ -175,6 +175,10 @@ impl Config {
             .unwrap_or_default();
         config.device.migrate_missing(&value, &legacy);
         config.name = truncate_player_name(&config.name);
+        // Mods come from Horizon only; a saved Modrinth choice falls back to it.
+        if config.mod_source == crate::shader_catalog::Origin::Modrinth {
+            config.mod_source = crate::shader_catalog::Origin::Horizon;
+        }
         config.theme.sanitize();
         horizon_client::ui_theme::set_active_theme(config.theme.resolve());
         horizon_client::ui_theme::motion::set_reduced_motion(
