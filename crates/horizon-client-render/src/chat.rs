@@ -16,6 +16,15 @@ use crate::{
 #[path = "chat_tests.rs"]
 mod tests;
 
+/// Convert a visible-window bottom in renderer pixels to the chat's GUI height.
+/// Unknown bounds, a closed keyboard and floating keyboards retain the full height.
+pub fn clamp_gui_height(full_height: f32, visible_bottom: u32, gui_scale: f32) -> f32 {
+    if visible_bottom == 0 || gui_scale <= 0.0 {
+        return full_height;
+    }
+    full_height.min(visible_bottom as f32 / gui_scale)
+}
+
 /// `CommandHistory.PERSISTED_COMMANDS_FILE_NAME` and its size cap.
 const COMMAND_HISTORY_FILE: &str = "command_history.txt";
 const MAX_PERSISTED_COMMAND_HISTORY: usize = 50;

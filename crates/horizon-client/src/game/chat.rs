@@ -1,6 +1,8 @@
 //! Chat, the command registries and the per-world state behind commands
 //! (game rules, the world clock, difficulty), bound to the game.
 use super::{Game, Screen};
+#[cfg(any(target_os = "android", test))]
+use horizon_client::chat::clamp_gui_height;
 use horizon_client::{
     chat::{
         Chat, ChatAbilities, ChatAction, ChatScreen, ChatSource, ChatVisibility, Commands,
@@ -135,16 +137,6 @@ fn should_discard_draft(reason: ChatExit, save_chat_drafts: bool) -> bool {
     reason != ChatExit::Interrupted && (reason != ChatExit::Intentional || !save_chat_drafts)
 }
 
-/// Convert an Android visible-window bottom (renderer pixels, as returned by
-/// `native_ime::viewport_bottom()`) to the GUI height the chat may use, never
-/// exceeding the full height. A zero bottom (no bounds read yet) leaves the
-/// height unchanged, so chat never collapses.
-fn clamp_gui_height(full_height: f32, visible_bottom: u32, gui_scale: f32) -> f32 {
-    if visible_bottom == 0 || gui_scale <= 0.0 {
-        return full_height;
-    }
-    full_height.min(visible_bottom as f32 / gui_scale)
-}
 /// UI and command state that lives beside the game.
 #[derive(Default)]
 pub struct UiState {
@@ -943,25 +935,29 @@ impl Game<'_> {
     }
     pub(super) fn chat_click(&mut self) {
         let cursor = self.cursor;
-        let height = self.renderer.as_ref().map_or(720.0, |r| {
-            HudBatch::new([r.config.width, r.config.height]).height
-        });
+        let mut batch = HudBatch::new(
+            self.renderer
+                .as_ref()
+                .map_or([1280, 720], |r| [r.config.width, r.config.height]),
+        );
+        // Hit testing uses the same keyboard-adjusted viewport as drawing.
+        batch.height = Self::visible_chat_height(&batch);
+        let height = batch.height;
         let m = Measure(&self.gui.atlas.font);
         let c = Commands {
             dispatcher: chat_tree(&self.remote, &self.mods),
             registries: &self.ui.registries,
         };
         if self.ui.in_bed_chat && self.sleeping.is_some() {
-            let width = self.renderer.as_ref().map_or(1280.0, |r| {
-                HudBatch::new([r.config.width, r.config.height]).width
-            });
-            let (x, y, w, h) = Self::leave_bed_button(width, height);
+            let (x, y, w, h) = Self::leave_bed_button(batch.width, height);
             if horizon_client::screen_draw::inside((cursor.0 as i32, cursor.1 as i32), x, y, w, h) {
                 self.wake_up();
                 return;
             }
         }
         if let Some(screen) = self.ui.chat_screen.as_mut() {
+            // Bounds may have changed since the last frame (IME animation).
+            screen.resize(&m, &c, batch.width as i32, height as i32);
             if screen.click(&m, &c, cursor.0 as f64, cursor.1 as f64) {
                 return;
             }
