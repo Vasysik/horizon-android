@@ -62,6 +62,10 @@ pub(super) struct Launcher {
     drag: Option<gesture::Drag>,
     chooser: Option<chooser::Chooser>,
     exit_confirmation: bool,
+    /// Navigation drawer opened from the header menu button.
+    drawer_open: bool,
+    /// Touch x position where a drawer swipe began, in physical pixels.
+    drawer_swipe_from: Option<f64>,
     login: login::Login,
     wardrobe: wardrobe::Wardrobe,
     session_worker: Option<mpsc::Receiver<std::result::Result<PreparedAccount, String>>>,
@@ -241,6 +245,8 @@ impl Launcher {
             drag: None,
             chooser: None,
             exit_confirmation: false,
+            drawer_open: false,
+            drawer_swipe_from: None,
             login: login::Login::new(),
             session_worker: prewarm_session_worker,
             session_ready: false,
@@ -394,7 +400,9 @@ impl Launcher {
             self.anim.intro_done = true;
             return;
         }
-        if self.diagnostics_modal_open {
+        if self.drawer_open {
+            self.drawer_open = false;
+        } else if self.diagnostics_modal_open {
             self.diagnostics_modal_open = false;
         } else if self.exit_confirmation {
             self.exit_confirmation = false;

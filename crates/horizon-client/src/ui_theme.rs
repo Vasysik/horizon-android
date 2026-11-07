@@ -134,6 +134,7 @@ pub enum Icon {
     MicrosoftGrid,
     Gamepad,
     ArrowLeft,
+    Menu,
     MenuEquals,
     Undo,
     Redo,
@@ -430,6 +431,12 @@ fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
             let top = seg_dist(u, v, 0.62, 0.24, 0.34, 0.50) <= 0.055;
             let bot = seg_dist(u, v, 0.34, 0.50, 0.62, 0.76) <= 0.055;
             top || bot
+        }
+        Icon::Menu => {
+            // Three even rounded bars: the navigation drawer toggle.
+            seg_dist(u, v, 0.18, 0.28, 0.82, 0.28) <= 0.062
+                || seg_dist(u, v, 0.18, 0.50, 0.82, 0.50) <= 0.062
+                || seg_dist(u, v, 0.18, 0.72, 0.82, 0.72) <= 0.062
         }
         Icon::MenuEquals => {
             // Sleek floating control-hub icon: two horizontal tracks with circular slider knobs.
