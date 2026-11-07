@@ -126,6 +126,59 @@ fn click_targets_match_rendered_spans_when_scaled_wrapped_and_scrolled() {
 }
 
 #[test]
+fn keyboard_viewport_keeps_visible_links_and_input_clicks_aligned() {
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let commands = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let link = ClickEvent::RunCommand("/accept".into());
+    let mut chat = Chat::default();
+    add(
+        &mut chat,
+        &font,
+        Text::styled(
+            "accept",
+            Style {
+                click: Some(link.clone()),
+                ..Style::default()
+            },
+        ),
+    );
+    let mut screen = ChatScreen::new(&m, &commands, "draft", 0, 640, 360, full());
+    // Closed, opening, docked, closing, floating, and not-yet-reported bounds.
+    for (bottom, expected_height) in [
+        (720, 360),
+        (600, 300),
+        (400, 200),
+        (600, 300),
+        (900, 360),
+        (0, 360),
+    ] {
+        let height = clamp_gui_height(360.0, bottom, 2.0) as i32;
+        assert_eq!(height, expected_height);
+        screen.resize(&m, &commands, 640, height);
+        let y = f64::from(expected_height - 45);
+        assert!(!screen.click(&m, &commands, 5.0, y));
+        assert_eq!(chat.click_at(&font, height, 5.0, y), Some(link.clone()));
+        assert!(
+            chat.layout(height, 0, true).iter().any(|draw| {
+                matches!(draw, GuiDraw::Text { y, .. } if *y == expected_height - 48)
+            })
+        );
+        if height < 360 {
+            // The pre-fix full-window lookup misses the link that is visible above the IME.
+            assert_eq!(chat.click_at(&font, 360, 5.0, y), None);
+        }
+        // Clicking the relocated edit box moves its cursor, rather than selecting chat history.
+        assert!(screen.click(&m, &commands, 5.0, f64::from(expected_height - 8)));
+        assert_eq!(screen.input.cursor, 0);
+    }
+}
+
+#[test]
 fn locate_coordinates_fill_chat_with_teleport_without_submitting() {
     let font = font();
     let m = Measure(&font);
