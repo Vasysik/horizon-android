@@ -23,8 +23,8 @@ use std::collections::HashSet;
 mod horizon_client { pub mod mouse { pub use crate::mouse::*; } }
 #[derive(Clone, Copy, PartialEq, Eq, Hash)] enum MouseButton { Left, Middle, Right }
 #[derive(Clone, Copy, PartialEq)] enum Screen { Playing, Other }
-struct Point { x: f64, y: f64 }
-enum MouseScrollDelta { LineDelta(f32, f32), PixelDelta(Point) }
+#[derive(Clone, Copy)] struct Point { x: f64, y: f64 }
+#[derive(Clone, Copy)] enum MouseScrollDelta { LineDelta(f32, f32), PixelDelta(Point) }
 struct Settings { discrete_scroll: bool, mouse_wheel_sensitivity: f32 }
 struct Player { flying_speed: f32 }
 struct SpectatorGui { active: bool }
