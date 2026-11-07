@@ -1318,6 +1318,17 @@ impl Launcher {
                 &fitted,
             );
         }
+        // The repository link rides at the right end of the status strip, out of
+        // the dock's way.
+        button(
+            &mut ui,
+            &mut self.targets,
+            [w - 116.0, dock_top(h) - 52.0, 96.0, 26.0],
+            "GitHub",
+            Action::Repository,
+            false,
+            press,
+        );
         // A dark rule separates the page from the dock, like vanilla's GUI edges.
         mc_ui::fill(&mut ui, 0.0, dock_top(h) - 26.0, w, 1.0, color::PANEL_EDGE);
         // The primary action: Play (or the install's next step) at the left of

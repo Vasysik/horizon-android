@@ -15,8 +15,8 @@ use std::path::Path;
 pub(super) const MAX_VIDEO_MS: i64 = 30_000;
 /// A clip may be bigger than a GIF, since only the decoded frames are kept.
 pub(super) const MAX_VIDEO_BYTES: u64 = 128 << 20;
-/// Frames are decoded at this size and scaled to the atlas slot afterwards.
-pub(super) const MAX_CLIP_EDGE: u32 = 640;
+// Frames are decoded at most 640 px wide (`HorizonMedia.MAX_EDGE`) and the
+// launcher scales them to the atlas slot afterwards.
 
 /// One decoded clip: RGBA frames with their per-frame delay in milliseconds.
 pub(super) struct DecodedClip {

@@ -137,7 +137,7 @@ public final class HorizonMedia {
         } finally {
             try {
                 retriever.release();
-            } catch (RuntimeException ignored) {
+            } catch (java.io.IOException | RuntimeException ignored) {
                 // A failed setDataSource leaves nothing to release.
             }
         }
