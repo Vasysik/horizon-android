@@ -14,7 +14,8 @@
       "abfaa525f923f807df8b4e4d29c1b5e3a104adbe",
       "1e4e4a68dece1c0f51b8f93b45da8fe8da51bcd3",
       "0c8f43b28f837869c1e54a6aeb22c396a1548946",
-      "917ff6d74b9f635c46bac0d28857206bbcc1ffe4"
+      "917ff6d74b9f635c46bac0d28857206bbcc1ffe4",
+      "331e5c80937c9cd79647ab34bdc1cbb5ef09f456"
     ],
     "accepted_asset_index_note": "The asset indexes (id 34) of those republished version JSONs: a launcher keeps one 34.json, the last it downloaded, whichever version JSON it reads.",
     "client_sha1": "e877b6a07acd633fb3bb475002175cec036e7b87",

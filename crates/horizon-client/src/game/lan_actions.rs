@@ -2783,6 +2783,19 @@ impl Game<'_> {
         command: &str,
         signed: Option<Vec<(String, horizon_client::lan::hub::chat::ChatMessage)>>,
     ) {
+        if command.trim_start_matches('/').split_whitespace().next() == Some("veinminer") {
+            if let Some(permission) = host.hub.guest(conn).map(|g| g.permission) {
+                host.commands.push(GuestCommand {
+                    conn,
+                    command: command.trim_start_matches('/').to_owned(),
+                    permission,
+                    integrated: host.hub.config.integrated,
+                    quiet: false,
+                });
+            }
+            return;
+        }
+
         // The mods hear every command first, and may stop it.
         let mut canceled = false;
         let mut replies = Vec::new();

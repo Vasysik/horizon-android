@@ -144,6 +144,9 @@ fn non_player_entity_id(t: Target) -> Option<i32> {
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
     pub(super) fn run_command(&mut self, command: &str) -> bool {
+        if let Some(result) = self.veinminer_command(command) {
+            return result;
+        }
         if self.client_mod_command(command) {
             return true;
         }
