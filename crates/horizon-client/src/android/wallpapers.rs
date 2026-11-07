@@ -328,8 +328,10 @@ pub fn document_result(
                     let _ = env.exception_clear();
                 }
                 let (input, name) = opened.map_err(|e| e.to_string())?;
-                // The VM the JNI call arrived on decodes MP4 on this thread.
-                import(&home, input, &name, Some(vm))
+                // `env` borrows `vm` for its lifetime, so the MP4 decoder gets a
+                // second handle over the same VM instead of moving this one.
+                let decode_vm = unsafe { jni::JavaVM::from_raw(vm.get_java_vm_pointer()) }.ok();
+                import(&home, input, &name, decode_vm)
             })();
             publish(result, false);
         });
