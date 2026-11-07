@@ -24,6 +24,10 @@ enum Step {
     /// game's files are where a player can reach them, and a bug report's log with them.
     #[cfg(target_os = "android")]
     Folder(super::files_offer::Stage),
+    /// Horizon Android is on the phone: its worlds and resource packs can come over
+    /// (HorizonImport.java). True once its folder was asked for: they are arriving.
+    #[cfg(target_os = "android")]
+    Horizon(bool),
     /// Nothing under way: sign in, play offline, or bring resources from a computer.
     Start,
     /// Play offline chosen: whether the player is sure (most servers need a sign-in).
@@ -59,6 +63,13 @@ enum Action {
     /// Not now (asked again on the title screen only if not turned down), or Later.
     #[cfg(target_os = "android")]
     FolderLater,
+    /// Horizon Android's folder in the system's picker (again, if the player came back without
+    /// picking it).
+    #[cfg(target_os = "android")]
+    Horizon,
+    /// Skip, or Next once its files are on their way: not offered again.
+    #[cfg(target_os = "android")]
+    HorizonDone,
     SignIn,
     /// Play offline: asks first, then the files are fetched without a sign-in.
     Offline,
@@ -87,6 +98,12 @@ pub(super) struct Setup {
     /// The Starling folder put off for this start (Later).
     #[cfg(target_os = "android")]
     folder_later: bool,
+    /// Whether Horizon Android is installed, asked of Android once.
+    #[cfg(target_os = "android")]
+    horizon_installed: Cell<Option<bool>>,
+    /// Its folder asked for: its worlds and packs are on their way to the import inbox.
+    #[cfg(target_os = "android")]
+    horizon_picked: bool,
     /// Play offline tapped: the question shows.
     offline_asked: bool,
     /// Prepared once already: what it made did not load either (the failure says why), so it is
@@ -155,6 +172,11 @@ fn step(setup: &Setup, failure: &str) -> Step {
             if let Some(stage) = folder_offer(setup) {
                 return Step::Folder(stage);
             }
+            // After the folder: what comes over lands in the game folder that stays.
+            #[cfg(target_os = "android")]
+            if horizon_offer(setup) {
+                return Step::Horizon(setup.horizon_picked);
+            }
             Step::Start
         }
         State::Resuming | State::Starting | State::SignedIn(_) => Step::Talking,
@@ -181,6 +203,26 @@ fn folder_offer(setup: &Setup) -> Option<super::files_offer::Stage> {
     })
 }
 
+/// Written once the player is done with the offer of Horizon Android's worlds (Next or Skip): it
+/// is not made again.
+#[cfg(target_os = "android")]
+fn horizon_answered() -> std::path::PathBuf {
+    horizon_client::logging::private_home().join("horizon-android-import-answered")
+}
+
+/// Whether to offer Horizon Android's worlds and packs: it is installed, and not answered yet.
+#[cfg(target_os = "android")]
+fn horizon_offer(setup: &Setup) -> bool {
+    if horizon_answered().exists() {
+        return false;
+    }
+    setup.horizon_installed.get().unwrap_or_else(|| {
+        let installed = crate::android::horizon_android_installed();
+        setup.horizon_installed.set(Some(installed));
+        installed
+    })
+}
+
 fn mb(bytes: u64) -> String {
     format!("{:.0}", bytes as f64 / 1_000_000.0)
 }
@@ -193,6 +235,23 @@ fn texts(step: &Step) -> (&'static str, String, Option<String>) {
             let [title, body, ..] = super::files_offer::texts(*stage);
             (title, body.into(), None)
         }
+        #[cfg(target_os = "android")]
+        Step::Horizon(false) => (
+            "Coming from Horizon Android?",
+            "Horizon Android is part of Starling now: bring your worlds and resource packs over. \
+             Close Horizon Android first, then, in the folder that opens, tap Use this folder and \
+             Allow."
+                .into(),
+            Some("They are copied: Horizon Android keeps its own.".into()),
+        ),
+        #[cfg(target_os = "android")]
+        Step::Horizon(true) => (
+            "Coming from Horizon Android?",
+            "Your worlds and resource packs are on their way: the note at the top says what each \
+             one added. Tap Next when they are in."
+                .into(),
+            None,
+        ),
         Step::Start => (
             "Set up Starling",
             "Sign in with the Microsoft account that owns Minecraft: Java Edition, or play \
@@ -269,6 +328,18 @@ fn buttons(step: &Step) -> [Option<(&'static str, Action)>; 3] {
                 None,
             ]
         }
+        #[cfg(target_os = "android")]
+        Step::Horizon(false) => [
+            Some(("Bring them over", Action::Horizon)),
+            Some(("Skip", Action::HorizonDone)),
+            None,
+        ],
+        #[cfg(target_os = "android")]
+        Step::Horizon(true) => [
+            Some(("Next", Action::HorizonDone)),
+            Some(("Pick the folder again", Action::Horizon)),
+            None,
+        ],
         Step::Start => [
             Some(("Sign in with Microsoft", Action::SignIn)),
             Some(("Play offline", Action::Offline)),
@@ -619,6 +690,18 @@ impl Loading {
                     let _ = std::fs::write(super::files_offer::declined(), b"");
                 }
                 self.setup.folder_later = true;
+            }
+            #[cfg(target_os = "android")]
+            Action::Horizon => {
+                if crate::android::import_horizon_android() {
+                    self.setup.horizon_picked = true;
+                } else {
+                    log::warn!("Horizon: no folder picker for Horizon Android's files");
+                }
+            }
+            #[cfg(target_os = "android")]
+            Action::HorizonDone => {
+                let _ = std::fs::write(horizon_answered(), b"");
             }
             Action::SignIn => {
                 self.setup.offline_asked = false;

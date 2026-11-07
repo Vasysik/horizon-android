@@ -267,6 +267,25 @@ pub fn file_access_allowed() -> bool {
     .unwrap_or(false)
 }
 
+/// Whether Horizon Android is on the phone: the setup offers to bring its worlds and packs over.
+pub fn horizon_android_installed() -> bool {
+    with_activity(|env, activity| {
+        env.call_method(activity, "horizonAndroidInstalled", "()Z", &[])?
+            .z()
+    })
+    .unwrap_or(false)
+}
+
+/// The system's folder picker on Horizon Android's folder: the worlds and packs picked arrive in
+/// the import inbox (StarlingActivity, HorizonImport.java). False when it could not open.
+pub fn import_horizon_android() -> bool {
+    with_activity(|env, activity| {
+        env.call_method(activity, "importFromHorizonAndroid", "()Z", &[])?
+            .z()
+    })
+    .unwrap_or(false)
+}
+
 /// Android's setting that allows it, in a task of its own: home and the icon come back to the
 /// game.
 pub fn open_file_access_settings() {

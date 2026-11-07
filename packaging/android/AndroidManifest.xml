@@ -27,6 +27,12 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400003" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <!-- Horizon Android, now part of Starling: the setup offers to bring its worlds and packs
+         over when it is installed (HorizonImport), which Android 11 and up only tell an app that
+         names it here. -->
+    <queries>
+        <package android:name="dev.horizon.android" />
+    </queries>
     <application
         android:label="@LABEL@"
         android:icon="@mipmap/ic_launcher"

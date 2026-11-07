@@ -57,6 +57,8 @@ import javax.crypto.spec.GCMParameterSpec;
  */
 public final class StarlingActivity extends NativeActivity {
     private static final int PICK_FILE = 1;
+    /** Horizon Android's folder picked: its worlds and packs come over (HorizonImport). */
+    private static final int PICK_HORIZON = 2;
 
     /** The build with native mods loaded in place of the APK's library (android_lib.rs). */
     private static final String GAME_LIBRARY = "STARLING_GAME_LIBRARY";
@@ -359,6 +361,9 @@ public final class StarlingActivity extends NativeActivity {
                 && data.getData() != null) {
             // The game shows the copy arriving in its inbox, then the import.
             LauncherActivity.receive(this, data.getData(), null);
+        } else if (requestCode == PICK_HORIZON && resultCode == RESULT_OK && data != null
+                && data.getData() != null) {
+            HorizonImport.start(this, data.getData());
         }
     }
 
@@ -508,6 +513,32 @@ public final class StarlingActivity extends NativeActivity {
                     startActivityForResult(intent, PICK_FILE);
                 } catch (ActivityNotFoundException e) {
                     // No picker: nothing to show.
+                }
+            }
+        });
+        return true;
+    }
+
+    /** Whether Horizon Android is on the phone, so its worlds can come over (the setup asks). */
+    public boolean horizonAndroidInstalled() {
+        return HorizonImport.installed(this);
+    }
+
+    /**
+     * The system's folder picker on Horizon Android's folder; its worlds and packs go to the
+     * game's import inbox (HorizonImport). False when it is not installed or nothing can pick.
+     */
+    public boolean importFromHorizonAndroid() {
+        if (!HorizonImport.installed(this)) {
+            return false;
+        }
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    startActivityForResult(HorizonImport.picker(), PICK_HORIZON);
+                } catch (ActivityNotFoundException e) {
+                    // No folder picker: nothing to show.
                 }
             }
         });
