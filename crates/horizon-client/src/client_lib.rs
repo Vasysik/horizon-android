@@ -127,6 +127,7 @@ pub mod scoreboard_cmd;
 pub mod screen_layout;
 pub mod screen_narrator;
 pub mod social_screen;
+pub mod starling_releases;
 pub use horizon_server_files as server;
 pub mod server_packs;
 pub mod shadows;

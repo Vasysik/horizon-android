@@ -1,6 +1,7 @@
 //! Android: native mods (docs/starling-native-mods.md). A native mod is compiled into the game, so
 //! playing with one is playing another build of this version's game library, made by GitHub
-//! (native-mods.yml) and published as assets of the native-builds release. This card lists the
+//! (native-mods.yml) and published as assets of the native-builds release, the organisation's
+//! repository's and Starling's own both asked (starling_releases). This card lists the
 //! builds for this version, downloads one (its SHA-256 checked against the build's JSON), and
 //! chooses it for the next start: StarlingActivity loads it in place of the APK's library
 //! (NativeMods.java). It also stops using one, asks GitHub for another set (an issue the player
@@ -8,6 +9,7 @@
 use super::Game;
 use horizon_client::{
     hud::HudBatch,
+    starling_releases::{self as releases, NativeBuild as Build},
     ui_theme::{Face, Ui, color},
 };
 use sha2::{Digest, Sha256};
@@ -29,7 +31,6 @@ const WAKING: Duration = Duration::from_secs(5 * 60);
 /// Tries in a row that brought nothing before a look or a download gives up.
 const QUIET_TRIES: u32 = 15;
 
-const RELEASE: &str = "https://api.github.com/repos/JuanLuci/starling/releases/tags/native-builds";
 /// The library's name in a build's folder, as NativeMods.java loads it.
 const LIBRARY: &str = "libhorizon_android.so";
 /// Rows of builds the card shows.
@@ -37,16 +38,6 @@ const SHOWN: usize = 4;
 /// Options > Mods' row that opens the card, after the native mods' own rows: a native mod's page
 /// with one button. (Not in native_hooks.rs, which keeps no `cfg`.)
 const ID: &str = "starling-native-builds";
-
-/// A build for this version in the native-builds release.
-#[derive(Clone, PartialEq)]
-struct Build {
-    /// `v0.1.4__wrench`: its assets' names, and its folder here.
-    name: String,
-    mods: Vec<String>,
-    json: String,
-    library: String,
-}
 
 #[derive(Clone, PartialEq)]
 enum Stage {
@@ -149,48 +140,30 @@ fn get(url: &str, version: &str) -> Result<ureq::Response, String> {
         .map_err(|e| e.to_string())
 }
 
-/// The builds made for `version`.
+/// The builds made for `version`, in every repository's native-builds release (a repository
+/// without one has none).
 fn list(version: &str) -> Result<Vec<Build>, String> {
-    let text = get(RELEASE, version)
-        .map_err(|e| {
-            if e.contains("404") {
-                "No native mod builds have been made yet.".to_owned()
-            } else {
-                e
-            }
-        })?
-        .into_string()
-        .map_err(|e| e.to_string())?;
-    let release: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let assets = release["assets"].as_array().cloned().unwrap_or_default();
-    let url = |name: &str| {
-        assets
-            .iter()
-            .find(|a| a["name"].as_str() == Some(name))
-            .and_then(|a| a["browser_download_url"].as_str())
-            .filter(|u| u.starts_with("https://"))
-            .map(str::to_owned)
-    };
-    let prefix = format!("v{version}__");
-    let mut builds: Vec<Build> = assets
-        .iter()
-        .filter_map(|a| a["name"].as_str())
-        .filter_map(|n| n.strip_suffix(".json"))
-        .filter(|n| n.starts_with(&prefix) && plain(n))
-        .filter_map(|name| {
-            Some(Build {
-                name: name.to_owned(),
-                mods: name[prefix.len()..]
-                    .split("__")
-                    .map(str::to_owned)
-                    .collect(),
-                json: url(&format!("{name}.json"))?,
-                library: url(&format!("{name}.so"))?,
-            })
-        })
-        .collect();
-    builds.sort_by(|a, b| (a.mods.len(), &a.name).cmp(&(b.mods.len(), &b.name)));
-    Ok(builds)
+    let mut lists = Vec::new();
+    let mut errors = Vec::new();
+    for repository in releases::REPOSITORIES {
+        let release = get(&releases::native_builds_url(repository), version)
+            .and_then(|r| r.into_string().map_err(|e| e.to_string()))
+            .and_then(|text| {
+                serde_json::from_str::<serde_json::Value>(&text).map_err(|e| e.to_string())
+            });
+        match release {
+            Ok(release) => lists.push(releases::native_builds_in(&release, version)),
+            Err(e) if e.contains("404") => {}
+            Err(e) => errors.push(e),
+        }
+    }
+    if lists.is_empty() {
+        return Err(errors
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "No native mod builds have been made yet.".to_owned()));
+    }
+    Ok(releases::merge_native_builds(lists))
 }
 
 /// The build's library into files/native/NAME/, checked against its JSON, and chosen for the next

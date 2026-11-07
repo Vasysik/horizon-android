@@ -1,13 +1,15 @@
 //! Android: the prompt, over the title screen, when GitHub has a newer Starling release than this
-//! one (github.com/JuanLuci/starling/releases/latest). Update downloads its APK and hands it to
-//! Android's installer, which asks the player (and, the first time, to allow installing from
-//! Starling) and offers to open the game again once it is in; Tomorrow asks again in a day; No,
-//! at the next start. Only a release asks: a test build is signed with another key, and the
-//! release could not install over it (`STARLING_UPDATE_TEST=<version>` makes one ask as that
-//! version, to try the prompt).
+//! one: the newest of the organisation's repository and Starling's own (starling_releases, which
+//! also keeps Horizon Android's releases and preview builds out). Update downloads its APK and
+//! hands it to Android's installer, which asks the player (and, the first time, to allow
+//! installing from Starling) and offers to open the game again once it is in; Tomorrow asks again
+//! in a day; No, at the next start. Only a release asks: a test build is signed with another key,
+//! and the release could not install over it (`STARLING_UPDATE_TEST=<version>` makes one ask as
+//! that version, to try the prompt).
 use super::Game;
 use horizon_client::{
     hud::HudBatch,
+    starling_releases::{self as releases, Update as Release},
     ui_theme::{Face, Ui, color},
 };
 use sha2::{Digest, Sha256};
@@ -19,21 +21,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use winit::event::{Touch, TouchPhase};
 
-const LATEST: &str = "https://api.github.com/repos/JuanLuci/starling/releases/latest";
 /// How long Tomorrow keeps the prompt away.
 const LATER: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// The latest release, when it is newer than this APK.
-#[derive(Clone)]
-struct Release {
-    version: String,
-    /// The APK's file name, its download and its size.
-    name: String,
-    url: String,
-    size: u64,
-    /// The SHA-256 GitHub gives for it (hex), checked after the download.
-    sha256: Option<String>,
-}
 
 #[derive(Clone, PartialEq)]
 enum Stage {
@@ -79,20 +68,9 @@ fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-/// Whether version `latest` (a tag: `v0.1.2`) comes after `current` (`0.1.1`), number by number.
-fn newer(latest: &str, current: &str) -> bool {
-    let numbers = |v: &str| -> Vec<u64> {
-        v.trim_start_matches('v')
-            .split(['.', '-', '+'])
-            .map(|part| part.parse().unwrap_or(0))
-            .collect()
-    };
-    numbers(latest) > numbers(current)
-}
-
-/// The latest release on GitHub, when it is newer than `current` and has an APK.
-fn check(current: &str) -> Result<Option<Release>, String> {
-    let text = ureq::get(LATEST)
+/// A repository's latest release, as GitHub's API serves it.
+fn latest(url: &str, current: &str) -> Result<serde_json::Value, String> {
+    let text = ureq::get(url)
         .set("User-Agent", &format!("Starling/{current}"))
         .set("Accept", "application/vnd.github+json")
         .timeout(Duration::from_secs(15))
@@ -100,34 +78,24 @@ fn check(current: &str) -> Result<Option<Release>, String> {
         .map_err(|e| e.to_string())?
         .into_string()
         .map_err(|e| e.to_string())?;
-    let latest: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let tag = latest["tag_name"].as_str().unwrap_or_default();
-    if !newer(tag, current) {
-        return Ok(None);
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+/// The newest Starling release on GitHub, when it is newer than `current` and has its APK: every
+/// repository asked, an error only when none answered.
+fn check(current: &str) -> Result<Option<Release>, String> {
+    let mut found = Vec::new();
+    let mut errors = Vec::new();
+    for repository in releases::REPOSITORIES {
+        match latest(&releases::latest_url(repository), current) {
+            Ok(release) => found.extend(releases::update_in(&release, current)),
+            Err(e) => errors.push(format!("{repository}: {e}")),
+        }
     }
-    let apk = latest["assets"].as_array().and_then(|assets| {
-        assets.iter().find(|a| {
-            a["name"]
-                .as_str()
-                .is_some_and(|n| n.starts_with("starling-") && n.ends_with(".apk"))
-        })
-    });
-    let Some(apk) = apk else {
-        return Ok(None);
-    };
-    Ok(Some(Release {
-        version: tag.trim_start_matches('v').to_owned(),
-        name: apk["name"].as_str().unwrap_or_default().to_owned(),
-        url: apk["browser_download_url"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned(),
-        size: apk["size"].as_u64().unwrap_or(0),
-        sha256: apk["digest"]
-            .as_str()
-            .and_then(|d| d.strip_prefix("sha256:"))
-            .map(str::to_owned),
-    }))
+    if errors.len() == releases::REPOSITORIES.len() {
+        return Err(errors.join("; "));
+    }
+    Ok(releases::newest(found))
 }
 
 /// The release's APK into files/updates/, checked; its name there.
