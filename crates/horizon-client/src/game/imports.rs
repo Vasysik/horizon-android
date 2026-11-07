@@ -25,6 +25,8 @@ const POP: Duration = Duration::from_millis(340);
 const AGAIN: Duration = Duration::from_millis(900);
 /// The made sounds' sample rate.
 pub(super) const RATE: u32 = 22_050;
+/// The banner's second line's size.
+const DETAIL: f32 = 15.5;
 
 /// What the banner says the import is doing.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,7 +53,7 @@ impl State {
 pub(super) enum Chime {
     /// It drops in: a soft rising note.
     Arrive,
-    /// Imported: two bright bell notes going up.
+    /// Imported: two soft round notes going up.
     Done,
     /// It failed: two low notes going down.
     Failed,
@@ -61,7 +63,7 @@ impl Chime {
     pub(super) fn gain(self) -> f32 {
         match self {
             Chime::Arrive => 0.22,
-            Chime::Done => 0.34,
+            Chime::Done => 0.28,
             Chime::Failed => 0.3,
         }
     }
@@ -79,23 +81,23 @@ impl Chime {
         let rate = RATE as f32;
         let seconds = match self {
             Chime::Arrive => 0.16,
-            Chime::Done => 0.75,
+            Chime::Done => 0.85,
             Chime::Failed => 0.42,
         };
         let n = (seconds * rate) as usize;
         let mut phase = 0.0f32;
         let mut out = Vec::with_capacity(n);
-        // A bell: its note, the octave fading faster, a dull partial above fading fastest.
+        // A soft round note, as a mallet on wood: its tone, a breath of the octave gone at once,
+        // swelling in over a few milliseconds and dying away slowly.
         let bell = |f: f32, t: f32| {
             if t < 0.0 {
                 return 0.0;
             }
-            let attack = (t / 0.004).min(1.0);
-            attack
-                * (-t * 5.5).exp()
-                * ((TAU * f * t).sin()
-                    + 0.45 * (TAU * 2.0 * f * t).sin() * (-t * 10.0).exp()
-                    + 0.2 * (TAU * 3.01 * f * t).sin() * (-t * 16.0).exp())
+            let attack = (t / 0.018).min(1.0);
+            let swell = attack * attack * (3.0 - 2.0 * attack);
+            swell
+                * (-t * 4.2).exp()
+                * ((TAU * f * t).sin() + 0.12 * (TAU * 2.0 * f * t).sin() * (-t * 18.0).exp())
         };
         // A soft low note: its tone and an odd overtone, like a rounded square.
         let low = |f: f32, t: f32, length: f32| {
@@ -117,8 +119,8 @@ impl Chime {
                     phase += (420.0 + 520.0 * k) / rate;
                     (phase * TAU).sin() * (PI * k).sin().powi(2) * 0.8
                 }
-                // A5, then E6 a beat later.
-                Chime::Done => 0.42 * bell(880.0, t) + 0.42 * bell(1318.5, t - 0.1),
+                // E5, then A5 a beat later.
+                Chime::Done => 0.5 * bell(659.3, t) + 0.5 * bell(880.0, t - 0.12),
                 // E4, then B3.
                 Chime::Failed => 0.45 * low(329.6, t, 0.17) + 0.45 * low(246.9, t - 0.19, 0.2),
             };
@@ -232,10 +234,12 @@ impl Imports {
             Event::Receiving { name, bytes } => self.show(
                 now,
                 "Receiving a file",
-                format!("{name} · {:.0} MB", bytes as f64 / 1e6),
+                format!("{} · {:.0} MB", shown(&name), bytes as f64 / 1e6),
                 State::Working,
             ),
-            Event::Installing { name } => self.show(now, "Importing", name, State::Working),
+            Event::Installing { name } => {
+                self.show(now, "Importing", shown(&name).to_owned(), State::Working)
+            }
             Event::Done(installed) => {
                 log::info!("Horizon: import: {}", installed.message);
                 finished = Some(installed.kind);
@@ -318,23 +322,24 @@ impl Imports {
         let Some(drop) = banner.drop(now) else { return };
         let mut ui = Ui::new(atlas, batch, (-1.0, -1.0));
         let w = ui.w;
-        let (pad, tile) = (24.0, 46.0);
-        let text_x = pad + tile + 16.0;
+        let (pad, tile, bar) = (28.0, 60.0, 6.0);
+        let text_x = pad + tile + 20.0;
         let lines = fit(&ui, &banner.detail, w - text_x - pad, 2);
-        let h = if lines.len() > 1 { 86.0 } else { 68.0 };
-        let shadow = 9.0;
+        let h = if lines.len() > 1 { 118.0 } else { 96.0 };
+        let shadow = 12.0;
         let y = -(h + shadow) * (1.0 - drop);
         let accent = banner.state.color();
-        // Reaching above the top, so its bounce shows no gap.
+        // Reaching above the top, so its bounce shows no gap; tinted with its state's colour, so it
+        // stands out from any screen under it.
         ui.fill(
             0.0,
             y - 30.0,
             w,
             h + 30.0,
-            color::with_alpha(color::BG, 0.97),
+            color::with_alpha(color::BG, 0.98),
         );
-        ui.fill(0.0, y - 30.0, w, h + 30.0, color::with_alpha(accent, 0.07));
-        for (i, alpha) in [0.22, 0.12, 0.05].into_iter().enumerate() {
+        ui.fill(0.0, y - 30.0, w, h + 30.0, color::with_alpha(accent, 0.18));
+        for (i, alpha) in [0.32, 0.18, 0.09, 0.04].into_iter().enumerate() {
             ui.fill(
                 0.0,
                 y + h + i as f32 * 3.0,
@@ -344,9 +349,9 @@ impl Imports {
             );
         }
         // The bar along its bottom: a light running across while it works, then the time left.
-        let bar_y = y + h - 4.0;
+        let bar_y = y + h - bar;
         if banner.state == State::Working {
-            ui.fill(0.0, bar_y, w, 4.0, color::with_alpha(accent, 0.25));
+            ui.fill(0.0, bar_y, w, bar, color::with_alpha(accent, 0.3));
             let run = now.saturating_duration_since(banner.entered).as_secs_f32() % 1.2 / 1.2;
             let width = w * 0.28;
             let x = -width + run * (w + width);
@@ -354,15 +359,15 @@ impl Imports {
                 x.max(0.0),
                 bar_y,
                 (x + width).min(w) - x.max(0.0),
-                4.0,
+                bar,
                 accent,
             );
         } else {
-            ui.fill(0.0, bar_y, w * banner.left(now), 4.0, accent);
+            ui.fill(0.0, bar_y, w * banner.left(now), bar, accent);
         }
         // The icon on its tile: a spinner while it works, what came in (with a tick), or "!".
         let mut tile_x = pad;
-        let tile_y = y + (h - 4.0 - tile) / 2.0;
+        let tile_y = y + (h - bar - tile) / 2.0;
         let since_end = banner
             .ended
             .map(|e| now.saturating_duration_since(e).as_secs_f32());
@@ -370,15 +375,15 @@ impl Imports {
             && let Some(t) = since_end.filter(|t| *t < 0.4)
         {
             // A shake, as a "no".
-            tile_x += (t * 55.0).sin() * 5.0 * (1.0 - t / 0.4);
+            tile_x += (t * 55.0).sin() * 7.0 * (1.0 - t / 0.4);
         }
         ui.rounded(
             tile_x,
             tile_y,
             tile,
             tile,
-            12.0,
-            color::with_alpha(accent, 0.22),
+            15.0,
+            color::with_alpha(accent, 0.3),
         );
         let (cx, cy) = (tile_x + tile / 2.0, tile_y + tile / 2.0);
         let scale = banner.pop(now);
@@ -391,37 +396,43 @@ impl Imports {
                 accent,
             ),
             State::Done(kind) => {
-                let (art, cell) = kind.map_or((CHECK, 3.4), |k| (icon(k), 3.0));
+                let (art, cell) = kind.map_or((CHECK, 4.6), |k| (icon(k), 4.0));
                 pixels(&mut ui, art, cx, cy, cell * scale);
                 if kind.is_some() {
                     // The tick, popping a little after the icon.
                     let late = since_end.map_or(1.0, |t| ((t - 0.12) / 0.25).clamp(0.0, 1.0));
                     if late > 0.0 {
                         let s = 0.5 + 0.5 * ease_out_back(late);
-                        let (bx, by) = (tile_x + tile - 6.0, tile_y + tile - 6.0);
-                        let r = 9.0 * s;
+                        let (bx, by) = (tile_x + tile - 8.0, tile_y + tile - 8.0);
+                        let r = 12.0 * s;
                         ui.rounded(bx - r, by - r, 2.0 * r, 2.0 * r, r, color::SUCCESS);
-                        pixels(&mut ui, TICK, bx, by, 1.8 * s);
+                        pixels(&mut ui, TICK, bx, by, 2.4 * s);
                     }
                 }
             }
-            State::Failed => pixels(&mut ui, BANG, cx, cy, 3.4 * scale),
+            State::Failed => pixels(&mut ui, BANG, cx, cy, 4.6 * scale),
         }
-        let title_y = y + 13.0;
+        let title_y = y + 18.0;
         ui.text(
             Face::Semibold,
-            16.0,
+            20.0,
             text_x,
             title_y,
             color::TEXT,
             &banner.title,
         );
         for (i, line) in lines.iter().enumerate() {
-            let ly = title_y + 24.0 + i as f32 * 18.0;
-            ui.text(Face::Regular, 13.5, text_x, ly, color::MUTED, line);
+            let ly = title_y + 31.0 + i as f32 * 21.0;
+            ui.text(Face::Regular, DETAIL, text_x, ly, color::MUTED, line);
         }
         ui.finish();
     }
+}
+
+/// A file's name as the banner shows it: a zip's without ".zip" (a world zipped on its way in is
+/// still its folder's name).
+fn shown(name: &str) -> &str {
+    name.strip_suffix(".zip").unwrap_or(name)
 }
 
 /// The banner's title for what an import added.
@@ -441,8 +452,7 @@ fn done_title(kind: Kind) -> &'static str {
 /// `text` in at most `most` lines no wider than `max`, the last cut short with "..." if it does
 /// not all fit.
 fn fit(ui: &Ui<'_>, text: &str, max: f32, most: usize) -> Vec<String> {
-    let size = 13.5;
-    let wide = |s: &str| ui.measure(Face::Regular, size, s) > max;
+    let wide = |s: &str| ui.measure(Face::Regular, DETAIL, s) > max;
     let mut lines: Vec<String> = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
@@ -485,14 +495,14 @@ fn spinner(ui: &mut Ui<'_>, cx: f32, cy: f32, running: Duration, ink: u32) {
     for i in 0..8 {
         let a = i as f32 / 8.0 * std::f32::consts::TAU;
         let behind = (turn * 8.0 - i as f32).rem_euclid(8.0) / 8.0;
-        let alpha = 0.2 + 0.8 * (1.0 - behind).powi(2);
-        let (x, y) = (cx + a.cos() * 12.0, cy + a.sin() * 12.0);
+        let alpha = 0.25 + 0.75 * (1.0 - behind).powi(2);
+        let (x, y) = (cx + a.cos() * 17.0, cy + a.sin() * 17.0);
         ui.rounded(
-            x - 2.8,
-            y - 2.8,
-            5.6,
-            5.6,
-            2.8,
+            x - 3.7,
+            y - 3.7,
+            7.4,
+            7.4,
+            3.7,
             color::with_alpha(ink, alpha),
         );
     }
