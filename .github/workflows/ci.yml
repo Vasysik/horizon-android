@@ -47,7 +47,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      # A pull request adds only its own commits to main, so it reads those; main's pushes read every ref's history.
+      # A pull request adds only its own commits to main, so it reads those; a push reads the pushed branch's whole
+      # history, not every ref's: in starling-client/starling the other refs hold Horizon Android's own history.
       - name: Keep game artifacts out of Git
         env:
           EVENT: ${{ github.event_name }}
@@ -58,7 +59,7 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             python tools/check_public_tree.py --range "$BASE_SHA..$HEAD_SHA"
           else
-            python tools/check_public_tree.py --history
+            python tools/check_public_tree.py --range HEAD
           fi
       - name: Test offline research tooling
         run: python -m unittest discover -s tests -v
