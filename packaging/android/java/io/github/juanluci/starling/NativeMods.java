@@ -5,6 +5,13 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * The game with native mods (game/native_builds.rs): a build of this version's game library with
@@ -58,6 +65,45 @@ final class NativeMods {
     /** The game showed its first frame: the build started. */
     static void started(Context context) {
         new File(dir(context), "starts").delete();
+    }
+
+    /**
+     * What the build at `library` says its mods need of Android, each with the mods that need it,
+     * in build.json's order ({"microphone": ["voicechat"]}): native_build.sh finds it in their
+     * source (native_mod_permissions.py); none from a build made before it did, or unreadable.
+     */
+    static Map<String, List<String>> permissions(File library) {
+        Map<String, List<String>> wanted = new LinkedHashMap<>();
+        String text = read(new File(library.getParentFile(), "build.json"));
+        if (text == null) {
+            return wanted;
+        }
+        try {
+            JSONArray mods = new JSONObject(text).optJSONArray("mods");
+            for (int i = 0; mods != null && i < mods.length(); i++) {
+                JSONObject mod = mods.optJSONObject(i);
+                JSONArray needs = mod == null ? null : mod.optJSONArray("permissions");
+                for (int j = 0; needs != null && j < needs.length(); j++) {
+                    String permission = needs.optString(j);
+                    if (!wanted.containsKey(permission)) {
+                        wanted.put(permission, new ArrayList<String>());
+                    }
+                    wanted.get(permission).add(mod.optString("id"));
+                }
+            }
+        } catch (JSONException e) {
+            // A damaged build.json asks for nothing.
+        }
+        return wanted;
+    }
+
+    /** Whether the player said Not now to the build's mods' permissions: not asked again for it. */
+    static boolean permissionsDeclined(File library) {
+        return new File(library.getParentFile(), "permissions-declined").exists();
+    }
+
+    static void declinePermissions(File library) {
+        write(new File(library.getParentFile(), "permissions-declined"), "");
     }
 
     /** The build could not be loaded: set aside, saying why. */

@@ -25,6 +25,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- A controller's motors (StarlingActivity.vibratePad): hits, explosions, a totem. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- For native mods that capture sound (a voice chat): asked only when the running build has
+         one, which native_build.sh finds in the mod's source (StarlingActivity.askModPermissions). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400003" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <!-- Horizon Android, now part of Starling: the setup offers to bring its worlds and packs

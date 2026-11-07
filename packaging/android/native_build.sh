@@ -7,7 +7,9 @@
 #
 # SOURCE is a Starling checkout at the commit to build, only read (git archive). Each BUNDLE is a
 # folder holding a horizon-mixin.toml. OUT gets libhorizon_android.so (stripped), the APK with the
-# mods in, and build.json: the key, the version, the commit, the mods and the library's SHA-256.
+# mods in, and build.json: the key, the version, the commit, the mods (each with the Android
+# permissions its source shows it needs, native_mod_permissions.py), all those permissions, and
+# the library's SHA-256.
 #
 # NATIVE_CACHE (default ~/.cache/starling-native) keeps horizon-mixins and the build folder with
 # its target between builds: a file a build leaves as it was keeps its time, so Cargo recompiles
@@ -108,6 +110,8 @@ cp "$library" "$out/libhorizon_android.so"
 python3 - "$build" "$work/mods" "$out" "$key" "$commit" "$profile" "$MIXINS_REV" <<'EOF'
 import hashlib, json, pathlib, re, sys, tomllib
 build, mods, out, key, commit, profile, mixins = sys.argv[1:]
+sys.path.insert(0, str(pathlib.Path(build) / "packaging/android"))
+from native_mod_permissions import needs
 version = re.search(r'^VERSION_NAME = "([^"]+)"',
                     (pathlib.Path(build) / "packaging/android/build_apk.py").read_text(),
                     re.M).group(1)
@@ -115,7 +119,13 @@ library = pathlib.Path(out) / "libhorizon_android.so"
 listed = []
 for folder in sorted(pathlib.Path(mods).iterdir()):
     mod = tomllib.loads((folder / "horizon-mixin.toml").read_text())["mod"]
-    listed.append({"id": mod["id"], "version": mod["version"]})
+    entry = {"id": mod["id"], "version": mod["version"]}
+    # What the player is asked for when the build runs (StarlingActivity): the mod is not changed.
+    wanted = needs(folder)
+    if wanted:
+        entry["permissions"] = wanted
+        print(f"native_build: {mod['id']} needs {', '.join(wanted)}", file=sys.stderr)
+    listed.append(entry)
 json.dump({
     "key": key,
     "version": version,
@@ -123,6 +133,7 @@ json.dump({
     "profile": profile,
     "mixins": mixins,
     "mods": listed,
+    "permissions": sorted({p for m in listed for p in m.get("permissions", [])}),
     "sha256": hashlib.sha256(library.read_bytes()).hexdigest(),
     "size": library.stat().st_size,
 }, open(pathlib.Path(out) / "build.json", "w"), indent=2)

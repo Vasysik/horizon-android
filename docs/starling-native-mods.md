@@ -33,6 +33,17 @@ without native mods" stops using one. Nothing is installed: the APK stays the re
 5. `build_apk.py --profile fast`, as a release: the stripped library, an APK unless `NATIVE_LIBRARY_ONLY` is set, and
    `build.json`.
 
+## Permissions
+
+A native mod is written for Horizon on a computer, where nothing asks before a program opens the microphone. On Android
+the app holds the permission and asks the player, and the mod stays as its maker wrote it: `native_build.sh` reads each
+mod's source with `native_mod_permissions.py` and writes what it needs in `build.json` (the mod's `permissions`, and
+all of them at the top). Today that is `microphone`: capturing sound through cpal (`build_input_stream`,
+`default_input_device`...), AAudio, Oboe, OpenSL ES or Android's `AudioRecord`. Once a build with such a mod shows its
+first frame, Starling says which mod wants what, then hands it to Android's own question (StarlingActivity
+`askModPermissions`); Not now is remembered for that build. The manifest declares `RECORD_AUDIO` for this, and nothing
+asks for it without such a mod.
+
 ## The service
 
 `packaging/android/mod_build_server.py` builds one job at a time and keeps the last results: the same mods for the same

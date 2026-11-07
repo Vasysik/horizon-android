@@ -1,11 +1,13 @@
 package io.github.juanluci.starling;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.app.NativeActivity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.hardware.Sensor;
@@ -37,7 +39,9 @@ import android.system.ErrnoException;
 import android.system.Os;
 import java.io.File;
 import java.net.InetAddress;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.security.Key;
 import java.security.KeyStore;
 import javax.crypto.Cipher;
@@ -59,6 +63,11 @@ public final class StarlingActivity extends NativeActivity {
     private static final int PICK_FILE = 1;
     /** Horizon Android's folder picked: its worlds and packs come over (HorizonImport). */
     private static final int PICK_HORIZON = 2;
+    /** Android's answer to the permissions the running build's mods need. */
+    private static final int MOD_PERMISSIONS = 3;
+
+    /** The build with native mods this game runs (loadGame), or null for the APK's own. */
+    private File modBuild;
 
     /** The build with native mods loaded in place of the APK's library (android_lib.rs). */
     private static final String GAME_LIBRARY = "STARLING_GAME_LIBRARY";
@@ -75,6 +84,7 @@ public final class StarlingActivity extends NativeActivity {
             try {
                 Os.setenv(GAME_LIBRARY, build.getPath(), true);
                 System.load(build.getPath());
+                modBuild = build;
                 return;
             } catch (UnsatisfiedLinkError | ErrnoException e) {
                 try {
@@ -442,8 +452,79 @@ public final class StarlingActivity extends NativeActivity {
             public void run() {
                 drawn = true;
                 getWindow().getDecorView().invalidate();
+                askModPermissions();
             }
         });
+    }
+
+    /** Android's permission for each of build.json's (native_mod_permissions.py), and its words. */
+    private static final String[][] MOD_PERMISSION_NAMES = {
+        {"microphone", Manifest.permission.RECORD_AUDIO, "the microphone"},
+    };
+
+    /** Asked once a run, on the first frame (firstFrame may come twice). */
+    private boolean modPermissionsAsked;
+
+    /**
+     * The permissions the running build's mods need and do not hold (NativeMods.permissions),
+     * asked once the game shows, saying which mod wants what: Continue hands them to Android's own
+     * question; Not now leaves them, and this build does not ask again. The mods themselves are as
+     * their makers wrote them: a mod that opens the microphone without the permission only gets
+     * silence.
+     */
+    private void askModPermissions() {
+        if (modPermissionsAsked || modBuild == null || NativeMods.permissionsDeclined(modBuild)) {
+            return;
+        }
+        modPermissionsAsked = true;
+        Map<String, List<String>> wanted = NativeMods.permissions(modBuild);
+        final List<String> missing = new ArrayList<>();
+        StringBuilder said = new StringBuilder();
+        for (String[] known : MOD_PERMISSION_NAMES) {
+            List<String> mods = wanted.get(known[0]);
+            if (mods == null || checkSelfPermission(known[1]) == PackageManager.PERMISSION_GRANTED) {
+                continue;
+            }
+            missing.add(known[1]);
+            if (said.length() > 0) {
+                said.append('\n');
+            }
+            said.append(modNames(mods)).append(mods.size() == 1 ? " wants " : " want ")
+                    .append(known[2]).append('.');
+        }
+        if (missing.isEmpty()) {
+            return;
+        }
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("A native mod needs a permission")
+                .setMessage(said + "\n\nAndroid asks you next. You can change it later in the "
+                        + "app's settings.")
+                .setPositiveButton("Continue", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        requestPermissions(missing.toArray(new String[0]), MOD_PERMISSIONS);
+                    }
+                })
+                .setNegativeButton("Not now", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        NativeMods.declinePermissions(modBuild);
+                    }
+                })
+                .show();
+    }
+
+    /** Mod ids as the player reads them: "voicechat" is Voicechat, two are "A and B". */
+    private static String modNames(List<String> ids) {
+        StringBuilder names = new StringBuilder();
+        for (int i = 0; i < ids.size(); i++) {
+            String id = ids.get(i);
+            if (i > 0) {
+                names.append(i == ids.size() - 1 ? " and " : ", ");
+            }
+            names.append(id.isEmpty() ? id : Character.toUpperCase(id.charAt(0)) + id.substring(1));
+        }
+        return names.toString();
     }
 
     /** Whether the player allowed the Starling folder (they may have just come back from it). */
