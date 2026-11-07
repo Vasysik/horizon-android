@@ -61,7 +61,11 @@ jobs:
               raise SystemExit('Set ANDROID_DEV_KEYSTORE_BASE64 first; see docs/android-dev-builds.md')
           path = Path('.local/android/debug.keystore')
           path.parent.mkdir(parents=True, exist_ok=True)
-          path.write_bytes(base64.b64decode(value, validate=True))
+          try:
+              data = base64.b64decode(''.join(value.split()), validate=True)
+          except ValueError:
+              raise SystemExit('ANDROID_DEV_KEYSTORE_BASE64 must contain only base64 text; re-enter it as one line. See docs/android-dev-builds.md')
+          path.write_bytes(data)
           path.chmod(0o600)
           PY
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
