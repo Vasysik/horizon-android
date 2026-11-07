@@ -21370,18 +21370,21 @@ impl Loading {
             {
                 self.failure = Some(e.to_string());
             }
+            self.play_import_sounds();
             if self.failure.is_some() && horizon_client::platform::registered() {
                 self.poll_setup();
             }
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
-            event_loop.set_control_flow(ControlFlow::WaitUntil(
-                Instant::now()
-                    + self
-                        .setup
-                        .frame(self.menu.options_open || self.menu_touch_editing()),
-            ));
+            // The import banner moves: every frame while it shows.
+            let frame = if self.imports.animating() {
+                Duration::from_millis(16)
+            } else {
+                self.setup
+                    .frame(self.menu.options_open || self.menu_touch_editing())
+            };
+            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + frame));
             return;
         }
         if let Err(error) = self.poll_menu_resources() {
@@ -21428,14 +21431,6 @@ impl Loading {
             self.draw_setup(&mut batch, "");
         } else {
             self.draw_menu(&mut batch);
-        }
-        // The inbox's note over the setup, which polls it: what a file picked there, or Horizon
-        // Android's worlds, added.
-        if self.failure.is_some()
-            && !self.menu.options_open
-            && let Some(gui) = &self.gui
-        {
-            self.imports.draw(&gui.atlas, &mut batch);
         }
         self.draw_menu_touch_editor(&mut batch, size);
         self.menu.frame_drawn((batch.width, batch.height));

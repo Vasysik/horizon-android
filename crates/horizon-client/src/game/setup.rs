@@ -631,6 +631,9 @@ impl Loading {
         self.setup
             .pond
             .set(pond.map(|_| [0.0, below, w, h - below]));
+        // The inbox's banner over it all, since the setup polls the inbox too: what its file
+        // picker, or Horizon Android's folder, added.
+        self.imports.draw(&gui.atlas, batch);
     }
 
     /// A finger lifted on a button acts.

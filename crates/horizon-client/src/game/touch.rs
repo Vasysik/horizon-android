@@ -1672,7 +1672,7 @@ impl Game<'_> {
         if horizon_client::platform::pick_file() {
             self.touch.import_image = Some(id);
         } else {
-            self.imports.say("No file picker opened".into());
+            self.imports.say_failed("No file picker opened".into());
         }
     }
 
@@ -1695,7 +1695,7 @@ impl Game<'_> {
             Ok((w, h, pixels)) => {
                 self.ui.options.import_button_image(w, h, &pixels);
                 self.imports
-                    .say("Picture on the canvas: Done keeps it".into());
+                    .say("Picture imported", "On the canvas: Done keeps it".into());
             }
             Err(e) => self.imports.say_failed(e),
         }
