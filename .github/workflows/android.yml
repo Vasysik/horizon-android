@@ -5,9 +5,14 @@ name: android
 # in the repository's secrets (STARLING_KEYSTORE_BASE64, STARLING_KEY_ALIAS, STARLING_STORE_PASSWORD, STARLING_KEY_PASSWORD)
 # and publishes it as the latest release, with packaging/android/release-notes.md. The APK holds no game files: players
 # prepare those from their own copy.
+#
+# Only JuanLuci/starling holds the release key (the merge agreement with Horizon Android). Everywhere else, as in
+# starling-client/starling, every build is Starling Preview (io.github.juanluci.starling.preview, build_apk.py
+# --preview), installed beside the release and signed with that repository's own test key in
+# STARLING_DEBUG_KEYSTORE_BASE64 (alias horizon-debug, password android); a tag there publishes nothing.
 on:
   push:
-    branches: [android]
+    branches: [android, starling, integration]
     tags: ['v*']
   pull_request:
     types: [opened, synchronize, reopened]
@@ -27,6 +32,9 @@ on:
         default: ''
 permissions:
   contents: read
+env:
+  RELEASE_BUILD: ${{ (github.repository == 'JuanLuci/starling' && (startsWith(github.ref, 'refs/tags/v') || inputs.release_key)) && 'true' || 'false' }}
+  PREVIEW: ${{ github.repository != 'JuanLuci/starling' && 'true' || 'false' }}
 concurrency:
   group: android-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -61,9 +69,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: android
-          save-if: ${{ github.ref == 'refs/heads/android' }}
+          save-if: ${{ github.ref == 'refs/heads/android' || github.ref == 'refs/heads/starling' }}
       - name: Unpack the release key
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_key
+        if: env.RELEASE_BUILD == 'true'
         env:
           KEYSTORE: ${{ secrets.STARLING_KEYSTORE_BASE64 }}
         run: |
@@ -73,7 +81,7 @@ jobs:
       # The fast profile's 16 codegen units of the game's crate took more than the runner's 16 GB, and the runner
       # went: swap, on the large temporary disk where there is one, and three units at a time instead of four.
       - name: Make room for the release build
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_key
+        if: env.RELEASE_BUILD == 'true'
         run: |
           sudo swapoff -a || true
           where=/mnt size=20G
@@ -87,7 +95,7 @@ jobs:
           echo "CARGO_BUILD_JOBS=3" >> "$GITHUB_ENV"
       # Where build_apk.py keeps its debug key (alias horizon-debug, password android).
       - name: Unpack the debug key
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') && !inputs.release_key }}
+        if: env.RELEASE_BUILD != 'true'
         env:
           KEYSTORE: ${{ secrets.STARLING_DEBUG_KEYSTORE_BASE64 }}
         run: |
@@ -96,16 +104,17 @@ jobs:
           echo "$KEYSTORE" | base64 -d > target/android/debug.keystore
       - name: Build the APK
         env:
-          HORIZON_ANDROID_KEY_ALIAS: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.release_key) && secrets.STARLING_KEY_ALIAS || 'horizon-debug' }}
+          HORIZON_ANDROID_KEY_ALIAS: ${{ env.RELEASE_BUILD == 'true' && secrets.STARLING_KEY_ALIAS || 'horizon-debug' }}
           HORIZON_ANDROID_STORE_PASSWORD: ${{ secrets.STARLING_STORE_PASSWORD }}
           HORIZON_ANDROID_KEY_PASSWORD: ${{ secrets.STARLING_KEY_PASSWORD }}
           MODS: ${{ inputs.native_mods }}
-          PROFILE: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.release_key) && 'fast' || 'quick' }}
+          PROFILE: ${{ env.RELEASE_BUILD == 'true' && 'fast' || 'quick' }}
+          VARIANT: ${{ env.PREVIEW == 'true' && '--preview' || '' }}
         # Releases with the fast profile (fewer codegen units: a little quicker in game). With native mods, the APK
         # native_build.sh makes, named after them.
         run: |
           if [ -z "$MODS" ]; then
-            python packaging/android/build_apk.py --profile "$PROFILE" ${{ inputs.keep_symbols && '--keep-symbols' || '' }}
+            python packaging/android/build_apk.py --profile "$PROFILE" $VARIANT ${{ inputs.keep_symbols && '--keep-symbols' || '' }}
             exit 0
           fi
           bundles=()
@@ -129,7 +138,7 @@ jobs:
       # The latest release is what the game's update prompt offers (game/update_offer.rs): the APK
       # it installs, Starling Visuals beside it, and the notes written for it.
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_BUILD == 'true' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -140,7 +149,7 @@ jobs:
       # The release's game with the sets of native-mods/prebuilt.txt (a release made with this token
       # starts no other workflow by itself; a dispatch does).
       - name: Build its native mods
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_BUILD == 'true' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run native-mods.yml -R "$GITHUB_REPOSITORY" --ref android -f version="${GITHUB_REF_NAME#v}"

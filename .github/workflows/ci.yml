@@ -5,7 +5,8 @@ name: checks
 # is built by android.yml.
 on:
   push:
-    branches: [android]
+    # android in JuanLuci/starling; starling and integration in starling-client/starling.
+    branches: [android, starling, integration]
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -75,7 +76,7 @@ jobs:
         if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           shared-key: verify
-          save-if: ${{ github.ref == 'refs/heads/android' }}
+          save-if: ${{ github.ref == 'refs/heads/android' || github.ref == 'refs/heads/starling' }}
       - name: Check formatting and lint
         if: steps.rust.outputs.required != 'false'
         run: |

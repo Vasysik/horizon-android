@@ -21,6 +21,8 @@ concurrency:
 
 jobs:
   check:
+    # Horizon's own repository files these issues; a fork would only repeat them.
+    if: github.repository == 'horizon-rust/horizon'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -12,6 +12,7 @@ horizon-prepare makes from the player's own copy are made on the phone, or copie
     python3 packaging/android/build_apk.py --install       # and adb install it
     python3 packaging/android/build_apk.py --zip           # and a zip of it to send
     python3 packaging/android/build_apk.py --dev           # Starling Dev, beside the release
+    python3 packaging/android/build_apk.py --preview       # Starling Preview, the organisation's CI build
 
 Needs the Android SDK (ANDROID_HOME, else the default folder) with the build-tools, platform and
 NDK pinned below, the aarch64-linux-android Rust target, cargo-ndk and a JDK (javac, keytool,
@@ -31,10 +32,12 @@ HERE = Path(__file__).resolve().parent
 
 APPLICATION_ID = "io.github.juanluci.starling"
 LABEL = "Starling"
-# --dev: an app of its own, installed beside the release (which a build signed with another key
-# cannot install over), with its own folder (StarlingActivity.sharedFolder: StarlingDev) and its
-# own sign-in and game files.
+# --dev and --preview: an app of its own, installed beside the release (which a build signed with
+# another key cannot install over), with its own folder (StarlingActivity.sharedFolder: StarlingDev,
+# StarlingPreview) and its own sign-in and game files. Preview is what starling-client/starling's
+# CI builds, signed with that repository's test key: the release key stays out of it.
 DEV_SUFFIX = ".dev"
+VARIANTS = {"dev": (DEV_SUFFIX, " Dev"), "preview": (".preview", " Preview")}
 VERSION_NAME = "0.2.2"
 VERSION_CODE = 11
 MIN_SDK = 26  # AAudio (cpal)
@@ -165,12 +168,13 @@ def compile_java(build_tools, android_jar, out):
     return dex / "classes.dex"
 
 
-def link_resources(aapt2, android_jar, out, assets, dev):
+def link_resources(aapt2, android_jar, out, assets, variant):
     """The manifest, the launcher icon, the themes and `assets`, compiled and linked into
-    `out/base.apk`."""
+    `out/base.apk`; `variant` is None (the release's app) or a key of VARIANTS."""
     manifest = (HERE / "AndroidManifest.xml").read_text(encoding="utf-8")
-    application_id = APPLICATION_ID + DEV_SUFFIX if dev else APPLICATION_ID
-    label = LABEL + " Dev" if dev else LABEL
+    suffix, label_suffix = VARIANTS[variant] if variant else ("", "")
+    application_id = APPLICATION_ID + suffix
+    label = LABEL + label_suffix
     manifest = manifest.replace("@APPLICATION_ID@", application_id).replace("@LABEL@", label)
     (out / "AndroidManifest.xml").write_text(manifest, encoding="utf-8")
     res = out / "res"
@@ -257,6 +261,10 @@ def main():
         "--dev", action="store_true",
         help=f"Starling Dev ({APPLICATION_ID}{DEV_SUFFIX}), installed beside the release",
     )
+    parser.add_argument(
+        "--preview", action="store_true",
+        help=f"Starling Preview ({APPLICATION_ID}{VARIANTS['preview'][0]}), the organisation's CI build",
+    )
     args = parser.parse_args()
 
     sdk = sdk_dir()
@@ -284,14 +292,15 @@ def main():
     if args.library_only:
         return
 
-    link_resources(tool(build_tools, "aapt2"), android_jar, out, assets(out), args.dev)
+    variant = "dev" if args.dev else "preview" if args.preview else None
+    link_resources(tool(build_tools, "aapt2"), android_jar, out, assets(out), variant)
     dex = compile_java(build_tools, android_jar, out)
     libraries = build_launchers(ndk, out)
     libraries[library.name] = library
     add_code(out / "base.apk", libraries, dex, out / "unsigned.apk")
     aligned = out / "aligned.apk"
     run(tool(build_tools, "zipalign"), "-P", "16", "-f", "4", out / "unsigned.apk", aligned)
-    apk = out / f"starling{'-dev' if args.dev else ''}-{VERSION_NAME}-{ABI}.apk"
+    apk = out / f"starling{'-' + variant if variant else ''}-{VERSION_NAME}-{ABI}.apk"
     sign(build_tools, aligned, apk, out)
     print(apk)
     if args.zip:

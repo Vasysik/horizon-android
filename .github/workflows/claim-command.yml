@@ -18,8 +18,10 @@ permissions:
   contents: read
 jobs:
   command:
-    # Every other comment skips here, before a runner starts. Pull requests are answered by the script.
+    # Every other comment skips here, before a runner starts. Pull requests are answered by the script. Horizon's own
+    # repository only: a fork's main has not this script.
     if: >-
+      github.repository == 'horizon-rust/horizon' &&
       github.event_name == 'issue_comment' && github.event.comment.user.type != 'Bot' && (
       startsWith(github.event.comment.body, '/claim') ||
       startsWith(github.event.comment.body, '/unclaim') ||

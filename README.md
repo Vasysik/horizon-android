@@ -28,7 +28,7 @@
 
 **You need** a 64-bit phone with Android 8 or newer and Vulkan, and about 2 GB free. Sign in with a Microsoft account that owns Minecraft: Java Edition, or play offline (most servers need the sign-in). No computer: on the first start Starling downloads the game's files from Mojang's servers and prepares them on the phone, once (79 seconds on a POCO F6 Pro, longer on slower phones). Go fishing or change the settings while it works.
 
-Builds of every push to the `android` branch are in [GitHub Actions](https://github.com/JuanLuci/starling/actions/workflows/android.yml) (the `starling-apk` artifact of a run; GitHub asks you to sign in to download it). They are signed with another key than the releases: uninstall one before installing the other, after copying your worlds out if they are not in the `Starling` folder. You can also [build it from source](#build-from-source).
+Development happens in [starling-client/starling](https://github.com/starling-client/starling), on the `starling` branch, where Starling and Horizon Android are becoming one app. Builds of every push there are **Starling Preview**, in [GitHub Actions](https://github.com/starling-client/starling/actions/workflows/android.yml) (the `starling-apk` artifact of a run; GitHub asks you to sign in to download it): an app of its own, installed beside the release, with its own `StarlingPreview` folder and sign-in. You can also [build it from source](#build-from-source).
 
 ## What works today
 
@@ -85,7 +85,7 @@ The old Starling mods and the WebAssembly mod format of v0.1 are gone.
 For developers. Requirements: Rust 1.90 or newer with the `aarch64-linux-android` target, [cargo-ndk](https://github.com/bbqsrc/cargo-ndk), the Android SDK (build-tools 35.0.0, platform 36, NDK r28c), a JDK 25 and Python 3.10 or newer.
 
 ```sh
-git clone https://github.com/JuanLuci/starling.git
+git clone -b starling https://github.com/starling-client/starling.git
 cd starling
 python packaging/android/build_apk.py            # the APK lands in target/android/
 ```
