@@ -146,7 +146,9 @@ pub(super) fn dock_layout(w: f32, h: f32, compact: bool) -> DockLayout {
         play: [margin, top, play_width, height],
         // Keep a clear gap from the Play button; a narrow screen drops the
         // slider rather than overlapping the primary action.
-        slider: (slider_x > margin + play_width + 40.0).then_some([
+        // A usable track needs room of its own, and a clear gap from Play: on a
+        // narrow screen the primary action wins and the slider is left out.
+        slider: (slider_width >= 200.0 && slider_x > margin + play_width + 40.0).then_some([
             slider_x,
             top + 14.0,
             slider_width,
@@ -229,7 +231,7 @@ fn dock(
         color::GREEN_TEXT,
         &value,
     );
-    mc_ui::slider(ui, track, opacity_fraction(opacity));
+    let _thumb = mc_ui::slider(ui, track, opacity_fraction(opacity));
     // The whole row is the touch target, not just the thin track.
     targets.push((
         [track[0], track[1] - 4.0, track[2], track[3] + 4.0],
@@ -1824,7 +1826,7 @@ impl Launcher {
         Ok(())
     }
     /// Is `(x, y)`, in GUI pixels, on the dock's opacity slider?
-    fn opacity_track_at(&self, x: f64, y: f64, density: f64) -> Option<f32> {
+    pub(super) fn opacity_track_at(&self, x: f64, y: f64, density: f64) -> Option<f32> {
         let (w, h, _) = self.screen;
         if density <= 0.0 {
             return None;
@@ -1838,7 +1840,7 @@ impl Launcher {
 
     /// Apply the opacity percentage under the finger. The slider spans 30–100%,
     /// the same range the Settings row steps through.
-    fn set_opacity_from_pointer(&mut self, x: f64, density: f64) {
+    pub(super) fn set_opacity_from_pointer(&mut self, x: f64, density: f64) {
         if self.opacity_drag.is_none() || density <= 0.0 {
             return;
         }
@@ -1992,7 +1994,8 @@ mod tests {
                 assert!(tab[1] + tab[3] <= h);
                 assert!(tab[0] >= 0.0 && tab[0] + tab[2] <= w);
             }
-            // Content never runs under the dock.
+            // Content ends above the dock, with the status strip in between.
+            assert_eq!(content_bottom(h), h - NAV_HEIGHT - DOCK_HEIGHT - 8.0);
             assert!(content_bottom(h) < dock_top(h));
         }
     }

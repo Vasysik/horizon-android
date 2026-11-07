@@ -26,26 +26,16 @@ public final class HorizonMedia {
         public final int height;
         /** Total clip duration, for reporting; 0 when the container had none. */
         public final long durationMs;
-        /**
-         * Presentation time of frame {@code i} in milliseconds, little-endian
-         * i64. A primitive array, not {@code long[]}: copying one into Rust
-         * works the same way as the frame bytes.
-         */
-        public final byte[] times;
+        /** Presentation time of frame {@code i} in milliseconds. */
+        public final long[] times;
         /** Frames packed back to back, 4 bytes of RGBA per pixel. */
         public final byte[] rgba;
 
-        Clip(int width, int height, long durationMs, long[] timesMs, byte[] rgba) {
+        Clip(int width, int height, long durationMs, long[] times, byte[] rgba) {
             this.width = width;
             this.height = height;
             this.durationMs = durationMs;
-            this.times = new byte[timesMs.length * 8];
-            for (int i = 0; i < timesMs.length; i++) {
-                long value = timesMs[i];
-                for (int byteIndex = 0; byteIndex < 8; byteIndex++) {
-                    this.times[i * 8 + byteIndex] = (byte) (value >>> (8 * byteIndex));
-                }
-            }
+            this.times = times;
             this.rgba = rgba;
         }
     }

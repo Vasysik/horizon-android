@@ -49,9 +49,7 @@ pub(super) fn decode(vm: &JavaVM, path: &Path) -> Result<DecodedClip, String> {
         }
         let width = env.get_field(&clip, "width", "I")?.i()?.clamp(2, 8192) as u32;
         let height = env.get_field(&clip, "height", "I")?.i()?.clamp(2, 8192) as u32;
-        let times = env.convert_byte_array(JByteArray::from(
-            env.get_field(&clip, "times", "[B")?.l()?,
-        ))?;
+        let times = long_array(&mut env, &clip, "times")?;
         let pixels = env.convert_byte_array(JByteArray::from(
             env.get_field(&clip, "rgba", "[B")?.l()?,
         ))?;
@@ -66,19 +64,9 @@ pub(super) fn decode(vm: &JavaVM, path: &Path) -> Result<DecodedClip, String> {
         if count > super::wallpapers::MAX_FRAMES {
             return Err(jni::errors::Error::NullPtr("HorizonMedia.Clip.tooManyFrames"));
         }
-        // One deadline per frame, in milliseconds, little-endian: the clip keeps
-        // its own pacing instead of a guessed frame rate.
-        let deadline = |index: usize| -> i64 {
-            let from = index * 8;
-            times
-                .get(from..from + 8)
-                .map(|bytes| {
-                    let mut word = [0u8; 8];
-                    word.copy_from_slice(bytes);
-                    i64::from_le_bytes(word)
-                })
-                .unwrap_or(0)
-        };
+        // One presentation time per frame, so the clip keeps its own pacing
+        // instead of a guessed frame rate.
+        let deadline = |index: usize| -> i64 { times.get(index).copied().unwrap_or(0) };
         let frames = (0..count)
             .map(|index| {
                 let start = deadline(index).max(0);
@@ -100,4 +88,19 @@ pub(super) fn decode(vm: &JavaVM, path: &Path) -> Result<DecodedClip, String> {
         let _ = env.exception_clear();
     }
     decoded.map_err(|error| format!("Could not decode the MP4: {error}"))
+}
+
+/// A `long[]` field as Rust values.
+fn long_array(
+    env: &mut jni::JNIEnv<'_>,
+    object: &JObject<'_>,
+    field: &str,
+) -> jni::errors::Result<Vec<i64>> {
+    // Same shape as `platform.rs`'s int arrays: build the reference wrapper with
+    // `From<JObject>` and read the region straight out.
+    let array = jni::objects::JLongArray::from(env.get_field(object, field, "[J")?.l()?);
+    let length = env.get_array_length(&array)? as usize;
+    let mut values = vec![0i64; length];
+    env.get_long_array_region(&array, 0, &mut values)?;
+    Ok(values)
 }
