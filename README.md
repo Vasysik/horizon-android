@@ -1,5 +1,14 @@
 # Horizon Android
 
+> [!IMPORTANT]
+> **Horizon Android is now Starling.**
+>
+> Horizon Android and [Starling](https://github.com/JuanLuci/starling) are merging into one Android port of Horizon, under the **Starling** name, here in this repository. Starling's code is the base, and the best of Horizon Android is being brought over to it.
+>
+> - **0.7.8 is Horizon Android's last stable release.** Starling's releases stay on [JuanLuci/starling](https://github.com/JuanLuci/starling/releases) until the unified release.
+> - **New work goes to the [`starling`](https://github.com/starling-client/starling/tree/starling) branch.** This `android` branch takes the pull requests that are already open, then becomes a historical branch at the unified release.
+> - Horizon Android's history, contributors, issues and community stay here.
+
 A native Android port of [Horizon](https://github.com/ludovic111/horizon), the
 Rust engine for Minecraft Java 26.3. Unofficial and in active development.
 
