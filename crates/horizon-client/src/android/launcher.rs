@@ -340,7 +340,7 @@ impl Launcher {
             return Ok(());
         }
         let window = Arc::new(
-            events.create_window(Window::default_attributes().with_title("Horizon Android"))?,
+            events.create_window(Window::default_attributes().with_title("HELYX"))?,
         );
         crate::display::prepare(&window)?;
         let vanilla_dir = self

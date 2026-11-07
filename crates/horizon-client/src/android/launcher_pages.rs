@@ -1168,7 +1168,7 @@ impl Launcher {
 
         let brand_x = 98.0;
         let brand_w = (eq_btn_rect[0] - brand_x - 12.0).max(40.0);
-        let fitted_brand = ui.fit_text(Face::SemiBold, 16.0, "Horizon", brand_w);
+        let fitted_brand = ui.fit_text(Face::SemiBold, 16.0, "HELYX", brand_w);
         ui.text(
             Face::SemiBold,
             16.0,
@@ -2117,7 +2117,7 @@ impl Launcher {
                 panel_x + 58.0,
                 12.0,
                 my3_text(),
-                "Horizon",
+                "HELYX",
             );
             ui.text(
                 Face::Regular,
