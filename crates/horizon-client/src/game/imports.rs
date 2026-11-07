@@ -285,7 +285,7 @@ impl Imports {
         }
         self.banner = Some(Banner {
             title: title.to_owned(),
-            detail,
+            detail: sentence(detail),
             state,
             entered,
             ended,
@@ -426,6 +426,16 @@ impl Imports {
             ui.text(Face::Regular, DETAIL, text_x, ly, color::MUTED, line);
         }
         ui.finish();
+    }
+}
+
+/// `text` with a capital first letter, as the banner's line starts (an import's error begins
+/// lower case, written to follow "could not import ...: ").
+fn sentence(text: String) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) if first.is_lowercase() => first.to_uppercase().chain(chars).collect(),
+        _ => text,
     }
 }
 
@@ -765,6 +775,18 @@ mod tests {
             State::Done(None),
         );
         assert_eq!(imports.take_sounds(), [Chime::Failed, Chime::Done]);
+    }
+
+    #[test]
+    fn its_lines_start_with_a_capital_and_zips_go_by_their_names() {
+        assert_eq!(
+            sentence("the game does not know".into()),
+            "The game does not know"
+        );
+        assert_eq!(sentence("World \"a\" added".into()), "World \"a\" added");
+        assert_eq!(sentence(String::new()), "");
+        assert_eq!(shown("New World.zip"), "New World");
+        assert_eq!(shown("skin.png"), "skin.png");
     }
 
     #[test]
