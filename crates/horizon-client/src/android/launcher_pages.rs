@@ -340,6 +340,7 @@ pub(super) enum Action {
     FovDelta(f32),
     // Animation & Diagnostics Modal actions
     ToggleLauncherAnimations,
+    ToggleShowFps,
     ToggleGameAnimations,
     CloseDiagnosticsSummary,
     OpenReportsFolder,
@@ -4221,8 +4222,10 @@ impl Launcher {
                     c.server.clone()
                 };
                 let game_anim_off = c.disable_game_animations || touch_cfg.disable_game_animations;
+                // The FPS counter is an extra stored next to the game's options.
+                let show_fps_on = horizon_client::extras::Extras::load(&c.game_home(&self.home)).fps;
 
-                let rows: [(&str, &str, SettingControl<'_>); 12] = [
+                let rows: [(&str, &str, SettingControl<'_>); 13] = [
                     (
                         "APPEARANCE, DPI SCALING & MOTION",
                         "Material 3 Expressive theme studio, adaptive phone DPI scaling & animation toggles",
@@ -4249,6 +4252,11 @@ impl Launcher {
                             c.disable_launcher_animations,
                             Action::ToggleLauncherAnimations,
                         ),
+                    ),
+                    (
+                        "Show FPS In Game",
+                        "Shows the frames-per-second counter over the game screen",
+                        SettingControl::Toggle(show_fps_on, Action::ToggleShowFps),
                     ),
                     (
                         "Disable In-Game Animations",
@@ -6455,6 +6463,19 @@ impl Launcher {
                     "Launcher animations disabled (instant page & modal transitions)."
                 } else {
                     "Launcher animations enabled."
+                }
+                .into();
+            }
+            Some(Action::ToggleShowFps) => {
+                let dir = self.catalog.config.game_home(&self.home);
+                let _ = std::fs::create_dir_all(&dir);
+                let mut extras = horizon_client::extras::Extras::load(&dir);
+                extras.fps = !extras.fps;
+                extras.save(&dir);
+                self.catalog.status = if extras.fps {
+                    "FPS counter is on in game."
+                } else {
+                    "FPS counter is off in game."
                 }
                 .into();
             }
