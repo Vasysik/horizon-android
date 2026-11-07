@@ -50,9 +50,11 @@ pub(super) fn decode(vm: &JavaVM, path: &Path) -> Result<DecodedClip, String> {
         let width = env.get_field(&clip, "width", "I")?.i()?.clamp(2, 8192) as u32;
         let height = env.get_field(&clip, "height", "I")?.i()?.clamp(2, 8192) as u32;
         let times = long_array(&mut env, &clip, "times")?;
-        let pixels = env.convert_byte_array(JByteArray::from(
-            env.get_field(&clip, "rgba", "[B")?.l()?,
-        ))?;
+        // Read the field out first: `convert_byte_array` borrows `env` for the
+        // duration of the call, so calling `get_field` inside it would need a
+        // second, mutable borrow of the same `env`.
+        let pixels_field = env.get_field(&clip, "rgba", "[B")?.l()?;
+        let pixels = env.convert_byte_array(JByteArray::from(pixels_field))?;
         let stride = width as usize * height as usize * 4;
         if stride == 0 || pixels.len() % stride != 0 {
             return Err(jni::errors::Error::NullPtr("HorizonMedia.Clip.rgba"));

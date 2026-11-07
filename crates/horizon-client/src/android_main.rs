@@ -261,7 +261,7 @@ fn android_main(app: AndroidApp) {
     if let Ok(vm) = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) } {
         // Kept for the wallpaper decoders: MP4 goes through Android's media
         // stack even when a saved wallpaper loads long after the picker closed.
-        wallpapers::initialize_vm(vm.clone());
+        wallpapers::initialize_vm(app.vm_as_ptr());
         secure_store::initialize(vm);
     }
     let engine_data = app.asset_manager().open(c"engine-data.zip");

@@ -505,9 +505,13 @@ impl ApplicationHandler for Launcher {
                     }
                     Ok(())
                 } else if self.opacity_drag.take().is_some() {
-                    // The drag already applied its value; persist it once.
+                    // The drag already applied its value; persist it once. This
+                    // handler returns (), so a failed save only costs the
+                    // setting, never the frame.
                     self.mouse_down = false;
-                    self.catalog.config.save(&self.home)?;
+                    if let Err(error) = self.catalog.config.save(&self.home) {
+                        log::warn!("Could not save the launcher opacity: {error}");
+                    }
                     self.redraw_now = true;
                     Ok(())
                 } else if std::mem::take(&mut self.mouse_down) {

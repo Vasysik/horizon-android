@@ -254,17 +254,27 @@ pub fn remove(home: &Path) -> std::io::Result<()> {
     }
     Ok(())
 }
-/// The JVM kept for the decode threads that Android's media stack needs.
-static VM: OnceLock<jni::JavaVM> = OnceLock::new();
+/// The JVM, kept for the decode threads Android's media stack needs.
+///
+/// `jni` 0.21's `JavaVM` is not `Clone`, so the process-wide pointer that
+/// android-activity already gives us is stored, and a handle is rebuilt where
+/// one is needed. The VM outlives the process and these handles are never
+/// dropped, so no reference is ever destroyed.
+static VM: std::sync::atomic::AtomicPtr<jni::sys::JavaVM> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
 /// Remember the JVM once, at startup, so a wallpaper loaded from the saved file
 /// long after the picker closed can still reach Android's media stack.
-pub fn initialize_vm(vm: jni::JavaVM) {
-    let _ = VM.set(vm);
+pub fn initialize_vm(vm: *mut std::ffi::c_void) {
+    VM.store(vm.cast(), std::sync::atomic::Ordering::Release);
 }
 
 fn saved_vm() -> Option<jni::JavaVM> {
-    VM.get().cloned()
+    let pointer = VM.load(std::sync::atomic::Ordering::Acquire);
+    if pointer.is_null() {
+        return None;
+    }
+    unsafe { jni::JavaVM::from_raw(pointer) }.ok()
 }
 
 /// The native Activity result callback routes request 4102 here.
@@ -288,9 +298,9 @@ pub fn document_result(
     }
     let setup = (|| -> jni::errors::Result<_> {
         let uri_text: String = env.get_string(&uri)?.into();
-        Ok((env.get_java_vm()?, env.new_global_ref(activity)?, uri_text))
+        Ok((env.new_global_ref(activity)?, uri_text))
     })();
-    let Ok((vm, activity, uri)) = setup else {
+    let Ok((activity, uri)) = setup else {
         let _ = env.exception_clear();
         publish(Err("Could not read the selected wallpaper document".into()), false);
         return;
@@ -303,6 +313,10 @@ pub fn document_result(
         .name("Live wallpaper import".into())
         .spawn(move || {
             let result = (|| -> std::result::Result<LiveWallpaper, String> {
+                // The stored singleton: the JVM the Activity result arrived on is
+                // the same one, and 0.21's `JavaVM` cannot be cloned across a
+                // thread boundary.
+                let vm = saved_vm().ok_or("Android did not supply a Java VM")?;
                 let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
                 let opened = crate::document_bridge::open(
                     &mut env,
@@ -315,7 +329,7 @@ pub fn document_result(
                 }
                 let (input, name) = opened.map_err(|e| e.to_string())?;
                 // The VM the JNI call arrived on decodes MP4 on this thread.
-                import(&home, input, &name, Some(vm.clone()))
+                import(&home, input, &name, Some(vm))
             })();
             publish(result, false);
         });
@@ -559,15 +573,21 @@ fn decode_gif_frames(path: &Path) -> std::result::Result<Vec<WallpaperFrame>, St
     Ok(frames)
 }
 
-/// APNG: the same `image` decoder chain the GIF path uses, one frame at a time.
+/// APNG: the same animated-image path as GIF.
+///
+/// `PngDecoder` alone is not an `AnimationDecoder`; its `apng()` adapter is.
+/// A still PNG has no animation to show and is reported as such.
 fn decode_apng(path: &Path) -> std::result::Result<Vec<WallpaperFrame>, String> {
-    let decoder = image::codecs::png::PngDecoder::new(BufReader::new(
-        File::open(path).map_err(|e| e.to_string())?,
-    ))
-    .map_err(|e| format!("Could not decode APNG: {e}"))?;
-    let decoder = image::AnimationDecoder::into_frames(decoder);
+    use image::{AnimationDecoder, codecs::png::PngDecoder, codecs::png::ApngDecoder};
+    type Reader = BufReader<File>;
+    let file: Reader = BufReader::new(File::open(path).map_err(|e| e.to_string())?);
+    let png: PngDecoder<Reader> =
+        PngDecoder::new(file).map_err(|e| format!("Could not decode APNG: {e}"))?;
+    let animated: ApngDecoder<Reader> = png
+        .apng()
+        .map_err(|_| "This PNG cannot be animated; choose a GIF, APNG or MP4".to_string())?;
     let mut frames = Vec::new();
-    for decoded in decoder.take(MAX_FRAMES + 1) {
+    for decoded in animated.into_frames().take(MAX_FRAMES + 1) {
         let frame = decoded.map_err(|e| format!("Could not decode APNG frame: {e}"))?;
         let (numerator, denominator) = frame.delay().numer_denom_ms();
         let delay_ms = if denominator == 0 {
