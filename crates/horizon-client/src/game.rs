@@ -23111,6 +23111,11 @@ impl Loading {
         let gui = self.gui.take().ok_or("missing menu bundle")?;
         let window = self.window.clone().ok_or("window closed")?;
         let renderer_at = Instant::now();
+        // Android allows one Vulkan surface per native window: hand the live one over.
+        #[cfg(target_os = "android")]
+        if let Some(renderer) = &mut self.renderer {
+            renderer.release_surface();
+        }
         let renderer = startup::time("renderer.world", || {
             build_renderer(
                 window.clone(),
