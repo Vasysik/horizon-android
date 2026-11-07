@@ -344,12 +344,29 @@ impl Ui {
                         "(Ljava/lang/String;)Landroid/content/Intent;",
                         &[JValue::Object(&category)],
                     )?;
-                    let mime = JObject::from(env.new_string("*/*")?);
+                    // Mods, packs and shaders are archives; the importer checks the contents.
+                    let any = JObject::from(env.new_string("*/*")?);
                     env.call_method(
                         &intent,
                         "setType",
                         "(Ljava/lang/String;)Landroid/content/Intent;",
-                        &[JValue::Object(&mime)],
+                        &[JValue::Object(&any)],
+                    )?;
+                    let types = env.new_object_array(3, "java/lang/String", JObject::null())?;
+                    for (index, mime) in ["application/zip", "application/octet-stream", "*/*"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let value = env.new_string(mime)?;
+                        env.set_object_array_element(&types, index as i32, value)?;
+                    }
+                    let extra =
+                        JObject::from(env.new_string("android.intent.extra.MIME_TYPES")?);
+                    env.call_method(
+                        &intent,
+                        "putExtra",
+                        "(Ljava/lang/String;[Ljava/lang/String;)Landroid/content/Intent;",
+                        &[JValue::Object(&extra), JValue::Object(&types)],
                     )?;
                     env.call_method(
                         &intent,
@@ -367,7 +384,7 @@ impl Ui {
                 })();
                 if let Err(error) = result {
                     let _ = env.exception_clear();
-                    log::warn!("Document picker: {error}");
+                    log::warn!("documents: {error}");
                     crate::documents::picker_failed("No Android document picker is available");
                 }
             }
@@ -388,12 +405,27 @@ impl Ui {
                         "(Ljava/lang/String;)Landroid/content/Intent;",
                         &[JValue::Object(&category)],
                     )?;
-                    let mime = JObject::from(env.new_string("image/gif")?);
+                    // Live wallpapers are an animated image or a video clip; the importer
+                    // decodes whichever the player picks.
+                    let any = JObject::from(env.new_string("*/*")?);
                     env.call_method(
                         &intent,
                         "setType",
                         "(Ljava/lang/String;)Landroid/content/Intent;",
-                        &[JValue::Object(&mime)],
+                        &[JValue::Object(&any)],
+                    )?;
+                    let types = env.new_object_array(2, "java/lang/String", JObject::null())?;
+                    for (index, mime) in ["image/*", "video/*"].into_iter().enumerate() {
+                        let value = env.new_string(mime)?;
+                        env.set_object_array_element(&types, index as i32, value)?;
+                    }
+                    let extra =
+                        JObject::from(env.new_string("android.intent.extra.MIME_TYPES")?);
+                    env.call_method(
+                        &intent,
+                        "putExtra",
+                        "(Ljava/lang/String;[Ljava/lang/String;)Landroid/content/Intent;",
+                        &[JValue::Object(&extra), JValue::Object(&types)],
                     )?;
                     env.call_method(
                         &intent,
@@ -413,7 +445,7 @@ impl Ui {
                     let _ = env.exception_clear();
                     log::warn!("Wallpaper picker: {error}");
                     crate::wallpapers::picker_failed(
-                        "No Android file picker for GIF wallpapers is available",
+                        "No Android file picker for live wallpapers is available",
                     );
                 }
             }

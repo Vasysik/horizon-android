@@ -40,6 +40,11 @@ pub(super) struct Launcher {
     gui: Option<game::UiResources>,
     wallpaper: Option<crate::wallpapers::LiveWallpaper>,
     wallpaper_frame: Option<usize>,
+    /// The last frame's dp size and density, so touch hit-testing can rebuild
+    /// the dock's geometry without a renderer.
+    screen: (f32, f32, f32),
+    /// Set while a finger drags the dock's opacity slider.
+    opacity_drag: Option<f32>,
     pub(super) audio: Option<horizon_client::audio::Audio>,
     game: Option<Box<dyn ApplicationHandler>>,
     cursor: (f64, f64),
@@ -112,6 +117,8 @@ impl Launcher {
             gui: None,
             wallpaper: None,
             wallpaper_frame: None,
+            screen: (0.0, 0.0, 1.0),
+            opacity_drag: None,
             audio: None,
             game: None,
             cursor: (0.0, 0.0),
@@ -462,6 +469,11 @@ impl ApplicationHandler for Launcher {
                 self.focus = None;
                 self.pending_focus = None;
                 self.cursor = (position.x, position.y);
+                // A held button on the dock's slider adjusts it live, the same
+                // way a finger drag does on a phone.
+                if self.mouse_down && self.opacity_drag.is_some() {
+                    self.set_opacity_from_pointer(position.x, f64::from(self.ui_density()));
+                }
                 Ok(())
             }
             WindowEvent::Touch(touch) => self.touch_event(events, touch),
@@ -480,6 +492,23 @@ impl ApplicationHandler for Launcher {
             } => {
                 if state == ElementState::Pressed {
                     self.mouse_down = true;
+                    self.opacity_drag = self.opacity_track_at(
+                        self.cursor.0,
+                        self.cursor.1,
+                        f64::from(self.ui_density()),
+                    );
+                    if self.opacity_drag.is_some() {
+                        self.set_opacity_from_pointer(
+                            self.cursor.0,
+                            f64::from(self.ui_density()),
+                        );
+                    }
+                    Ok(())
+                } else if self.opacity_drag.take().is_some() {
+                    // The drag already applied its value; persist it once.
+                    self.mouse_down = false;
+                    self.catalog.config.save(&self.home)?;
+                    self.redraw_now = true;
                     Ok(())
                 } else if std::mem::take(&mut self.mouse_down) {
                     self.activate(events)

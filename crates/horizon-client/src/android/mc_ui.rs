@@ -328,3 +328,26 @@ pub fn grass_mark(ui: &mut Ui, x: f32, y: f32, s: f32) {
         color::DIRT_DARK,
     );
 }
+
+/// A horizontal slider: an inset track, a green fill up to `fraction`, and a
+/// stone thumb. Five quads, so dragging one repaints as cheaply as a button.
+/// Returns the thumb's centre x, for the caller's label placement.
+pub fn slider(ui: &mut Ui, rect: [f32; 4], fraction: f32) -> f32 {
+    let [x, y, w, h] = rect;
+    let fraction = fraction.clamp(0.0, 1.0);
+    // The track is a thin inset in the middle of the row, so the thumb has room
+    // to overlap it without leaving the widget's own box.
+    let track_h = (h * 0.34).max(6.0);
+    let track_y = y + (h - track_h) / 2.0;
+    fill(ui, x, track_y, w, track_h, color::TRACK_BORDER);
+    fill(ui, x + 1.0, track_y + 1.0, w - 2.0, track_h - 2.0, color::TRACK);
+    let filled = (w - 2.0) * fraction;
+    if filled >= 1.0 {
+        fill(ui, x + 1.0, track_y + 1.0, filled, track_h - 2.0, color::GREEN_FACE);
+        fill(ui, x + 1.0, track_y + 1.0, filled, 2.0f32.min(track_h - 2.0), color::GREEN_HI);
+    }
+    let thumb_w = 14.0;
+    let thumb_x = (x + filled - thumb_w / 2.0).clamp(x, x + w - thumb_w);
+    bevel(ui, [thumb_x, y + 1.0, thumb_w, h - 2.0], Kind::Stone, false);
+    thumb_x + thumb_w / 2.0
+}

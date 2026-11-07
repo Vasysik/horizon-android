@@ -60,6 +60,8 @@ pub(super) enum Action {
     FpsCap,
     PerfPreset,
     UiOpacity,
+    /// The dock's opacity slider: a drag anywhere on it sets the value.
+    OpacityTrack,
     Wallpaper,
     ClearWallpaper,
 }
@@ -103,7 +105,151 @@ fn button_font(rect: [f32; 4]) -> f32 {
     }
 }
 
-/// Draws a widget for `action` and registers its tap target. `press` is the
+/// The bottom navigation bar's height in dp: one row of bevelled tabs.
+const NAV_HEIGHT: f32 = 52.0;
+/// The strip above the bar holding the Play button and the opacity slider.
+const DOCK_HEIGHT: f32 = 64.0;
+/// The launcher content ends this far above the bottom edge, clear of the dock
+/// and the navigation bar.
+fn content_bottom(h: f32) -> f32 {
+    h - NAV_HEIGHT - DOCK_HEIGHT - 8.0
+}
+
+/// Where the bottom navigation bar starts, and the dock above it.
+fn dock_top(h: f32) -> f32 {
+    h - NAV_HEIGHT - DOCK_HEIGHT
+}
+fn nav_top(h: f32) -> f32 {
+    h - NAV_HEIGHT
+}
+
+/// Where the dock and navigation bar put their controls, in dp.
+///
+/// One function decides both, so the drawing pass and the touch hit-testing
+/// can never disagree about where the slider is.
+pub(super) struct DockLayout {
+    pub play: [f32; 4],
+    /// The slider's box, when the screen is wide enough for both controls.
+    pub slider: Option<[f32; 4]>,
+    /// Each tab's box, in `Page::ALL` order.
+    pub tabs: Vec<[f32; 4]>,
+}
+
+pub(super) fn dock_layout(w: f32, h: f32, compact: bool) -> DockLayout {
+    let top = dock_top(h) + 4.0;
+    let height = DOCK_HEIGHT - 10.0;
+    let margin = if compact { 8.0 } else { 32.0 };
+    let play_width = if compact { (w * 0.42).min(240.0) } else { 300.0 };
+    let slider_width = if compact { w * 0.42 } else { 260.0 };
+    let slider_x = w - margin - slider_width;
+    DockLayout {
+        play: [margin, top, play_width, height],
+        // Keep a clear gap from the Play button; a narrow screen drops the
+        // slider rather than overlapping the primary action.
+        slider: (slider_x > margin + play_width + 40.0).then_some([
+            slider_x,
+            top + 14.0,
+            slider_width,
+            height - 14.0,
+        ]),
+        tabs: {
+            let count = Page::ALL.len() as f32;
+            let gap = 4.0;
+            let width = (w - 2.0 * margin - gap * (count - 1.0)) / count;
+            let y = nav_top(h) + 5.0;
+            (0..Page::ALL.len())
+                .map(|index| {
+                    [
+                        margin + index as f32 * (width + gap),
+                        y,
+                        width,
+                        NAV_HEIGHT - 10.0,
+                    ]
+                })
+                .collect()
+        },
+    }
+}
+
+/// The tab strip: Play, Mods, Packs, Shaders, Files and Setup along the bottom
+/// edge, the active page lit grass-green like a chosen slot.
+fn navigation(
+    ui: &mut Ui,
+    targets: &mut Vec<([f32; 4], Action)>,
+    current: crate::catalog::Page,
+    compact: bool,
+    press: Option<[f32; 4]>,
+) {
+    let layout = dock_layout(ui.w, ui.h, compact);
+    for (page, rect) in Page::ALL.iter().zip(layout.tabs) {
+        button(
+            ui,
+            targets,
+            rect,
+            if compact {
+                match page {
+                    Page::Installed => "Files",
+                    Page::Settings => "Setup",
+                    _ => page.name(),
+                }
+            } else {
+                page.name()
+            },
+            Action::Page(*page),
+            *page == current,
+            press,
+        );
+    }
+}
+
+/// The dock above the navigation bar: Play at the left (the page's primary
+/// action) and the live "UI Opacity" slider at the right.
+fn dock(
+    ui: &mut Ui,
+    targets: &mut Vec<([f32; 4], Action)>,
+    launch: &str,
+    opacity: u8,
+    compact: bool,
+    press: Option<[f32; 4]>,
+) {
+    let layout = dock_layout(ui.w, ui.h, compact);
+    button(ui, targets, layout.play, launch, Action::Play, true, press);
+    let Some(track) = layout.slider else {
+        return;
+    };
+    let label_top = track[1] - 18.0;
+    mc_ui::shadow_text(ui, Face::Pixel, 14.0, track[0], label_top, color::TEXT, "UI opacity");
+    let value = format!("{opacity}%");
+    let value_width = ui.measure(Face::Pixel, 14.0, &value);
+    ui.text(
+        Face::Pixel,
+        14.0,
+        track[0] + track[2] - value_width,
+        label_top,
+        color::GREEN_TEXT,
+        &value,
+    );
+    mc_ui::slider(ui, track, opacity_fraction(opacity));
+    // The whole row is the touch target, not just the thin track.
+    targets.push((
+        [track[0], track[1] - 4.0, track[2], track[3] + 4.0],
+        Action::OpacityTrack,
+    ));
+}
+
+/// `launcher_opacity` (30–100) as a slider position.
+pub(super) fn opacity_fraction(opacity: u8) -> f32 {
+    let value = f32::from(opacity.clamp(30, 100));
+    (value - 30.0) / 70.0
+}
+
+/// The opacity a slider position means, snapped to whole percent.
+pub(super) fn opacity_from(x: f32, width: f32) -> u8 {
+    let fraction = (x / width.max(1.0)).clamp(0.0, 1.0);
+    (30.0 + fraction * 70.0).round() as u8
+}
+
+/// Draws a widget for `action` and registers its tap target./// Draws a widget for `action` and registers its tap target. `press` is the
 /// rect being held (or tapped in the last 160 ms), so the widget can draw
 /// vanilla's pressed bevel in the same pass. Field actions draw an edit box
 /// instead of a button.
@@ -299,6 +445,8 @@ impl Launcher {
             self.cursor.0 as f32 / ui.density,
             self.cursor.1 as f32 / ui.density,
         ];
+        // The touch path needs the same geometry the frame used.
+        self.screen = (w, h, ui.density);
         let holding = self.mouse_down || self.drag.as_ref().is_some_and(|drag| !drag.moved);
         let press = if holding {
             previous
@@ -349,29 +497,6 @@ impl Launcher {
             self.login.signed_in,
             press,
         );
-        let tabs = Page::ALL.len() as f32;
-        let tab_margin = if w < 700.0 { 16.0 } else { 32.0 };
-        let tab_width = (w - 2.0 * tab_margin) / tabs;
-        for (i, page) in Page::ALL.iter().enumerate() {
-            let x = tab_margin + i as f32 * tab_width;
-            button(
-                &mut ui,
-                &mut self.targets,
-                [x, 88.0, tab_width - 4.0, 42.0],
-                if w < 700.0 {
-                    match page {
-                        Page::Installed => "Files",
-                        Page::Settings => "Setup",
-                        _ => page.name(),
-                    }
-                } else {
-                    page.name()
-                },
-                Action::Page(*page),
-                *page == self.catalog.page,
-                press,
-            );
-        }
         let compact = w < 700.0;
         let page = self.catalog.page;
         if page == Page::Play {
@@ -480,7 +605,7 @@ impl Launcher {
                     0.0
                 };
                 let overall = (current as f32 + fraction.clamp(0.0, 1.0)) / 6.0;
-                let bar_y = h - 156.0;
+                let bar_y = content_bottom(h) - 40.0;
                 mc_ui::progress(&mut ui, [32.0, bar_y, w - 64.0, 12.0], overall);
                 let detail = match progress.stage {
                     InstallStage::Download => format!(
@@ -531,22 +656,6 @@ impl Launcher {
                     h - 92.0,
                     color::TEXT,
                     progress.stage.label(),
-                );
-            } else {
-                button(
-                    &mut ui,
-                    &mut self.targets,
-                    [32.0, h - 100.0, 320.0, 60.0],
-                    if installed {
-                        "Play"
-                    } else if self.error.is_some() {
-                        "Retry installation"
-                    } else {
-                        "Download Minecraft 26.3"
-                    },
-                    Action::Play,
-                    true,
-                    press,
                 );
             }
         } else if page.is_catalog() {
@@ -692,7 +801,7 @@ impl Launcher {
                 press,
             );
             let top = 296.0;
-            let bottom = h - 112.0;
+            let bottom = content_bottom(h);
             self.catalog.scroll = self.catalog.scroll.clamp(
                 0.0,
                 (self.catalog.results.len() as f32 * 78.0 - (bottom - top)).max(0.0),
@@ -777,7 +886,7 @@ impl Launcher {
             button(
                 &mut ui,
                 &mut self.targets,
-                [32.0, h - 100.0, 120.0, 40.0],
+                [32.0, content_bottom(h) - 46.0, 120.0, 40.0],
                 "Previous",
                 Action::Previous,
                 false,
@@ -786,7 +895,7 @@ impl Launcher {
             button(
                 &mut ui,
                 &mut self.targets,
-                [166.0, h - 100.0, 120.0, 40.0],
+                [166.0, content_bottom(h) - 46.0, 120.0, 40.0],
                 "Next",
                 Action::Next,
                 false,
@@ -795,7 +904,7 @@ impl Launcher {
         } else if page == Page::Installed {
             use horizon_client::content_files::Kind;
             let top = 156.0;
-            let bottom = h - 100.0;
+            let bottom = content_bottom(h);
             let row_height = if compact { 110.0 } else { 72.0 };
             let total = Kind::ALL
                 .iter()
@@ -948,11 +1057,11 @@ impl Launcher {
             self.catalog.scroll = self
                 .catalog
                 .scroll
-                .clamp(0.0, (20.0 * row_height - (h - 130.0 - 195.0)).max(0.0));
+                .clamp(0.0, (20.0 * row_height - (content_bottom(h) - 195.0)).max(0.0));
             self.list_view = Some([
                 195.0,
-                h - 130.0,
-                (20.0 * row_height - (h - 130.0 - 195.0)).max(0.0),
+                content_bottom(h),
+                (20.0 * row_height - (content_bottom(h) - 195.0)).max(0.0),
             ]);
             let wallpaper_label = c
                 .wallpaper_name
@@ -966,7 +1075,7 @@ impl Launcher {
                         short
                     }
                 })
-                .unwrap_or_else(|| "Tap to choose animated GIF".into());
+                .unwrap_or_else(|| "Tap to choose a GIF or MP4".into());
             for (i, (title, value, action)) in [
                 ("Rendering", c.renderer.label().to_owned(), Action::Renderer),
                 (
@@ -1025,7 +1134,7 @@ impl Launcher {
                     format!("{}%", c.launcher_opacity.clamp(30, 100)),
                     Action::UiOpacity,
                 ),
-                ("Custom live wallpaper", wallpaper_label, Action::Wallpaper),
+                ("Live wallpaper (GIF / MP4)", wallpaper_label, Action::Wallpaper),
                 (
                     "Clear live wallpaper",
                     if c.wallpaper_name.is_some() {
@@ -1099,7 +1208,7 @@ impl Launcher {
                     ],
                     action,
                 ));
-                if y < 185.0 || y + if compact { 70.0 } else { 46.0 } > h - 130.0 {
+                if y < 185.0 || y + if compact { 70.0 } else { 46.0 } > content_bottom(h) {
                     continue;
                 }
                 ui.text(
@@ -1171,7 +1280,7 @@ impl Launcher {
             button(
                 &mut ui,
                 &mut self.targets,
-                [w * 0.5 + 6.0, h - 114.0, w * 0.5 - 38.0, 42.0],
+                [w * 0.5 + 6.0, content_bottom(h) - 52.0, w * 0.5 - 38.0, 42.0],
                 "Microsoft / Xbox account",
                 Action::Account,
                 true,
@@ -1180,47 +1289,63 @@ impl Launcher {
             button(
                 &mut ui,
                 &mut self.targets,
-                [32.0, h - 114.0, w * 0.5 - 38.0, 42.0],
+                [32.0, content_bottom(h) - 52.0, w * 0.5 - 38.0, 42.0],
                 "Diagnostics",
                 Action::Logs,
                 false,
                 press,
             );
         }
+        // The status line sits just above the dock, where a page's own content
+        // ends, so the launcher's feedback never hides behind the controls.
         let status = self.error.as_deref().unwrap_or(&self.catalog.status);
         let status_color = if self.error.is_some() {
             color::ERROR
         } else {
             color::MUTED
         };
-        for (i, line) in status
-            .chars()
-            .collect::<Vec<_>>()
-            .chunks(110)
-            .take(2)
-            .enumerate()
-        {
+        let status_line: String = status.lines().next().unwrap_or_default().to_owned();
+        if !status_line.is_empty() {
+            let fitted = ui.fit_text(Face::Regular, 13.0, &status_line, (w - 64.0).max(40.0));
             ui.text(
                 Face::Regular,
-                14.0,
-                32.0,
-                h - 47.0 + i as f32 * 18.0,
+                13.0,
+                if compact { 8.0 } else { 32.0 },
+                dock_top(h) - 20.0,
                 status_color,
-                &ui.fit_text(
-                    Face::Regular,
-                    14.0,
-                    &line.iter().collect::<String>(),
-                    (w - 210.0).max(40.0),
-                ),
+                &fitted,
             );
         }
-        button(
+        // A dark rule separates the page from the dock, like vanilla's GUI edges.
+        mc_ui::fill(&mut ui, 0.0, dock_top(h) - 26.0, w, 1.0, color::PANEL_EDGE);
+        // The primary action: Play (or the install's next step) at the left of
+        // the dock, with the live opacity slider at the right.
+        let launch = if self.catalog.page == Page::Play {
+            if horizon_client::official_install::ready(&self.home) {
+                "Play"
+            } else if self.error.is_some() {
+                "Retry installation"
+            } else if self.worker.is_some() {
+                "Installing"
+            } else {
+                "Download Minecraft 26.3"
+            }
+        } else {
+            "Play"
+        };
+        dock(
             &mut ui,
             &mut self.targets,
-            [w - 142.0, h - 52.0, 110.0, 32.0],
-            "GitHub",
-            Action::Repository,
-            false,
+            launch,
+            self.catalog.config.launcher_opacity,
+            compact,
+            press,
+        );
+        navigation(
+            &mut ui,
+            &mut self.targets,
+            self.catalog.page,
+            compact,
             press,
         );
         if self.login.visible {
@@ -1369,6 +1494,23 @@ impl Launcher {
             audio.play_button_click();
         }
         match action {
+            Some(Action::OpacityTrack) => {
+                // A tap (no drag) on the track still moves the thumb there.
+                let density = f64::from(self.ui_density());
+                self.opacity_drag = self.opacity_track_at(
+                    self.cursor.0,
+                    self.cursor.1,
+                    density,
+                );
+                self.set_opacity_from_pointer(self.cursor.0, density);
+                self.opacity_drag = None;
+                self.catalog.config.save(&self.home)?;
+                self.catalog.status = format!(
+                    "Launcher UI opacity set to {}. The wallpaper stays at full brightness.",
+                    self.catalog.config.launcher_opacity
+                );
+                self.redraw_now = true;
+            }
             Some(Action::Immersive) => {
                 self.catalog.config.screen.immersive ^= true;
                 self.catalog.config.save(&self.home)?;
@@ -1448,7 +1590,10 @@ impl Launcher {
             }
             Some(Action::Wallpaper) => {
                 self.catalog.status = match crate::wallpapers::begin(&self.home) {
-                    Ok(()) => "Choose an animated GIF (max 16 MiB and 48 frames).".into(),
+                    Ok(()) => {
+                        "Choose an animated GIF/APNG (16 MiB, 48 frames) or an MP4 (30 s)."
+                            .into()
+                    }
                     Err(error) => error,
                 };
             }
@@ -1678,6 +1823,37 @@ impl Launcher {
         }
         Ok(())
     }
+    /// Is `(x, y)`, in GUI pixels, on the dock's opacity slider?
+    fn opacity_track_at(&self, x: f64, y: f64, density: f64) -> Option<f32> {
+        let (w, h, _) = self.screen;
+        if density <= 0.0 {
+            return None;
+        }
+        let track = dock_layout(w, h, w < 700.0).slider?;
+        let px = (x / density) as f32;
+        let py = (y / density) as f32;
+        (px >= track[0] && px <= track[0] + track[2] && py >= track[1] && py <= track[1] + track[3])
+            .then_some(track[2])
+    }
+
+    /// Apply the opacity percentage under the finger. The slider spans 30–100%,
+    /// the same range the Settings row steps through.
+    fn set_opacity_from_pointer(&mut self, x: f64, density: f64) {
+        if self.opacity_drag.is_none() || density <= 0.0 {
+            return;
+        }
+        let (w, h, _) = self.screen;
+        let Some(track) = dock_layout(w, h, w < 700.0).slider else {
+            return;
+        };
+        let local = (x / density) as f32 - track[0];
+        let opacity = opacity_from(local, track[2]);
+        if opacity != self.catalog.config.launcher_opacity {
+            self.catalog.config.launcher_opacity = opacity;
+            self.redraw_now = true;
+        }
+    }
+
     pub(super) fn ui_density(&self) -> f32 {
         let (Some(r), Some(gui)) = (&self.renderer, &self.gui) else {
             return 1.0;
@@ -1696,9 +1872,21 @@ impl Launcher {
         match t.phase {
             TouchPhase::Started => {
                 self.drag = Some(super::gesture::Drag::new(t.location.x, t.location.y));
+                // Capture the track drag before the gesture layer sees it, so a
+                // horizontal slide adjusts opacity instead of scrolling a list.
+                self.opacity_drag = self.opacity_track_at(t.location.x, t.location.y, self.ui_density() as f64);
+                if self.opacity_drag.is_some() {
+                    self.set_opacity_from_pointer(t.location.x, self.ui_density() as f64);
+                }
             }
             TouchPhase::Moved => {
                 let density = self.ui_density() as f64;
+                // A finger on the dock's slider repaints the launcher's own
+                // layers live; nothing here touches the wallpaper.
+                if self.opacity_drag.is_some() {
+                    self.set_opacity_from_pointer(t.location.x, density);
+                    return Ok(());
+                }
                 if let Some(drag) = &mut self.drag {
                     let delta = drag.update(t.location.x, t.location.y, density);
                     if drag.moved {
@@ -1714,12 +1902,20 @@ impl Launcher {
                 }
             }
             TouchPhase::Ended => {
+                if self.opacity_drag.take().is_some() {
+                    // The value is already applied; keep the status line honest
+                    // and let the setting survive a restart.
+                    self.catalog.config.save(&self.home)?;
+                    self.drag = None;
+                    return Ok(());
+                }
                 if self.drag.take().is_some_and(|drag| !drag.moved) {
                     self.activate(events)?;
                 }
             }
             TouchPhase::Cancelled => {
                 self.drag = None;
+                self.opacity_drag = None;
             }
         }
         Ok(())
@@ -1757,5 +1953,61 @@ impl Launcher {
         if let Some(out) = out {
             self.catalog.edit(out, &self.home);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_opacity_slider_spans_the_settings_range() {
+        // 30% is the left end, 100% the right, and the mapping round-trips.
+        assert_eq!(opacity_from(0.0, 200.0), 30);
+        assert_eq!(opacity_from(200.0, 200.0), 100);
+        assert!((opacity_fraction(30) - 0.0).abs() < f32::EPSILON);
+        assert!((opacity_fraction(100) - 1.0).abs() < f32::EPSILON);
+        for percent in [30u8, 48, 65, 99, 100] {
+            let x = opacity_fraction(percent) * 200.0;
+            assert_eq!(opacity_from(x, 200.0), percent, "{percent}% round-trips");
+        }
+        // A finger past either end clamps instead of overflowing.
+        assert_eq!(opacity_from(-50.0, 200.0), 30);
+        assert_eq!(opacity_from(500.0, 200.0), 100);
+    }
+
+    #[test]
+    fn the_play_button_sits_bottom_left_and_clears_the_navigation() {
+        for (w, h) in [(1040.0, 700.0), (800.0, 400.0), (640.0, 360.0)] {
+            let compact = w < 700.0;
+            let layout = dock_layout(w, h, compact);
+            let [x, y, _, height] = layout.play;
+            // Left edge of the dock, above the navigation bar.
+            assert!(x <= 32.0, "play starts at the left margin");
+            assert!(y + height <= nav_top(h), "play clears the tab strip");
+            assert!(y >= dock_top(h), "play stays inside the dock");
+            // Every tab sits inside the bottom bar and stays on screen.
+            for tab in &layout.tabs {
+                assert!(tab[1] >= nav_top(h));
+                assert!(tab[1] + tab[3] <= h);
+                assert!(tab[0] >= 0.0 && tab[0] + tab[2] <= w);
+            }
+            // Content never runs under the dock.
+            assert!(content_bottom(h) < dock_top(h));
+        }
+    }
+
+    #[test]
+    fn a_narrow_screen_drops_the_slider_instead_of_overlapping_play() {
+        let wide = dock_layout(1040.0, 700.0, false);
+        assert!(wide.slider.is_some());
+        // The slider, when shown, cannot touch the Play button.
+        let play = wide.play;
+        let slider = wide.slider.unwrap();
+        assert!(slider[0] > play[0] + play[2]);
+
+        // A very narrow screen keeps Play alone rather than stacking controls.
+        let narrow = dock_layout(360.0, 640.0, true);
+        assert!(narrow.slider.is_none());
     }
 }

@@ -47,6 +47,8 @@ mod gallery;
 mod native_ime;
 #[path = "android/wallpapers.rs"]
 mod wallpapers;
+#[path = "android/wallpaper_video.rs"]
+mod wallpaper_video;
 #[path = "android/performance.rs"]
 mod performance;
 #[path = "android/platform.rs"]
@@ -68,9 +70,9 @@ mod skins;
 // The shared account protocol needs only the launcher's version and data path.
 mod backend {
     pub const VERSION: &str = if crate::PUBLIC_BUILD {
-        "0.7.6"
+        "0.7.7"
     } else {
-        "0.7.6-dev"
+        "0.7.7-dev"
     };
     static HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     pub fn initialize(home: std::path::PathBuf) {
@@ -257,6 +259,9 @@ fn android_main(app: AndroidApp) {
         log::error!("Cannot initialize local diagnostics: {error}");
     }
     if let Ok(vm) = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) } {
+        // Kept for the wallpaper decoders: MP4 goes through Android's media
+        // stack even when a saved wallpaper loads long after the picker closed.
+        wallpapers::initialize_vm(vm.clone());
         secure_store::initialize(vm);
     }
     let engine_data = app.asset_manager().open(c"engine-data.zip");

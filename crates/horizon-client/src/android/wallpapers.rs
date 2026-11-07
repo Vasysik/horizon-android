@@ -1,4 +1,9 @@
-//! User-selected looping GIF wallpapers for the native Android launcher.
+//! User-selected looping live wallpapers for the native Android launcher.
+//!
+//! Two formats are supported: animated GIF/APNG, decoded by the `image` crate,
+//! and MP4, decoded by Android's own media stack through `HorizonMedia`
+//! (`wallpaper_video.rs`). Both end up as the same bounded vector of RGBA
+//! frames, so the launcher has one drawing path.
 use image::{AnimationDecoder, codecs::gif::GifDecoder, imageops::FilterType};
 use jni::{
     JNIEnv,
@@ -14,11 +19,65 @@ use std::{
 
 const MAX_GIF_BYTES: u64 = 16 << 20;
 const MAX_SOURCE_SIDE: u16 = 2048;
-const MAX_FRAMES: usize = 48;
+/// Shared by both formats: the decoded wallpaper lives in RAM.
+pub(super) const MAX_FRAMES: usize = 48;
 pub const FRAME_WIDTH: u32 = 384;
 pub const FRAME_HEIGHT: u32 = 216;
 const WALLPAPER_FILE: &str = "launcher-wallpaper.gif";
 const PART_FILE: &str = "launcher-wallpaper.partial";
+/// Where an MP4 is staged before decoding. Android's media stack takes a file
+/// path, and a `content://` URI has none.
+const VIDEO_FILE: &str = "launcher-wallpaper.mp4";
+
+/// Which decoder owns the saved wallpaper file.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum Format {
+    /// `IMAGE`: GIF or APNG.
+    Image,
+    /// `VIDEO`: MP4 (H.264/HEVC/AV1 as far as the device's media stack decodes).
+    Video,
+}
+impl Format {
+    fn of(name: &str) -> Option<Self> {
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".gif") || lower.ends_with(".png") || lower.ends_with(".apng") {
+            Some(Self::Image)
+        } else if lower.ends_with(".mp4") || lower.ends_with(".m4v") || lower.ends_with(".mov") {
+            Some(Self::Video)
+        } else {
+            None
+        }
+    }
+    /// The file name this format is saved under.
+    fn file(self) -> &'static str {
+        match self {
+            Self::Image => WALLPAPER_FILE,
+            Self::Video => VIDEO_FILE,
+        }
+    }
+}
+
+/// Sniff the format from the selected file's own bytes.
+///
+/// The file name is a hint, not a promise: Android content providers return
+/// whatever display name they like, and a GIF renamed `.mp4` must still work.
+fn sniff(file: &Path) -> Option<Format> {
+    let mut header = [0u8; 12];
+    let mut opened = File::open(file).ok()?;
+    let read = opened.read(&mut header).ok()?;
+    let header = &header[..read];
+    if header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a") {
+        return Some(Format::Image);
+    }
+    if header.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(Format::Image);
+    }
+    // ISO base media (MP4/MOV): a `ftyp` box at offset 4.
+    if header.len() >= 8 && &header[4..8] == b"ftyp" {
+        return Some(Format::Video);
+    }
+    None
+}
 
 #[derive(Clone)]
 pub struct WallpaperFrame {
@@ -144,11 +203,24 @@ pub fn load_async(home: &Path, name: &str) -> std::result::Result<(), String> {
         state.request_home = None;
         state.result = None;
     }
-    let path = home.join(WALLPAPER_FILE);
+    // Whichever format was saved last: only one wallpaper file is kept.
+    let saved = if home.join(VIDEO_FILE).exists() {
+        home.join(VIDEO_FILE)
+    } else {
+        home.join(WALLPAPER_FILE)
+    };
     let name = clean_name(name);
     let spawned = std::thread::Builder::new()
         .name("Saved wallpaper decode".into())
-        .spawn(move || publish(decode_gif(&path, name), true));
+        .spawn(move || {
+            let format = Format::of(&name).or_else(|| sniff(&saved));
+            let decoded = match format {
+                Some(Format::Video) => decode_video(&saved, name, saved_vm()),
+                Some(Format::Image) => decode_gif(&saved, name),
+                None => Err("The saved wallpaper is not a GIF, APNG or MP4".into()),
+            };
+            publish(decoded, true);
+        });
     if let Err(error) = spawned {
         publish(Err(format!("Could not start wallpaper loading: {error}")), true);
         return Err(format!("Could not start wallpaper loading: {error}"));
@@ -172,7 +244,7 @@ pub fn poll() -> Option<Completion> {
         .take()
 }
 pub fn remove(home: &Path) -> std::io::Result<()> {
-    for name in [WALLPAPER_FILE, PART_FILE] {
+    for name in [WALLPAPER_FILE, VIDEO_FILE, PART_FILE] {
         let path = home.join(name);
         match fs::remove_file(path) {
             Ok(()) => {}
@@ -182,6 +254,19 @@ pub fn remove(home: &Path) -> std::io::Result<()> {
     }
     Ok(())
 }
+/// The JVM kept for the decode threads that Android's media stack needs.
+static VM: OnceLock<jni::JavaVM> = OnceLock::new();
+
+/// Remember the JVM once, at startup, so a wallpaper loaded from the saved file
+/// long after the picker closed can still reach Android's media stack.
+pub fn initialize_vm(vm: jni::JavaVM) {
+    let _ = VM.set(vm);
+}
+
+fn saved_vm() -> Option<jni::JavaVM> {
+    VM.get().cloned()
+}
+
 /// The native Activity result callback routes request 4102 here.
 pub fn document_result(
     mut env: JNIEnv<'_>,
@@ -229,7 +314,8 @@ pub fn document_result(
                     let _ = env.exception_clear();
                 }
                 let (input, name) = opened.map_err(|e| e.to_string())?;
-                import_gif(&home, input, &name)
+                // The VM the JNI call arrived on decodes MP4 on this thread.
+                import(&home, input, &name, Some(vm.clone()))
             })();
             publish(result, false);
         });
@@ -248,6 +334,9 @@ fn publish(result: std::result::Result<LiveWallpaper, String>, from_saved_file: 
     });
 }
 
+/// The display name, kept only for the Settings row and the status line.
+/// Anything with a recognised extension passes; the decoder is chosen by the
+/// file's own bytes, not by this name.
 fn clean_name(value: &str) -> String {
     let name = Path::new(value)
         .file_name()
@@ -258,38 +347,54 @@ fn clean_name(value: &str) -> String {
         .filter(|c| !c.is_control() && *c != '/' && *c != '\\')
         .take(72)
         .collect();
-    if clean.to_ascii_lowercase().ends_with(".gif") {
+    if Format::of(&clean).is_some() {
         clean
     } else {
         "wallpaper.gif".into()
     }
 }
 
-fn import_gif(
+/// Copy the selected document into `home`, decode it and make it the saved
+/// wallpaper. GIF and MP4 take the same path; only the decoder differs.
+/// Copy the selected document into `home`, decode it and make it the saved
+/// wallpaper. GIF, APNG and MP4 take the same path; only the decoder differs.
+///
+/// The decoder is chosen by the file's bytes, so a provider that reports a
+/// generic or missing display name cannot steer the import wrong.
+pub(super) fn import(
     home: &Path,
     mut input: File,
     display_name: &str,
+    vm: Option<jni::JavaVM>,
 ) -> std::result::Result<LiveWallpaper, String> {
     let name = clean_name(display_name);
-    if !display_name.to_ascii_lowercase().ends_with(".gif") {
-        return Err("Choose an animated GIF file for a live wallpaper".into());
-    }
     fs::create_dir_all(home).map_err(|e| e.to_string())?;
     let temporary = home.join(PART_FILE);
-    let copied = (|| -> std::io::Result<()> {
+    // An MP4 is staged on disk (Android's media stack wants a path); a GIF is
+    // held in the same file and decoded from it, so both formats copy alike.
+    // Read the header first: the copy limit depends on what the file is.
+    let mut header = [0u8; 12];
+    let sniffed = read_header(&mut input, &mut header);
+    let staged = (|| -> std::io::Result<()> {
         let mut output = File::create(&temporary)?;
+        if let Some(count) = sniffed {
+            output.write_all(&header[..count])?;
+        }
         let mut buffer = [0u8; 32 * 1024];
-        let mut total = 0u64;
+        let mut total = sniffed.unwrap_or(0) as u64;
         loop {
             let count = input.read(&mut buffer)?;
             if count == 0 {
                 break;
             }
             total = total.saturating_add(count as u64);
-            if total > MAX_GIF_BYTES {
+            if total > super::wallpaper_video::MAX_VIDEO_BYTES {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    "GIF exceeds the 16 MiB import limit",
+                    format!(
+                        "File exceeds the {} MiB import limit",
+                        super::wallpaper_video::MAX_VIDEO_BYTES >> 20
+                    ),
                 ));
             }
             output.write_all(&buffer[..count])?;
@@ -297,29 +402,101 @@ fn import_gif(
         if total < 14 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "GIF file is too small",
+                "File is too small",
             ));
         }
         output.sync_all()
     })();
-    if let Err(error) = copied {
+    if let Err(error) = staged {
         let _ = fs::remove_file(&temporary);
         return Err(error.to_string());
     }
-    let wallpaper = match decode_gif(&temporary, name) {
+    let format = Format::of(display_name).or_else(|| sniff(&temporary));
+    let Some(format) = format else {
+        let _ = fs::remove_file(&temporary);
+        return Err("Choose an animated GIF, APNG or MP4 clip for a live wallpaper".into());
+    };
+    // A GIF has a smaller budget than a clip; check it now that the format is
+    // known rather than trusting the name.
+    if format == Format::Image
+        && fs::metadata(&temporary).is_ok_and(|m| m.len() > MAX_GIF_BYTES)
+    {
+        let _ = fs::remove_file(&temporary);
+        return Err("GIF exceeds the 16 MiB import limit".into());
+    }
+    let decoded = match format {
+        Format::Image => decode_gif(&temporary, name),
+        Format::Video => decode_video(&temporary, name, vm),
+    };
+    let wallpaper = match decoded {
         Ok(wallpaper) => wallpaper,
         Err(error) => {
             let _ = fs::remove_file(&temporary);
             return Err(error);
         }
     };
-    if let Err(error) = fs::rename(&temporary, home.join(WALLPAPER_FILE)) {
+    // Keep only one saved wallpaper: the other format's file goes away.
+    let other = if format == Format::Image {
+        VIDEO_FILE
+    } else {
+        WALLPAPER_FILE
+    };
+    let _ = fs::remove_file(home.join(other));
+    if let Err(error) = fs::rename(&temporary, home.join(format.file())) {
         let _ = fs::remove_file(&temporary);
         return Err(error.to_string());
     }
     Ok(wallpaper)
 }
 
+/// Read up to the buffer's length from `input`, tolerating a short file.
+fn read_header(input: &mut File, buffer: &mut [u8]) -> Option<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match input.read(&mut buffer[filled..]) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(_) => break,
+        }
+    }
+    (filled > 0).then_some(filled)
+}
+
+/// Android's media stack decodes the staged clip through `HorizonMedia`.
+fn decode_video(
+    path: &Path,
+    name: String,
+    vm: Option<jni::JavaVM>,
+) -> std::result::Result<LiveWallpaper, String> {
+    let vm = vm.ok_or("Video wallpapers need the Android media stack, which is unavailable")?;
+    let clip = super::wallpaper_video::decode(&vm, path)?;
+    let frames = clip
+        .frames
+        .into_iter()
+        .filter_map(|(rgba, delay_ms)| {
+            cover_bytes(rgba, clip.width, clip.height).map(|rgba| WallpaperFrame { rgba, delay_ms })
+        })
+        .collect::<Vec<_>>();
+    if frames.len() < 2 {
+        return Err("Choose a clip with at least two decodable frames".into());
+    }
+    Ok(LiveWallpaper::new(
+        name,
+        frames,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+    ))
+}
+
+/// [`cover`] for an already-decoded RGBA buffer. `None` when the buffer does
+/// not match the stated size, so a malformed frame is dropped rather than
+/// uploaded at the wrong dimensions.
+fn cover_bytes(rgba: Vec<u8>, width: u32, height: u32) -> Option<Vec<u8>> {
+    image::RgbaImage::from_raw(width, height, rgba).map(|image| cover(&image))
+}
+
+/// Decode an animated GIF or APNG. The decoder is picked from the header, so a
+/// provider's display name cannot send an animation to the video path.
 fn decode_gif(path: &Path, name: String) -> std::result::Result<LiveWallpaper, String> {
     let mut header_file = File::open(path).map_err(|e| e.to_string())?;
     if header_file.metadata().map_err(|e| e.to_string())?.len() > MAX_GIF_BYTES {
@@ -329,18 +506,39 @@ fn decode_gif(path: &Path, name: String) -> std::result::Result<LiveWallpaper, S
     header_file
         .read_exact(&mut header)
         .map_err(|_| "GIF header is incomplete")?;
-    if &header[..6] != b"GIF87a" && &header[..6] != b"GIF89a" {
-        return Err("Selected file is not a GIF".into());
+    let frames = if header.starts_with(b"\x89PNG\r\n\x1a\n") {
+        decode_apng(path)?
+    } else if &header[..6] == b"GIF87a" || &header[..6] == b"GIF89a" {
+        let source_width = u16::from_le_bytes([header[6], header[7]]);
+        let source_height = u16::from_le_bytes([header[8], header[9]]);
+        if source_width == 0
+            || source_height == 0
+            || source_width > MAX_SOURCE_SIDE
+            || source_height > MAX_SOURCE_SIDE
+        {
+            return Err("GIF dimensions must be between 1 and 2048 pixels".into());
+        }
+        decode_gif_frames(path)?
+    } else {
+        return Err("Selected file is not a GIF or APNG".into());
+    };
+    if frames.len() < 2 {
+        return Err("Choose an animation with at least two frames".into());
     }
-    let source_width = u16::from_le_bytes([header[6], header[7]]);
-    let source_height = u16::from_le_bytes([header[8], header[9]]);
-    if source_width == 0
-        || source_height == 0
-        || source_width > MAX_SOURCE_SIDE
-        || source_height > MAX_SOURCE_SIDE
-    {
-        return Err("GIF dimensions must be between 1 and 2048 pixels".into());
+    if frames.len() > MAX_FRAMES {
+        return Err(format!(
+            "Animation has more than {MAX_FRAMES} frames; trim it and try again"
+        ));
     }
+    Ok(LiveWallpaper::new(
+        name,
+        frames,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+    ))
+}
+
+fn decode_gif_frames(path: &Path) -> std::result::Result<Vec<WallpaperFrame>, String> {
     let decoder = GifDecoder::new(BufReader::new(File::open(path).map_err(|e| e.to_string())?))
         .map_err(|e| format!("Could not decode GIF: {e}"))?;
     let mut frames = Vec::new();
@@ -358,20 +556,32 @@ fn decode_gif(path: &Path, name: String) -> std::result::Result<LiveWallpaper, S
             delay_ms,
         });
     }
-    if frames.len() < 2 {
-        return Err("Choose an animated GIF with at least two frames".into());
-    }
-    if frames.len() > MAX_FRAMES {
-        return Err(format!(
-            "GIF has more than {MAX_FRAMES} frames; trim it and try again"
-        ));
-    }
-    Ok(LiveWallpaper::new(
-        name,
-        frames,
-        FRAME_WIDTH,
-        FRAME_HEIGHT,
+    Ok(frames)
+}
+
+/// APNG: the same `image` decoder chain the GIF path uses, one frame at a time.
+fn decode_apng(path: &Path) -> std::result::Result<Vec<WallpaperFrame>, String> {
+    let decoder = image::codecs::png::PngDecoder::new(BufReader::new(
+        File::open(path).map_err(|e| e.to_string())?,
     ))
+    .map_err(|e| format!("Could not decode APNG: {e}"))?;
+    let decoder = image::AnimationDecoder::into_frames(decoder);
+    let mut frames = Vec::new();
+    for decoded in decoder.take(MAX_FRAMES + 1) {
+        let frame = decoded.map_err(|e| format!("Could not decode APNG frame: {e}"))?;
+        let (numerator, denominator) = frame.delay().numer_denom_ms();
+        let delay_ms = if denominator == 0 {
+            100
+        } else {
+            (numerator / denominator).clamp(20, 1000)
+        };
+        let image = frame.into_buffer();
+        frames.push(WallpaperFrame {
+            rgba: cover(&image),
+            delay_ms,
+        });
+    }
+    Ok(frames)
 }
 
 fn cover(image: &image::RgbaImage) -> Vec<u8> {
@@ -430,5 +640,51 @@ mod tests {
         let pixels = vec![255; 1920 * 1080 * 4];
         let image = image::RgbaImage::from_raw(1920, 1080, pixels).unwrap();
         assert_eq!(cover(&image).len(), (FRAME_WIDTH * FRAME_HEIGHT * 4) as usize);
+    }
+
+    #[test]
+    fn a_format_is_chosen_by_the_file_not_only_its_name() {
+        assert_eq!(Format::of("holiday.gif"), Some(Format::Image));
+        assert_eq!(Format::of("holiday.PNG"), Some(Format::Image));
+        assert_eq!(Format::of("clip.apng"), Some(Format::Image));
+        assert_eq!(Format::of("clip.mp4"), Some(Format::Video));
+        assert_eq!(Format::of("clip.M4V"), Some(Format::Video));
+        assert_eq!(Format::of("notes.txt"), None);
+        // The provider's display name survives cleaning when it names a format.
+        assert_eq!(clean_name("clip.mp4"), "clip.mp4");
+        assert_eq!(clean_name("../escape/clip.mp4"), "clip.mp4");
+        // An unusable name falls back to the image default, and the sniffed
+        // header decides what the file really is.
+        assert_eq!(clean_name("payload.bin"), "wallpaper.gif");
+    }
+
+    #[test]
+    fn video_and_image_wallpapers_save_under_different_files() {
+        assert_ne!(Format::Image.file(), Format::Video.file());
+        assert!(Format::Image.file().ends_with(".gif"));
+        assert!(Format::Video.file().ends_with(".mp4"));
+    }
+
+    #[test]
+    fn the_sniffer_reads_the_header_not_the_extension() {
+        let dir = std::env::temp_dir().join(format!("oxide-wallpaper-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        // A GIF renamed .mp4 must still be recognised as an animation.
+        assert_eq!(
+            sniff(&write("renamed.mp4", b"GIF89a\x01\x00\x01\x00\x00\x00")),
+            Some(Format::Image)
+        );
+        // An MP4's `ftyp` box sits at offset 4.
+        assert_eq!(
+            sniff(&write("clip.bin", b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00")),
+            Some(Format::Video)
+        );
+        assert_eq!(sniff(&write("junk.mp4", b"not a media file")), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
