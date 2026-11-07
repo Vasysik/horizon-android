@@ -31,25 +31,41 @@ pub struct MouseState {
     touchpad_at: Option<(f64, f64)>,
 }
 
+fn relative_axes(x: f64, y: f64, rel_x: f64, rel_y: f64) -> (f64, f64) {
+    if x != 0.0 || y != 0.0 {
+        (x, y)
+    } else {
+        (rel_x, rel_y)
+    }
+}
+
 impl MouseState {
     /// Captured deltas are per sample, rather than a total for the packet.
     pub fn update_with_history(
         &mut self,
         mut sample: Sample,
-        history: impl IntoIterator<Item = (f64, f64)>,
+        history: impl IntoIterator<Item = (f64, f64, f64, f64)>,
     ) -> Vec<Event> {
-        if sample.relative && !sample.touchpad && sample.action == 2 {
-            let current = (sample.x, sample.y);
+        if sample.relative
+            && !sample.touchpad
+            && sample.action == 2
+            && sample.x.is_finite()
+            && sample.y.is_finite()
+        {
+            let current = (sample.x, sample.y, sample.rel_x, sample.rel_y);
             sample.x = 0.0;
             sample.y = 0.0;
-            for (x, y) in history {
+            for (x, y, rel_x, rel_y) in history.into_iter().chain(std::iter::once(current)) {
+                let (x, y) = relative_axes(x, y, rel_x, rel_y);
                 if x.is_finite() && y.is_finite() {
                     sample.x += x;
                     sample.y += y;
                 }
             }
-            sample.x += current.0;
-            sample.y += current.1;
+            // Axis selection is per sample. A zero aggregate can be a real
+            // reversal and must not trigger the current sample's fallback again.
+            sample.rel_x = 0.0;
+            sample.rel_y = 0.0;
         }
         self.update(sample)
     }
@@ -90,12 +106,8 @@ impl MouseState {
             self.x = None;
             self.y = None;
             if matches!(sample.action, 2 | 7) {
-                let (dx, dy) = if sample.x != 0.0 || sample.y != 0.0 {
-                    (sample.x, sample.y)
-                } else {
-                    (sample.rel_x, sample.rel_y)
-                };
-                if dx != 0.0 || dy != 0.0 {
+                let (dx, dy) = relative_axes(sample.x, sample.y, sample.rel_x, sample.rel_y);
+                if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
                     events.push(Event::Relative(dx, dy));
                 }
             }
@@ -280,7 +292,7 @@ mod tests {
             ..sample(2, 1)
         };
         assert_eq!(
-            state.update_with_history(packet, [(4.0, 1.0), (-1.0, 2.0)]),
+            state.update_with_history(packet, [(4.0, 1.0, 0.0, 0.0), (-1.0, 2.0, 0.0, 0.0)]),
             [
                 Event::Enter,
                 Event::Relative(5.0, 0.0),
@@ -294,7 +306,7 @@ mod tests {
                     y: 0.0,
                     ..packet
                 },
-                [(3.0, -2.0)]
+                [(3.0, -2.0, 0.0, 0.0)]
             ),
             [Event::Relative(3.0, -2.0)]
         );
@@ -327,7 +339,7 @@ mod tests {
                 y: 3.0,
                 ..sample(2, 1)
             },
-            samples[..3].iter().copied(),
+            samples[..3].iter().map(|&(x, y)| (x, y, 0.0, 0.0)),
         );
         assert!(result.contains(&Event::Relative(8.0, 2.0)));
     }
@@ -336,7 +348,7 @@ mod tests {
     fn history_never_moves_absolute_or_button_only_packets() {
         let mut state = MouseState::default();
         assert_eq!(
-            state.update_with_history(sample(7, 0), [(500.0, -100.0)]),
+            state.update_with_history(sample(7, 0), [(500.0, -100.0, 0.0, 0.0)]),
             [Event::Enter, Event::Position(100.0, 200.0)]
         );
         assert_eq!(
@@ -345,7 +357,7 @@ mod tests {
                     relative: true,
                     ..sample(11, 2)
                 },
-                [(500.0, -100.0)]
+                [(500.0, -100.0, 0.0, 0.0)]
             ),
             [Event::Button(2, true)]
         );
@@ -362,9 +374,72 @@ mod tests {
                     y: 2.0,
                     ..sample(2, 0)
                 },
-                [(f64::NAN, 4.0), (2.0, -1.0), (f64::INFINITY, 0.0)]
+                [
+                    (f64::NAN, 4.0, 0.0, 0.0),
+                    (2.0, -1.0, 0.0, 0.0),
+                    (f64::INFINITY, 0.0, 0.0, 0.0)
+                ]
             ),
             [Event::Enter, Event::Relative(3.0, 1.0)]
+        );
+    }
+
+    #[test]
+    fn a_zero_sum_batch_does_not_reapply_the_current_fallback() {
+        let mut state = MouseState::default();
+        let packet = Sample {
+            relative: true,
+            x: 2.0,
+            y: -3.0,
+            rel_x: 2.0,
+            rel_y: -3.0,
+            ..sample(2, 0)
+        };
+        assert_eq!(
+            state.update_with_history(packet, [(-2.0, 3.0, -2.0, 3.0)]),
+            [Event::Enter]
+        );
+    }
+
+    #[test]
+    fn fallback_history_is_selected_per_sample_without_double_counting() {
+        let mut state = MouseState::default();
+        let packet = Sample {
+            relative: true,
+            x: 0.0,
+            y: 0.0,
+            rel_x: 2.0,
+            rel_y: 1.0,
+            ..sample(2, 1)
+        };
+        assert_eq!(
+            state.update_with_history(packet, [(0.0, 0.0, 4.0, -2.0), (3.0, 2.0, 99.0, 99.0)]),
+            [
+                Event::Enter,
+                Event::Relative(9.0, 1.0),
+                Event::Button(1, true)
+            ]
+        );
+        assert_eq!(
+            state.update_with_history(packet, [(0.0, 0.0, -2.0, -1.0)]),
+            []
+        );
+    }
+
+    #[test]
+    fn nonfinite_fallback_history_cannot_poison_a_valid_batch() {
+        let mut state = MouseState::default();
+        let packet = Sample {
+            relative: true,
+            x: 0.0,
+            y: 0.0,
+            rel_x: 2.0,
+            rel_y: 1.0,
+            ..sample(2, 0)
+        };
+        assert_eq!(
+            state.update_with_history(packet, [(0.0, 0.0, f64::NAN, 2.0)]),
+            [Event::Enter, Event::Relative(2.0, 1.0)]
         );
     }
 }
