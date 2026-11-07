@@ -54,15 +54,50 @@ jobs:
           DEV_KEYSTORE: ${{ secrets.ANDROID_DEV_KEYSTORE_BASE64 }}
         run: |
           python3 - <<'PY'
-          import base64, os
+          import base64, os, string
           from pathlib import Path
-          value = os.environ.get('DEV_KEYSTORE', '')
-          if not value:
-              raise SystemExit('Set ANDROID_DEV_KEYSTORE_BASE64 first; see docs/android-dev-builds.md')
+          DOC = 'docs/android-dev-builds.md'
+          SUMMARY = os.environ.get('GITHUB_STEP_SUMMARY')
+
+          def fail(message):
+              # Also written to the run summary page, which needs no sign-in.
+              if SUMMARY:
+                  with open(SUMMARY, 'a') as summary:
+                      summary.write('### Dev keystore check failed\n\n' + message + '\n')
+              raise SystemExit(message)
+
+          raw = os.environ.get('DEV_KEYSTORE', '')
+          if not raw.strip():
+              fail('Set ANDROID_DEV_KEYSTORE_BASE64 first; see ' + DOC)
+          # Pasting can add whitespace, a byte-order mark or quotes. None of them
+          # belong to the key, so they are removed before decoding. The message
+          # below names only lengths and character codes, never the value.
+          value = ''.join(raw.split()).strip('﻿​"\'`“”‘’')
+          alphabet = set(string.ascii_letters + string.digits + '+/=')
+          if not value or any(c not in alphabet for c in value):
+              odd = sorted({f'U+{ord(c):04X}' for c in value if c not in alphabet})[:5]
+              fail(
+                  f'ANDROID_DEV_KEYSTORE_BASE64 is not plain base64: {len(value)} characters, '
+                  f'length mod 4 = {len(value) % 4}, unexpected characters: {", ".join(odd) or "none"}. '
+                  'Copy the single-line output again. See ' + DOC)
+          try:
+              data = base64.b64decode(value, validate=True)
+          except ValueError as error:
+              fail(f'ANDROID_DEV_KEYSTORE_BASE64 did not decode ({error}). See ' + DOC)
+          if data[:4] == b'\xfe\xed\xfe\xed':
+              kind = 'JKS'
+          elif data[:1] == b'\x30':
+              kind = 'PKCS12'
+          else:
+              fail(
+                  f'The secret decodes to {len(data)} bytes that are not a Java keystore '
+                  f'(first bytes {data[:4].hex()}). It probably holds the wrong file. '
+                  'Create the key with keytool as described in ' + DOC)
           path = Path('.local/android/debug.keystore')
           path.parent.mkdir(parents=True, exist_ok=True)
-          path.write_bytes(base64.b64decode(value, validate=True))
+          path.write_bytes(data)
           path.chmod(0o600)
+          print(f'Restored dev keystore: {len(data)} bytes, {kind}.')
           PY
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:

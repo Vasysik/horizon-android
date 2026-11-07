@@ -2589,6 +2589,8 @@ impl TouchUi {
                     14.0,
                     color::with_alpha(rgba(0, 0, 0, 135), bubble_alpha),
                 );
+                // Slightly see-through background; the renderer has no backdrop blur.
+                let glass = if self.floating_menu { 1.0 } else { 0.72 };
                 ui.rounded(
                     bx,
                     by,
@@ -2597,7 +2599,7 @@ impl TouchUi {
                     14.0,
                     color::with_alpha(
                         if self.floating_menu { accent } else { card_bg },
-                        bubble_alpha,
+                        bubble_alpha * glass,
                     ),
                 );
                 ui.stroke_rounded(

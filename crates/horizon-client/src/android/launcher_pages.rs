@@ -87,6 +87,8 @@ pub(crate) struct AnimState {
     pub last_has_modal: bool,
     pub nav_pill_y: f32,
     pub target_nav_y: f32,
+    /// Navigation drawer visibility, 0.0 (closed) to 1.0 (open).
+    pub drawer_anim: f32,
     pub page_fade: f32,
     pub page_slide: f32,
     pub progress_smooth: f32,
@@ -106,8 +108,9 @@ impl Default for AnimState {
             last_page: Page::Play,
             last_category: SettingsCategory::Overview,
             last_has_modal: false,
-            nav_pill_y: 62.0,
-            target_nav_y: 62.0,
+            nav_pill_y: DRAWER_ITEMS_Y,
+            target_nav_y: DRAWER_ITEMS_Y,
+            drawer_anim: 0.0,
             page_fade: 1.0,
             page_slide: 0.0,
             progress_smooth: 0.0,
@@ -130,6 +133,7 @@ impl AnimState {
         target_nav_y: f32,
         has_modal: bool,
         sections: [bool; 3],
+        drawer_open: bool,
     ) {
         let now = std::time::Instant::now();
         let intro_t0 = *self.intro_start.get_or_insert(now);
@@ -147,6 +151,7 @@ impl AnimState {
             self.last_category = category;
             self.last_has_modal = has_modal;
             self.nav_pill_y = target_nav_y;
+            self.drawer_anim = if drawer_open { 1.0 } else { 0.0 };
             self.page_fade = 1.0;
             self.page_slide = 0.0;
             self.modal_anim = if has_modal { 1.0 } else { 0.0 };
@@ -182,6 +187,8 @@ impl AnimState {
 
         let speed = (dt * 14.0).min(1.0);
         self.nav_pill_y += (target_nav_y - self.nav_pill_y) * (dt * 18.0).min(1.0);
+        let drawer_target = if drawer_open { 1.0 } else { 0.0 };
+        self.drawer_anim += (drawer_target - self.drawer_anim) * (dt * 12.0).min(1.0);
         self.page_fade = (self.page_fade + dt * 7.5).min(1.0);
         self.page_slide *= (1.0 - speed).max(0.0);
         let modal_target = if has_modal { 1.0 } else { 0.0 };
@@ -219,6 +226,7 @@ impl AnimState {
         self.page_fade < 0.99
             || self.page_slide.abs() > 0.35
             || (self.nav_pill_y - self.target_nav_y).abs() > 0.5
+            || (self.drawer_anim > 0.01 && self.drawer_anim < 0.99)
             || (self.modal_anim > 0.01 && self.modal_anim < 0.99)
             || self.theme_pulse < 0.99
             || self.section_expand.iter().any(|v| *v > 0.01 && *v < 0.99)
@@ -228,6 +236,8 @@ impl AnimState {
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Action {
     Page(Page),
+    ToggleDrawer,
+    CloseDrawer,
     SettingsCat(SettingsCategory),
     Play,
     PauseInstall,
@@ -330,6 +340,7 @@ pub(super) enum Action {
     FovDelta(f32),
     // Animation & Diagnostics Modal actions
     ToggleLauncherAnimations,
+    ToggleShowFps,
     ToggleGameAnimations,
     CloseDiagnosticsSummary,
     OpenReportsFolder,
@@ -757,6 +768,16 @@ enum SettingControl<'a> {
     },
 }
 
+/// Navigation drawer geometry in dp: first row top and the largest row pitch.
+const DRAWER_ITEMS_Y: f32 = 96.0;
+const DRAWER_ITEM_STEP: f32 = 58.0;
+
+/// Row pitch of the drawer list. Tall screens use `DRAWER_ITEM_STEP`; short landscape screens
+/// compress the rows so every page stays on screen.
+fn drawer_row_step(h: f32) -> f32 {
+    ((h - DRAWER_ITEMS_Y - 12.0) / Page::ALL.len() as f32).clamp(34.0, DRAWER_ITEM_STEP)
+}
+
 fn page_icon(page: Page) -> Icon {
     match page {
         Page::Play => Icon::Play,
@@ -1101,8 +1122,13 @@ impl Launcher {
         let active_th = horizon_client::ui_theme::active_theme();
         ui.draw_theme_background(0.0, 0.0, w, h, &active_th);
 
-        // ---- Top Header Bar (brand lockup ... account pill) ----
-        ui.horizon_logo(18.0, 12.0, 28.0);
+        // ---- Top Header Bar (menu toggle, brand lockup ... account pill) ----
+        let menu_rect: [f32; 4] = [6.0, 4.0, 48.0, 48.0];
+        ui.rounded(10.0, 8.0, 40.0, 40.0, 14.0, my3_surface());
+        ui.border(10.0, 8.0, 40.0, 40.0, 14.0, my3_border());
+        ui.icon(Icon::Menu, 20.0, 18.0, 20.0, my3_text());
+        self.targets.push((menu_rect, Action::ToggleDrawer));
+        ui.horizon_logo(62.0, 12.0, 28.0);
         let account_name = self
             .login
             .profile
@@ -1140,14 +1166,23 @@ impl Launcher {
         );
         self.targets.push((eq_btn_rect, Action::OpenControlEditor));
 
-        let brand_w = (eq_btn_rect[0] - 66.0).max(70.0);
-        ui.text(Face::SemiBold, 16.0, 54.0, 10.0, my3_text(), "Horizon");
+        let brand_x = 98.0;
+        let brand_w = (eq_btn_rect[0] - brand_x - 12.0).max(40.0);
+        let fitted_brand = ui.fit_text(Face::SemiBold, 16.0, "HELYX", brand_w);
+        ui.text(
+            Face::SemiBold,
+            16.0,
+            brand_x,
+            10.0,
+            my3_text(),
+            &fitted_brand,
+        );
         let version_line = format!("Android {}", crate::backend::VERSION);
         let fitted_version = ui.fit_text(Face::Regular, 11.0, &version_line, brand_w);
         ui.text(
             Face::Regular,
             11.0,
-            54.0,
+            brand_x,
             30.0,
             my3_muted(),
             &fitted_version,
@@ -1187,24 +1222,12 @@ impl Launcher {
         self.targets
             .push(([pill_x, pill_y, pill_w, pill_h], Action::Account));
 
-        // ---- Left Vertical Navigation Rail + Smooth Gliding Active Pill ----
-        let sidebar_w = if w < 560.0 { 136.0 } else { 184.0 };
-        ui.rounded(
-            sidebar_w,
-            56.0,
-            1.0,
-            (h - 68.0).max(10.0),
-            0.0,
-            my3_border(),
-        );
-        let nav_start_y = 62.0;
-        let nav_step = ((h - nav_start_y - 14.0) / 6.0).clamp(36.0, 48.0);
-        let nav_h = (nav_step - 5.0).clamp(32.0, 41.0);
+        // ---- Navigation state: the drawer lists the pages; the selected row is a gliding pill ----
         let selected_idx = Page::ALL
             .iter()
             .position(|p| *p == self.catalog.page)
             .unwrap_or(0);
-        let target_nav_y = nav_start_y + selected_idx as f32 * nav_step;
+        let target_nav_y = DRAWER_ITEMS_Y + selected_idx as f32 * drawer_row_step(h);
         let has_any_modal = self.catalog.project_modal.is_some()
             || self.catalog.fm_modal.is_some()
             || self.chooser.is_some()
@@ -1216,47 +1239,12 @@ impl Launcher {
             target_nav_y,
             has_any_modal,
             self.catalog.sections,
+            self.drawer_open,
         );
 
-        // Draw gliding MY3 active indicator pill
-        ui.rounded(
-            10.0,
-            self.anim.nav_pill_y,
-            sidebar_w - 20.0,
-            nav_h,
-            nav_h * 0.5,
-            my3_nav_active(),
-        );
-
-        for (i, page) in Page::ALL.iter().enumerate() {
-            let nx = 10.0;
-            let ny = nav_start_y + i as f32 * nav_step;
-            let nw = sidebar_w - 20.0;
-            let selected = *page == self.catalog.page;
-            let fg = if selected { my3_text() } else { my3_muted() };
-            ui.icon(
-                page_icon(*page),
-                nx + 14.0,
-                ny + (nav_h - 17.0) * 0.5,
-                17.0,
-                fg,
-            );
-            let label = ui.fit_text(Face::Medium, 13.5, page.name(), nw - 42.0);
-            ui.text(
-                Face::Medium,
-                13.5,
-                nx + 39.0,
-                ny + (nav_h - 19.0) * 0.5,
-                fg,
-                &label,
-            );
-            self.targets
-                .push(([nx, ny, nw, nav_h], Action::Page(*page)));
-        }
-
-        // ---- Main Content Area (with smooth slide transition offset) ----
-        let content_x = sidebar_w + 22.0;
-        let content_w = (w - content_x - 22.0).max(160.0);
+        // ---- Main Content Area (full width; navigation lives in the drawer) ----
+        let content_x = 18.0;
+        let content_w = (w - content_x * 2.0).max(160.0);
         let compact = content_w < 430.0;
         let page = self.catalog.page;
         let slide_y = self.anim.page_slide;
@@ -1567,8 +1555,15 @@ impl Launcher {
             if matches!(page, Page::Shaders | Page::Mods) {
                 use crate::shader_catalog::Origin;
                 let seg_w = 100.0;
-                for (i, origin) in [Origin::Horizon, Origin::Modrinth].into_iter().enumerate() {
-                    let rx = content_x + content_w - (2 - i) as f32 * (seg_w + 6.0) + 6.0;
+                // Mods have no Modrinth source; only Shaders keep both choices.
+                let origins = if page == Page::Mods {
+                    vec![Origin::Horizon]
+                } else {
+                    vec![Origin::Horizon, Origin::Modrinth]
+                };
+                let slots = origins.len();
+                for (i, origin) in origins.into_iter().enumerate() {
+                    let rx = content_x + content_w - (slots - i) as f32 * (seg_w + 6.0) + 6.0;
                     let rect = [rx, header_y - 2.0, seg_w, 30.0];
                     let active = (if page == Page::Mods {
                         self.catalog.config.mod_source
@@ -2091,17 +2086,105 @@ impl Launcher {
                 f64::from((y + h / 2.0) * ui.density),
             );
         }
+        // ---- Navigation drawer (opened by the header menu button). It is drawn after the page so it
+        // sits on top, and its targets are pushed last so they win hit-testing over the page below.
+        if self.drawer_open || self.anim.drawer_anim > 0.01 {
+            // The drawer is modal: page targets underneath are no longer reachable by touch or focus.
+            // Targets are rebuilt on every frame, so they return as soon as the drawer closes.
+            self.targets.clear();
+            self.list_targets.clear();
+            SLIDER_TRACK_TARGETS.with(|t| t.borrow_mut().clear());
+            let t = self.anim.drawer_anim.clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - t) * (1.0 - t);
+            let drawer_w = (w * 0.78).clamp(248.0, 320.0).min((w - 40.0).max(200.0));
+            let panel_x = -drawer_w * (1.0 - eased);
+            // Scrim behind the panel: a tap outside the panel closes the drawer.
+            ui.fill(
+                0.0,
+                0.0,
+                w,
+                h,
+                color::hex(0x000000, (120.0 * t).round() as u8),
+            );
+            self.targets.push(([0.0, 0.0, w, h], Action::CloseDrawer));
+
+            ui.rounded(panel_x, 0.0, drawer_w, h, 22.0, my3_surface());
+            ui.border(panel_x, 0.0, drawer_w, h, 22.0, my3_border());
+            ui.horizon_logo(panel_x + 20.0, 16.0, 28.0);
+            ui.text(
+                Face::SemiBold,
+                16.0,
+                panel_x + 58.0,
+                12.0,
+                my3_text(),
+                "HELYX",
+            );
+            ui.text(
+                Face::Regular,
+                11.0,
+                panel_x + 58.0,
+                32.0,
+                my3_muted(),
+                &version_line,
+            );
+            let close_rect = [panel_x + drawer_w - 56.0, 8.0, 48.0, 48.0];
+            ui.rounded(
+                panel_x + drawer_w - 50.0,
+                12.0,
+                40.0,
+                40.0,
+                14.0,
+                my3_surface_high(),
+            );
+            ui.icon(
+                Icon::Close,
+                panel_x + drawer_w - 40.0,
+                22.0,
+                20.0,
+                my3_muted(),
+            );
+            self.targets.push((close_rect, Action::CloseDrawer));
+
+            // Gliding pill marks the current page; it is drawn beneath the rows.
+            let item_x = panel_x + 12.0;
+            let item_w = drawer_w - 24.0;
+            let row_step = drawer_row_step(h);
+            let row_h = (row_step - 6.0).max(28.0);
+            ui.rounded(
+                item_x,
+                self.anim.nav_pill_y,
+                item_w,
+                row_h,
+                16.0,
+                my3_nav_active(),
+            );
+            for (i, page) in Page::ALL.iter().enumerate() {
+                let iy = DRAWER_ITEMS_Y + i as f32 * row_step;
+                let selected = *page == self.catalog.page;
+                let fg = if selected { my3_text() } else { my3_muted() };
+                let text_y = iy + (row_h - 20.0) * 0.5;
+                ui.icon(page_icon(*page), item_x + 16.0, text_y, 20.0, fg);
+                let label = ui.fit_text(Face::Medium, 15.0, page.name(), item_w - 64.0);
+                ui.text(Face::Medium, 15.0, item_x + 52.0, text_y + 1.0, fg, &label);
+                self.targets
+                    .push(([item_x, iy, item_w, row_h], Action::Page(*page)));
+            }
+        }
+
         if self.mouse_down || self.drag.as_ref().is_some_and(|drag| !drag.moved) {
             let point = [
                 self.cursor.0 as f32 / ui.density,
                 self.cursor.1 as f32 / ui.density,
             ];
-            if let Some(([x, y, w, h], _)) = self.targets.iter().rev().find(|(rect, _)| {
-                point[0] >= rect[0]
-                    && point[0] <= rect[0] + rect[2]
-                    && point[1] >= rect[1]
-                    && point[1] <= rect[1] + rect[3]
-            }) {
+            if let Some(([x, y, w, h], hover_action)) =
+                self.targets.iter().rev().find(|(rect, _)| {
+                    point[0] >= rect[0]
+                        && point[0] <= rect[0] + rect[2]
+                        && point[1] >= rect[1]
+                        && point[1] <= rect[1] + rect[3]
+                })
+                && *hover_action != Action::CloseDrawer
+            {
                 ui.rounded(
                     *x,
                     *y,
@@ -2115,6 +2198,7 @@ impl Launcher {
         if !self.mouse_down
             && self.drag.is_none()
             && let Some((action, time)) = self.feedback
+            && action != Action::CloseDrawer
             && time.elapsed() < std::time::Duration::from_millis(160)
             && let Some(([x, y, w, h], _)) = self.targets.iter().find(|(_, a)| *a == action)
         {
@@ -4138,8 +4222,10 @@ impl Launcher {
                     c.server.clone()
                 };
                 let game_anim_off = c.disable_game_animations || touch_cfg.disable_game_animations;
+                // The FPS counter is an extra stored next to the game's options.
+                let show_fps_on = horizon_client::extras::Extras::load(&c.game_home(&self.home)).fps;
 
-                let rows: [(&str, &str, SettingControl<'_>); 12] = [
+                let rows: [(&str, &str, SettingControl<'_>); 13] = [
                     (
                         "APPEARANCE, DPI SCALING & MOTION",
                         "Material 3 Expressive theme studio, adaptive phone DPI scaling & animation toggles",
@@ -4166,6 +4252,11 @@ impl Launcher {
                             c.disable_launcher_animations,
                             Action::ToggleLauncherAnimations,
                         ),
+                    ),
+                    (
+                        "Show FPS In Game",
+                        "Shows the frames-per-second counter over the game screen",
+                        SettingControl::Toggle(show_fps_on, Action::ToggleShowFps),
                     ),
                     (
                         "Disable In-Game Animations",
@@ -5425,6 +5516,8 @@ impl Launcher {
                     Action::PauseCatalogDownload
                         | Action::CancelCatalogDownload
                         | Action::Page(_)
+                        | Action::ToggleDrawer
+                        | Action::CloseDrawer
                         | Action::Account
                 )
             )
@@ -6174,6 +6267,8 @@ impl Launcher {
                 self.refresh_wardrobe_account();
             }
             Some(Action::LoginLink) => self.login.open_link(),
+            Some(Action::ToggleDrawer) => self.drawer_open = !self.drawer_open,
+            Some(Action::CloseDrawer) => self.drawer_open = false,
             Some(Action::Page(page)) => {
                 if page == Page::Skins {
                     self.wardrobe.open(
@@ -6181,6 +6276,7 @@ impl Launcher {
                         &self.catalog.config.microsoft_client_id,
                     );
                 }
+                self.drawer_open = false;
                 self.catalog.editing = None;
                 self.catalog.project_modal = None;
                 self.catalog.modal_worker = None;
@@ -6367,6 +6463,19 @@ impl Launcher {
                     "Launcher animations disabled (instant page & modal transitions)."
                 } else {
                     "Launcher animations enabled."
+                }
+                .into();
+            }
+            Some(Action::ToggleShowFps) => {
+                let dir = self.catalog.config.game_home(&self.home);
+                let _ = std::fs::create_dir_all(&dir);
+                let mut extras = horizon_client::extras::Extras::load(&dir);
+                extras.fps = !extras.fps;
+                extras.save(&dir);
+                self.catalog.status = if extras.fps {
+                    "FPS counter is on in game."
+                } else {
+                    "FPS counter is off in game."
                 }
                 .into();
             }
@@ -6914,6 +7023,7 @@ impl Launcher {
     pub(super) fn touch_event(&mut self, events: &ActiveEventLoop, t: Touch) -> Result<()> {
         if self.catalog.page == Page::Skins
             && !self.login.visible
+            && !self.drawer_open
             && self.wardrobe.gesture(&t, self.ui_density())
         {
             if let Some(window) = &self.window {
@@ -6985,6 +7095,21 @@ impl Launcher {
         }
 
         let density = self.ui_density();
+        // A leftward swipe of at least 56dp on the open drawer closes it. Swipes move past the
+        // drag threshold, so they never also activate a row under the finger.
+        let mut swipe_closes_drawer = false;
+        if self.drawer_open {
+            match t.phase {
+                TouchPhase::Started => self.drawer_swipe_from = Some(t.location.x),
+                TouchPhase::Ended => {
+                    if let Some(from) = self.drawer_swipe_from.take() {
+                        swipe_closes_drawer = (from - t.location.x) as f32 / density >= 56.0;
+                    }
+                }
+                TouchPhase::Cancelled => self.drawer_swipe_from = None,
+                TouchPhase::Moved => {}
+            }
+        }
         let px = t.location.x as f32 / density;
         let py = t.location.y as f32 / density;
         match t.phase {
@@ -7021,9 +7146,10 @@ impl Launcher {
                                 chooser.scroll = (chooser.scroll + delta).max(0.0);
                             } else if let Some(modal) = &mut self.catalog.project_modal {
                                 modal.scroll = (modal.scroll + delta).max(0.0);
-                            } else if self
-                                .list_view
-                                .is_some_and(|view| drag.origin_y() / density_f64 >= view[0] as f64)
+                            } else if !self.drawer_open
+                                && self.list_view.is_some_and(|view| {
+                                    drag.origin_y() / density_f64 >= view[0] as f64
+                                })
                             {
                                 self.catalog.scroll = (self.catalog.scroll + delta).max(0.0);
                             }
@@ -7042,6 +7168,9 @@ impl Launcher {
                 ACTIVE_SLIDER_DRAG.with(|c| c.set(None));
                 self.drag = None;
             }
+        }
+        if swipe_closes_drawer {
+            self.drawer_open = false;
         }
         Ok(())
     }

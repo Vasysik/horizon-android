@@ -1313,18 +1313,10 @@ impl Audio {
         self.play(event, at, volume, pitch);
         self.capture = capture;
     }
-    /// `AbstractWidget.playButtonClickSound`: an unseeded, relative UI sound.
-    pub fn play_button_click(&mut self) {
-        self.play_instance(
-            SoundInstance::for_ui(
-                "minecraft:ui.button.click",
-                1.0,
-                0.25,
-                SoundEngine::unseeded(),
-            ),
-            false,
-        );
-    }
+    /// `AbstractWidget.playButtonClickSound` is disabled in Horizon: button
+    /// presses make no sound in the launcher or in the game.
+    pub fn play_button_click(&mut self) {}
+
     /// `SoundPreviewHandler.preview`: a category volume slider moved to
     /// `volume` on the title screen's options.
     pub fn preview(&mut self, source: usize, volume: f32) {

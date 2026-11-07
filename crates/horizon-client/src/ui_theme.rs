@@ -134,6 +134,7 @@ pub enum Icon {
     MicrosoftGrid,
     Gamepad,
     ArrowLeft,
+    Menu,
     MenuEquals,
     Undo,
     Redo,
@@ -430,6 +431,12 @@ fn icon_hit(icon: Icon, u: f32, v: f32) -> bool {
             let top = seg_dist(u, v, 0.62, 0.24, 0.34, 0.50) <= 0.055;
             let bot = seg_dist(u, v, 0.34, 0.50, 0.62, 0.76) <= 0.055;
             top || bot
+        }
+        Icon::Menu => {
+            // Three even rounded bars: the navigation drawer toggle.
+            seg_dist(u, v, 0.18, 0.28, 0.82, 0.28) <= 0.062
+                || seg_dist(u, v, 0.18, 0.50, 0.82, 0.50) <= 0.062
+                || seg_dist(u, v, 0.18, 0.72, 0.82, 0.72) <= 0.062
         }
         Icon::MenuEquals => {
             // Sleek floating control-hub icon: two horizontal tracks with circular slider knobs.
@@ -1070,8 +1077,29 @@ impl<'a> Ui<'a> {
         }
     }
 
-    /// Draw the stylized two-tone Horizon `H` mark at `(x, y)` in `size x size` dp.
+    /// The HELYX mark: a 256x256 RGBA PNG, decoded once. `None` if it cannot be
+    /// decoded, in which case the vector mark is drawn instead.
+    fn helyx_logo_rgba() -> Option<&'static [u8]> {
+        static LOGO: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+        const PNG: &[u8] = include_bytes!("../assets/helyx_logo.png");
+        const SIZE: usize = 256;
+        LOGO.get_or_init(|| {
+            let mut reader = png::Decoder::new(std::io::Cursor::new(PNG))
+                .read_info()
+                .ok()?;
+            let mut rgba = vec![0; SIZE * SIZE * 4];
+            reader.next_frame(&mut rgba).ok()?;
+            Some(rgba)
+        })
+        .as_deref()
+    }
+
+    /// Draw the HELYX mark at `(x, y)` in `size x size` dp (the vector mark as a fallback).
     pub fn horizon_logo(&mut self, x: f32, y: f32, size: f32) {
+        if let Some(rgba) = Self::helyx_logo_rgba() {
+            self.image("helyx-logo", 256, 256, rgba, x, y, size, size);
+            return;
+        }
         let theme = active_theme();
         let primary = theme.accent;
         let shadow = color::with_alpha(theme.surface_selected, 0.92);

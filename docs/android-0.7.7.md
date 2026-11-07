@@ -2,6 +2,17 @@
 
 This version is in development; no device-wide performance improvement is established.
 
+## Launcher navigation
+
+The always-visible left page rail is replaced by a ☰ button in the header. It opens a
+navigation drawer that lists the same pages (Play, Mods, Resource Packs, Shaders,
+Installed, Settings, Skins). The page content now uses the full width. The drawer closes
+with its ✕ button, a tap outside it, a leftward swipe, or Back. Choosing a page closes it.
+Rows shrink on short landscape screens so every page stays reachable. Nothing is removed
+from the launcher. The drawer's Versions, Accounts and About entries are not yet separate
+pages. Account and version information remains in Settings and the header account pill.
+This change was not compiled or run on a device in this revision.
+
 Touch shield control defaults to Button for new or reset layouts. Aim layouts
 with a regular Use button raise the shield through Use and hide the redundant
 shield button automatically. Tap layouts retain a dedicated hold-to-raise button
